@@ -189,6 +189,10 @@ function parsePorcelainPath(line: string): string | null {
   return filePath.length > 0 ? filePath : null;
 }
 
+function normalizeRelativePathInput(relativePath: string): string {
+  return relativePath.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+}
+
 function parseBranchLine(line: string): { name: string; current: boolean } | null {
   const trimmed = line.trim();
   if (trimmed.length === 0) return null;
@@ -859,6 +863,38 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
       ),
     );
 
+  const readDiffOutput = (
+    operation: string,
+    cwd: string,
+    args: readonly string[],
+  ): Effect.Effect<string, GitCommandError> =>
+    executeGit(operation, cwd, args, {
+      allowNonZeroExit: true,
+      maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+      truncateOutputAtMaxBytes: true,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const stdout = result.stdoutTruncated
+          ? `${result.stdout}${OUTPUT_TRUNCATED_MARKER}`
+          : result.stdout;
+        const stderr = result.stderr.trim();
+        const hasRenderableDiff = stdout.trim().length > 0;
+
+        if (result.code <= 1 || hasRenderableDiff) {
+          return Effect.succeed(stdout);
+        }
+
+        return Effect.fail(
+          createGitCommandError(
+            operation,
+            cwd,
+            args,
+            stderr.length > 0 ? stderr : `${commandLabel(args)} failed: code=${result.code}`,
+          ),
+        );
+      }),
+    );
+
   const branchExists = (cwd: string, branch: string): Effect.Effect<boolean, GitCommandError> =>
     executeGit(
       "GitCore.branchExists",
@@ -1362,6 +1398,96 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
         pr: null,
       })),
     );
+
+  const getWorkingTreeDiff: GitCoreShape["getWorkingTreeDiff"] = Effect.fn("getWorkingTreeDiff")(
+    function* (input) {
+      const relativePath = normalizeRelativePathInput(input.relativePath);
+      if (relativePath.length === 0) {
+        return { diff: "" };
+      }
+
+      const statusResult = yield* executeGit(
+        "GitCore.getWorkingTreeDiff.status",
+        input.cwd,
+        ["status", "--porcelain=2", "--", relativePath],
+        {
+          allowNonZeroExit: true,
+        },
+      );
+
+      if (statusResult.code !== 0) {
+        const detail = statusResult.stderr.trim();
+        return yield* createGitCommandError(
+          "GitCore.getWorkingTreeDiff.status",
+          input.cwd,
+          ["status", "--porcelain=2", "--", relativePath],
+          detail.length > 0 ? detail : "git status failed",
+        );
+      }
+
+      const statusLines = statusResult.stdout
+        .split(/\r?\n/g)
+        .map((line) => line.trimEnd())
+        .filter((line) => line.length > 0);
+      if (statusLines.length === 0) {
+        return { diff: "" };
+      }
+
+      const hasUntrackedFile = statusLines.some((line) => line.startsWith("? "));
+      if (!hasUntrackedFile) {
+        const diff = yield* readDiffOutput("GitCore.getWorkingTreeDiff.diff", input.cwd, [
+          "diff",
+          "--minimal",
+          "HEAD",
+          "--",
+          relativePath,
+        ]);
+        return { diff };
+      }
+
+      const diff = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const emptyFilePath = yield* fileSystem
+            .makeTempFileScoped({
+              prefix: "t3-git-empty-",
+              suffix: ".tmp",
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                createGitCommandError(
+                  "GitCore.getWorkingTreeDiff.makeTempFile",
+                  input.cwd,
+                  ["diff", "--no-index", "--", relativePath],
+                  "Failed to create a temporary file for the untracked diff.",
+                  cause,
+                ),
+              ),
+            );
+          yield* fileSystem
+            .writeFileString(emptyFilePath, "")
+            .pipe(
+              Effect.mapError((cause) =>
+                createGitCommandError(
+                  "GitCore.getWorkingTreeDiff.writeTempFile",
+                  input.cwd,
+                  ["diff", "--no-index", "--", relativePath],
+                  "Failed to initialize the untracked diff temp file.",
+                  cause,
+                ),
+              ),
+            );
+          return yield* readDiffOutput("GitCore.getWorkingTreeDiff.untrackedDiff", input.cwd, [
+            "diff",
+            "--no-index",
+            "--",
+            emptyFilePath,
+            relativePath,
+          ]);
+        }),
+      );
+      return { diff };
+    },
+  );
 
   const prepareCommitContext: GitCoreShape["prepareCommitContext"] = Effect.fn(
     "prepareCommitContext",
@@ -2177,6 +2303,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
   return {
     execute,
     status,
+    getWorkingTreeDiff,
     statusDetails,
     statusDetailsLocal,
     prepareCommitContext,

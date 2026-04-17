@@ -20,7 +20,7 @@ export interface WorkspaceAgentDiffIndex {
   turnFilesByTurnId: ReadonlyMap<TurnId, ReadonlyArray<WorkspaceAgentFileDiff>>;
 }
 
-function normalizeWorkspaceDiffPath(pathValue: string): string {
+export function normalizeWorkspaceDiffPath(pathValue: string): string {
   return pathValue.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
 }
 
@@ -109,6 +109,30 @@ export function buildWorkspaceAgentDiffIndex(
     fileHistoryByPath: sortWorkspaceAgentDiffHistoryByPath(fileHistoryByPath),
     turnFilesByTurnId: sortWorkspaceAgentTurnFilesByTurnId(turnFilesByTurnId),
   };
+}
+
+export function buildWorkspaceDiffStatByPath(
+  files: ReadonlyArray<{
+    path: string;
+    insertions: number;
+    deletions: number;
+  }>,
+): ReadonlyMap<string, WorkspaceAgentDiffStat> {
+  const statByPath = new Map<string, WorkspaceAgentDiffStat>();
+
+  for (const file of files) {
+    const path = normalizeWorkspaceDiffPath(file.path);
+    if (path.length === 0) {
+      continue;
+    }
+
+    statByPath.set(path, {
+      additions: file.insertions,
+      deletions: file.deletions,
+    });
+  }
+
+  return statByPath;
 }
 
 export function buildWorkspaceAgentFileDiffHistory(

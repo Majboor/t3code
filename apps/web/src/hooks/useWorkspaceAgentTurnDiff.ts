@@ -14,6 +14,7 @@ export function useWorkspaceAgentTurnDiff(input: {
   targetFilePath: string | null;
   resolvedTheme: "light" | "dark";
   cacheScope: string;
+  enabled?: boolean;
 }) {
   const checkpointRange = useMemo(() => {
     if (typeof input.selectedHistoryEntry?.checkpointTurnCount !== "number") {
@@ -34,7 +35,8 @@ export function useWorkspaceAgentTurnDiff(input: {
       cacheScope: input.selectedHistoryEntry
         ? `${input.cacheScope}:${input.selectedHistoryEntry.turnId}`
         : null,
-      enabled: input.selectedHistoryEntry !== null && checkpointRange !== null,
+      enabled:
+        (input.enabled ?? true) && input.selectedHistoryEntry !== null && checkpointRange !== null,
     }),
   );
 

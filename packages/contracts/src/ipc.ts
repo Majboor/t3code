@@ -5,6 +5,8 @@ import type {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitGetWorkingTreeDiffInput,
+  GitGetWorkingTreeDiffResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitInitInput,
@@ -270,6 +272,7 @@ export interface EnvironmentApi {
     ) => Promise<GitPreparePullRequestThreadResult>;
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     refreshStatus: (input: GitStatusInput) => Promise<GitStatusResult>;
+    getWorkingTreeDiff: (input: GitGetWorkingTreeDiffInput) => Promise<GitGetWorkingTreeDiffResult>;
     onStatus: (
       input: GitStatusInput,
       callback: (status: GitStatusResult) => void,

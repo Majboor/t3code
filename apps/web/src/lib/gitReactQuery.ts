@@ -23,6 +23,13 @@ export const gitQueryKeys = {
     ["git", "branches", environmentId ?? null, cwd] as const,
   branchSearch: (environmentId: EnvironmentId | null, cwd: string | null, query: string) =>
     ["git", "branches", environmentId ?? null, cwd, "search", query] as const,
+  workingTreeDiffs: (environmentId: EnvironmentId | null, cwd: string | null) =>
+    ["git", "working-tree-diff", environmentId ?? null, cwd] as const,
+  workingTreeDiff: (
+    environmentId: EnvironmentId | null,
+    cwd: string | null,
+    relativePath: string | null,
+  ) => ["git", "working-tree-diff", environmentId ?? null, cwd, relativePath] as const,
 };
 
 export const gitMutationKeys = {
@@ -116,6 +123,35 @@ export function gitResolvePullRequestQueryOptions(input: {
     },
     enabled: input.environmentId !== null && input.cwd !== null && input.reference !== null,
     staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function gitWorkingTreeDiffQueryOptions(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  relativePath: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: gitQueryKeys.workingTreeDiff(input.environmentId, input.cwd, input.relativePath),
+    queryFn: async () => {
+      if (!input.cwd || !input.relativePath || !input.environmentId) {
+        throw new Error("Git working tree diff is unavailable.");
+      }
+      const api = ensureEnvironmentApi(input.environmentId);
+      return api.git.getWorkingTreeDiff({
+        cwd: input.cwd,
+        relativePath: input.relativePath,
+      });
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      input.environmentId !== null &&
+      input.cwd !== null &&
+      input.relativePath !== null,
+    staleTime: 0,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });

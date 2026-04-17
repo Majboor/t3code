@@ -13,6 +13,8 @@ import {
   GitActionProgressEvent,
   GitCheckoutInput,
   GitCheckoutResult,
+  GitGetWorkingTreeDiffInput,
+  GitGetWorkingTreeDiffResult,
   GitCommandError,
   GitCreateBranchInput,
   GitCreateBranchResult,
@@ -106,6 +108,7 @@ export const WS_METHODS = {
   // Git methods
   gitPull: "git.pull",
   gitRefreshStatus: "git.refreshStatus",
+  gitGetWorkingTreeDiff: "git.getWorkingTreeDiff",
   gitRunStackedAction: "git.runStackedAction",
   gitListBranches: "git.listBranches",
   gitCreateWorktree: "git.createWorktree",
@@ -226,6 +229,12 @@ export const WsGitRefreshStatusRpc = Rpc.make(WS_METHODS.gitRefreshStatus, {
   payload: GitStatusInput,
   success: GitStatusResult,
   error: GitManagerServiceError,
+});
+
+export const WsGitGetWorkingTreeDiffRpc = Rpc.make(WS_METHODS.gitGetWorkingTreeDiff, {
+  payload: GitGetWorkingTreeDiffInput,
+  success: GitGetWorkingTreeDiffResult,
+  error: GitCommandError,
 });
 
 export const WsGitRunStackedActionRpc = Rpc.make(WS_METHODS.gitRunStackedAction, {
@@ -401,6 +410,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeGitStatusRpc,
   WsGitPullRpc,
   WsGitRefreshStatusRpc,
+  WsGitGetWorkingTreeDiffRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,

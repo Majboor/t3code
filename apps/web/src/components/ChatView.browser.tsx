@@ -7,6 +7,7 @@ import {
   CheckpointRef,
   EnvironmentId,
   type EnvironmentApi,
+  type GitStatusResult,
   type MessageId,
   type OrchestrationReadModel,
   type ProjectId,
@@ -57,12 +58,84 @@ import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test
 
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
-vi.mock("../lib/gitStatusState", () => ({
-  useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
-  useGitStatuses: () => new Map(),
-  refreshGitStatus: () => Promise.resolve(null),
-  resetGitStatusStateForTests: () => undefined,
-}));
+const gitStatusHarness = vi.hoisted(() => {
+  const EMPTY_STATE = {
+    data: null,
+    error: null,
+    cause: null,
+    isPending: false,
+  };
+  const listeners = new Set<() => void>();
+  const stateByKey = new Map<
+    string,
+    {
+      data: GitStatusResult | null;
+      error: null;
+      cause: null;
+      isPending: boolean;
+    }
+  >();
+
+  const keyFor = (target: { environmentId: string | null; cwd: string | null }) =>
+    target.environmentId && target.cwd ? `${target.environmentId}:${target.cwd}` : "null";
+  const emit = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+
+  const refreshMock = vi.fn(
+    async (target: { environmentId: string | null; cwd: string | null }) => {
+      return stateByKey.get(keyFor(target))?.data ?? null;
+    },
+  );
+
+  return {
+    refreshMock,
+    read(target: { environmentId: string | null; cwd: string | null }) {
+      return stateByKey.get(keyFor(target)) ?? EMPTY_STATE;
+    },
+    set(
+      target: { environmentId: string | null; cwd: string | null },
+      data: GitStatusResult | null,
+    ) {
+      stateByKey.set(keyFor(target), {
+        data,
+        error: null,
+        cause: null,
+        isPending: false,
+      });
+      emit();
+    },
+    clear() {
+      stateByKey.clear();
+      listeners.clear();
+      refreshMock.mockClear();
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+});
+
+vi.mock("../lib/gitStatusState", async () => {
+  const React = await import("react");
+
+  return {
+    useGitStatus: (target: { environmentId: string | null; cwd: string | null }) =>
+      React.useSyncExternalStore(
+        gitStatusHarness.subscribe,
+        () => gitStatusHarness.read(target),
+        () => gitStatusHarness.read(target),
+      ),
+    useGitStatuses: () => new Map(),
+    refreshGitStatus: gitStatusHarness.refreshMock,
+    resetGitStatusStateForTests: () => gitStatusHarness.clear(),
+  };
+});
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const THREAD_TITLE = "Browser test thread";
@@ -190,6 +263,28 @@ function createBaseServerConfig(): ServerConfig {
       ...DEFAULT_SERVER_SETTINGS,
       ...DEFAULT_CLIENT_SETTINGS,
     },
+  };
+}
+
+function createGitStatusSnapshot(input?: {
+  files?: Array<{ path: string; insertions: number; deletions: number }>;
+}): GitStatusResult {
+  const files = input?.files ?? [];
+  return {
+    isRepo: true,
+    hasOriginRemote: true,
+    isDefaultBranch: true,
+    branch: "main",
+    hasWorkingTreeChanges: files.length > 0,
+    workingTree: {
+      files,
+      insertions: files.reduce((total, file) => total + file.insertions, 0),
+      deletions: files.reduce((total, file) => total + file.deletions, 0),
+    },
+    hasUpstream: true,
+    aheadCount: 0,
+    behindCount: 0,
+    pr: null,
   };
 }
 
@@ -1624,6 +1719,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
+    gitStatusHarness.clear();
     __resetEnvironmentApiOverridesForTests();
     resetSavedEnvironmentRegistryStoreForTests();
     resetSavedEnvironmentRuntimeStoreForTests();
@@ -5821,6 +5917,151 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(listDirectoryCallCount).toBeGreaterThanOrEqual(2);
           expect(readFileCallCount).toBeGreaterThanOrEqual(2);
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows live workspace diffs inline while the active turn is still running", async () => {
+    let readFileCallCount = 0;
+    const workspaceRoot = "/repo/project";
+    const workspaceFilePath = "workspace-live.ts";
+    let workspaceFileContents = "export const live = false;\n";
+    const liveDiffPatch = [
+      "diff --git a/workspace-live.ts b/workspace-live.ts",
+      "index 1111111..2222222 100644",
+      "--- a/workspace-live.ts",
+      "+++ b/workspace-live.ts",
+      "@@ -1 +1 @@",
+      "-export const live = false;",
+      "+export const live = true;",
+    ].join("\n");
+
+    gitStatusHarness.set(
+      {
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        cwd: workspaceRoot,
+      },
+      createGitStatusSnapshot(),
+    );
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-workspace-live-diff-target" as MessageId,
+        targetText: "workspace live diff thread",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: workspaceFilePath,
+                path: workspaceFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          return {
+            relativePath: body.relativePath,
+            contents: workspaceFileContents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: workspaceFileContents.length,
+          };
+        }
+        if (body._tag === WS_METHODS.gitGetWorkingTreeDiff) {
+          return {
+            diff: liveDiffPatch,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
+      workspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await waitForElement(
+        () => document.querySelector('[data-workspace-file-mode="editor"]'),
+        "Expected workspace editor mode before live git diff lands.",
+      );
+      await vi.waitFor(
+        () => {
+          expect(gitStatusHarness.refreshMock).toHaveBeenCalled();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      const refreshCallCountBeforeUpdate = gitStatusHarness.refreshMock.mock.calls.length;
+
+      workspaceFileContents = "export const live = true;\n";
+      gitStatusHarness.set(
+        {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          cwd: workspaceRoot,
+        },
+        createGitStatusSnapshot({
+          files: [{ path: workspaceFilePath, insertions: 1, deletions: 1 }],
+        }),
+      );
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(2_500),
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  status: "running",
+                  activeTurnId: TurnId.make("turn-workspace-live-running"),
+                  updatedAt: isoAt(2_500),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(2_500),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBeGreaterThanOrEqual(2);
+          expect(gitStatusHarness.refreshMock.mock.calls.length).toBeGreaterThan(
+            refreshCallCountBeforeUpdate,
+          );
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.gitGetWorkingTreeDiff &&
+                request.relativePath === workspaceFilePath,
+            ),
+          ).toBe(true);
           expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
         },
         { timeout: 8_000, interval: 16 },

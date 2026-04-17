@@ -1682,6 +1682,44 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("returns a unified diff for tracked working tree changes", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "# updated\n");
+
+        const result = yield* core.getWorkingTreeDiff({
+          cwd: tmp,
+          relativePath: "README.md",
+        });
+
+        expect(result.diff).toContain("diff --git a/README.md b/README.md");
+        expect(result.diff).toContain("-# test");
+        expect(result.diff).toContain("+# updated");
+      }),
+    );
+
+    it.effect("returns a unified diff for untracked workspace files", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* makeDirectory(path.join(tmp, "src"));
+        yield* writeTextFile(path.join(tmp, "src/new-file.ts"), "export const created = true;\n");
+
+        const result = yield* core.getWorkingTreeDiff({
+          cwd: tmp,
+          relativePath: "src/new-file.ts",
+        });
+
+        expect(result.diff).toContain("b/src/new-file.ts");
+        expect(result.diff).toContain("+export const created = true;");
+      }),
+    );
+
     it.effect("returns a non-repo status for deleted directories", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

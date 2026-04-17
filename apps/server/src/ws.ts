@@ -885,6 +885,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               "rpc.aggregate": "git",
             },
           ),
+        [WS_METHODS.gitGetWorkingTreeDiff]: (input) =>
+          observeRpcEffect(WS_METHODS.gitGetWorkingTreeDiff, git.getWorkingTreeDiff(input), {
+            "rpc.aggregate": "git",
+          }),
         [WS_METHODS.gitPull]: (input) =>
           observeRpcEffect(
             WS_METHODS.gitPull,

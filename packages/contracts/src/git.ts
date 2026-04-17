@@ -110,6 +110,12 @@ export const GitStatusInput = Schema.Struct({
 });
 export type GitStatusInput = typeof GitStatusInput.Type;
 
+export const GitGetWorkingTreeDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  relativePath: TrimmedNonEmptyStringSchema,
+});
+export type GitGetWorkingTreeDiffInput = typeof GitGetWorkingTreeDiffInput.Type;
+
 export const GitPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
@@ -238,6 +244,11 @@ export const GitStatusResult = Schema.Struct({
   ...GitStatusRemoteShape,
 });
 export type GitStatusResult = typeof GitStatusResult.Type;
+
+export const GitGetWorkingTreeDiffResult = Schema.Struct({
+  diff: Schema.String,
+});
+export type GitGetWorkingTreeDiffResult = typeof GitGetWorkingTreeDiffResult.Type;
 
 export const GitStatusStreamEvent = Schema.Union([
   Schema.TaggedStruct("snapshot", {
