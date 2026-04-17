@@ -5926,19 +5926,29 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("shows live workspace diffs inline while the active turn is still running", async () => {
+  it("lets you review live workspace diff hunks one by one before clearing the badge", async () => {
     let readFileCallCount = 0;
     const workspaceRoot = "/repo/project";
-    const workspaceFilePath = "workspace-live.ts";
-    let workspaceFileContents = "export const live = false;\n";
+    const workspaceFilePath = "workspace-live-review.ts";
+    let workspaceFileContents = [
+      "export const first = false;",
+      "",
+      "export const second = false;",
+      "",
+      "export const stable = true;",
+      "",
+    ].join("\n");
     const liveDiffPatch = [
-      "diff --git a/workspace-live.ts b/workspace-live.ts",
+      "diff --git a/workspace-live-review.ts b/workspace-live-review.ts",
       "index 1111111..2222222 100644",
-      "--- a/workspace-live.ts",
-      "+++ b/workspace-live.ts",
+      "--- a/workspace-live-review.ts",
+      "+++ b/workspace-live-review.ts",
       "@@ -1 +1 @@",
-      "-export const live = false;",
-      "+export const live = true;",
+      "-export const first = false;",
+      "+export const first = true;",
+      "@@ -3 +3 @@",
+      "-export const second = false;",
+      "+export const second = true;",
     ].join("\n");
 
     gitStatusHarness.set(
@@ -6016,14 +6026,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const refreshCallCountBeforeUpdate = gitStatusHarness.refreshMock.mock.calls.length;
 
-      workspaceFileContents = "export const live = true;\n";
+      workspaceFileContents = [
+        "export const first = true;",
+        "",
+        "export const second = true;",
+        "",
+        "export const stable = true;",
+        "",
+      ].join("\n");
       gitStatusHarness.set(
         {
           environmentId: LOCAL_ENVIRONMENT_ID,
           cwd: workspaceRoot,
         },
         createGitStatusSnapshot({
-          files: [{ path: workspaceFilePath, insertions: 1, deletions: 1 }],
+          files: [{ path: workspaceFilePath, insertions: 2, deletions: 2 }],
         }),
       );
       fixture.snapshot = Object.assign({}, fixture.snapshot, {
@@ -6067,20 +6084,81 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      const acceptDiffButton = await waitForElement(
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector("[data-workspace-diff-review-status]")?.textContent,
+          ).toContain("Change 1 of 2");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const jumpSecondChangeButton = await waitForElement(
         () =>
           document.querySelector<HTMLButtonElement>(
-            'button[aria-label="Accept current diff and show file contents"]',
+            'button[aria-label="Jump to change 2, new 3, old 3"]',
           ),
-        'Unable to find "Accept current diff and show file contents" button.',
+        'Unable to find "Jump to change 2, new 3, old 3" button.',
       );
-      acceptDiffButton.click();
+      jumpSecondChangeButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector("[data-workspace-diff-review-status]")?.textContent,
+          ).toContain("Change 2 of 2");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const acceptChangeButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Accept the current change"]',
+          ),
+        'Unable to find "Accept the current change" button.',
+      );
+      acceptChangeButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector("[data-workspace-diff-review-status]")?.textContent,
+          ).toContain("Change 1 of 1");
+          expect(
+            document.querySelector('button[aria-label="Jump to change 2, new 3, old 3"]'),
+          ).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${workspaceFilePath}"]`),
+          ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const acceptFinalChangeButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Accept the current change"]',
+          ),
+        'Unable to find "Accept the current change" button for the final hunk.',
+      );
+      acceptFinalChangeButton.click();
 
       await waitForElement(
         () => document.querySelector('[data-workspace-file-mode="editor"]'),
-        "Expected workspace file pane to return to editor mode after accepting the diff.",
+        "Expected workspace file pane to return to editor mode after accepting the final change.",
       );
-      await expect.element(page.getByText("Live workspace diff accepted")).toBeInTheDocument();
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${workspaceFilePath}"]`),
+          ).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-entry-diff-state="${workspaceFilePath}"]`),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }
