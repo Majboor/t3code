@@ -237,6 +237,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         })
       : undefined,
   );
+  const activeEnvironmentId = activeThread?.environmentId ?? null;
   const activeWorkspaceRoot = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
   const workspaceLabel = activeWorkspaceRoot ? basenameOfPath(activeWorkspaceRoot) : "Workspace";
   const workspaceScopeLabel = activeThread?.worktreePath ? "Thread workspace" : "Project workspace";
@@ -287,7 +288,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
 
   const loadDirectory = useCallback(
     async (directoryPath: string | null) => {
-      if (!activeThread || !activeWorkspaceRoot) {
+      if (!activeEnvironmentId || !activeWorkspaceRoot) {
         return;
       }
 
@@ -297,7 +298,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       try {
         const result = await queryClient.fetchQuery(
           workspaceListDirectoryQueryOptions({
-            environmentId: activeThread.environmentId,
+            environmentId: activeEnvironmentId,
             cwd: activeWorkspaceRoot,
             ...(directoryPath ? { directoryPath } : {}),
           }),
@@ -325,12 +326,12 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         });
       }
     },
-    [activeThread, activeWorkspaceRoot, queryClient],
+    [activeEnvironmentId, activeWorkspaceRoot, queryClient],
   );
 
   const loadFile = useCallback(
     async (relativePath: string) => {
-      if (!activeThread || !activeWorkspaceRoot) {
+      if (!activeEnvironmentId || !activeWorkspaceRoot) {
         return;
       }
 
@@ -339,7 +340,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       try {
         const result = await queryClient.fetchQuery(
           workspaceReadFileQueryOptions({
-            environmentId: activeThread.environmentId,
+            environmentId: activeEnvironmentId,
             cwd: activeWorkspaceRoot,
             relativePath,
           }),
@@ -372,7 +373,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         setLoadingFilePath((current) => (current === relativePath ? null : current));
       }
     },
-    [activeThread, activeWorkspaceRoot, queryClient],
+    [activeEnvironmentId, activeWorkspaceRoot, queryClient],
   );
 
   useEffect(() => {
@@ -433,7 +434,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   );
 
   const refreshWorkspace = useCallback(() => {
-    if (!activeThread || !activeWorkspaceRoot) {
+    if (!activeEnvironmentId || !activeWorkspaceRoot) {
       return;
     }
 
@@ -453,7 +454,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     });
   }, [
     activeFilePath,
-    activeThread,
+    activeEnvironmentId,
     activeWorkspaceRoot,
     expandedDirectoriesByPath,
     loadDirectory,
@@ -512,7 +513,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   );
 
   const saveActiveFile = useCallback(async () => {
-    if (!activeThread || !activeWorkspaceRoot || !activeFilePath || !activeFileState) {
+    if (!activeEnvironmentId || !activeWorkspaceRoot || !activeFilePath || !activeFileState) {
       return;
     }
 
@@ -524,7 +525,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     setSavingFilePath(activeFilePath);
 
     try {
-      const api = ensureEnvironmentApi(activeThread.environmentId);
+      const api = ensureEnvironmentApi(activeEnvironmentId);
       await api.projects.writeFile({
         cwd: activeWorkspaceRoot,
         relativePath: activeFilePath,
@@ -543,11 +544,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         [activeFilePath]: nextFileState,
       }));
       await queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.file(
-          activeThread.environmentId,
-          activeWorkspaceRoot,
-          activeFilePath,
-        ),
+        queryKey: workspaceQueryKeys.file(activeEnvironmentId, activeWorkspaceRoot, activeFilePath),
       });
       toastManager.add({
         type: "success",
@@ -564,10 +561,10 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       setSavingFilePath((current) => (current === activeFilePath ? null : current));
     }
   }, [
+    activeEnvironmentId,
     activeFileDirty,
     activeFilePath,
     activeFileState,
-    activeThread,
     activeWorkspaceRoot,
     draftByPath,
     queryClient,
@@ -629,13 +626,13 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
 
   const submitCreateEntry = useCallback(async () => {
     const trimmedName = createDialogState.name.trim();
-    if (!activeThread || !activeWorkspaceRoot || !trimmedName) {
+    if (!activeEnvironmentId || !activeWorkspaceRoot || !trimmedName) {
       return;
     }
 
     const relativePath = joinRelativePath(actionDirectoryPath, trimmedName);
     try {
-      const api = ensureEnvironmentApi(activeThread.environmentId);
+      const api = ensureEnvironmentApi(activeEnvironmentId);
       await api.projects.createEntry({
         cwd: activeWorkspaceRoot,
         relativePath,
@@ -669,7 +666,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     }
   }, [
     actionDirectoryPath,
-    activeThread,
+    activeEnvironmentId,
     activeWorkspaceRoot,
     closeCreateEntryDialog,
     createDialogState.kind,
@@ -680,14 +677,14 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
 
   const uploadFilesToDirectory = useCallback(
     async (files: readonly File[], directoryPath: string | null) => {
-      if (!activeThread || !activeWorkspaceRoot || files.length === 0) {
+      if (!activeEnvironmentId || !activeWorkspaceRoot || files.length === 0) {
         return;
       }
 
       setUploadingDirectoryPath(directoryPath);
 
       try {
-        const api = ensureEnvironmentApi(activeThread.environmentId);
+        const api = ensureEnvironmentApi(activeEnvironmentId);
 
         for (const file of files) {
           const relativePath = joinRelativePath(directoryPath, file.name);
@@ -716,7 +713,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         setUploadingDirectoryPath(null);
       }
     },
-    [activeThread, activeWorkspaceRoot, loadDirectory],
+    [activeEnvironmentId, activeWorkspaceRoot, loadDirectory],
   );
 
   const handleUploadInputChange = useCallback(

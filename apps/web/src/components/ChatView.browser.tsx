@@ -5551,6 +5551,136 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps the workspace panel stable across prompt-driven thread updates", async () => {
+    let listDirectoryCallCount = 0;
+    let readFileCallCount = 0;
+    const workspaceFilePath = "workspace-refresh.ts";
+    const workspaceFileContents = "export const stable = true;\n";
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-workspace-refresh-target" as MessageId,
+        targetText: "workspace refresh thread",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          listDirectoryCallCount += 1;
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: workspaceFilePath,
+                path: workspaceFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          return {
+            relativePath: body.relativePath,
+            contents: workspaceFileContents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: workspaceFileContents.length,
+          };
+        }
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      await vi.waitFor(
+        () => {
+          expect(listDirectoryCallCount).toBe(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const workspaceFileButton = await waitForButtonByText(workspaceFilePath);
+      workspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            `button[aria-label="Close ${workspaceFilePath}"]`,
+          ),
+        `Unable to find close button for "${workspaceFilePath}".`,
+      );
+
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "Ship it");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const dispatchRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          );
+          expect(dispatchRequest).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(2_000),
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  updatedAt: isoAt(2_000),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(2_000),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(listDirectoryCallCount).toBe(1);
+          expect(readFileCallCount).toBe(1);
+          expect(
+            document.querySelector(`button[aria-label="Close ${workspaceFilePath}"]`),
+          ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows a tooltip with the skill description when hovering a skill pill", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
