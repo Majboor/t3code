@@ -35,8 +35,33 @@ export const authSessionRouteLayer = HttpRouter.add(
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const serverAuth = yield* ServerAuth;
+    const sessions = yield* SessionCredentialService;
     const session = yield* serverAuth.getSessionState(request);
-    return HttpServerResponse.jsonUnsafe(session, { status: 200 });
+    if (session.authenticated || session.auth.policy !== "loopback-browser") {
+      return HttpServerResponse.jsonUnsafe(session, { status: 200 });
+    }
+
+    const localSession = yield* serverAuth.issueLoopbackOwnerSession(
+      deriveAuthClientMetadata({ request }),
+    );
+
+    return yield* HttpServerResponse.jsonUnsafe(
+      {
+        authenticated: true,
+        auth: session.auth,
+        role: localSession.response.role,
+        sessionMethod: localSession.response.sessionMethod,
+        expiresAt: localSession.response.expiresAt,
+      },
+      { status: 200 },
+    ).pipe(
+      HttpServerResponse.setCookie(sessions.cookieName, localSession.sessionToken, {
+        expires: DateTime.toDate(localSession.response.expiresAt),
+        httpOnly: true,
+        path: "/",
+        sameSite: "lax",
+      }),
+    );
   }),
 );
 

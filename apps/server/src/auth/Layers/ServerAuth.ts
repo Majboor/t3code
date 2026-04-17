@@ -1,6 +1,7 @@
 import {
   type AuthBearerBootstrapResult,
   type AuthClientSession,
+  type AuthClientMetadata,
   type AuthBootstrapResult,
   type AuthPairingCredentialResult,
   type AuthSessionState,
@@ -30,6 +31,8 @@ type BootstrapExchangeResult = {
   readonly response: AuthBootstrapResult;
   readonly sessionToken: string;
 };
+
+const LOOPBACK_OWNER_SUBJECT = "loopback-local-owner";
 
 const AUTHORIZATION_PREFIX = "Bearer ";
 const WEBSOCKET_TOKEN_QUERY_PARAM = "wsToken";
@@ -92,6 +95,48 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
+  const toBootstrapExchangeResult = (session: {
+    readonly token: string;
+    readonly role: "owner" | "client";
+    readonly method: "browser-session-cookie" | "bearer-session-token";
+    readonly expiresAt: DateTime.DateTime;
+  }): BootstrapExchangeResult => ({
+    response: {
+      authenticated: true,
+      role: session.role,
+      sessionMethod: session.method,
+      expiresAt: DateTime.toUtc(session.expiresAt),
+    } satisfies AuthBootstrapResult,
+    sessionToken: session.token,
+  });
+
+  const issueBrowserSession = ({
+    role,
+    subject,
+    requestMetadata,
+  }: {
+    readonly role: "owner" | "client";
+    readonly subject: string;
+    readonly requestMetadata: AuthClientMetadata;
+  }) =>
+    sessions
+      .issue({
+        method: "browser-session-cookie",
+        subject,
+        role,
+        client: requestMetadata,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new AuthError({
+              message: "Failed to issue authenticated session.",
+              cause,
+            }),
+        ),
+        Effect.map(toBootstrapExchangeResult),
+      );
+
   const authenticateRequest = (request: HttpServerRequest.HttpServerRequest) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request);
@@ -127,6 +172,15 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
+  const issueLoopbackOwnerSession: ServerAuthShape["issueLoopbackOwnerSession"] = (
+    requestMetadata,
+  ) =>
+    issueBrowserSession({
+      role: "owner",
+      subject: LOOPBACK_OWNER_SUBJECT,
+      requestMetadata,
+    });
+
   const exchangeBootstrapCredential: ServerAuthShape["exchangeBootstrapCredential"] = (
     credential,
     requestMetadata,
@@ -134,37 +188,14 @@ export const makeServerAuth = Effect.gen(function* () {
     bootstrapCredentials.consume(credential).pipe(
       Effect.mapError(toBootstrapExchangeAuthError),
       Effect.flatMap((grant) =>
-        sessions
-          .issue({
-            method: "browser-session-cookie",
-            subject: grant.subject,
-            role: grant.role,
-            client: {
-              ...requestMetadata,
-              ...(grant.label ? { label: grant.label } : {}),
-            },
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new AuthError({
-                  message: "Failed to issue authenticated session.",
-                  cause,
-                }),
-            ),
-          ),
-      ),
-      Effect.map(
-        (session) =>
-          ({
-            response: {
-              authenticated: true,
-              role: session.role,
-              sessionMethod: session.method,
-              expiresAt: DateTime.toUtc(session.expiresAt),
-            } satisfies AuthBootstrapResult,
-            sessionToken: session.token,
-          }) satisfies BootstrapExchangeResult,
+        issueBrowserSession({
+          role: grant.role,
+          subject: grant.subject,
+          requestMetadata: {
+            ...requestMetadata,
+            ...(grant.label ? { label: grant.label } : {}),
+          },
+        }),
       ),
     );
 
@@ -373,6 +404,7 @@ export const makeServerAuth = Effect.gen(function* () {
   return {
     getDescriptor: () => Effect.succeed(descriptor),
     getSessionState,
+    issueLoopbackOwnerSession,
     exchangeBootstrapCredential,
     exchangeBootstrapCredentialForBearerSession,
     issuePairingCredential,

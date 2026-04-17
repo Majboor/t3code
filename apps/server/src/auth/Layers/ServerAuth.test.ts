@@ -117,6 +117,30 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
     }).pipe(Effect.provide(makeServerAuthLayer())),
   );
 
+  it.effect("issues loopback owner sessions without a pairing credential", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+
+      const issued = yield* serverAuth.issueLoopbackOwnerSession(requestMetadata);
+      const verified = yield* serverAuth.authenticateHttpRequest(
+        makeCookieRequest(issued.sessionToken),
+      );
+
+      expect(issued.response.authenticated).toBe(true);
+      expect(issued.response.role).toBe("owner");
+      expect(issued.response.sessionMethod).toBe("browser-session-cookie");
+      expect(verified.role).toBe("owner");
+      expect(verified.subject).toBe("loopback-local-owner");
+    }).pipe(
+      Effect.provide(
+        makeServerAuthLayer({
+          mode: "web",
+          host: "127.0.0.1",
+        }),
+      ),
+    ),
+  );
+
   it.effect("lists pairing links and revokes other client sessions while keeping the owner", () =>
     Effect.gen(function* () {
       const serverAuth = yield* ServerAuth;
