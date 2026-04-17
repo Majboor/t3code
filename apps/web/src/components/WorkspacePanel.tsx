@@ -1,22 +1,24 @@
 import Editor from "@monaco-editor/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import type {
   ProjectCreateEntryInput,
   ProjectDirectoryEntry,
   ProjectReadFileResult,
+  TurnId,
 } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime";
 import { createThreadSelectorByRef } from "~/storeSelectors";
 import {
+  ChevronRightIcon,
   FilePlus2Icon,
+  FileWarningIcon,
   FolderClosedIcon,
   FolderPlusIcon,
   HardDriveUploadIcon,
   LoaderCircleIcon,
   RefreshCcwIcon,
   SaveIcon,
-  ChevronRightIcon,
-  FileWarningIcon,
 } from "lucide-react";
 import {
   type ChangeEvent,
@@ -30,7 +32,10 @@ import {
 } from "react";
 
 import { ensureEnvironmentApi } from "~/environmentApi";
+import { stripDiffSearchParams } from "~/diffRouteSearch";
 import { useTheme } from "~/hooks/useTheme";
+import { useTurnDiffSummaries } from "~/hooks/useTurnDiffSummaries";
+import { buildWorkspaceAgentFileDiffHistory } from "~/lib/workspaceAgentDiffs";
 import {
   workspaceListDirectoryQueryOptions,
   workspaceQueryKeys,
@@ -38,10 +43,12 @@ import {
 } from "~/lib/workspaceReactQuery";
 import { cn } from "~/lib/utils";
 import { selectProjectByRef, useStore } from "~/store";
-import { resolveThreadRouteRef } from "~/threadRoutes";
+import { buildThreadRouteParams, resolveThreadRouteRef } from "~/threadRoutes";
 import { basenameOfPath } from "~/vscode-icons";
 
+import { DiffStatLabel, hasNonZeroStat } from "./chat/DiffStatLabel";
 import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
+import { WorkspaceAgentDiffPreview } from "./WorkspaceAgentDiffPreview";
 import {
   WorkspacePanelLoadingState,
   WorkspacePanelShell,
@@ -112,6 +119,8 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   selected: boolean;
   dropTarget: boolean;
   resolvedTheme: "light" | "dark";
+  agentChanged: boolean;
+  agentDiffStat?: { additions: number; deletions: number } | null;
   onToggleDirectory: (directoryPath: string) => void;
   onOpenFile: (relativePath: string) => void;
   onSelectEntry: (entry: Pick<ProjectDirectoryEntry, "kind" | "path">) => void;
@@ -174,6 +183,7 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
         props.selected
           ? "bg-accent text-accent-foreground"
           : "text-muted-foreground/80 hover:bg-accent/70 hover:text-foreground",
+        props.agentChanged && "text-foreground/90",
       )}
       style={{ paddingLeft: `${paddingLeft + 18}px` }}
       onClick={() => {
@@ -188,6 +198,18 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
         className="size-3.5"
       />
       <span className="truncate text-xs">{entry.name}</span>
+      {props.agentChanged ? (
+        <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">
+          {props.agentDiffStat && hasNonZeroStat(props.agentDiffStat) ? (
+            <DiffStatLabel
+              additions={props.agentDiffStat.additions}
+              deletions={props.agentDiffStat.deletions}
+            />
+          ) : (
+            <span className="text-primary/80">changed</span>
+          )}
+        </span>
+      ) : null}
     </button>
   );
 });
@@ -197,6 +219,7 @@ interface WorkspacePanelProps {
 }
 
 export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const routeThreadRef = useParams({
@@ -217,6 +240,13 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const activeWorkspaceRoot = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
   const workspaceLabel = activeWorkspaceRoot ? basenameOfPath(activeWorkspaceRoot) : "Workspace";
   const workspaceScopeLabel = activeThread?.worktreePath ? "Thread workspace" : "Project workspace";
+  const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
+    useTurnDiffSummaries(activeThread);
+  const workspaceAgentDiffHistoryByPath = useMemo(
+    () =>
+      buildWorkspaceAgentFileDiffHistory(turnDiffSummaries, inferredCheckpointTurnCountByTurnId),
+    [inferredCheckpointTurnCountByTurnId, turnDiffSummaries],
+  );
   const workspaceRootRef = useRef(activeWorkspaceRoot);
   workspaceRootRef.current = activeWorkspaceRoot;
 
@@ -451,6 +481,9 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     return dirtyPaths;
   }, [draftByPath, fileStateByPath, openTabs]);
   const activeFileDirty = activeFilePath ? dirtyFilePathSet.has(activeFilePath) : false;
+  const activeFileDiffHistory = activeFilePath
+    ? (workspaceAgentDiffHistoryByPath.get(activeFilePath) ?? [])
+    : [];
 
   const actionDirectoryPath =
     selectedEntry.kind === "directory"
@@ -460,6 +493,23 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         : activeFilePath
           ? parentDirectoryOf(activeFilePath)
           : null;
+  const openFileDiff = useCallback(
+    (turnId: TurnId, filePath: string) => {
+      if (!activeThread) {
+        return;
+      }
+
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(scopeThreadRef(activeThread.environmentId, activeThread.id)),
+        search: (previous) => {
+          const rest = stripDiffSearchParams(previous);
+          return { ...rest, diff: "1", diffTurnId: turnId, diffFilePath: filePath };
+        },
+      });
+    },
+    [activeThread, navigate],
+  );
 
   const saveActiveFile = useCallback(async () => {
     if (!activeThread || !activeWorkspaceRoot || !activeFilePath || !activeFileState) {
@@ -715,6 +765,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       entries.map((entry) => {
         const isDirectoryExpanded = Boolean(expandedDirectoriesByPath[directoryKey(entry.path)]);
         const childEntries = directoryEntriesByPath[directoryKey(entry.path)] ?? [];
+        const latestAgentDiff = workspaceAgentDiffHistoryByPath.get(entry.path)?.[0] ?? null;
         return (
           <WorkspaceExplorerRow
             key={entry.path}
@@ -725,6 +776,8 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
             selected={selectedEntry.path === entry.path}
             dropTarget={dropTargetDirectoryPath === entry.path}
             resolvedTheme={resolvedTheme}
+            agentChanged={latestAgentDiff !== null}
+            agentDiffStat={latestAgentDiff?.stat ?? null}
             onToggleDirectory={toggleDirectory}
             onOpenFile={openFile}
             onSelectEntry={setSelectedEntry}
@@ -750,6 +803,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       resolvedTheme,
       selectedEntry.path,
       toggleDirectory,
+      workspaceAgentDiffHistoryByPath,
     ],
   );
 
@@ -943,6 +997,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                 openTabs.map((tabPath) => {
                   const dirty = dirtyFilePathSet.has(tabPath);
                   const active = tabPath === activeFilePath;
+                  const latestAgentDiff = workspaceAgentDiffHistoryByPath.get(tabPath)?.[0] ?? null;
                   return (
                     <div
                       key={tabPath}
@@ -970,6 +1025,18 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                             unsaved
                           </span>
                         ) : null}
+                        {!dirty && latestAgentDiff ? (
+                          <span className="font-mono text-[9px] tabular-nums text-muted-foreground/80">
+                            {hasNonZeroStat(latestAgentDiff.stat) ? (
+                              <DiffStatLabel
+                                additions={latestAgentDiff.stat.additions}
+                                deletions={latestAgentDiff.stat.deletions}
+                              />
+                            ) : (
+                              "agent"
+                            )}
+                          </span>
+                        ) : null}
                       </button>
                       <button
                         type="button"
@@ -986,67 +1053,80 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
             </div>
           </div>
 
-          <div className="min-h-0 flex-1">
-            {!activeFilePath ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-                <div className="rounded-full border border-border/70 bg-card/70 p-3">
-                  <FilePlus2Icon className="size-5 text-muted-foreground/70" />
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1">
+              {!activeFilePath ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+                  <div className="rounded-full border border-border/70 bg-card/70 p-3">
+                    <FilePlus2Icon className="size-5 text-muted-foreground/70" />
+                  </div>
+                  <div className="text-sm font-medium text-foreground">
+                    Select a file to start editing
+                  </div>
+                  <div className="max-w-md text-xs text-muted-foreground/70">
+                    Create a file, upload one into the explorer, or open an existing file from the
+                    workspace tree.
+                  </div>
                 </div>
-                <div className="text-sm font-medium text-foreground">
-                  Select a file to start editing
+              ) : loadingFilePath === activeFilePath && !activeFileState ? (
+                <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground/70">
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                  Loading file…
                 </div>
-                <div className="max-w-md text-xs text-muted-foreground/70">
-                  Create a file, upload one into the explorer, or open an existing file from the
-                  workspace tree.
+              ) : activeFileState?.isBinary ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+                  <FileWarningIcon className="size-5 text-muted-foreground/70" />
+                  <div className="text-sm font-medium text-foreground">
+                    Binary files aren&apos;t editable here yet
+                  </div>
+                  <div className="text-xs text-muted-foreground/70">{activeFilePath}</div>
                 </div>
-              </div>
-            ) : loadingFilePath === activeFilePath && !activeFileState ? (
-              <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground/70">
-                <LoaderCircleIcon className="size-4 animate-spin" />
-                Loading file…
-              </div>
-            ) : activeFileState?.isBinary ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-                <FileWarningIcon className="size-5 text-muted-foreground/70" />
-                <div className="text-sm font-medium text-foreground">
-                  Binary files aren&apos;t editable here yet
+              ) : activeFileState?.tooLarge ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+                  <FileWarningIcon className="size-5 text-muted-foreground/70" />
+                  <div className="text-sm font-medium text-foreground">
+                    This file is too large to open in the editor
+                  </div>
+                  <div className="text-xs text-muted-foreground/70">{activeFilePath}</div>
                 </div>
-                <div className="text-xs text-muted-foreground/70">{activeFilePath}</div>
-              </div>
-            ) : activeFileState?.tooLarge ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-                <FileWarningIcon className="size-5 text-muted-foreground/70" />
-                <div className="text-sm font-medium text-foreground">
-                  This file is too large to open in the editor
+              ) : activeFileState ? (
+                <Editor
+                  height="100%"
+                  path={activeFilePath}
+                  theme={resolvedTheme === "dark" ? "vs-dark" : "vs"}
+                  value={activeFileDraft}
+                  onChange={(nextValue) => {
+                    setDraftByPath((current) => ({
+                      ...current,
+                      [activeFilePath]: nextValue ?? "",
+                    }));
+                  }}
+                  options={{
+                    automaticLayout: true,
+                    fontSize: 13,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    smoothScrolling: true,
+                    wordWrap: "on",
+                  }}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
+                  Select a file to start editing.
                 </div>
-                <div className="text-xs text-muted-foreground/70">{activeFilePath}</div>
-              </div>
-            ) : activeFileState ? (
-              <Editor
-                height="100%"
-                path={activeFilePath}
-                theme={resolvedTheme === "dark" ? "vs-dark" : "vs"}
-                value={activeFileDraft}
-                onChange={(nextValue) => {
-                  setDraftByPath((current) => ({
-                    ...current,
-                    [activeFilePath]: nextValue ?? "",
-                  }));
-                }}
-                options={{
-                  automaticLayout: true,
-                  fontSize: 13,
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  smoothScrolling: true,
-                  wordWrap: "on",
-                }}
+              )}
+            </div>
+
+            {activeFilePath && activeFileDiffHistory.length > 0 ? (
+              <WorkspaceAgentDiffPreview
+                environmentId={activeThread.environmentId}
+                threadId={activeThread.id}
+                filePath={activeFilePath}
+                fileHistory={activeFileDiffHistory}
+                resolvedTheme={resolvedTheme}
+                onOpenFullDiff={openFileDiff}
               />
-            ) : (
-              <div className="flex h-full items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
-                Select a file to start editing.
-              </div>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
