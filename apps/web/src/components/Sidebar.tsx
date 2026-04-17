@@ -152,6 +152,7 @@ import {
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
+  prioritizeProjectDropCollisions,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
@@ -3230,12 +3231,20 @@ export default function Sidebar() {
     }),
   );
   const projectCollisionDetection = useCallback<CollisionDetection>((args) => {
-    const pointerCollisions = pointerWithin(args);
+    const pointerCollisions = prioritizeProjectDropCollisions({
+      collisions: pointerWithin(args),
+      activeId: args.active.id,
+      isCategoryCollision: (id) => parseProjectCategoryDropId(id) !== null,
+    });
     if (pointerCollisions.length > 0) {
       return pointerCollisions;
     }
 
-    return closestCorners(args);
+    return prioritizeProjectDropCollisions({
+      collisions: closestCorners(args),
+      activeId: args.active.id,
+      isCategoryCollision: (id) => parseProjectCategoryDropId(id) !== null,
+    });
   }, []);
 
   const handleProjectDragEnd = useCallback(

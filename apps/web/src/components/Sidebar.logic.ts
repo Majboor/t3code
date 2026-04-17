@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { Collision, UniqueIdentifier } from "@dnd-kit/core";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -239,6 +240,26 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   });
   const remaining = items.filter((item) => !preferredIdSet.has(getId(item)));
   return [...ordered, ...remaining];
+}
+
+export function prioritizeProjectDropCollisions(input: {
+  collisions: readonly Collision[];
+  activeId: UniqueIdentifier;
+  isCategoryCollision: (id: UniqueIdentifier) => boolean;
+}): Collision[] {
+  if (input.collisions.length === 0) {
+    return [];
+  }
+
+  const nonActiveCollisions = input.collisions.filter(
+    (collision) => collision.id !== input.activeId,
+  );
+  const candidateCollisions =
+    nonActiveCollisions.length > 0 ? nonActiveCollisions : [...input.collisions];
+  const categoryCollisions = candidateCollisions.filter((collision) =>
+    input.isCategoryCollision(collision.id),
+  );
+  return categoryCollisions.length > 0 ? categoryCollisions : candidateCollisions;
 }
 
 export function getVisibleSidebarThreadIds<TThreadId>(
