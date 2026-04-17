@@ -5520,6 +5520,37 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("renders the workspace panel contents when opening it from the thread header", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-workspace-panel-target" as MessageId,
+        targetText: "workspace panel thread",
+      }),
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+
+      workspaceToggle.click();
+
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await expect.element(page.getByText("No open files")).toBeInTheDocument();
+      await expect.element(page.getByText("Select a file to start editing")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows a tooltip with the skill description when hovering a skill pill", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

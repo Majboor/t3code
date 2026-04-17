@@ -337,6 +337,7 @@ function ChatThreadRouteView() {
             environmentId={threadRef.environmentId}
             threadId={threadRef.threadId}
             onDiffPanelOpen={markDiffOpened}
+            onWorkspacePanelOpen={markWorkspaceOpened}
             reserveTitleBarControlInset={!rightPanelOpen}
             routeKind="server"
           />
@@ -360,6 +361,7 @@ function ChatThreadRouteView() {
           environmentId={threadRef.environmentId}
           threadId={threadRef.threadId}
           onDiffPanelOpen={markDiffOpened}
+          onWorkspacePanelOpen={markWorkspaceOpened}
           routeKind="server"
         />
       </SidebarInset>

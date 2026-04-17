@@ -318,6 +318,7 @@ type ChatViewProps =
       environmentId: EnvironmentId;
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
+      onWorkspacePanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       routeKind: "server";
       draftId?: never;
@@ -326,6 +327,7 @@ type ChatViewProps =
       environmentId: EnvironmentId;
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
+      onWorkspacePanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       routeKind: "draft";
       draftId: DraftId;
@@ -585,6 +587,7 @@ export default function ChatView(props: ChatViewProps) {
     threadId,
     routeKind,
     onDiffPanelOpen,
+    onWorkspacePanelOpen,
     reserveTitleBarControlInset = true,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
@@ -1475,6 +1478,9 @@ export default function ChatView(props: ChatViewProps) {
     if (!isServerThread) {
       return;
     }
+    if (!workspaceOpen) {
+      onWorkspacePanelOpen?.();
+    }
 
     void navigate({
       to: "/$environmentId/$threadId",
@@ -1488,7 +1494,7 @@ export default function ChatView(props: ChatViewProps) {
         return workspaceOpen ? { ...rest, workspace: undefined } : { ...rest, workspace: "1" };
       },
     });
-  }, [environmentId, isServerThread, navigate, threadId, workspaceOpen]);
+  }, [environmentId, isServerThread, navigate, onWorkspacePanelOpen, threadId, workspaceOpen]);
   const onToggleDiff = useCallback(() => {
     if (!isServerThread) {
       return;
