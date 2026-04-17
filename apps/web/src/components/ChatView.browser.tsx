@@ -6026,23 +6026,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const refreshCallCountBeforeUpdate = gitStatusHarness.refreshMock.mock.calls.length;
 
-      workspaceFileContents = [
-        "export const first = true;",
-        "",
-        "export const second = true;",
-        "",
-        "export const stable = true;",
-        "",
-      ].join("\n");
-      gitStatusHarness.set(
-        {
-          environmentId: LOCAL_ENVIRONMENT_ID,
-          cwd: workspaceRoot,
-        },
-        createGitStatusSnapshot({
-          files: [{ path: workspaceFilePath, insertions: 2, deletions: 2 }],
-        }),
-      );
       fixture.snapshot = Object.assign({}, fixture.snapshot, {
         snapshotSequence: fixture.snapshot.snapshotSequence + 1,
         threads: fixture.snapshot.threads.map((thread) => {
@@ -6068,10 +6051,34 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await vi.waitFor(
         () => {
-          expect(readFileCallCount).toBeGreaterThanOrEqual(2);
           expect(gitStatusHarness.refreshMock.mock.calls.length).toBeGreaterThan(
             refreshCallCountBeforeUpdate,
           );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      workspaceFileContents = [
+        "export const first = true;",
+        "",
+        "export const second = true;",
+        "",
+        "export const stable = true;",
+        "",
+      ].join("\n");
+      gitStatusHarness.set(
+        {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          cwd: workspaceRoot,
+        },
+        createGitStatusSnapshot({
+          files: [{ path: workspaceFilePath, insertions: 2, deletions: 2 }],
+        }),
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBeGreaterThanOrEqual(2);
           expect(
             wsRequests.some(
               (request) =>
@@ -6159,6 +6166,130 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not show live review controls for diffs that already existed before the turn started", async () => {
+    let readFileCallCount = 0;
+    const workspaceRoot = "/repo/project";
+    const workspaceFilePath = "workspace-existing-diff.ts";
+    const workspaceFileContents = "export const existing = true;\n";
+
+    gitStatusHarness.set(
+      {
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        cwd: workspaceRoot,
+      },
+      createGitStatusSnapshot({
+        files: [{ path: workspaceFilePath, insertions: 1, deletions: 0 }],
+      }),
+    );
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-workspace-existing-diff-target" as MessageId,
+        targetText: "workspace existing diff thread",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: workspaceFilePath,
+                path: workspaceFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          return {
+            relativePath: body.relativePath,
+            contents: workspaceFileContents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: workspaceFileContents.length,
+          };
+        }
+        if (body._tag === WS_METHODS.gitGetWorkingTreeDiff) {
+          return {
+            diff: [
+              "diff --git a/workspace-existing-diff.ts b/workspace-existing-diff.ts",
+              "index 1111111..2222222 100644",
+              "--- a/workspace-existing-diff.ts",
+              "+++ b/workspace-existing-diff.ts",
+              "@@ -0,0 +1 @@",
+              "+export const existing = true;",
+            ].join("\n"),
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
+      workspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+          expect(document.querySelector('[data-workspace-file-mode="editor"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(3_000),
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  status: "running",
+                  activeTurnId: TurnId.make("turn-workspace-existing-diff-running"),
+                  updatedAt: isoAt(3_000),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(3_000),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(gitStatusHarness.refreshMock).toHaveBeenCalled();
+          expect(document.querySelector('[data-workspace-file-mode="editor"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      expect(document.querySelector("[data-workspace-diff-review='controls']")).toBeNull();
+      expect(
+        wsRequests.some(
+          (request) =>
+            request._tag === WS_METHODS.gitGetWorkingTreeDiff &&
+            request.relativePath === workspaceFilePath,
+        ),
+      ).toBe(false);
     } finally {
       await mounted.cleanup();
     }
