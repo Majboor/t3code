@@ -6066,6 +6066,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+
+      const acceptDiffButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Accept current diff and show file contents"]',
+          ),
+        'Unable to find "Accept current diff and show file contents" button.',
+      );
+      acceptDiffButton.click();
+
+      await waitForElement(
+        () => document.querySelector('[data-workspace-file-mode="editor"]'),
+        "Expected workspace file pane to return to editor mode after accepting the diff.",
+      );
+      await expect.element(page.getByText("Live workspace diff accepted")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

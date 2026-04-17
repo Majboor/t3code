@@ -599,6 +599,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     activeFilePath !== null &&
     !activeFileDirty &&
     (activeFileHasLiveDiff || activeFileDiffHistory.length > 0);
+  const activeInlineDiffAccepted = canShowActiveInlineDiff && activeFileViewMode === "editor";
   const activeInlineDiffSource = activeFileHasLiveDiff
     ? "working-tree"
     : activeFileDiffHistory.length > 0
@@ -1475,11 +1476,13 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                     {activeInlineDiffSource === "working-tree" ? (
                       <>
                         Live workspace diff
+                        {activeInlineDiffAccepted ? " accepted" : ""}
                         {activeFileDirty ? " · local edits active" : ""}
                       </>
                     ) : selectedActiveDiffEntry ? (
                       <>
                         Turn {selectedActiveDiffEntry.checkpointTurnCount ?? "?"} agent diff
+                        {activeInlineDiffAccepted ? " accepted" : ""}
                         {activeFileDirty ? " · local edits active" : ""}
                       </>
                     ) : (
@@ -1511,7 +1514,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                       type="button"
                       size="xs"
                       variant={activeFileViewMode === "editor" ? "default" : "outline"}
-                      aria-label="Show editable file contents"
+                      aria-label="Accept current diff and show file contents"
                       onClick={() => {
                         if (!activeFilePath) {
                           return;
@@ -1522,7 +1525,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                         }));
                       }}
                     >
-                      Edit
+                      {activeInlineDiffAccepted ? "Accepted" : "Accept"}
                     </Button>
                   </div>
                 ) : null}
