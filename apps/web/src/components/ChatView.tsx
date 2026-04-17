@@ -786,6 +786,7 @@ export default function ChatView(props: ChatViewProps) {
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
+  const workspaceOpen = rawSearch.workspace === "1";
   const diffOpen = rawSearch.diff === "1";
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadRef = useMemo(
@@ -1470,6 +1471,24 @@ export default function ChatView(props: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "diff.toggle", nonTerminalShortcutLabelOptions),
     [keybindings, nonTerminalShortcutLabelOptions],
   );
+  const onToggleWorkspace = useCallback(() => {
+    if (!isServerThread) {
+      return;
+    }
+
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: {
+        environmentId,
+        threadId,
+      },
+      replace: true,
+      search: (previous) => {
+        const rest = stripDiffSearchParams(previous);
+        return workspaceOpen ? { ...rest, workspace: undefined } : { ...rest, workspace: "1" };
+      },
+    });
+  }, [environmentId, isServerThread, navigate, threadId, workspaceOpen]);
   const onToggleDiff = useCallback(() => {
     if (!isServerThread) {
       return;
@@ -3235,12 +3254,15 @@ export default function ChatView(props: ChatViewProps) {
           terminalToggleShortcutLabel={terminalToggleShortcutLabel}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
+          workspaceAvailable={Boolean(activeWorkspaceRoot)}
+          workspaceOpen={workspaceOpen}
           diffOpen={diffOpen}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
+          onToggleWorkspace={onToggleWorkspace}
           onToggleDiff={onToggleDiff}
         />
       </header>

@@ -9,7 +9,14 @@
 import { Schema, Context } from "effect";
 import type { Effect } from "effect";
 
-import type { ProjectWriteFileInput, ProjectWriteFileResult } from "@t3tools/contracts";
+import type {
+  ProjectCreateEntryInput,
+  ProjectCreateEntryResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
+  ProjectWriteFileInput,
+  ProjectWriteFileResult,
+} from "@t3tools/contracts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths.ts";
 
 export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceFileSystemError>()(
@@ -28,6 +35,18 @@ export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceF
  */
 export interface WorkspaceFileSystemShape {
   /**
+   * Read a file relative to the workspace root.
+   *
+   * Binary and oversized files are reported without returning editable text.
+   */
+  readonly readFile: (
+    input: ProjectReadFileInput,
+  ) => Effect.Effect<
+    ProjectReadFileResult,
+    WorkspaceFileSystemError | WorkspacePathOutsideRootError
+  >;
+
+  /**
    * Write a file relative to the workspace root.
    *
    * Creates parent directories as needed and rejects paths that escape the
@@ -37,6 +56,16 @@ export interface WorkspaceFileSystemShape {
     input: ProjectWriteFileInput,
   ) => Effect.Effect<
     ProjectWriteFileResult,
+    WorkspaceFileSystemError | WorkspacePathOutsideRootError
+  >;
+
+  /**
+   * Create an empty file or directory relative to the workspace root.
+   */
+  readonly createEntry: (
+    input: ProjectCreateEntryInput,
+  ) => Effect.Effect<
+    ProjectCreateEntryResult,
     WorkspaceFileSystemError | WorkspacePathOutsideRootError
   >;
 }
