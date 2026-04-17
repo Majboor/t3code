@@ -3,6 +3,8 @@ import {
   ArrowUpDownIcon,
   ChevronRightIcon,
   CloudIcon,
+  FolderIcon,
+  FolderPlusIcon,
   GitPullRequestIcon,
   PlusIcon,
   SearchIcon,
@@ -29,6 +31,7 @@ import {
   type DragStartEvent,
   closestCorners,
   pointerWithin,
+  useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -61,7 +64,7 @@ import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isMacPlatform, newCommandId } from "../lib/utils";
+import { cn, isMacPlatform, newCommandId } from "../lib/utils";
 import {
   selectProjectByRef,
   selectProjectsAcrossEnvironments,
@@ -133,6 +136,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarHeader,
+  SidebarMenuAction,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -178,6 +182,14 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
+import {
+  buildSidebarProjectCategoryTree,
+  canAssignSidebarProjectCategoryParent,
+  orderSidebarProjectCategories,
+  resolveSidebarProjectCategoryId,
+  type SidebarProjectCategory,
+  type SidebarProjectCategoryNode,
+} from "../sidebarProjectCategories";
 const THREAD_PREVIEW_LIMIT = 6;
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
@@ -198,6 +210,21 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   repository_path: "Group by repository path",
   separate: "Keep separate",
 };
+const CATEGORY_DROP_ID_PREFIX = "project-category:";
+
+function projectCategoryDropId(categoryId: string): string {
+  return `${CATEGORY_DROP_ID_PREFIX}${categoryId}`;
+}
+
+function parseProjectCategoryDropId(value: string | number): string | null {
+  const normalized = String(value);
+  if (!normalized.startsWith(CATEGORY_DROP_ID_PREFIX)) {
+    return null;
+  }
+
+  const categoryId = normalized.slice(CATEGORY_DROP_ID_PREFIX.length).trim();
+  return categoryId.length > 0 ? categoryId : null;
+}
 
 function threadJumpLabelMapsEqual(
   left: ReadonlyMap<string, string>,
@@ -942,6 +969,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     sidebarProjectGroupingOverrides: settings.sidebarProjectGroupingOverrides,
   }));
   const { updateSettings } = useUpdateSettings();
+  const projectCategories = useUiStateStore((state) => state.projectCategories);
+  const projectCategoryAssignmentsByPhysicalKey = useUiStateStore(
+    (state) => state.projectCategoryAssignmentsByPhysicalKey,
+  );
+  const projectCategoryOrder = useUiStateStore((state) => state.projectCategoryOrder);
+  const assignProjectsToCategory = useUiStateStore((state) => state.assignProjectsToCategory);
   const router = useRouter();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const toggleProject = useUiStateStore((state) => state.toggleProject);
@@ -1093,6 +1126,43 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     }
     return counts;
   }, [memberProjectByScopedKey, project.memberProjects, projectThreads]);
+  const orderedProjectCategories = useMemo(
+    () => orderSidebarProjectCategories(projectCategories, projectCategoryOrder),
+    [projectCategories, projectCategoryOrder],
+  );
+  const categoryPathLabelById = useMemo(() => {
+    const categoryById = new Map(
+      orderedProjectCategories.map((category) => [category.id, category] as const),
+    );
+
+    const readLabel = (categoryId: string): string => {
+      const category = categoryById.get(categoryId);
+      if (!category) {
+        return categoryId;
+      }
+
+      const segments = [category.name];
+      let parentId = category.parentId;
+      while (parentId) {
+        const parent = categoryById.get(parentId);
+        if (!parent) {
+          break;
+        }
+        segments.unshift(parent.name);
+        parentId = parent.parentId;
+      }
+
+      return segments.join(" / ");
+    };
+
+    return new Map(
+      orderedProjectCategories.map((category) => [category.id, readLabel(category.id)] as const),
+    );
+  }, [orderedProjectCategories]);
+  const resolvedProjectCategoryId = useMemo(
+    () => resolveSidebarProjectCategoryId(project, projectCategoryAssignmentsByPhysicalKey),
+    [project, projectCategoryAssignmentsByPhysicalKey],
+  );
 
   const { projectStatus, visibleProjectThreads, orderedProjectThreadKeys } = useMemo(() => {
     const lastVisitedAtByThreadKey = new Map(
@@ -1422,10 +1492,33 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           };
         };
 
+        const projectCategoryMenuItems: ContextMenuItem<string>[] =
+          orderedProjectCategories.length > 0 || resolvedProjectCategoryId !== null
+            ? [
+                {
+                  id: "project-category:submenu",
+                  label: "Project category",
+                  children: [
+                    {
+                      id: "project-category:none",
+                      label: "No category",
+                      ...(resolvedProjectCategoryId === null ? { disabled: true } : {}),
+                    },
+                    ...orderedProjectCategories.map((category) => ({
+                      id: `project-category:${category.id}`,
+                      label: categoryPathLabelById.get(category.id) ?? category.name,
+                      ...(resolvedProjectCategoryId === category.id ? { disabled: true } : {}),
+                    })),
+                  ],
+                },
+              ]
+            : [];
+
         const clicked = await api.contextMenu.show(
           [
             buildTargetedItem("rename", "Rename project"),
             buildTargetedItem("grouping", "Project grouping…"),
+            ...projectCategoryMenuItems,
             buildTargetedItem("copy-path", "Copy Project Path"),
             buildTargetedItem("delete", "Remove project", {
               destructive: true,
@@ -1443,17 +1536,40 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
 
+        if (clicked === "project-category:none") {
+          assignProjectsToCategory(
+            project.memberProjects.map((member) => member.physicalProjectKey),
+            null,
+          );
+          return;
+        }
+
+        const clickedProjectCategoryId = clicked.startsWith("project-category:")
+          ? clicked.slice("project-category:".length)
+          : null;
+        if (clickedProjectCategoryId && clickedProjectCategoryId !== "submenu") {
+          assignProjectsToCategory(
+            project.memberProjects.map((member) => member.physicalProjectKey),
+            clickedProjectCategoryId,
+          );
+          return;
+        }
+
         await actionHandlers.get(clicked)?.();
       })();
     },
     [
+      assignProjectsToCategory,
+      categoryPathLabelById,
       copyPathToClipboard,
       handleRemoveProject,
       memberThreadCountByPhysicalKey,
       openProjectGroupingDialog,
       openProjectRenameDialog,
+      orderedProjectCategories,
       project.groupedProjectCount,
       project.memberProjects,
+      resolvedProjectCategoryId,
       suppressProjectClickForContextMenuRef,
     ],
   );
@@ -2139,6 +2255,114 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
   );
 });
 
+const SidebarProjectCategoryRow = memo(function SidebarProjectCategoryRow(props: {
+  node: SidebarProjectCategoryNode;
+  isManualProjectSorting: boolean;
+  onCreateSubcategory: (parentId: string) => void;
+  onEditCategory: (category: SidebarProjectCategory) => void;
+  onDeleteCategory: (category: SidebarProjectCategory) => void;
+  children?: React.ReactNode;
+}) {
+  const {
+    children,
+    isManualProjectSorting,
+    node,
+    onCreateSubcategory,
+    onDeleteCategory,
+    onEditCategory,
+  } = props;
+  const setProjectCategoryExpanded = useUiStateStore((state) => state.setProjectCategoryExpanded);
+  const categoryExpanded = useUiStateStore(
+    (state) => state.projectCategoryExpandedById[node.category.id] ?? true,
+  );
+  const { setNodeRef, isOver } = useDroppable({
+    id: projectCategoryDropId(node.category.id),
+    disabled: !isManualProjectSorting,
+  });
+
+  const handleCategoryContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) {
+          return;
+        }
+
+        const clicked = await api.contextMenu.show(
+          [
+            { id: "new-subcategory", label: "New subcategory" },
+            { id: "edit", label: "Edit category" },
+            { id: "delete", label: "Delete category", destructive: true },
+          ],
+          {
+            x: event.clientX,
+            y: event.clientY,
+          },
+        );
+
+        if (clicked === "new-subcategory") {
+          onCreateSubcategory(node.category.id);
+          return;
+        }
+
+        if (clicked === "edit") {
+          onEditCategory(node.category);
+          return;
+        }
+
+        if (clicked === "delete") {
+          onDeleteCategory(node.category);
+        }
+      })();
+    },
+    [node.category, onCreateSubcategory, onDeleteCategory, onEditCategory],
+  );
+
+  return (
+    <SidebarMenuItem className="rounded-md">
+      <div
+        ref={setNodeRef}
+        className={cn(
+          "relative rounded-md",
+          isManualProjectSorting && isOver && "ring-1 ring-primary/40",
+        )}
+      >
+        <SidebarMenuButton
+          size="sm"
+          className="gap-2 px-2 py-1.5 text-left hover:bg-accent hover:text-sidebar-accent-foreground"
+          onClick={() => setProjectCategoryExpanded(node.category.id, !categoryExpanded)}
+          onContextMenu={handleCategoryContextMenu}
+        >
+          <ChevronRightIcon
+            className={cn(
+              "size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150",
+              categoryExpanded && "rotate-90",
+            )}
+          />
+          <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/75" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90">
+            {node.category.name}
+          </span>
+          <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.projectCount}</span>
+        </SidebarMenuButton>
+        <SidebarMenuAction
+          showOnHover
+          className="top-1 right-1"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onCreateSubcategory(node.category.id);
+          }}
+        >
+          <FolderPlusIcon className="size-3.5" />
+        </SidebarMenuAction>
+      </div>
+      {categoryExpanded && children ? <SidebarMenuSub>{children}</SidebarMenuSub> : null}
+    </SidebarMenuItem>
+  );
+});
+
 function T3Wordmark() {
   return (
     <svg
@@ -2371,6 +2595,10 @@ interface SidebarProjectsContentProps {
   updateSettings: ReturnType<typeof useUpdateSettings>["updateSettings"];
   openAddProject: () => void;
   isManualProjectSorting: boolean;
+  projectCategories: readonly SidebarProjectCategory[];
+  projectCategoryOrder: readonly string[];
+  rootProjectCategories: readonly SidebarProjectCategoryNode[];
+  uncategorizedProjects: readonly SidebarProjectSnapshot[];
   projectDnDSensors: ReturnType<typeof useSensors>;
   projectCollisionDetection: CollisionDetection;
   handleProjectDragStart: (event: DragStartEvent) => void;
@@ -2411,6 +2639,10 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     updateSettings,
     openAddProject,
     isManualProjectSorting,
+    projectCategories,
+    projectCategoryOrder,
+    rootProjectCategories,
+    uncategorizedProjects,
     projectDnDSensors,
     projectCollisionDetection,
     handleProjectDragStart,
@@ -2435,6 +2667,19 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     attachProjectListAutoAnimateRef,
     projectsLength,
   } = props;
+  const addProjectCategory = useUiStateStore((state) => state.addProjectCategory);
+  const updateProjectCategoryState = useUiStateStore((state) => state.updateProjectCategory);
+  const deleteProjectCategoryState = useUiStateStore((state) => state.deleteProjectCategory);
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [categoryDialogTarget, setCategoryDialogTarget] = useState<SidebarProjectCategory | null>(
+    null,
+  );
+  const [categoryDialogName, setCategoryDialogName] = useState("");
+  const [categoryDialogParentId, setCategoryDialogParentId] = useState<string | "root">("root");
+  const orderedProjectCategories = useMemo(
+    () => orderSidebarProjectCategories(projectCategories, projectCategoryOrder),
+    [projectCategories, projectCategoryOrder],
+  );
 
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
@@ -2454,6 +2699,146 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     },
     [updateSettings],
   );
+  const openCreateCategoryDialog = useCallback((parentId: string | null = null) => {
+    setCategoryDialogOpen(true);
+    setCategoryDialogTarget(null);
+    setCategoryDialogName("");
+    setCategoryDialogParentId(parentId ?? "root");
+  }, []);
+  const openEditCategoryDialog = useCallback((category: SidebarProjectCategory) => {
+    setCategoryDialogOpen(true);
+    setCategoryDialogTarget(category);
+    setCategoryDialogName(category.name);
+    setCategoryDialogParentId(category.parentId ?? "root");
+  }, []);
+  const closeCategoryDialog = useCallback(() => {
+    setCategoryDialogOpen(false);
+    setCategoryDialogTarget(null);
+    setCategoryDialogName("");
+    setCategoryDialogParentId("root");
+  }, []);
+  const submitCategoryDialog = useCallback(() => {
+    const name = categoryDialogName.trim();
+    if (!name) {
+      toastManager.add({
+        type: "warning",
+        title: "Category name cannot be empty",
+      });
+      return;
+    }
+
+    const parentId = categoryDialogParentId === "root" ? null : categoryDialogParentId;
+    if (categoryDialogTarget) {
+      updateProjectCategoryState({
+        id: categoryDialogTarget.id,
+        name,
+        parentId,
+      });
+    } else {
+      addProjectCategory({
+        name,
+        parentId,
+      });
+    }
+
+    closeCategoryDialog();
+  }, [
+    addProjectCategory,
+    categoryDialogName,
+    categoryDialogParentId,
+    categoryDialogTarget,
+    closeCategoryDialog,
+    updateProjectCategoryState,
+  ]);
+  const deleteCategory = useCallback(
+    async (category: SidebarProjectCategory) => {
+      const api = readLocalApi();
+      if (!api) {
+        return;
+      }
+
+      const confirmed = await api.dialogs.confirm(
+        [
+          `Delete category "${category.name}"?`,
+          "Child categories move up one level and assigned projects move to the parent category.",
+        ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      deleteProjectCategoryState(category.id);
+    },
+    [deleteProjectCategoryState],
+  );
+  const availableCategoryParents = useMemo(
+    () =>
+      orderedProjectCategories.filter((category) =>
+        categoryDialogTarget
+          ? canAssignSidebarProjectCategoryParent({
+              categories: projectCategories,
+              categoryId: categoryDialogTarget.id,
+              parentId: category.id,
+            })
+          : true,
+      ),
+    [categoryDialogTarget, orderedProjectCategories, projectCategories],
+  );
+
+  const renderProjectRow = (project: SidebarProjectSnapshot) => {
+    const sharedProps: SidebarProjectItemProps = {
+      project,
+      isThreadListExpanded: expandedThreadListsByProject.has(project.projectKey),
+      activeRouteThreadKey: activeRouteProjectKey === project.projectKey ? routeThreadKey : null,
+      newThreadShortcutLabel,
+      handleNewThread,
+      archiveThread,
+      deleteThread,
+      threadJumpLabelByKey,
+      attachThreadListAutoAnimateRef,
+      expandThreadListForProject,
+      collapseThreadListForProject,
+      dragInProgressRef,
+      suppressProjectClickAfterDragRef,
+      suppressProjectClickForContextMenuRef,
+      isManualProjectSorting,
+      dragHandleProps: null,
+    };
+
+    if (!isManualProjectSorting) {
+      return <SidebarProjectListRow key={project.projectKey} {...sharedProps} />;
+    }
+
+    return (
+      <SortableProjectItem key={project.projectKey} projectId={project.projectKey}>
+        {(dragHandleProps) => (
+          <SidebarProjectItem {...sharedProps} dragHandleProps={dragHandleProps} />
+        )}
+      </SortableProjectItem>
+    );
+  };
+
+  const renderCategoryNode = (node: SidebarProjectCategoryNode): React.ReactNode => {
+    const categoryChildren = [
+      ...node.children.map(renderCategoryNode),
+      ...node.projects.map(renderProjectRow),
+    ];
+
+    return (
+      <SidebarProjectCategoryRow
+        key={node.category.id}
+        node={node}
+        isManualProjectSorting={isManualProjectSorting}
+        onCreateSubcategory={(parentId) => openCreateCategoryDialog(parentId)}
+        onEditCategory={openEditCategoryDialog}
+        onDeleteCategory={(category) => {
+          void deleteCategory(category);
+        }}
+      >
+        {categoryChildren}
+      </SidebarProjectCategoryRow>
+    );
+  };
 
   return (
     <SidebarContent className="gap-0">
@@ -2522,6 +2907,21 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 render={
                   <button
                     type="button"
+                    aria-label="Add category"
+                    className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => openCreateCategoryDialog(null)}
+                  />
+                }
+              >
+                <FolderPlusIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup side="right">Add category</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
                     aria-label="Add project"
                     data-testid="sidebar-add-project-trigger"
                     className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
@@ -2550,62 +2950,15 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 items={sortedProjects.map((project) => project.projectKey)}
                 strategy={verticalListSortingStrategy}
               >
-                {sortedProjects.map((project) => (
-                  <SortableProjectItem key={project.projectKey} projectId={project.projectKey}>
-                    {(dragHandleProps) => (
-                      <SidebarProjectItem
-                        project={project}
-                        isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
-                        activeRouteThreadKey={
-                          activeRouteProjectKey === project.projectKey ? routeThreadKey : null
-                        }
-                        newThreadShortcutLabel={newThreadShortcutLabel}
-                        handleNewThread={handleNewThread}
-                        archiveThread={archiveThread}
-                        deleteThread={deleteThread}
-                        threadJumpLabelByKey={threadJumpLabelByKey}
-                        attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-                        expandThreadListForProject={expandThreadListForProject}
-                        collapseThreadListForProject={collapseThreadListForProject}
-                        dragInProgressRef={dragInProgressRef}
-                        suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-                        suppressProjectClickForContextMenuRef={
-                          suppressProjectClickForContextMenuRef
-                        }
-                        isManualProjectSorting={isManualProjectSorting}
-                        dragHandleProps={dragHandleProps}
-                      />
-                    )}
-                  </SortableProjectItem>
-                ))}
+                {rootProjectCategories.map(renderCategoryNode)}
+                {uncategorizedProjects.map(renderProjectRow)}
               </SortableContext>
             </SidebarMenu>
           </DndContext>
         ) : (
           <SidebarMenu ref={attachProjectListAutoAnimateRef}>
-            {sortedProjects.map((project) => (
-              <SidebarProjectListRow
-                key={project.projectKey}
-                project={project}
-                isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
-                activeRouteThreadKey={
-                  activeRouteProjectKey === project.projectKey ? routeThreadKey : null
-                }
-                newThreadShortcutLabel={newThreadShortcutLabel}
-                handleNewThread={handleNewThread}
-                archiveThread={archiveThread}
-                deleteThread={deleteThread}
-                threadJumpLabelByKey={threadJumpLabelByKey}
-                attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-                expandThreadListForProject={expandThreadListForProject}
-                collapseThreadListForProject={collapseThreadListForProject}
-                dragInProgressRef={dragInProgressRef}
-                suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-                suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
-                isManualProjectSorting={isManualProjectSorting}
-                dragHandleProps={null}
-              />
-            ))}
+            {rootProjectCategories.map(renderCategoryNode)}
+            {uncategorizedProjects.map(renderProjectRow)}
           </SidebarMenu>
         )}
 
@@ -2614,6 +2967,76 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             No projects yet
           </div>
         )}
+        <Dialog
+          open={categoryDialogOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              closeCategoryDialog();
+            }
+          }}
+        >
+          <DialogPopup className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{categoryDialogTarget ? "Edit category" : "New category"}</DialogTitle>
+              <DialogDescription>
+                {categoryDialogTarget
+                  ? "Update the category label or move it under a different parent."
+                  : "Create a sidebar category for organizing projects."}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogPanel className="space-y-4">
+              <div className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">Category name</span>
+                <Input
+                  aria-label="Category name"
+                  value={categoryDialogName}
+                  onChange={(event) => setCategoryDialogName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      submitCategoryDialog();
+                    }
+                  }}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">Parent category</span>
+                <Select
+                  value={categoryDialogParentId}
+                  onValueChange={(value) => {
+                    setCategoryDialogParentId(value ?? "root");
+                  }}
+                >
+                  <SelectTrigger className="w-full" aria-label="Category parent">
+                    <SelectValue>
+                      {categoryDialogParentId === "root"
+                        ? "Top level"
+                        : (orderedProjectCategories.find(
+                            (category) => category.id === categoryDialogParentId,
+                          )?.name ?? "Top level")}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    <SelectItem hideIndicator value="root">
+                      Top level
+                    </SelectItem>
+                    {availableCategoryParents.map((category) => (
+                      <SelectItem key={category.id} hideIndicator value={category.id}>
+                        {category.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+            </DialogPanel>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeCategoryDialog}>
+                Cancel
+              </Button>
+              <Button onClick={submitCategoryDialog}>Save</Button>
+            </DialogFooter>
+          </DialogPopup>
+        </Dialog>
       </SidebarGroup>
     </SidebarContent>
   );
@@ -2623,7 +3046,13 @@ export default function Sidebar() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
+  const projectCategories = useUiStateStore((store) => store.projectCategories);
+  const projectCategoryAssignmentsByPhysicalKey = useUiStateStore(
+    (store) => store.projectCategoryAssignmentsByPhysicalKey,
+  );
+  const projectCategoryOrder = useUiStateStore((store) => store.projectCategoryOrder);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const assignProjectsToCategory = useUiStateStore((store) => store.assignProjectsToCategory);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
@@ -2819,15 +3248,34 @@ export default function Sidebar() {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
       const activeProject = sidebarProjects.find((project) => project.projectKey === active.id);
-      const overProject = sidebarProjects.find((project) => project.projectKey === over.id);
-      if (!activeProject || !overProject) return;
+      if (!activeProject) return;
       const activeMemberKeys = activeProject.memberProjects.map(
         (member) => member.physicalProjectKey,
       );
+
+      const overCategoryId = parseProjectCategoryDropId(over.id);
+      if (overCategoryId) {
+        assignProjectsToCategory(activeMemberKeys, overCategoryId);
+        return;
+      }
+
+      const overProject = sidebarProjects.find((project) => project.projectKey === over.id);
+      if (!overProject) return;
+
       const overMemberKeys = overProject.memberProjects.map((member) => member.physicalProjectKey);
+      const overProjectCategoryId =
+        resolveSidebarProjectCategoryId(overProject, projectCategoryAssignmentsByPhysicalKey) ??
+        null;
+      assignProjectsToCategory(activeMemberKeys, overProjectCategoryId);
       reorderProjects(activeMemberKeys, overMemberKeys);
     },
-    [sidebarProjectSortOrder, reorderProjects, sidebarProjects],
+    [
+      assignProjectsToCategory,
+      projectCategoryAssignmentsByPhysicalKey,
+      reorderProjects,
+      sidebarProjectSortOrder,
+      sidebarProjects,
+    ],
   );
 
   const handleProjectDragStart = useCallback(
@@ -2898,6 +3346,21 @@ export default function Sidebar() {
     sidebarProjects,
     visibleThreads,
   ]);
+  const { rootCategories, uncategorizedProjects } = useMemo(
+    () =>
+      buildSidebarProjectCategoryTree({
+        categories: projectCategories,
+        categoryOrder: projectCategoryOrder,
+        projects: sortedProjects,
+        categoryByPhysicalProjectKey: projectCategoryAssignmentsByPhysicalKey,
+      }),
+    [
+      projectCategories,
+      projectCategoryAssignmentsByPhysicalKey,
+      projectCategoryOrder,
+      sortedProjects,
+    ],
+  );
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
   const visibleSidebarThreadKeys = useMemo(
     () =>
@@ -3302,6 +3765,10 @@ export default function Sidebar() {
             updateSettings={updateSettings}
             openAddProject={openAddProjectCommandPalette}
             isManualProjectSorting={isManualProjectSorting}
+            projectCategories={projectCategories}
+            projectCategoryOrder={projectCategoryOrder}
+            rootProjectCategories={rootCategories}
+            uncategorizedProjects={uncategorizedProjects}
             projectDnDSensors={projectDnDSensors}
             projectCollisionDetection={projectCollisionDetection}
             handleProjectDragStart={handleProjectDragStart}
