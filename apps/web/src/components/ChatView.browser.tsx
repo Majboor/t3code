@@ -4,6 +4,7 @@ import "../index.css";
 import {
   EventId,
   ORCHESTRATION_WS_METHODS,
+  CheckpointRef,
   EnvironmentId,
   type EnvironmentApi,
   type MessageId,
@@ -12,7 +13,7 @@ import {
   type ServerConfig,
   type ServerLifecycleWelcomePayload,
   type ThreadId,
-  type TurnId,
+  TurnId,
   WS_METHODS,
   OrchestrationSessionStatus,
   DEFAULT_SERVER_SETTINGS,
@@ -5675,6 +5676,156 @@ describe("ChatView timeline estimator parity (full app)", () => {
           ).toBeTruthy();
         },
         { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows all changed files for the selected turn inside the workspace panel", async () => {
+    let readFileCallCount = 0;
+    const firstFilePath = "app.ts";
+    const secondFilePath = "utils.ts";
+    const firstFileContents = "export const app = 1;\n";
+    const secondFileContents = "export const util = true;\n";
+    const turnId = TurnId.make("turn-workspace-multi-file-diff");
+    const turnDiffPatch = [
+      "diff --git a/app.ts b/app.ts",
+      "index 1111111..2222222 100644",
+      "--- a/app.ts",
+      "+++ b/app.ts",
+      "@@ -1 +1 @@",
+      "-export const app = 0;",
+      "+export const app = 1;",
+      "diff --git a/utils.ts b/utils.ts",
+      "index 3333333..4444444 100644",
+      "--- a/utils.ts",
+      "+++ b/utils.ts",
+      "@@ -1 +1 @@",
+      "-export const util = false;",
+      "+export const util = true;",
+    ].join("\n");
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-workspace-multi-file-diff-target" as MessageId,
+      targetText: "workspace multi-file diff thread",
+    });
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                checkpoints: [
+                  {
+                    turnId,
+                    checkpointTurnCount: 2,
+                    checkpointRef: CheckpointRef.make("checkpoint-workspace-multi-file-diff"),
+                    status: "ready",
+                    files: [
+                      { path: firstFilePath, kind: "modified", additions: 1, deletions: 1 },
+                      { path: secondFilePath, kind: "modified", additions: 1, deletions: 1 },
+                    ],
+                    assistantMessageId: null,
+                    completedAt: isoAt(2_000),
+                  },
+                ],
+              }
+            : thread,
+        ),
+      },
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: firstFilePath,
+                path: firstFilePath,
+                kind: "file" as const,
+              },
+              {
+                name: secondFilePath,
+                path: secondFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          const contents =
+            body.relativePath === firstFilePath ? firstFileContents : secondFileContents;
+          return {
+            relativePath: body.relativePath,
+            contents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: contents.length,
+          };
+        }
+        if (body._tag === ORCHESTRATION_WS_METHODS.getTurnDiff) {
+          return {
+            threadId: THREAD_ID,
+            fromTurnCount: 1,
+            toTurnCount: 2,
+            diff: turnDiffPatch,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const firstWorkspaceFileButton = await waitForButtonContainingText(firstFilePath);
+      firstWorkspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some((request) => request._tag === ORCHESTRATION_WS_METHODS.getTurnDiff),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await expect.element(page.getByText("2 files in turn")).toBeInTheDocument();
+
+      const secondPreviewFileButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            `button[aria-label="Show agent diff for ${secondFilePath}"]`,
+          ),
+        `Unable to find workspace diff preview button for "${secondFilePath}".`,
+      );
+      secondPreviewFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(2);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(`button[aria-label="Close ${secondFilePath}"]`),
+        `Unable to find close button for "${secondFilePath}".`,
       );
     } finally {
       await mounted.cleanup();

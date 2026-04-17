@@ -8,10 +8,12 @@ import { useSettings } from "~/hooks/useSettings";
 import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
 import { cn } from "~/lib/utils";
 import { formatShortTimestamp } from "~/timestampFormat";
+import { basenameOfPath } from "~/vscode-icons";
 
 import { resolveDiffThemeName } from "../lib/diffRendering";
 import { DIFF_VIEWER_UNSAFE_CSS, getRenderablePatch, resolveFileDiffPath } from "../lib/patchDiff";
 import { type WorkspaceAgentFileDiff } from "../lib/workspaceAgentDiffs";
+import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
 import { Button } from "./ui/button";
 import { DiffStatLabel, hasNonZeroStat } from "./chat/DiffStatLabel";
 
@@ -22,12 +24,23 @@ interface WorkspaceAgentDiffPreviewProps {
   threadId: ThreadId;
   filePath: string;
   fileHistory: ReadonlyArray<WorkspaceAgentFileDiff>;
+  turnFilesByTurnId: ReadonlyMap<TurnId, ReadonlyArray<WorkspaceAgentFileDiff>>;
   resolvedTheme: "light" | "dark";
+  onOpenFile: (filePath: string) => void;
   onOpenFullDiff: (turnId: TurnId, filePath: string) => void;
 }
 
 export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps) {
-  const { environmentId, fileHistory, filePath, onOpenFullDiff, resolvedTheme, threadId } = props;
+  const {
+    environmentId,
+    fileHistory,
+    filePath,
+    onOpenFile,
+    onOpenFullDiff,
+    resolvedTheme,
+    threadId,
+    turnFilesByTurnId,
+  } = props;
   const settings = useSettings();
   const [selectedTurnId, setSelectedTurnId] = useState<TurnId | null>(
     () => fileHistory[0]?.turnId ?? null,
@@ -65,19 +78,40 @@ export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps)
       threadId,
       fromTurnCount: checkpointRange?.fromTurnCount ?? null,
       toTurnCount: checkpointRange?.toTurnCount ?? null,
-      cacheScope: selectedHistoryEntry
-        ? `workspace-file:${filePath}:${selectedHistoryEntry.turnId}`
-        : null,
+      cacheScope: selectedHistoryEntry ? `workspace-turn:${selectedHistoryEntry.turnId}` : null,
       enabled: selectedHistoryEntry !== null && checkpointRange !== null,
     }),
+  );
+  const selectedTurnFiles = useMemo(
+    () =>
+      (selectedHistoryEntry ? turnFilesByTurnId.get(selectedHistoryEntry.turnId) : undefined) ??
+      (selectedHistoryEntry ? [selectedHistoryEntry] : []),
+    [selectedHistoryEntry, turnFilesByTurnId],
+  );
+  const selectedPreviewFilePath = useMemo(() => {
+    if (selectedTurnFiles.some((entry) => entry.path === filePath)) {
+      return filePath;
+    }
+    return selectedTurnFiles[0]?.path ?? filePath;
+  }, [filePath, selectedTurnFiles]);
+  const selectedTurnStat = useMemo(
+    () =>
+      selectedTurnFiles.reduce(
+        (totals, entry) => ({
+          additions: totals.additions + entry.stat.additions,
+          deletions: totals.deletions + entry.stat.deletions,
+        }),
+        { additions: 0, deletions: 0 },
+      ),
+    [selectedTurnFiles],
   );
   const renderablePatch = useMemo(
     () =>
       getRenderablePatch(
         activeDiffQuery.data?.diff,
         selectedHistoryEntry
-          ? `workspace-file:${selectedHistoryEntry.turnId}:${resolvedTheme}`
-          : "workspace-file",
+          ? `workspace-turn:${selectedHistoryEntry.turnId}:${resolvedTheme}`
+          : "workspace-turn",
       ),
     [activeDiffQuery.data?.diff, resolvedTheme, selectedHistoryEntry],
   );
@@ -86,9 +120,11 @@ export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps)
       return null;
     }
     return (
-      renderablePatch.files.find((fileDiff) => resolveFileDiffPath(fileDiff) === filePath) ?? null
+      renderablePatch.files.find(
+        (fileDiff) => resolveFileDiffPath(fileDiff) === selectedPreviewFilePath,
+      ) ?? null
     );
-  }, [filePath, renderablePatch]);
+  }, [renderablePatch, selectedPreviewFilePath]);
   const diffError =
     activeDiffQuery.error instanceof Error
       ? activeDiffQuery.error.message
@@ -111,11 +147,14 @@ export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps)
             <span className="truncate">
               {fileHistory.length} turn{fileHistory.length === 1 ? "" : "s"}
             </span>
-            {hasNonZeroStat(selectedHistoryEntry.stat) ? (
+            <span className="truncate">
+              {selectedTurnFiles.length} file{selectedTurnFiles.length === 1 ? "" : "s"} in turn
+            </span>
+            {hasNonZeroStat(selectedTurnStat) ? (
               <span className="font-mono tabular-nums">
                 <DiffStatLabel
-                  additions={selectedHistoryEntry.stat.additions}
-                  deletions={selectedHistoryEntry.stat.deletions}
+                  additions={selectedTurnStat.additions}
+                  deletions={selectedTurnStat.deletions}
                 />
               </span>
             ) : (
@@ -127,10 +166,10 @@ export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps)
           type="button"
           size="xs"
           variant="outline"
-          onClick={() => onOpenFullDiff(selectedHistoryEntry.turnId, filePath)}
+          onClick={() => onOpenFullDiff(selectedHistoryEntry.turnId, selectedPreviewFilePath)}
         >
           <ExternalLinkIcon className="size-3" />
-          Full diff
+          Review turn
         </Button>
       </div>
 
@@ -168,48 +207,120 @@ export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps)
         })}
       </div>
 
-      <div className="max-h-[18rem] min-h-[12rem] overflow-auto bg-background/70 p-2">
-        {diffError && !renderablePatch ? (
-          <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive/80">
-            {diffError}
+      <div className="grid max-h-[18rem] min-h-[12rem] grid-cols-[15rem_minmax(0,1fr)] overflow-hidden bg-background/70">
+        <div className="min-h-0 overflow-auto border-r border-border/50 bg-card/20">
+          <div className="border-b border-border/50 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
+            Changed files
           </div>
-        ) : activeDiffQuery.isLoading && !renderablePatch ? (
-          <div className="flex h-full min-h-[10rem] items-center justify-center text-xs text-muted-foreground/70">
-            Loading agent diff preview...
+          <div className="space-y-1 p-2">
+            {selectedTurnFiles.map((entry) => {
+              const selected = entry.path === selectedPreviewFilePath;
+              const fileName = basenameOfPath(entry.path);
+              const showFullPath = fileName !== entry.path;
+              return (
+                <button
+                  key={`${entry.turnId}:${entry.path}`}
+                  type="button"
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
+                    selected
+                      ? "border-border bg-accent text-accent-foreground"
+                      : "border-border/60 bg-background/60 text-muted-foreground/80 hover:border-border hover:text-foreground/85",
+                  )}
+                  aria-label={`Show agent diff for ${entry.path}`}
+                  title={entry.path}
+                  onClick={() => onOpenFile(entry.path)}
+                >
+                  <VscodeEntryIcon
+                    pathValue={entry.path}
+                    kind="file"
+                    theme={resolvedTheme}
+                    className="mt-0.5 size-3.5 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className={cn(
+                        "truncate text-[11px] font-medium",
+                        selected ? "text-accent-foreground" : "text-foreground",
+                      )}
+                    >
+                      {fileName}
+                    </div>
+                    {showFullPath ? (
+                      <div
+                        className={cn(
+                          "truncate text-[10px]",
+                          selected ? "text-accent-foreground/75" : "text-muted-foreground/70",
+                        )}
+                      >
+                        {entry.path}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div
+                    className={cn(
+                      "shrink-0 font-mono text-[10px] tabular-nums",
+                      selected ? "text-accent-foreground/80" : "text-muted-foreground/80",
+                    )}
+                  >
+                    {hasNonZeroStat(entry.stat) ? (
+                      <DiffStatLabel
+                        additions={entry.stat.additions}
+                        deletions={entry.stat.deletions}
+                      />
+                    ) : (
+                      "changed"
+                    )}
+                  </div>
+                </button>
+              );
+            })}
           </div>
-        ) : renderableFile ? (
-          <div className="overflow-hidden rounded-md border border-border/60 bg-card">
-            <FileDiff
-              fileDiff={renderableFile}
-              options={{
-                diffStyle: "unified",
-                lineDiffType: "none",
-                overflow: settings.diffWordWrap ? "wrap" : "scroll",
-                theme: resolveDiffThemeName(resolvedTheme),
-                themeType: resolvedTheme as DiffThemeType,
-                unsafeCSS: DIFF_VIEWER_UNSAFE_CSS,
-              }}
-            />
-          </div>
-        ) : renderablePatch?.kind === "raw" ? (
-          <div className="space-y-2">
-            <p className="text-[11px] text-muted-foreground/75">{renderablePatch.reason}</p>
-            <pre
-              className={cn(
-                "rounded-md border border-border/70 bg-background/70 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground/90",
-                settings.diffWordWrap
-                  ? "overflow-auto whitespace-pre-wrap wrap-break-word"
-                  : "overflow-auto",
-              )}
-            >
-              {renderablePatch.text}
-            </pre>
-          </div>
-        ) : (
-          <div className="flex h-full min-h-[10rem] items-center justify-center px-4 text-center text-xs text-muted-foreground/70">
-            No file-specific patch is available for this turn.
-          </div>
-        )}
+        </div>
+
+        <div className="min-h-0 overflow-auto p-2">
+          {diffError && !renderablePatch ? (
+            <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive/80">
+              {diffError}
+            </div>
+          ) : activeDiffQuery.isLoading && !renderablePatch ? (
+            <div className="flex h-full min-h-[10rem] items-center justify-center text-xs text-muted-foreground/70">
+              Loading agent diff preview...
+            </div>
+          ) : renderableFile ? (
+            <div className="overflow-hidden rounded-md border border-border/60 bg-card">
+              <FileDiff
+                fileDiff={renderableFile}
+                options={{
+                  diffStyle: "unified",
+                  lineDiffType: "none",
+                  overflow: settings.diffWordWrap ? "wrap" : "scroll",
+                  theme: resolveDiffThemeName(resolvedTheme),
+                  themeType: resolvedTheme as DiffThemeType,
+                  unsafeCSS: DIFF_VIEWER_UNSAFE_CSS,
+                }}
+              />
+            </div>
+          ) : renderablePatch?.kind === "raw" ? (
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted-foreground/75">{renderablePatch.reason}</p>
+              <pre
+                className={cn(
+                  "rounded-md border border-border/70 bg-background/70 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground/90",
+                  settings.diffWordWrap
+                    ? "overflow-auto whitespace-pre-wrap wrap-break-word"
+                    : "overflow-auto",
+                )}
+              >
+                {renderablePatch.text}
+              </pre>
+            </div>
+          ) : (
+            <div className="flex h-full min-h-[10rem] items-center justify-center px-4 text-center text-xs text-muted-foreground/70">
+              No file-specific patch is available for this turn.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

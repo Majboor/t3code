@@ -35,7 +35,7 @@ import { ensureEnvironmentApi } from "~/environmentApi";
 import { stripDiffSearchParams } from "~/diffRouteSearch";
 import { useTheme } from "~/hooks/useTheme";
 import { useTurnDiffSummaries } from "~/hooks/useTurnDiffSummaries";
-import { buildWorkspaceAgentFileDiffHistory } from "~/lib/workspaceAgentDiffs";
+import { buildWorkspaceAgentDiffIndex } from "~/lib/workspaceAgentDiffs";
 import {
   workspaceListDirectoryQueryOptions,
   workspaceQueryKeys,
@@ -243,11 +243,12 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const workspaceScopeLabel = activeThread?.worktreePath ? "Thread workspace" : "Project workspace";
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
-  const workspaceAgentDiffHistoryByPath = useMemo(
-    () =>
-      buildWorkspaceAgentFileDiffHistory(turnDiffSummaries, inferredCheckpointTurnCountByTurnId),
+  const workspaceAgentDiffIndex = useMemo(
+    () => buildWorkspaceAgentDiffIndex(turnDiffSummaries, inferredCheckpointTurnCountByTurnId),
     [inferredCheckpointTurnCountByTurnId, turnDiffSummaries],
   );
+  const workspaceAgentDiffHistoryByPath = workspaceAgentDiffIndex.fileHistoryByPath;
+  const workspaceAgentDiffTurnFilesByTurnId = workspaceAgentDiffIndex.turnFilesByTurnId;
   const workspaceRootRef = useRef(activeWorkspaceRoot);
   workspaceRootRef.current = activeWorkspaceRoot;
 
@@ -1120,7 +1121,9 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                 threadId={activeThread.id}
                 filePath={activeFilePath}
                 fileHistory={activeFileDiffHistory}
+                turnFilesByTurnId={workspaceAgentDiffTurnFilesByTurnId}
                 resolvedTheme={resolvedTheme}
+                onOpenFile={openFile}
                 onOpenFullDiff={openFileDiff}
               />
             ) : null}
