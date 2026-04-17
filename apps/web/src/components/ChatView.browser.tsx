@@ -516,6 +516,21 @@ function sendShellThreadUpsert(
   });
 }
 
+function sendThreadSnapshot(threadId: ThreadId): void {
+  const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
+  if (!thread) {
+    throw new Error(`Expected thread ${threadId} in snapshot.`);
+  }
+
+  rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+    kind: "snapshot",
+    snapshot: {
+      snapshotSequence: fixture.snapshot.snapshotSequence,
+      thread,
+    },
+  });
+}
+
 async function waitForWsClient(): Promise<void> {
   await vi.waitFor(
     () => {
@@ -5666,6 +5681,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(2_000),
       });
       sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
 
       await vi.waitFor(
         () => {
@@ -5674,6 +5690,138 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(
             document.querySelector(`button[aria-label="Close ${workspaceFilePath}"]`),
           ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("auto-refreshes clean workspace files when a new turn diff lands", async () => {
+    let listDirectoryCallCount = 0;
+    let readFileCallCount = 0;
+    const workspaceFilePath = "workspace-refresh.ts";
+    let workspaceFileContents = "export const stable = true;\n";
+    const turnId = TurnId.make("turn-workspace-auto-refresh");
+    const turnDiffPatch = [
+      "diff --git a/workspace-refresh.ts b/workspace-refresh.ts",
+      "index 1111111..2222222 100644",
+      "--- a/workspace-refresh.ts",
+      "+++ b/workspace-refresh.ts",
+      "@@ -1 +1 @@",
+      "-export const stable = true;",
+      "+export const stable = false;",
+    ].join("\n");
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-workspace-auto-refresh-target" as MessageId,
+        targetText: "workspace auto refresh thread",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          listDirectoryCallCount += 1;
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: workspaceFilePath,
+                path: workspaceFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          return {
+            relativePath: body.relativePath,
+            contents: workspaceFileContents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: workspaceFileContents.length,
+          };
+        }
+        if (body._tag === ORCHESTRATION_WS_METHODS.getTurnDiff) {
+          return {
+            threadId: THREAD_ID,
+            fromTurnCount: 1,
+            toTurnCount: 2,
+            diff: turnDiffPatch,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
+      workspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await waitForElement(
+        () => document.querySelector('[data-workspace-file-mode="editor"]'),
+        "Expected workspace editor mode before agent diff lands.",
+      );
+
+      workspaceFileContents = "export const stable = false;\n";
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(2_000),
+            checkpoints: [
+              {
+                turnId,
+                checkpointTurnCount: 2,
+                checkpointRef: CheckpointRef.make("checkpoint-workspace-auto-refresh"),
+                status: "ready",
+                files: [
+                  {
+                    path: workspaceFilePath,
+                    kind: "modified",
+                    additions: 1,
+                    deletions: 1,
+                  },
+                ],
+                assistantMessageId: null,
+                completedAt: isoAt(2_000),
+              },
+            ],
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  updatedAt: isoAt(2_000),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(2_000),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(listDirectoryCallCount).toBeGreaterThanOrEqual(2);
+          expect(readFileCallCount).toBeGreaterThanOrEqual(2);
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -5802,6 +5950,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
           ).toBe(true);
         },
         { timeout: 8_000, interval: 16 },
+      );
+      await waitForElement(
+        () => document.querySelector('[data-workspace-file-mode="diff"]'),
+        "Expected workspace file pane to enter inline diff mode.",
       );
 
       await expect.element(page.getByText("2 files in turn")).toBeInTheDocument();

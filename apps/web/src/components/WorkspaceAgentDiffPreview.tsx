@@ -1,17 +1,16 @@
 import { FileDiff } from "@pierre/diffs/react";
-import { useQuery } from "@tanstack/react-query";
 import { type EnvironmentId, type ThreadId, type TurnId } from "@t3tools/contracts";
 import { ExternalLinkIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { useSettings } from "~/hooks/useSettings";
-import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
+import { useWorkspaceAgentTurnDiff } from "~/hooks/useWorkspaceAgentTurnDiff";
 import { cn } from "~/lib/utils";
 import { formatShortTimestamp } from "~/timestampFormat";
 import { basenameOfPath } from "~/vscode-icons";
 
 import { resolveDiffThemeName } from "../lib/diffRendering";
-import { DIFF_VIEWER_UNSAFE_CSS, getRenderablePatch, resolveFileDiffPath } from "../lib/patchDiff";
+import { DIFF_VIEWER_UNSAFE_CSS } from "../lib/patchDiff";
 import { type WorkspaceAgentFileDiff } from "../lib/workspaceAgentDiffs";
 import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
 import { Button } from "./ui/button";
@@ -25,7 +24,9 @@ interface WorkspaceAgentDiffPreviewProps {
   filePath: string;
   fileHistory: ReadonlyArray<WorkspaceAgentFileDiff>;
   turnFilesByTurnId: ReadonlyMap<TurnId, ReadonlyArray<WorkspaceAgentFileDiff>>;
+  selectedTurnId: TurnId | null;
   resolvedTheme: "light" | "dark";
+  onSelectTurnId: (turnId: TurnId) => void;
   onOpenFile: (filePath: string) => void;
   onOpenFullDiff: (turnId: TurnId, filePath: string) => void;
 }
@@ -37,51 +38,18 @@ export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps)
     filePath,
     onOpenFile,
     onOpenFullDiff,
+    onSelectTurnId,
     resolvedTheme,
+    selectedTurnId,
     threadId,
     turnFilesByTurnId,
   } = props;
   const settings = useSettings();
-  const [selectedTurnId, setSelectedTurnId] = useState<TurnId | null>(
-    () => fileHistory[0]?.turnId ?? null,
-  );
-
-  useEffect(() => {
-    if (fileHistory.length === 0) {
-      setSelectedTurnId(null);
-      return;
-    }
-
-    const selectedStillExists = fileHistory.some((entry) => entry.turnId === selectedTurnId);
-    if (!selectedStillExists) {
-      setSelectedTurnId(fileHistory[0]?.turnId ?? null);
-    }
-  }, [fileHistory, selectedTurnId]);
 
   const selectedHistoryEntry =
     (selectedTurnId ? fileHistory.find((entry) => entry.turnId === selectedTurnId) : undefined) ??
     fileHistory[0] ??
     null;
-  const checkpointRange = useMemo(() => {
-    if (typeof selectedHistoryEntry?.checkpointTurnCount !== "number") {
-      return null;
-    }
-    return {
-      fromTurnCount: Math.max(0, selectedHistoryEntry.checkpointTurnCount - 1),
-      toTurnCount: selectedHistoryEntry.checkpointTurnCount,
-    };
-  }, [selectedHistoryEntry?.checkpointTurnCount]);
-
-  const activeDiffQuery = useQuery(
-    checkpointDiffQueryOptions({
-      environmentId,
-      threadId,
-      fromTurnCount: checkpointRange?.fromTurnCount ?? null,
-      toTurnCount: checkpointRange?.toTurnCount ?? null,
-      cacheScope: selectedHistoryEntry ? `workspace-turn:${selectedHistoryEntry.turnId}` : null,
-      enabled: selectedHistoryEntry !== null && checkpointRange !== null,
-    }),
-  );
   const selectedTurnFiles = useMemo(
     () =>
       (selectedHistoryEntry ? turnFilesByTurnId.get(selectedHistoryEntry.turnId) : undefined) ??
@@ -105,32 +73,16 @@ export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps)
       ),
     [selectedTurnFiles],
   );
-  const renderablePatch = useMemo(
-    () =>
-      getRenderablePatch(
-        activeDiffQuery.data?.diff,
-        selectedHistoryEntry
-          ? `workspace-turn:${selectedHistoryEntry.turnId}:${resolvedTheme}`
-          : "workspace-turn",
-      ),
-    [activeDiffQuery.data?.diff, resolvedTheme, selectedHistoryEntry],
+  const { activeDiffQuery, diffError, renderableFile, renderablePatch } = useWorkspaceAgentTurnDiff(
+    {
+      environmentId,
+      threadId,
+      selectedHistoryEntry,
+      targetFilePath: selectedPreviewFilePath,
+      resolvedTheme,
+      cacheScope: "workspace-preview",
+    },
   );
-  const renderableFile = useMemo(() => {
-    if (!renderablePatch || renderablePatch.kind !== "files") {
-      return null;
-    }
-    return (
-      renderablePatch.files.find(
-        (fileDiff) => resolveFileDiffPath(fileDiff) === selectedPreviewFilePath,
-      ) ?? null
-    );
-  }, [renderablePatch, selectedPreviewFilePath]);
-  const diffError =
-    activeDiffQuery.error instanceof Error
-      ? activeDiffQuery.error.message
-      : activeDiffQuery.error
-        ? "Failed to load agent diff preview."
-        : null;
 
   if (!selectedHistoryEntry) {
     return null;
@@ -186,7 +138,7 @@ export function WorkspaceAgentDiffPreview(props: WorkspaceAgentDiffPreviewProps)
                   ? "border-border bg-accent text-accent-foreground"
                   : "border-border/70 bg-background/70 text-muted-foreground/80 hover:border-border hover:text-foreground/85",
               )}
-              onClick={() => setSelectedTurnId(entry.turnId)}
+              onClick={() => onSelectTurnId(entry.turnId)}
             >
               <div className="text-[10px] font-medium leading-tight">
                 Turn {entry.checkpointTurnCount ?? "?"}

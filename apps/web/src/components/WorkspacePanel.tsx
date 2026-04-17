@@ -1,4 +1,5 @@
 import Editor from "@monaco-editor/react";
+import { FileDiff } from "@pierre/diffs/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type {
@@ -33,9 +34,16 @@ import {
 
 import { ensureEnvironmentApi } from "~/environmentApi";
 import { stripDiffSearchParams } from "~/diffRouteSearch";
+import { useSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { useTurnDiffSummaries } from "~/hooks/useTurnDiffSummaries";
-import { buildWorkspaceAgentDiffIndex } from "~/lib/workspaceAgentDiffs";
+import { useWorkspaceAgentTurnDiff } from "~/hooks/useWorkspaceAgentTurnDiff";
+import { resolveDiffThemeName } from "~/lib/diffRendering";
+import { DIFF_VIEWER_UNSAFE_CSS } from "~/lib/patchDiff";
+import {
+  buildWorkspaceAgentDiffIndex,
+  type WorkspaceAgentFileDiff,
+} from "~/lib/workspaceAgentDiffs";
 import {
   workspaceListDirectoryQueryOptions,
   workspaceQueryKeys,
@@ -69,6 +77,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { toastManager } from "./ui/toast";
 
 const ROOT_DIRECTORY_KEY = "";
+const EMPTY_WORKSPACE_FILE_DIFF_HISTORY: ReadonlyArray<WorkspaceAgentFileDiff> = [];
 
 function directoryKey(pathValue: string | null | undefined): string {
   return pathValue ?? ROOT_DIRECTORY_KEY;
@@ -218,9 +227,12 @@ interface WorkspacePanelProps {
   mode?: WorkspacePanelMode;
 }
 
+type WorkspaceFileViewMode = "editor" | "diff";
+
 export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const settings = useSettings();
   const { resolvedTheme } = useTheme();
   const routeThreadRef = useParams({
     strict: false,
@@ -276,6 +288,10 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const [dropTargetDirectoryPath, setDropTargetDirectoryPath] = useState<string | null>(null);
   const [fileStateByPath, setFileStateByPath] = useState<Record<string, ProjectReadFileResult>>({});
   const [draftByPath, setDraftByPath] = useState<Record<string, string>>({});
+  const [selectedDiffTurnId, setSelectedDiffTurnId] = useState<TurnId | null>(null);
+  const [fileViewModeByPath, setFileViewModeByPath] = useState<
+    Record<string, WorkspaceFileViewMode>
+  >({});
   const [createDialogState, setCreateDialogState] = useState<{
     open: boolean;
     kind: ProjectCreateEntryInput["kind"];
@@ -286,9 +302,15 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     name: "",
   });
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const fileStateByPathRef = useRef(fileStateByPath);
+  fileStateByPathRef.current = fileStateByPath;
+  const draftByPathRef = useRef(draftByPath);
+  draftByPathRef.current = draftByPath;
+  const observedWorkspaceDiffSignatureRef = useRef("");
+  const hasObservedWorkspaceDiffBaselineRef = useRef(false);
 
   const loadDirectory = useCallback(
-    async (directoryPath: string | null) => {
+    async (directoryPath: string | null, options?: { force?: boolean }) => {
       if (!activeEnvironmentId || !activeWorkspaceRoot) {
         return;
       }
@@ -301,6 +323,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
           workspaceListDirectoryQueryOptions({
             environmentId: activeEnvironmentId,
             cwd: activeWorkspaceRoot,
+            ...(options?.force ? { staleTime: 0 } : {}),
             ...(directoryPath ? { directoryPath } : {}),
           }),
         );
@@ -331,7 +354,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   );
 
   const loadFile = useCallback(
-    async (relativePath: string) => {
+    async (relativePath: string, options?: { force?: boolean }) => {
       if (!activeEnvironmentId || !activeWorkspaceRoot) {
         return;
       }
@@ -344,6 +367,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
             environmentId: activeEnvironmentId,
             cwd: activeWorkspaceRoot,
             relativePath,
+            ...(options?.force ? { staleTime: 0 } : {}),
           }),
         );
 
@@ -351,12 +375,24 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
           return;
         }
 
+        const previousFileState = fileStateByPathRef.current[relativePath];
+        const existingDraft = draftByPathRef.current[relativePath];
+        const hasUnsavedLocalEdits =
+          existingDraft !== undefined &&
+          previousFileState !== undefined &&
+          !previousFileState.isBinary &&
+          !previousFileState.tooLarge &&
+          existingDraft !== previousFileState.contents;
+
         setFileStateByPath((current) => ({
           ...current,
           [relativePath]: result,
         }));
         setDraftByPath((current) => {
-          if (current[relativePath] !== undefined || result.isBinary || result.tooLarge) {
+          if (result.isBinary || result.tooLarge || hasUnsavedLocalEdits) {
+            return current;
+          }
+          if (current[relativePath] === result.contents) {
             return current;
           }
           return {
@@ -390,6 +426,10 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     setDropTargetDirectoryPath(null);
     setFileStateByPath({});
     setDraftByPath({});
+    setSelectedDiffTurnId(null);
+    setFileViewModeByPath({});
+    observedWorkspaceDiffSignatureRef.current = "";
+    hasObservedWorkspaceDiffBaselineRef.current = false;
 
     if (!activeWorkspaceRoot) {
       return;
@@ -439,20 +479,20 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       return;
     }
 
-    const directoryPaths = Object.keys(expandedDirectoriesByPath).map((pathValue) =>
-      pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
-    );
-    void Promise.all(directoryPaths.map((directoryPath) => loadDirectory(directoryPath))).catch(
-      () => undefined,
-    );
-
-    if (activeFilePath) {
-      void loadFile(activeFilePath);
-    }
-
     void queryClient.invalidateQueries({
       queryKey: workspaceQueryKeys.all,
     });
+
+    const directoryPaths = Object.keys(expandedDirectoriesByPath).map((pathValue) =>
+      pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
+    );
+    void Promise.all(
+      directoryPaths.map((directoryPath) => loadDirectory(directoryPath, { force: true })),
+    ).catch(() => undefined);
+
+    if (activeFilePath) {
+      void loadFile(activeFilePath, { force: true });
+    }
   }, [
     activeFilePath,
     activeEnvironmentId,
@@ -484,8 +524,49 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   }, [draftByPath, fileStateByPath, openTabs]);
   const activeFileDirty = activeFilePath ? dirtyFilePathSet.has(activeFilePath) : false;
   const activeFileDiffHistory = activeFilePath
-    ? (workspaceAgentDiffHistoryByPath.get(activeFilePath) ?? [])
-    : [];
+    ? (workspaceAgentDiffHistoryByPath.get(activeFilePath) ?? EMPTY_WORKSPACE_FILE_DIFF_HISTORY)
+    : EMPTY_WORKSPACE_FILE_DIFF_HISTORY;
+  const selectedActiveDiffEntry =
+    (selectedDiffTurnId
+      ? activeFileDiffHistory.find((entry) => entry.turnId === selectedDiffTurnId)
+      : undefined) ??
+    activeFileDiffHistory[0] ??
+    null;
+  const activeFileViewMode =
+    activeFilePath && !activeFileDirty && activeFileDiffHistory.length > 0
+      ? (fileViewModeByPath[activeFilePath] ?? "diff")
+      : "editor";
+  const {
+    activeDiffQuery: activeInlineDiffQuery,
+    diffError: activeInlineDiffError,
+    renderableFile: activeInlineRenderableFile,
+    renderablePatch: activeInlineRenderablePatch,
+  } = useWorkspaceAgentTurnDiff({
+    environmentId: activeThread?.environmentId ?? null,
+    threadId: activeThread?.id ?? null,
+    selectedHistoryEntry: selectedActiveDiffEntry,
+    targetFilePath: activeFilePath,
+    resolvedTheme,
+    cacheScope: "workspace-inline",
+  });
+  const canShowActiveInlineDiff =
+    activeFilePath !== null && activeFileDiffHistory.length > 0 && !activeFileDirty;
+  const workspaceDiffSignature = useMemo(
+    () =>
+      turnDiffSummaries
+        .filter((summary) => summary.files.length > 0)
+        .map(
+          (summary) =>
+            `${summary.turnId}:${summary.completedAt}:${summary.files
+              .map(
+                (file) =>
+                  `${file.path.replaceAll("\\", "/")}:${file.kind ?? ""}:${file.additions ?? 0}:${file.deletions ?? 0}`,
+              )
+              .join("|")}`,
+        )
+        .join("||"),
+    [turnDiffSummaries],
+  );
 
   const actionDirectoryPath =
     selectedEntry.kind === "directory"
@@ -512,6 +593,114 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     },
     [activeThread, navigate],
   );
+
+  useEffect(() => {
+    if (activeFileDiffHistory.length === 0) {
+      setSelectedDiffTurnId(null);
+      return;
+    }
+
+    const selectedStillExists = activeFileDiffHistory.some(
+      (entry) => entry.turnId === selectedDiffTurnId,
+    );
+    if (!selectedStillExists) {
+      setSelectedDiffTurnId(activeFileDiffHistory[0]?.turnId ?? null);
+    }
+  }, [activeFileDiffHistory, selectedDiffTurnId]);
+
+  useEffect(() => {
+    if (!activeFilePath) {
+      return;
+    }
+
+    setFileViewModeByPath((current) => {
+      if (activeFileDirty || activeFileDiffHistory.length === 0 || current[activeFilePath]) {
+        return current;
+      }
+
+      return { ...current, [activeFilePath]: "diff" };
+    });
+  }, [activeFileDiffHistory.length, activeFileDirty, activeFilePath]);
+
+  useEffect(() => {
+    if (!activeWorkspaceRoot) {
+      observedWorkspaceDiffSignatureRef.current = "";
+      hasObservedWorkspaceDiffBaselineRef.current = false;
+      return;
+    }
+
+    if (!hasObservedWorkspaceDiffBaselineRef.current) {
+      observedWorkspaceDiffSignatureRef.current = workspaceDiffSignature;
+      hasObservedWorkspaceDiffBaselineRef.current = true;
+      return;
+    }
+
+    if (observedWorkspaceDiffSignatureRef.current === workspaceDiffSignature) {
+      return;
+    }
+    observedWorkspaceDiffSignatureRef.current = workspaceDiffSignature;
+
+    if (workspaceDiffSignature.length === 0) {
+      return;
+    }
+
+    void queryClient.invalidateQueries({
+      queryKey: workspaceQueryKeys.all,
+    });
+
+    const directoryPaths = Object.keys(expandedDirectoriesByPath).map((pathValue) =>
+      pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
+    );
+    void Promise.all(
+      directoryPaths.map((directoryPath) => loadDirectory(directoryPath, { force: true })),
+    ).catch(() => undefined);
+
+    for (const filePath of openTabs) {
+      if (dirtyFilePathSet.has(filePath)) {
+        continue;
+      }
+      void loadFile(filePath, { force: true });
+    }
+
+    setFileViewModeByPath((current) => {
+      let next = current;
+
+      for (const filePath of openTabs) {
+        if (dirtyFilePathSet.has(filePath)) {
+          continue;
+        }
+        if ((workspaceAgentDiffHistoryByPath.get(filePath)?.length ?? 0) === 0) {
+          continue;
+        }
+        if ((next[filePath] ?? null) === "diff") {
+          continue;
+        }
+        if (next === current) {
+          next = { ...current };
+        }
+        next[filePath] = "diff";
+      }
+
+      return next;
+    });
+
+    if (activeFilePath && !dirtyFilePathSet.has(activeFilePath)) {
+      setSelectedDiffTurnId(
+        workspaceAgentDiffHistoryByPath.get(activeFilePath)?.[0]?.turnId ?? null,
+      );
+    }
+  }, [
+    activeFilePath,
+    activeWorkspaceRoot,
+    dirtyFilePathSet,
+    expandedDirectoriesByPath,
+    loadDirectory,
+    loadFile,
+    openTabs,
+    queryClient,
+    workspaceAgentDiffHistoryByPath,
+    workspaceDiffSignature,
+  ]);
 
   const saveActiveFile = useCallback(async () => {
     if (!activeEnvironmentId || !activeWorkspaceRoot || !activeFilePath || !activeFileState) {
@@ -1052,6 +1241,67 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col">
+            {activeFilePath &&
+            activeFileState &&
+            !activeFileState.isBinary &&
+            !activeFileState.tooLarge ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-medium text-foreground">
+                    {basenameOfPath(activeFilePath)}
+                  </div>
+                  <div className="truncate text-[11px] text-muted-foreground/70">
+                    {selectedActiveDiffEntry ? (
+                      <>
+                        Turn {selectedActiveDiffEntry.checkpointTurnCount ?? "?"} agent diff
+                        {activeFileDirty ? " · local edits active" : ""}
+                      </>
+                    ) : (
+                      activeFilePath
+                    )}
+                  </div>
+                </div>
+                {activeFileDiffHistory.length > 0 ? (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant={activeFileViewMode === "diff" ? "default" : "outline"}
+                      disabled={!canShowActiveInlineDiff}
+                      aria-label="Show agent diff inline"
+                      onClick={() => {
+                        if (!activeFilePath) {
+                          return;
+                        }
+                        setFileViewModeByPath((current) => ({
+                          ...current,
+                          [activeFilePath]: "diff",
+                        }));
+                      }}
+                    >
+                      Diff
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant={activeFileViewMode === "editor" ? "default" : "outline"}
+                      aria-label="Show editable file contents"
+                      onClick={() => {
+                        if (!activeFilePath) {
+                          return;
+                        }
+                        setFileViewModeByPath((current) => ({
+                          ...current,
+                          [activeFilePath]: "editor",
+                        }));
+                      }}
+                    >
+                      Edit
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="min-h-0 flex-1">
               {!activeFilePath ? (
                 <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
@@ -1087,27 +1337,78 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                   </div>
                   <div className="text-xs text-muted-foreground/70">{activeFilePath}</div>
                 </div>
+              ) : activeFileState && activeFileViewMode === "diff" && canShowActiveInlineDiff ? (
+                <div
+                  className="h-full overflow-auto bg-background/70 p-2"
+                  data-workspace-file-mode="diff"
+                >
+                  {activeInlineDiffError && !activeInlineRenderablePatch ? (
+                    <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive/80">
+                      {activeInlineDiffError}
+                    </div>
+                  ) : activeInlineDiffQuery.isLoading && !activeInlineRenderablePatch ? (
+                    <div className="flex h-full min-h-[10rem] items-center justify-center text-xs text-muted-foreground/70">
+                      Loading inline diff…
+                    </div>
+                  ) : activeInlineRenderableFile ? (
+                    <div className="overflow-hidden rounded-md border border-border/60 bg-card">
+                      <FileDiff
+                        fileDiff={activeInlineRenderableFile}
+                        options={{
+                          diffStyle: "unified",
+                          lineDiffType: "none",
+                          overflow: settings.diffWordWrap ? "wrap" : "scroll",
+                          theme: resolveDiffThemeName(resolvedTheme),
+                          themeType: resolvedTheme,
+                          unsafeCSS: DIFF_VIEWER_UNSAFE_CSS,
+                        }}
+                      />
+                    </div>
+                  ) : activeInlineRenderablePatch?.kind === "raw" ? (
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-muted-foreground/75">
+                        {activeInlineRenderablePatch.reason}
+                      </p>
+                      <pre
+                        className={cn(
+                          "rounded-md border border-border/70 bg-background/70 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground/90",
+                          settings.diffWordWrap
+                            ? "overflow-auto whitespace-pre-wrap wrap-break-word"
+                            : "overflow-auto",
+                        )}
+                      >
+                        {activeInlineRenderablePatch.text}
+                      </pre>
+                    </div>
+                  ) : (
+                    <div className="flex h-full min-h-[10rem] items-center justify-center px-4 text-center text-xs text-muted-foreground/70">
+                      No inline diff is available for this file yet.
+                    </div>
+                  )}
+                </div>
               ) : activeFileState ? (
-                <Editor
-                  height="100%"
-                  path={activeFilePath}
-                  theme={resolvedTheme === "dark" ? "vs-dark" : "vs"}
-                  value={activeFileDraft}
-                  onChange={(nextValue) => {
-                    setDraftByPath((current) => ({
-                      ...current,
-                      [activeFilePath]: nextValue ?? "",
-                    }));
-                  }}
-                  options={{
-                    automaticLayout: true,
-                    fontSize: 13,
-                    minimap: { enabled: false },
-                    scrollBeyondLastLine: false,
-                    smoothScrolling: true,
-                    wordWrap: "on",
-                  }}
-                />
+                <div className="h-full" data-workspace-file-mode="editor">
+                  <Editor
+                    height="100%"
+                    path={activeFilePath}
+                    theme={resolvedTheme === "dark" ? "vs-dark" : "vs"}
+                    value={activeFileDraft}
+                    onChange={(nextValue) => {
+                      setDraftByPath((current) => ({
+                        ...current,
+                        [activeFilePath]: nextValue ?? "",
+                      }));
+                    }}
+                    options={{
+                      automaticLayout: true,
+                      fontSize: 13,
+                      minimap: { enabled: false },
+                      scrollBeyondLastLine: false,
+                      smoothScrolling: true,
+                      wordWrap: "on",
+                    }}
+                  />
+                </div>
               ) : (
                 <div className="flex h-full items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
                   Select a file to start editing.
@@ -1122,7 +1423,9 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                 filePath={activeFilePath}
                 fileHistory={activeFileDiffHistory}
                 turnFilesByTurnId={workspaceAgentDiffTurnFilesByTurnId}
+                selectedTurnId={selectedDiffTurnId}
                 resolvedTheme={resolvedTheme}
+                onSelectTurnId={setSelectedDiffTurnId}
                 onOpenFile={openFile}
                 onOpenFullDiff={openFileDiff}
               />
