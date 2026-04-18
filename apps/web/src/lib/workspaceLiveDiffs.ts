@@ -1,7 +1,7 @@
 import type { WorkspaceAgentDiffStat } from "./workspaceAgentDiffs";
 import { normalizeWorkspaceDiffPath } from "./workspaceAgentDiffs";
 
-interface WorkspaceWorkingTreeFileStat {
+export interface WorkspaceWorkingTreeFileStat {
   path: string;
   insertions: number;
   deletions: number;

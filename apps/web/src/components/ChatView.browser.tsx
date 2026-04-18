@@ -44,6 +44,7 @@ import {
   removeInlineTerminalContextPlaceholder,
   type TerminalContextDraft,
 } from "../lib/terminalContext";
+import { resetWorkspaceLiveDiffBaselineStateForTests } from "../lib/workspaceLiveDiffBaselineState";
 import { isMacPlatform } from "../lib/utils";
 import { __resetLocalApiForTests } from "../localApi";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
@@ -1720,6 +1721,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     wsRequests.length = 0;
     customWsRpcResolver = null;
     gitStatusHarness.clear();
+    resetWorkspaceLiveDiffBaselineStateForTests();
     __resetEnvironmentApiOverridesForTests();
     resetSavedEnvironmentRegistryStoreForTests();
     resetSavedEnvironmentRuntimeStoreForTests();
@@ -1751,6 +1753,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
       terminalEventEntriesByKey: {},
       nextTerminalEventId: 1,
     });
+    delete (
+      window as typeof window & {
+        __t3_workspace_live_diff_baseline_state__?: unknown;
+      }
+    ).__t3_workspace_live_diff_baseline_state__;
   });
 
   afterEach(() => {
@@ -5993,6 +6000,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
             diff: liveDiffPatch,
           };
         }
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
         return undefined;
       },
     });
@@ -6079,13 +6091,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(readFileCallCount).toBeGreaterThanOrEqual(2);
-          expect(
-            wsRequests.some(
-              (request) =>
-                request._tag === WS_METHODS.gitGetWorkingTreeDiff &&
-                request.relativePath === workspaceFilePath,
-            ),
-          ).toBe(true);
           expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
         },
         { timeout: 8_000, interval: 16 },
@@ -6163,6 +6168,237 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(
             document.querySelector(`[data-workspace-entry-diff-state="${workspaceFilePath}"]`),
           ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps a live workspace diff visible after generation finishes until the checkpoint diff arrives", async () => {
+    let readFileCallCount = 0;
+    const workspaceRoot = "/repo/project";
+    const workspaceFilePath = "workspace-finish-handoff.ts";
+    let workspaceFileContents = "export const draft = false;\n";
+    const turnId = TurnId.make("turn-workspace-finish-handoff");
+    const liveDiffPatch = [
+      "diff --git a/workspace-finish-handoff.ts b/workspace-finish-handoff.ts",
+      "index 1111111..2222222 100644",
+      "--- a/workspace-finish-handoff.ts",
+      "+++ b/workspace-finish-handoff.ts",
+      "@@ -1 +1 @@",
+      "-export const draft = false;",
+      "+export const draft = true;",
+    ].join("\n");
+    const checkpointDiffPatch = liveDiffPatch;
+
+    gitStatusHarness.set(
+      {
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        cwd: workspaceRoot,
+      },
+      createGitStatusSnapshot(),
+    );
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-workspace-finish-handoff-target" as MessageId,
+        targetText: "workspace finish handoff thread",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: workspaceFilePath,
+                path: workspaceFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          return {
+            relativePath: body.relativePath,
+            contents: workspaceFileContents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: workspaceFileContents.length,
+          };
+        }
+        if (body._tag === WS_METHODS.gitGetWorkingTreeDiff) {
+          return {
+            diff: liveDiffPatch,
+          };
+        }
+        if (body._tag === ORCHESTRATION_WS_METHODS.getTurnDiff) {
+          return {
+            threadId: THREAD_ID,
+            fromTurnCount: 1,
+            toTurnCount: 2,
+            diff: checkpointDiffPatch,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
+      workspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+          expect(document.querySelector('[data-workspace-file-mode="editor"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const refreshCallCountBeforeRunning = gitStatusHarness.refreshMock.mock.calls.length;
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(3_000),
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  status: "running",
+                  activeTurnId: turnId,
+                  updatedAt: isoAt(3_000),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(3_000),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(gitStatusHarness.refreshMock.mock.calls.length).toBeGreaterThan(
+            refreshCallCountBeforeRunning,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      workspaceFileContents = "export const draft = true;\n";
+      gitStatusHarness.set(
+        {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          cwd: workspaceRoot,
+        },
+        createGitStatusSnapshot({
+          files: [{ path: workspaceFilePath, insertions: 1, deletions: 1 }],
+        }),
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${workspaceFilePath}"]`),
+          ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(3_500),
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  status: "idle",
+                  activeTurnId: null,
+                  updatedAt: isoAt(3_500),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(3_500),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
+          expect(document.querySelector("[data-workspace-diff-review='controls']")).toBeTruthy();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${workspaceFilePath}"]`),
+          ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(4_000),
+            checkpoints: [
+              {
+                turnId,
+                checkpointTurnCount: 2,
+                checkpointRef: CheckpointRef.make("checkpoint-workspace-finish-handoff"),
+                status: "ready",
+                files: [
+                  {
+                    path: workspaceFilePath,
+                    kind: "modified",
+                    additions: 1,
+                    deletions: 1,
+                  },
+                ],
+                assistantMessageId: null,
+                completedAt: isoAt(4_000),
+              },
+            ],
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  updatedAt: isoAt(4_000),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(4_000),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${workspaceFilePath}"]`),
+          ).toBeTruthy();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -6273,6 +6509,141 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
       sendShellThreadUpsert(THREAD_ID);
       sendThreadSnapshot(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(gitStatusHarness.refreshMock).toHaveBeenCalled();
+          expect(document.querySelector('[data-workspace-file-mode="editor"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      expect(document.querySelector("[data-workspace-diff-review='controls']")).toBeNull();
+      expect(
+        wsRequests.some(
+          (request) =>
+            request._tag === WS_METHODS.gitGetWorkingTreeDiff &&
+            request.relativePath === workspaceFilePath,
+        ),
+      ).toBe(false);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("captures the live diff baseline from a fresh git status refresh before showing review controls", async () => {
+    let readFileCallCount = 0;
+    const workspaceRoot = "/repo/project";
+    const workspaceFilePath = "workspace-stale-baseline.ts";
+    const workspaceFileContents = "export const existing = true;\n";
+    const preexistingStatus = createGitStatusSnapshot({
+      files: [{ path: workspaceFilePath, insertions: 1, deletions: 0 }],
+    });
+
+    gitStatusHarness.set(
+      {
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        cwd: workspaceRoot,
+      },
+      createGitStatusSnapshot(),
+    );
+
+    gitStatusHarness.refreshMock.mockImplementationOnce(async () => preexistingStatus);
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-workspace-stale-baseline-target" as MessageId,
+        targetText: "workspace stale baseline thread",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: workspaceFilePath,
+                path: workspaceFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          return {
+            relativePath: body.relativePath,
+            contents: workspaceFileContents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: workspaceFileContents.length,
+          };
+        }
+        if (body._tag === WS_METHODS.gitGetWorkingTreeDiff) {
+          return {
+            diff: [
+              "diff --git a/workspace-stale-baseline.ts b/workspace-stale-baseline.ts",
+              "index 1111111..2222222 100644",
+              "--- a/workspace-stale-baseline.ts",
+              "+++ b/workspace-stale-baseline.ts",
+              "@@ -0,0 +1 @@",
+              "+export const existing = true;",
+            ].join("\n"),
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
+      workspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+          expect(document.querySelector('[data-workspace-file-mode="editor"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(3_500),
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  status: "running",
+                  activeTurnId: TurnId.make("turn-workspace-stale-baseline-running"),
+                  updatedAt: isoAt(3_500),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(3_500),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
+
+      gitStatusHarness.set(
+        {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          cwd: workspaceRoot,
+        },
+        preexistingStatus,
+      );
 
       await vi.waitFor(
         () => {
@@ -6612,6 +6983,293 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => document.querySelector('[data-workspace-file-mode="editor"]'),
         "Expected workspace file pane to return to editor mode after accepting the final file.",
       );
+
+      const firstTabButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            `[data-workspace-tab-path="${firstFilePath}"] > button`,
+          ),
+        `Unable to find workspace tab for "${firstFilePath}".`,
+      );
+      firstTabButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-workspace-file-mode="editor"]')).toBeTruthy();
+          expect(document.querySelector("[data-workspace-diff-review='controls']")).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${firstFilePath}"]`),
+          ).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${secondFilePath}"]`),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps accepted live multi-file diffs accepted after the turn lands as a checkpoint", async () => {
+    let readFileCallCount = 0;
+    const workspaceRoot = "/repo/project";
+    const firstFilePath = "first-live-review.ts";
+    const secondFilePath = "second-live-review.ts";
+    const firstFileContents = "export const first = true;\n";
+    const secondFileContents = "export const second = true;\n";
+    const completedTurnId = TurnId.make("turn-workspace-live-review-completed");
+    const completedTurnDiff = [
+      "diff --git a/first-live-review.ts b/first-live-review.ts",
+      "index 1111111..2222222 100644",
+      "--- a/first-live-review.ts",
+      "+++ b/first-live-review.ts",
+      "@@ -1 +1 @@",
+      "-export const first = false;",
+      "+export const first = true;",
+      "diff --git a/second-live-review.ts b/second-live-review.ts",
+      "index 3333333..4444444 100644",
+      "--- a/second-live-review.ts",
+      "+++ b/second-live-review.ts",
+      "@@ -1 +1 @@",
+      "-export const second = false;",
+      "+export const second = true;",
+    ].join("\n");
+
+    gitStatusHarness.set(
+      {
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        cwd: workspaceRoot,
+      },
+      createGitStatusSnapshot(),
+    );
+    gitStatusHarness.refreshMock.mockImplementationOnce(async () => createGitStatusSnapshot());
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-workspace-live-review-completed-target" as MessageId,
+        targetText: "workspace live review completed thread",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: firstFilePath,
+                path: firstFilePath,
+                kind: "file" as const,
+              },
+              {
+                name: secondFilePath,
+                path: secondFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          const contents =
+            body.relativePath === firstFilePath ? firstFileContents : secondFileContents;
+          return {
+            relativePath: body.relativePath,
+            contents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: contents.length,
+          };
+        }
+        if (body._tag === WS_METHODS.gitGetWorkingTreeDiff) {
+          if (body.relativePath === firstFilePath) {
+            return {
+              diff: [
+                "diff --git a/first-live-review.ts b/first-live-review.ts",
+                "index 1111111..2222222 100644",
+                "--- a/first-live-review.ts",
+                "+++ b/first-live-review.ts",
+                "@@ -1 +1 @@",
+                "-export const first = false;",
+                "+export const first = true;",
+              ].join("\n"),
+            };
+          }
+
+          if (body.relativePath === secondFilePath) {
+            return {
+              diff: [
+                "diff --git a/second-live-review.ts b/second-live-review.ts",
+                "index 3333333..4444444 100644",
+                "--- a/second-live-review.ts",
+                "+++ b/second-live-review.ts",
+                "@@ -1 +1 @@",
+                "-export const second = false;",
+                "+export const second = true;",
+              ].join("\n"),
+            };
+          }
+        }
+        if (body._tag === ORCHESTRATION_WS_METHODS.getTurnDiff) {
+          return {
+            threadId: THREAD_ID,
+            fromTurnCount: 1,
+            toTurnCount: 2,
+            diff: completedTurnDiff,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const firstWorkspaceFileButton = await waitForButtonContainingText(firstFilePath);
+      firstWorkspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      const refreshCallCountBeforeUpdate = gitStatusHarness.refreshMock.mock.calls.length;
+
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(4_000),
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  status: "running",
+                  activeTurnId: completedTurnId,
+                  updatedAt: isoAt(4_000),
+                })
+              : null,
+          });
+        }),
+        updatedAt: isoAt(4_000),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
+
+      await vi.waitFor(
+        () => {
+          expect(gitStatusHarness.refreshMock.mock.calls.length).toBeGreaterThan(
+            refreshCallCountBeforeUpdate,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      gitStatusHarness.set(
+        {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          cwd: workspaceRoot,
+        },
+        createGitStatusSnapshot({
+          files: [
+            { path: firstFilePath, insertions: 1, deletions: 1 },
+            { path: secondFilePath, insertions: 1, deletions: 1 },
+          ],
+        }),
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.gitGetWorkingTreeDiff &&
+                request.relativePath === firstFilePath,
+            ),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const acceptFirstFileButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Accept the current change"]',
+          ),
+        'Unable to find "Accept the current change" button for the first live file.',
+      );
+      acceptFirstFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBeGreaterThanOrEqual(2);
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${firstFilePath}"]`),
+          ).toBeNull();
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const acceptSecondFileButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Accept the current change"]',
+          ),
+        'Unable to find "Accept the current change" button for the second live file.',
+      );
+      acceptSecondFileButton.click();
+
+      await waitForElement(
+        () => document.querySelector('[data-workspace-file-mode="editor"]'),
+        "Expected workspace file pane to return to editor mode after accepting both live files.",
+      );
+
+      fixture.snapshot = Object.assign({}, fixture.snapshot, {
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) => {
+          if (thread.id !== THREAD_ID) {
+            return thread;
+          }
+
+          return Object.assign({}, thread, {
+            updatedAt: isoAt(4_500),
+            session: thread.session
+              ? Object.assign({}, thread.session, {
+                  status: "idle",
+                  activeTurnId: null,
+                  updatedAt: isoAt(4_500),
+                })
+              : null,
+            checkpoints: [
+              {
+                turnId: completedTurnId,
+                checkpointTurnCount: 2,
+                checkpointRef: CheckpointRef.make("checkpoint-workspace-live-review-completed"),
+                status: "ready",
+                files: [
+                  { path: firstFilePath, kind: "modified", additions: 1, deletions: 1 },
+                  { path: secondFilePath, kind: "modified", additions: 1, deletions: 1 },
+                ],
+                assistantMessageId: null,
+                completedAt: isoAt(4_500),
+              },
+            ],
+          });
+        }),
+        updatedAt: isoAt(4_500),
+      });
+      sendShellThreadUpsert(THREAD_ID);
+      sendThreadSnapshot(THREAD_ID);
 
       const firstTabButton = await waitForElement(
         () =>

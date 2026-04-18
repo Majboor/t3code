@@ -32,7 +32,7 @@ import { Debouncer } from "@tanstack/react-pacer";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
-import { useGitStatus } from "~/lib/gitStatusState";
+import { refreshGitStatus, useGitStatus } from "~/lib/gitStatusState";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
@@ -174,6 +174,10 @@ import {
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
+import {
+  clearPendingWorkspaceLiveDiffBaselineForThread,
+  setPendingWorkspaceLiveDiffBaselineForThread,
+} from "~/lib/workspaceLiveDiffBaselineState";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -1430,6 +1434,41 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const capturePendingWorkspaceLiveDiffBaseline = useCallback(
+    async (threadId: ThreadId, cwd: string | null | undefined) => {
+      if (!cwd) {
+        return;
+      }
+
+      const baselineStatus =
+        gitStatusQuery.data ??
+        (await refreshGitStatus({
+          environmentId,
+          cwd,
+        }));
+      if (!baselineStatus) {
+        return;
+      }
+
+      setPendingWorkspaceLiveDiffBaselineForThread({
+        environmentId,
+        threadId,
+        cwd,
+        isRepo: baselineStatus.isRepo,
+        files: baselineStatus.isRepo ? baselineStatus.workingTree.files : [],
+      });
+    },
+    [environmentId, gitStatusQuery.data],
+  );
+  const clearPendingWorkspaceLiveDiffBaseline = useCallback(
+    (threadId: ThreadId) => {
+      clearPendingWorkspaceLiveDiffBaselineForThread({
+        environmentId,
+        threadId,
+      });
+    },
+    [environmentId],
+  );
   const activeTerminalLaunchContext =
     terminalLaunchContext?.threadId === activeThreadId
       ? terminalLaunchContext
@@ -2616,6 +2655,7 @@ export default function ChatView(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
+      await capturePendingWorkspaceLiveDiffBaseline(threadIdForSend, activeWorkspaceRoot);
       beginLocalDispatch({ preparingWorktree: false });
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
@@ -2636,6 +2676,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       turnStartSucceeded = true;
     })().catch(async (err: unknown) => {
+      clearPendingWorkspaceLiveDiffBaseline(threadIdForSend);
       if (
         !turnStartSucceeded &&
         promptRef.current.length === 0 &&
@@ -2898,6 +2939,7 @@ export default function ChatView(props: ChatViewProps) {
       sendInFlightRef.current = true;
       beginLocalDispatch({ preparingWorktree: false });
       setThreadError(threadIdForSend, null);
+      await capturePendingWorkspaceLiveDiffBaseline(threadIdForSend, activeWorkspaceRoot);
 
       // Scroll to the current end *before* adding the optimistic message.
       isAtEndRef.current = true;
@@ -2965,6 +3007,7 @@ export default function ChatView(props: ChatViewProps) {
         }
         sendInFlightRef.current = false;
       } catch (err) {
+        clearPendingWorkspaceLiveDiffBaseline(threadIdForSend);
         setOptimisticUserMessages((existing) =>
           existing.filter((message) => message.id !== messageIdForSend),
         );
@@ -2978,8 +3021,11 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
+      activeWorkspaceRoot,
       activeProposedPlan,
       beginLocalDispatch,
+      capturePendingWorkspaceLiveDiffBaseline,
+      clearPendingWorkspaceLiveDiffBaseline,
       isConnecting,
       isSendBusy,
       isServerThread,
@@ -3055,26 +3101,28 @@ export default function ChatView(props: ChatViewProps) {
         createdAt,
       })
       .then(() => {
-        return api.orchestration.dispatchCommand({
-          type: "thread.turn.start",
-          commandId: newCommandId(),
-          threadId: nextThreadId,
-          message: {
-            messageId: newMessageId(),
-            role: "user",
-            text: outgoingImplementationPrompt,
-            attachments: [],
-          },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: nextThreadTitle,
-          runtimeMode,
-          interactionMode: "default",
-          sourceProposedPlan: {
-            threadId: activeThread.id,
-            planId: activeProposedPlan.id,
-          },
-          createdAt,
-        });
+        return capturePendingWorkspaceLiveDiffBaseline(nextThreadId, activeWorkspaceRoot).then(() =>
+          api.orchestration.dispatchCommand({
+            type: "thread.turn.start",
+            commandId: newCommandId(),
+            threadId: nextThreadId,
+            message: {
+              messageId: newMessageId(),
+              role: "user",
+              text: outgoingImplementationPrompt,
+              attachments: [],
+            },
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: nextThreadTitle,
+            runtimeMode,
+            interactionMode: "default",
+            sourceProposedPlan: {
+              threadId: activeThread.id,
+              planId: activeProposedPlan.id,
+            },
+            createdAt,
+          }),
+        );
       })
       .then(() => {
         return waitForStartedServerThread(scopeThreadRef(activeThread.environmentId, nextThreadId));
@@ -3091,6 +3139,7 @@ export default function ChatView(props: ChatViewProps) {
         });
       })
       .catch(async (err: unknown) => {
+        clearPendingWorkspaceLiveDiffBaseline(nextThreadId);
         await api.orchestration
           .dispatchCommand({
             type: "thread.delete",
@@ -3109,9 +3158,12 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeProject,
     activeProposedPlan,
+    activeWorkspaceRoot,
     activeThreadBranch,
     activeThread,
     beginLocalDispatch,
+    capturePendingWorkspaceLiveDiffBaseline,
+    clearPendingWorkspaceLiveDiffBaseline,
     isConnecting,
     isSendBusy,
     isServerThread,

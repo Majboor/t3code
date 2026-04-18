@@ -28,6 +28,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -53,7 +54,11 @@ import {
   buildWorkspaceFocusedFileDiff,
   type WorkspaceDiffReviewItem,
 } from "~/lib/workspaceDiffReview";
-import { buildWorkspaceLiveTurnDiffStatByPath } from "~/lib/workspaceLiveDiffs";
+import { takePendingWorkspaceLiveDiffBaselineForThread } from "~/lib/workspaceLiveDiffBaselineState";
+import {
+  buildWorkspaceLiveTurnDiffStatByPath,
+  type WorkspaceWorkingTreeFileStat,
+} from "~/lib/workspaceLiveDiffs";
 import {
   workspaceListDirectoryQueryOptions,
   workspaceQueryKeys,
@@ -105,8 +110,13 @@ function buildWorkspaceCheckpointDiffKey(entry: WorkspaceAgentFileDiff): string 
   return `checkpoint:${entry.turnId}`;
 }
 
+function buildWorkspaceReviewSessionKey(turnId: TurnId, pathValue: string): string {
+  return `turn:${turnId}:${pathValue}`;
+}
+
 interface WorkspaceResolvedFileDiffState {
   source: "working-tree" | "checkpoint";
+  sessionKey: string;
   visibilityKey: string;
   stat: {
     additions: number;
@@ -114,13 +124,44 @@ interface WorkspaceResolvedFileDiffState {
   };
 }
 
-interface WorkspaceReviewFileEntry {
-  path: string;
+interface WorkspaceAcceptedDiffState {
+  source: "working-tree" | "checkpoint";
+  sessionKey: string;
   visibilityKey: string;
-  stat: {
-    additions: number;
-    deletions: number;
-  };
+}
+
+interface WorkspaceReviewFileEntry extends WorkspaceResolvedFileDiffState {
+  path: string;
+}
+
+interface WorkspaceCompletedLiveDiffState {
+  turnId: TurnId;
+  turnKey: string;
+  statByPath: ReadonlyMap<string, { additions: number; deletions: number }>;
+}
+
+interface WorkspaceGitStatusSnapshot {
+  isRepo: boolean;
+  files: ReadonlyArray<WorkspaceWorkingTreeFileStat>;
+}
+
+function isWorkspaceDiffAccepted(
+  acceptedState: WorkspaceAcceptedDiffState | null | undefined,
+  visibleDiffState: Pick<WorkspaceResolvedFileDiffState, "source" | "sessionKey" | "visibilityKey">,
+): boolean {
+  if (!acceptedState) {
+    return false;
+  }
+
+  if (acceptedState.visibilityKey === visibleDiffState.visibilityKey) {
+    return true;
+  }
+
+  return (
+    acceptedState.source === "working-tree" &&
+    visibleDiffState.source === "checkpoint" &&
+    acceptedState.sessionKey === visibleDiffState.sessionKey
+  );
 }
 
 function directoryKey(pathValue: string | null | undefined): string {
@@ -281,12 +322,6 @@ interface WorkspaceDiffReviewState {
   selectedHunkId: string | null;
 }
 
-interface WorkspaceWorkingTreeFileStat {
-  path: string;
-  insertions: number;
-  deletions: number;
-}
-
 export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -311,9 +346,13 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const activeWorkspaceRoot = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
   const workspaceLabel = activeWorkspaceRoot ? basenameOfPath(activeWorkspaceRoot) : "Workspace";
   const workspaceScopeLabel = activeThread?.worktreePath ? "Thread workspace" : "Project workspace";
-  const activeRunningTurnKey =
+  const activeRunningTurnId =
     activeThread?.session?.orchestrationStatus === "running" && activeThread.session.activeTurnId
-      ? `${activeThread.environmentId}:${activeThread.id}:${activeThread.session.activeTurnId}`
+      ? activeThread.session.activeTurnId
+      : null;
+  const activeRunningTurnKey =
+    activeRunningTurnId !== null && activeThread
+      ? `${activeThread.environmentId}:${activeThread.id}:${activeRunningTurnId}`
       : null;
   const gitStatus = useGitStatus({
     environmentId: activeEnvironmentId,
@@ -330,6 +369,21 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const currentWorkspaceWorkingTreeFiles = gitStatus.data?.isRepo
     ? gitStatus.data.workingTree.files
     : EMPTY_WORKSPACE_WORKING_TREE_FILES;
+  const currentWorkspaceWorkingTreeFilesRef = useRef(currentWorkspaceWorkingTreeFiles);
+  currentWorkspaceWorkingTreeFilesRef.current = currentWorkspaceWorkingTreeFiles;
+  const hasCurrentGitStatusSnapshotRef = useRef(gitStatus.data !== null);
+  hasCurrentGitStatusSnapshotRef.current = gitStatus.data !== null;
+  const gitStatusIsRepoRef = useRef(Boolean(gitStatus.data?.isRepo));
+  gitStatusIsRepoRef.current = Boolean(gitStatus.data?.isRepo);
+  const lastCommittedGitStatusSnapshotRef = useRef<WorkspaceGitStatusSnapshot | null>(
+    gitStatus.data !== null
+      ? {
+          isRepo: Boolean(gitStatus.data.isRepo),
+          files: currentWorkspaceWorkingTreeFiles,
+        }
+      : null,
+  );
+  const previousRunningTurnKeyRef = useRef<string | null>(activeRunningTurnKey);
   const workspaceRootRef = useRef(activeWorkspaceRoot);
   workspaceRootRef.current = activeWorkspaceRoot;
 
@@ -358,7 +412,9 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const [fileStateByPath, setFileStateByPath] = useState<Record<string, ProjectReadFileResult>>({});
   const [draftByPath, setDraftByPath] = useState<Record<string, string>>({});
   const [selectedDiffTurnId, setSelectedDiffTurnId] = useState<TurnId | null>(null);
-  const [acceptedDiffKeyByPath, setAcceptedDiffKeyByPath] = useState<Record<string, string>>({});
+  const [acceptedDiffStateByPath, setAcceptedDiffStateByPath] = useState<
+    Record<string, WorkspaceAcceptedDiffState>
+  >({});
   const [diffReviewStateByKey, setDiffReviewStateByKey] = useState<
     Record<string, WorkspaceDiffReviewState>
   >({});
@@ -379,14 +435,22 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   fileStateByPathRef.current = fileStateByPath;
   const draftByPathRef = useRef(draftByPath);
   draftByPathRef.current = draftByPath;
+  const openTabsRef = useRef(openTabs);
+  openTabsRef.current = openTabs;
+  const expandedDirectoriesByPathRef = useRef(expandedDirectoriesByPath);
+  expandedDirectoriesByPathRef.current = expandedDirectoriesByPath;
   const observedWorkspaceDiffSignatureRef = useRef("");
   const hasObservedWorkspaceDiffBaselineRef = useRef(false);
   const observedLiveWorkspaceDiffSignatureRef = useRef("");
   const hasObservedLiveWorkspaceDiffBaselineRef = useRef(false);
   const [liveDiffBaselineTurnKey, setLiveDiffBaselineTurnKey] = useState<string | null>(null);
+  const liveDiffBaselinePendingTurnKeyRef = useRef<string | null>(null);
   const [liveDiffBaselineFiles, setLiveDiffBaselineFiles] = useState<
     ReadonlyArray<WorkspaceWorkingTreeFileStat>
   >(EMPTY_WORKSPACE_WORKING_TREE_FILES);
+  const latestRunningLiveDiffRef = useRef<WorkspaceCompletedLiveDiffState | null>(null);
+  const [completedLiveDiffState, setCompletedLiveDiffState] =
+    useState<WorkspaceCompletedLiveDiffState | null>(null);
 
   const loadDirectory = useCallback(
     async (directoryPath: string | null, options?: { force?: boolean }) => {
@@ -433,7 +497,13 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   );
 
   const loadFile = useCallback(
-    async (relativePath: string, options?: { force?: boolean }) => {
+    async (
+      relativePath: string,
+      options?: {
+        force?: boolean;
+        suppressErrorToast?: boolean;
+      },
+    ) => {
       if (!activeEnvironmentId || !activeWorkspaceRoot) {
         return;
       }
@@ -480,11 +550,13 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
           };
         });
       } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not open file",
-          description: error instanceof Error ? error.message : "An unexpected error occurred.",
-        });
+        if (!options?.suppressErrorToast) {
+          toastManager.add({
+            type: "error",
+            title: "Could not open file",
+            description: error instanceof Error ? error.message : "An unexpected error occurred.",
+          });
+        }
       } finally {
         setLoadingFilePath((current) => (current === relativePath ? null : current));
       }
@@ -506,11 +578,14 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     setFileStateByPath({});
     setDraftByPath({});
     setSelectedDiffTurnId(null);
-    setAcceptedDiffKeyByPath({});
+    setAcceptedDiffStateByPath({});
     setDiffReviewStateByKey({});
     setFileViewModeByPath({});
     setLiveDiffBaselineTurnKey(null);
+    liveDiffBaselinePendingTurnKeyRef.current = null;
     setLiveDiffBaselineFiles(EMPTY_WORKSPACE_WORKING_TREE_FILES);
+    latestRunningLiveDiffRef.current = null;
+    setCompletedLiveDiffState(null);
     observedWorkspaceDiffSignatureRef.current = "";
     hasObservedWorkspaceDiffBaselineRef.current = false;
     observedLiveWorkspaceDiffSignatureRef.current = "";
@@ -559,67 +634,132 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     [directoryEntriesByPath, loadDirectory],
   );
 
-  const refreshWorkspace = useCallback(() => {
-    if (!activeEnvironmentId || !activeWorkspaceRoot) {
+  const refreshExpandedDirectories = useCallback(() => {
+    const directoryPaths = Object.keys(expandedDirectoriesByPathRef.current).map((pathValue) =>
+      pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
+    );
+    if (directoryPaths.length === 0) {
       return;
     }
 
-    void refreshGitStatus({
-      environmentId: activeEnvironmentId,
-      cwd: activeWorkspaceRoot,
-    }).catch(() => undefined);
-    void queryClient.invalidateQueries({
-      queryKey: workspaceQueryKeys.all,
-    });
-    void queryClient.invalidateQueries({
-      queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
-    });
-
-    const directoryPaths = Object.keys(expandedDirectoriesByPath).map((pathValue) =>
-      pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
-    );
     void Promise.all(
       directoryPaths.map((directoryPath) => loadDirectory(directoryPath, { force: true })),
     ).catch(() => undefined);
+  }, [loadDirectory]);
 
-    if (activeFilePath) {
-      void loadFile(activeFilePath, { force: true });
-    }
-  }, [
-    activeFilePath,
-    activeEnvironmentId,
-    activeWorkspaceRoot,
-    expandedDirectoriesByPath,
-    queryClient,
-    loadDirectory,
-    loadFile,
-  ]);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (activeRunningTurnKey === null) {
       if (liveDiffBaselineTurnKey !== null) {
         setLiveDiffBaselineTurnKey(null);
         setLiveDiffBaselineFiles(EMPTY_WORKSPACE_WORKING_TREE_FILES);
       }
+      liveDiffBaselinePendingTurnKeyRef.current = null;
       return;
     }
 
-    if (liveDiffBaselineTurnKey === activeRunningTurnKey) {
+    if (
+      liveDiffBaselineTurnKey === activeRunningTurnKey ||
+      liveDiffBaselinePendingTurnKeyRef.current === activeRunningTurnKey ||
+      !activeEnvironmentId ||
+      !activeWorkspaceRoot
+    ) {
       return;
     }
 
-    if (!gitStatus.data?.isRepo) {
-      return;
+    const committedBaselineSnapshot =
+      previousRunningTurnKeyRef.current !== activeRunningTurnKey
+        ? lastCommittedGitStatusSnapshotRef.current
+        : null;
+    const pendingDispatchBaseline =
+      activeThread !== undefined
+        ? takePendingWorkspaceLiveDiffBaselineForThread({
+            environmentId: activeThread.environmentId,
+            threadId: activeThread.id,
+            cwd: activeWorkspaceRoot,
+          })
+        : null;
+    const immediateBaselineFiles =
+      pendingDispatchBaseline !== null
+        ? pendingDispatchBaseline.isRepo
+          ? pendingDispatchBaseline.files
+          : EMPTY_WORKSPACE_WORKING_TREE_FILES
+        : committedBaselineSnapshot !== null
+          ? committedBaselineSnapshot.isRepo
+            ? committedBaselineSnapshot.files
+            : EMPTY_WORKSPACE_WORKING_TREE_FILES
+          : hasCurrentGitStatusSnapshotRef.current
+            ? gitStatusIsRepoRef.current
+              ? currentWorkspaceWorkingTreeFilesRef.current
+              : EMPTY_WORKSPACE_WORKING_TREE_FILES
+            : null;
+
+    if (immediateBaselineFiles !== null) {
+      setLiveDiffBaselineFiles(immediateBaselineFiles);
+      setLiveDiffBaselineTurnKey(activeRunningTurnKey);
+      liveDiffBaselinePendingTurnKeyRef.current = null;
+    } else {
+      setLiveDiffBaselineTurnKey(null);
+      liveDiffBaselinePendingTurnKeyRef.current = activeRunningTurnKey;
+      setLiveDiffBaselineFiles(EMPTY_WORKSPACE_WORKING_TREE_FILES);
     }
 
-    setLiveDiffBaselineTurnKey(activeRunningTurnKey);
-    setLiveDiffBaselineFiles(currentWorkspaceWorkingTreeFiles);
+    let cancelled = false;
+
+    void refreshGitStatus({
+      environmentId: activeEnvironmentId,
+      cwd: activeWorkspaceRoot,
+    })
+      .then((refreshedStatus) => {
+        if (cancelled || immediateBaselineFiles !== null) {
+          return;
+        }
+
+        const baselineFiles = refreshedStatus?.isRepo
+          ? refreshedStatus.workingTree.files
+          : gitStatusIsRepoRef.current
+            ? currentWorkspaceWorkingTreeFilesRef.current
+            : EMPTY_WORKSPACE_WORKING_TREE_FILES;
+        setLiveDiffBaselineFiles(baselineFiles);
+        setLiveDiffBaselineTurnKey(activeRunningTurnKey);
+        if (liveDiffBaselinePendingTurnKeyRef.current === activeRunningTurnKey) {
+          liveDiffBaselinePendingTurnKeyRef.current = null;
+        }
+      })
+      .catch(() => {
+        if (cancelled || immediateBaselineFiles !== null) {
+          return;
+        }
+
+        const baselineFiles = gitStatusIsRepoRef.current
+          ? currentWorkspaceWorkingTreeFilesRef.current
+          : EMPTY_WORKSPACE_WORKING_TREE_FILES;
+        setLiveDiffBaselineFiles(baselineFiles);
+        setLiveDiffBaselineTurnKey(activeRunningTurnKey);
+        if (liveDiffBaselinePendingTurnKeyRef.current === activeRunningTurnKey) {
+          liveDiffBaselinePendingTurnKeyRef.current = null;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [
+    activeEnvironmentId,
     activeRunningTurnKey,
-    currentWorkspaceWorkingTreeFiles,
-    gitStatus.data?.isRepo,
+    activeThread,
+    activeWorkspaceRoot,
     liveDiffBaselineTurnKey,
   ]);
+
+  useLayoutEffect(() => {
+    previousRunningTurnKeyRef.current = activeRunningTurnKey;
+    if (gitStatus.data !== null) {
+      lastCommittedGitStatusSnapshotRef.current = {
+        isRepo: Boolean(gitStatus.data.isRepo),
+        files: currentWorkspaceWorkingTreeFiles,
+      };
+    }
+  }, [activeRunningTurnKey, currentWorkspaceWorkingTreeFiles, gitStatus.data]);
 
   const liveWorkspaceDiffStatByPath = useMemo(() => {
     if (
@@ -641,6 +781,37 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     liveDiffBaselineFiles,
     liveDiffBaselineTurnKey,
   ]);
+  useEffect(() => {
+    if (activeRunningTurnId !== null && activeRunningTurnKey !== null) {
+      const runningLiveDiffState: WorkspaceCompletedLiveDiffState = {
+        turnId: activeRunningTurnId,
+        turnKey: activeRunningTurnKey,
+        statByPath: liveWorkspaceDiffStatByPath,
+      };
+      latestRunningLiveDiffRef.current = runningLiveDiffState;
+      setCompletedLiveDiffState((current) => (current === null ? current : null));
+      return;
+    }
+
+    const latestRunningLiveDiff = latestRunningLiveDiffRef.current;
+    if (!latestRunningLiveDiff) {
+      setCompletedLiveDiffState((current) => (current === null ? current : null));
+      return;
+    }
+
+    if (latestRunningLiveDiff.statByPath.size === 0) {
+      latestRunningLiveDiffRef.current = null;
+      setCompletedLiveDiffState((current) => (current === null ? current : null));
+      return;
+    }
+
+    setCompletedLiveDiffState((current) => {
+      if (current?.turnKey === latestRunningLiveDiff.turnKey) {
+        return current;
+      }
+      return latestRunningLiveDiff;
+    });
+  }, [activeRunningTurnId, activeRunningTurnKey, liveWorkspaceDiffStatByPath]);
 
   const activeFileState = activeFilePath ? (fileStateByPath[activeFilePath] ?? null) : null;
   const activeFileDraft =
@@ -661,13 +832,67 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     }
     return dirtyPaths;
   }, [draftByPath, fileStateByPath, openTabs]);
-  const activeFileDirty = activeFilePath ? dirtyFilePathSet.has(activeFilePath) : false;
-  const activeFileLiveDiffStat =
-    activeFilePath !== null ? (liveWorkspaceDiffStatByPath.get(activeFilePath) ?? null) : null;
-  const activeFileHasLiveDiff = activeFileLiveDiffStat !== null;
+  const dirtyFilePathSetRef = useRef(dirtyFilePathSet);
+  dirtyFilePathSetRef.current = dirtyFilePathSet;
+  const refreshCleanOpenFiles = useCallback(
+    (options?: { suppressErrorToast?: boolean }) => {
+      for (const filePath of openTabsRef.current) {
+        if (dirtyFilePathSetRef.current.has(filePath)) {
+          continue;
+        }
+
+        const loadFileOptions =
+          options?.suppressErrorToast === undefined
+            ? { force: true }
+            : { force: true, suppressErrorToast: options.suppressErrorToast };
+        void loadFile(filePath, loadFileOptions);
+      }
+    },
+    [loadFile],
+  );
+  const refreshWorkspace = useCallback(() => {
+    if (!activeEnvironmentId || !activeWorkspaceRoot) {
+      return;
+    }
+
+    void refreshGitStatus({
+      environmentId: activeEnvironmentId,
+      cwd: activeWorkspaceRoot,
+    }).catch(() => undefined);
+    void queryClient.invalidateQueries({
+      queryKey: workspaceQueryKeys.all,
+    });
+    void queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
+    });
+    refreshExpandedDirectories();
+    refreshCleanOpenFiles();
+  }, [
+    activeEnvironmentId,
+    activeWorkspaceRoot,
+    queryClient,
+    refreshCleanOpenFiles,
+    refreshExpandedDirectories,
+  ]);
   const activeFileDiffHistory = activeFilePath
     ? (workspaceAgentDiffHistoryByPath.get(activeFilePath) ?? EMPTY_WORKSPACE_FILE_DIFF_HISTORY)
     : EMPTY_WORKSPACE_FILE_DIFF_HISTORY;
+  const activeFileCompletedLiveDiffStat =
+    activeFilePath !== null && activeFileDiffHistory.length === 0
+      ? (completedLiveDiffState?.statByPath.get(activeFilePath) ?? null)
+      : null;
+  const activeFileDirty = activeFilePath ? dirtyFilePathSet.has(activeFilePath) : false;
+  const activeFileLiveDiffStat =
+    activeFilePath !== null
+      ? (liveWorkspaceDiffStatByPath.get(activeFilePath) ?? activeFileCompletedLiveDiffStat ?? null)
+      : null;
+  const activeFileLiveDiffTurnId =
+    activeRunningTurnId ??
+    (activeFileCompletedLiveDiffStat ? (completedLiveDiffState?.turnId ?? null) : null);
+  const activeFileLiveDiffTurnKey =
+    activeRunningTurnKey ??
+    (activeFileCompletedLiveDiffStat ? (completedLiveDiffState?.turnKey ?? null) : null);
+  const activeFileHasLiveDiff = activeFileLiveDiffStat !== null;
   const selectedActiveDiffEntry =
     (selectedDiffTurnId
       ? activeFileDiffHistory.find((entry) => entry.turnId === selectedDiffTurnId)
@@ -677,10 +902,22 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const activeVisibleDiffKey =
     activeFilePath === null
       ? null
-      : activeFileHasLiveDiff && activeFileLiveDiffStat && activeRunningTurnKey
-        ? buildWorkspaceLiveDiffKey(activeRunningTurnKey, activeFilePath, activeFileLiveDiffStat)
+      : activeFileHasLiveDiff && activeFileLiveDiffStat && activeFileLiveDiffTurnKey
+        ? buildWorkspaceLiveDiffKey(
+            activeFileLiveDiffTurnKey,
+            activeFilePath,
+            activeFileLiveDiffStat,
+          )
         : selectedActiveDiffEntry
           ? buildWorkspaceCheckpointDiffKey(selectedActiveDiffEntry)
+          : null;
+  const activeVisibleDiffSessionKey =
+    activeFilePath === null
+      ? null
+      : activeFileHasLiveDiff && activeFileLiveDiffTurnId
+        ? buildWorkspaceReviewSessionKey(activeFileLiveDiffTurnId, activeFilePath)
+        : selectedActiveDiffEntry
+          ? buildWorkspaceReviewSessionKey(selectedActiveDiffEntry.turnId, activeFilePath)
           : null;
   const {
     activeDiffQuery: activeWorkingTreeDiffQuery,
@@ -729,11 +966,10 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       ? activeWorkingTreeDiffQuery.isLoading
       : activeInlineDiffQuery.isLoading;
   const activeVisibleDiffReviewKey =
-    activeVisibleDiffKey !== null && activeFilePath !== null
-      ? `${activeVisibleDiffKey}:${activeFilePath}`
-      : activeRenderableInlineFile !== null
-        ? buildFileDiffRenderKey(activeRenderableInlineFile)
-        : activeVisibleDiffKey;
+    activeVisibleDiffSessionKey ??
+    (activeRenderableInlineFile !== null
+      ? buildFileDiffRenderKey(activeRenderableInlineFile)
+      : activeVisibleDiffKey);
   const activeReviewItems = useMemo(
     () =>
       activeRenderableInlineFile
@@ -778,7 +1014,13 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const activeVisibleDiffAccepted =
     activeFilePath !== null &&
     activeVisibleDiffKey !== null &&
-    acceptedDiffKeyByPath[activeFilePath] === activeVisibleDiffKey;
+    activeVisibleDiffSessionKey !== null &&
+    activeInlineDiffSource !== null &&
+    isWorkspaceDiffAccepted(acceptedDiffStateByPath[activeFilePath], {
+      source: activeInlineDiffSource,
+      sessionKey: activeVisibleDiffSessionKey,
+      visibilityKey: activeVisibleDiffKey,
+    });
   const activeVisibleDiffFullyAccepted =
     activeVisibleDiffAccepted ||
     (activeReviewItems.length > 0 && activeRemainingReviewItems.length === 0);
@@ -803,10 +1045,38 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       return Array.from(liveWorkspaceDiffStatByPath.entries())
         .map(([pathValue, stat]) => ({
           path: pathValue,
+          source: "working-tree" as const,
+          sessionKey:
+            activeRunningTurnId !== null
+              ? buildWorkspaceReviewSessionKey(activeRunningTurnId, pathValue)
+              : "",
           visibilityKey: buildWorkspaceLiveDiffKey(activeRunningTurnKey, pathValue, stat),
           stat,
         }))
-        .filter((entry) => acceptedDiffKeyByPath[entry.path] !== entry.visibilityKey)
+        .filter(
+          (entry) =>
+            activeRunningTurnId !== null &&
+            !isWorkspaceDiffAccepted(acceptedDiffStateByPath[entry.path], entry),
+        )
+        .toSorted((left, right) =>
+          left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+        );
+    }
+
+    if (
+      activeInlineDiffSource === "working-tree" &&
+      activeRunningTurnKey === null &&
+      completedLiveDiffState
+    ) {
+      return Array.from(completedLiveDiffState.statByPath.entries())
+        .map(([pathValue, stat]) => ({
+          path: pathValue,
+          source: "working-tree" as const,
+          sessionKey: buildWorkspaceReviewSessionKey(completedLiveDiffState.turnId, pathValue),
+          visibilityKey: buildWorkspaceLiveDiffKey(completedLiveDiffState.turnKey, pathValue, stat),
+          stat,
+        }))
+        .filter((entry) => !isWorkspaceDiffAccepted(acceptedDiffStateByPath[entry.path], entry))
         .toSorted((left, right) =>
           left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
         );
@@ -816,16 +1086,20 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       return (workspaceAgentDiffTurnFilesByTurnId.get(selectedActiveDiffEntry.turnId) ?? [])
         .map((entry) => ({
           path: entry.path,
+          source: "checkpoint" as const,
+          sessionKey: buildWorkspaceReviewSessionKey(entry.turnId, entry.path),
           visibilityKey: buildWorkspaceCheckpointDiffKey(entry),
           stat: entry.stat,
         }))
-        .filter((entry) => acceptedDiffKeyByPath[entry.path] !== entry.visibilityKey);
+        .filter((entry) => !isWorkspaceDiffAccepted(acceptedDiffStateByPath[entry.path], entry));
     }
 
     return [];
   }, [
-    acceptedDiffKeyByPath,
+    acceptedDiffStateByPath,
+    completedLiveDiffState,
     activeInlineDiffSource,
+    activeRunningTurnId,
     activeRunningTurnKey,
     liveWorkspaceDiffStatByPath,
     selectedActiveDiffEntry,
@@ -896,34 +1170,69 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
           normalizedPath,
           liveDiffStat,
         );
-        if (acceptedDiffKeyByPath[normalizedPath] === visibilityKey) {
-          return null;
-        }
-        return {
+        const liveDiffState: WorkspaceResolvedFileDiffState = {
           source: "working-tree",
+          sessionKey:
+            activeRunningTurnId !== null
+              ? buildWorkspaceReviewSessionKey(activeRunningTurnId, normalizedPath)
+              : "",
           visibilityKey,
           stat: liveDiffStat,
         };
+        if (
+          activeRunningTurnId !== null &&
+          isWorkspaceDiffAccepted(acceptedDiffStateByPath[normalizedPath], liveDiffState)
+        ) {
+          return null;
+        }
+        return liveDiffState;
       }
 
       const latestCheckpointDiff = workspaceAgentDiffHistoryByPath.get(normalizedPath)?.[0] ?? null;
-      if (!latestCheckpointDiff) {
+      if (latestCheckpointDiff) {
+        const checkpointDiffState: WorkspaceResolvedFileDiffState = {
+          source: "checkpoint",
+          sessionKey: buildWorkspaceReviewSessionKey(latestCheckpointDiff.turnId, normalizedPath),
+          visibilityKey: buildWorkspaceCheckpointDiffKey(latestCheckpointDiff),
+          stat: latestCheckpointDiff.stat,
+        };
+        if (
+          !isWorkspaceDiffAccepted(acceptedDiffStateByPath[normalizedPath], checkpointDiffState)
+        ) {
+          return checkpointDiffState;
+        }
+      }
+
+      const completedLiveDiffStat = completedLiveDiffState?.statByPath.get(normalizedPath) ?? null;
+      if (!completedLiveDiffStat || !completedLiveDiffState) {
         return null;
       }
 
-      const visibilityKey = buildWorkspaceCheckpointDiffKey(latestCheckpointDiff);
-      if (acceptedDiffKeyByPath[normalizedPath] === visibilityKey) {
-        return null;
-      }
-
-      return {
-        source: "checkpoint",
-        visibilityKey,
-        stat: latestCheckpointDiff.stat,
+      const completedLiveDiffResolvedState: WorkspaceResolvedFileDiffState = {
+        source: "working-tree",
+        sessionKey: buildWorkspaceReviewSessionKey(completedLiveDiffState.turnId, normalizedPath),
+        visibilityKey: buildWorkspaceLiveDiffKey(
+          completedLiveDiffState.turnKey,
+          normalizedPath,
+          completedLiveDiffStat,
+        ),
+        stat: completedLiveDiffStat,
       };
+      if (
+        isWorkspaceDiffAccepted(
+          acceptedDiffStateByPath[normalizedPath],
+          completedLiveDiffResolvedState,
+        )
+      ) {
+        return null;
+      }
+
+      return completedLiveDiffResolvedState;
     },
     [
-      acceptedDiffKeyByPath,
+      acceptedDiffStateByPath,
+      completedLiveDiffState,
+      activeRunningTurnId,
       activeRunningTurnKey,
       liveWorkspaceDiffStatByPath,
       workspaceAgentDiffHistoryByPath,
@@ -1014,16 +1323,31 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     [activeReviewFileCount, activeReviewFileIndex, activeReviewSessionFiles, openReviewFile],
   );
   const markActiveVisibleDiffAccepted = useCallback(() => {
-    if (!activeFilePath || !activeVisibleDiffKey) {
+    if (
+      !activeFilePath ||
+      !activeVisibleDiffKey ||
+      !activeVisibleDiffSessionKey ||
+      !activeInlineDiffSource
+    ) {
       return;
     }
 
-    setAcceptedDiffKeyByPath((current) => ({
+    setAcceptedDiffStateByPath((current) => ({
       ...current,
-      [activeFilePath]: activeVisibleDiffKey,
+      [activeFilePath]: {
+        source: activeInlineDiffSource,
+        sessionKey: activeVisibleDiffSessionKey,
+        visibilityKey: activeVisibleDiffKey,
+      },
     }));
     showFileViewForPath(activeFilePath, "editor");
-  }, [activeFilePath, activeVisibleDiffKey, showFileViewForPath]);
+  }, [
+    activeFilePath,
+    activeInlineDiffSource,
+    activeVisibleDiffKey,
+    activeVisibleDiffSessionKey,
+    showFileViewForPath,
+  ]);
   const selectActiveReviewItem = useCallback(
     (reviewItemId: string) => {
       if (!activeVisibleDiffReviewKey) {
@@ -1221,15 +1545,24 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     if (
       !activeFilePath ||
       !activeVisibleDiffKey ||
-      !activeVisibleDiffAccepted ||
+      !activeVisibleDiffSessionKey ||
+      !activeInlineDiffSource ||
       activeReviewItems.length === 0 ||
       activeRemainingReviewItems.length === 0
     ) {
       return;
     }
 
-    setAcceptedDiffKeyByPath((current) => {
-      if (current[activeFilePath] !== activeVisibleDiffKey) {
+    setAcceptedDiffStateByPath((current) => {
+      const acceptedState = current[activeFilePath];
+      if (
+        !acceptedState ||
+        !isWorkspaceDiffAccepted(acceptedState, {
+          source: activeInlineDiffSource,
+          sessionKey: activeVisibleDiffSessionKey,
+          visibilityKey: activeVisibleDiffKey,
+        })
+      ) {
         return current;
       }
 
@@ -1238,13 +1571,54 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       return next;
     });
   }, [
-    acceptedDiffKeyByPath,
     activeFilePath,
+    activeInlineDiffSource,
     activeRemainingReviewItems.length,
     activeReviewItems.length,
-    activeVisibleDiffAccepted,
     activeVisibleDiffKey,
+    activeVisibleDiffSessionKey,
   ]);
+
+  useEffect(() => {
+    if (activeRunningTurnId === null || activeRunningTurnKey === null) {
+      return;
+    }
+
+    setAcceptedDiffStateByPath((current) => {
+      let next: Record<string, WorkspaceAcceptedDiffState> | null = null;
+
+      for (const [pathValue, acceptedState] of Object.entries(current)) {
+        if (
+          acceptedState.source !== "working-tree" ||
+          acceptedState.sessionKey !==
+            buildWorkspaceReviewSessionKey(activeRunningTurnId, pathValue)
+        ) {
+          continue;
+        }
+
+        const liveDiffStat = liveWorkspaceDiffStatByPath.get(pathValue) ?? null;
+        if (liveDiffStat === null) {
+          continue;
+        }
+
+        const currentVisibilityKey = buildWorkspaceLiveDiffKey(
+          activeRunningTurnKey,
+          pathValue,
+          liveDiffStat,
+        );
+        if (acceptedState.visibilityKey === currentVisibilityKey) {
+          continue;
+        }
+
+        if (next === null) {
+          next = { ...current };
+        }
+        delete next[pathValue];
+      }
+
+      return next ?? current;
+    });
+  }, [activeRunningTurnId, activeRunningTurnKey, liveWorkspaceDiffStatByPath]);
 
   useEffect(() => {
     if (!activeEnvironmentId || !activeWorkspaceRoot) {
@@ -1258,21 +1632,17 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     void queryClient.invalidateQueries({
       queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
     });
-
-    if (activeFilePath && !activeFileDirty && activeFileHasLiveDiff) {
-      void loadFile(activeFilePath, { force: true });
-    }
+    refreshExpandedDirectories();
+    refreshCleanOpenFiles({ suppressErrorToast: true });
   }, [
     activeEnvironmentId,
     activeWorkspaceRoot,
     activeThread?.updatedAt,
     activeThread?.session?.activeTurnId,
     activeThread?.session?.orchestrationStatus,
-    activeFileDirty,
-    activeFileHasLiveDiff,
-    activeFilePath,
-    loadFile,
     queryClient,
+    refreshCleanOpenFiles,
+    refreshExpandedDirectories,
   ]);
 
   useEffect(() => {
@@ -1292,10 +1662,8 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       void queryClient.invalidateQueries({
         queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
       });
-
-      if (activeFilePath && !activeFileDirty && activeFileHasLiveDiff) {
-        void loadFile(activeFilePath, { force: true });
-      }
+      refreshExpandedDirectories();
+      refreshCleanOpenFiles({ suppressErrorToast: true });
     }, 2_000);
 
     return () => {
@@ -1305,11 +1673,9 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     activeEnvironmentId,
     activeWorkspaceRoot,
     activeThread?.session?.orchestrationStatus,
-    activeFileDirty,
-    activeFileHasLiveDiff,
-    activeFilePath,
-    loadFile,
     queryClient,
+    refreshCleanOpenFiles,
+    refreshExpandedDirectories,
   ]);
 
   useEffect(() => {
@@ -1349,7 +1715,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       if (dirtyFilePathSet.has(filePath)) {
         continue;
       }
-      void loadFile(filePath, { force: true });
+      void loadFile(filePath, { force: true, suppressErrorToast: true });
     }
 
     setFileViewModeByPath((current) => {
@@ -1429,7 +1795,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       if (dirtyFilePathSet.has(filePath)) {
         continue;
       }
-      void loadFile(filePath, { force: true });
+      void loadFile(filePath, { force: true, suppressErrorToast: true });
     }
 
     setFileViewModeByPath((current) => {
