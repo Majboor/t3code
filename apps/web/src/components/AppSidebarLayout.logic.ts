@@ -10,8 +10,8 @@ export const PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX = 40 * 16;
 export const PROJECT_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 export const WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_sidebar_width";
 export const DEV_WORKSPACE_MIN_WIDTH_PX = 28 * 16;
-export const DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_PX = 18 * 16;
-export const DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX = 22 * 16;
+export const DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_PX = 22 * 16;
+export const DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX = 24 * 16;
 
 const PROJECT_SIDEBAR_OPEN_STATE_STORAGE_KEY = "t3code:project-sidebar-open:v1";
 const DESKTOP_LAYOUT_PANEL_PREFERENCE_STORAGE_KEY = "t3code:desktop-layout-panels:v1";
