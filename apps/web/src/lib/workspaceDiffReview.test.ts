@@ -33,16 +33,18 @@ describe("workspaceDiffReview", () => {
       return;
     }
 
-    const reviewItems = buildWorkspaceDiffReviewItems(fileDiff);
+    const reviewItems = buildWorkspaceDiffReviewItems(fileDiff, "checkpoint:turn-7:src/live.ts");
 
     expect(reviewItems).toHaveLength(2);
     expect(reviewItems[0]).toMatchObject({
+      id: "checkpoint:turn-7:src/live.ts:hunk:0:1:1",
       index: 0,
       additions: 1,
       deletions: 1,
       lineLabel: "new 1, old 1",
     });
     expect(reviewItems[1]).toMatchObject({
+      id: "checkpoint:turn-7:src/live.ts:hunk:1:3:3",
       index: 1,
       additions: 1,
       deletions: 1,

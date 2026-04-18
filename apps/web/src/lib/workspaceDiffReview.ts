@@ -13,9 +13,10 @@ export interface WorkspaceDiffReviewItem {
 
 export function buildWorkspaceDiffReviewItems(
   fileDiff: FileDiffMetadata,
+  reviewKey = fileDiff.cacheKey ?? fileDiff.name,
 ): ReadonlyArray<WorkspaceDiffReviewItem> {
   return fileDiff.hunks.map((hunk, index) => ({
-    id: `${fileDiff.cacheKey ?? fileDiff.name}:hunk:${index}:${hunk.additionLineIndex}:${hunk.deletionLineIndex}`,
+    id: `${reviewKey}:hunk:${index}:${hunk.additionStart}:${hunk.deletionStart}`,
     index,
     additions: hunk.additionLines,
     deletions: hunk.deletionLines,

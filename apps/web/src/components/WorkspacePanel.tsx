@@ -114,6 +114,15 @@ interface WorkspaceResolvedFileDiffState {
   };
 }
 
+interface WorkspaceReviewFileEntry {
+  path: string;
+  visibilityKey: string;
+  stat: {
+    additions: number;
+    deletions: number;
+  };
+}
+
 function directoryKey(pathValue: string | null | undefined): string {
   return pathValue ?? ROOT_DIRECTORY_KEY;
 }
@@ -720,15 +729,20 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       ? activeWorkingTreeDiffQuery.isLoading
       : activeInlineDiffQuery.isLoading;
   const activeVisibleDiffReviewKey =
-    activeRenderableInlineFile !== null
-      ? buildFileDiffRenderKey(activeRenderableInlineFile)
-      : activeVisibleDiffKey;
+    activeVisibleDiffKey !== null && activeFilePath !== null
+      ? `${activeVisibleDiffKey}:${activeFilePath}`
+      : activeRenderableInlineFile !== null
+        ? buildFileDiffRenderKey(activeRenderableInlineFile)
+        : activeVisibleDiffKey;
   const activeReviewItems = useMemo(
     () =>
       activeRenderableInlineFile
-        ? buildWorkspaceDiffReviewItems(activeRenderableInlineFile)
+        ? buildWorkspaceDiffReviewItems(
+            activeRenderableInlineFile,
+            activeVisibleDiffReviewKey ?? buildFileDiffRenderKey(activeRenderableInlineFile),
+          )
         : EMPTY_WORKSPACE_DIFF_REVIEW_ITEMS,
-    [activeRenderableInlineFile],
+    [activeRenderableInlineFile, activeVisibleDiffReviewKey],
   );
   const activeReviewState =
     activeVisibleDiffReviewKey !== null ? diffReviewStateByKey[activeVisibleDiffReviewKey] : null;
@@ -784,6 +798,44 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     activeRenderableInlineFile !== null && activeSelectedReviewItem !== null
       ? buildWorkspaceFocusedFileDiff(activeRenderableInlineFile, activeSelectedReviewItem)
       : activeRenderableInlineFile;
+  const activeReviewSessionFiles = useMemo<ReadonlyArray<WorkspaceReviewFileEntry>>(() => {
+    if (activeInlineDiffSource === "working-tree" && activeRunningTurnKey !== null) {
+      return Array.from(liveWorkspaceDiffStatByPath.entries())
+        .map(([pathValue, stat]) => ({
+          path: pathValue,
+          visibilityKey: buildWorkspaceLiveDiffKey(activeRunningTurnKey, pathValue, stat),
+          stat,
+        }))
+        .filter((entry) => acceptedDiffKeyByPath[entry.path] !== entry.visibilityKey)
+        .toSorted((left, right) =>
+          left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+        );
+    }
+
+    if (activeInlineDiffSource === "checkpoint" && selectedActiveDiffEntry) {
+      return (workspaceAgentDiffTurnFilesByTurnId.get(selectedActiveDiffEntry.turnId) ?? [])
+        .map((entry) => ({
+          path: entry.path,
+          visibilityKey: buildWorkspaceCheckpointDiffKey(entry),
+          stat: entry.stat,
+        }))
+        .filter((entry) => acceptedDiffKeyByPath[entry.path] !== entry.visibilityKey);
+    }
+
+    return [];
+  }, [
+    acceptedDiffKeyByPath,
+    activeInlineDiffSource,
+    activeRunningTurnKey,
+    liveWorkspaceDiffStatByPath,
+    selectedActiveDiffEntry,
+    workspaceAgentDiffTurnFilesByTurnId,
+  ]);
+  const activeReviewFileIndex =
+    activeFilePath !== null
+      ? activeReviewSessionFiles.findIndex((entry) => entry.path === activeFilePath)
+      : -1;
+  const activeReviewFileCount = activeReviewSessionFiles.length;
   const activeInlineDiffSubtitle =
     activeFileViewMode === "diff" && canShowActiveInlineDiff
       ? activeInlineDiffSource === "working-tree"
@@ -914,12 +966,18 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
 
     showFileViewForPath(activeFilePath, "diff");
   }, [activeFilePath, showFileViewForPath]);
-  const openFileFromPreview = useCallback(
+  const openReviewFile = useCallback(
     (relativePath: string) => {
       openFile(relativePath);
       showFileViewForPath(relativePath, "diff");
     },
     [openFile, showFileViewForPath],
+  );
+  const openFileFromPreview = useCallback(
+    (relativePath: string) => {
+      openReviewFile(relativePath);
+    },
+    [openReviewFile],
   );
   const selectDiffTurnFromPreview = useCallback(
     (turnId: TurnId) => {
@@ -929,6 +987,31 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       }
     },
     [activeFilePath, showFileViewForPath],
+  );
+  const selectActiveReviewFile = useCallback(
+    (relativePath: string) => {
+      openReviewFile(relativePath);
+    },
+    [openReviewFile],
+  );
+  const moveActiveReviewFile = useCallback(
+    (direction: -1 | 1) => {
+      if (activeReviewFileCount <= 1 || activeReviewFileIndex < 0) {
+        return;
+      }
+
+      const nextFile =
+        activeReviewSessionFiles[
+          Math.min(
+            activeReviewSessionFiles.length - 1,
+            Math.max(0, activeReviewFileIndex + direction),
+          )
+        ] ?? null;
+      if (nextFile) {
+        openReviewFile(nextFile.path);
+      }
+    },
+    [activeReviewFileCount, activeReviewFileIndex, activeReviewSessionFiles, openReviewFile],
   );
   const markActiveVisibleDiffAccepted = useCallback(() => {
     if (!activeFilePath || !activeVisibleDiffKey) {
@@ -1007,6 +1090,12 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       activeRemainingReviewItems[currentIndex + 1] ??
       activeRemainingReviewItems[currentIndex - 1] ??
       null;
+    const nextReviewFile =
+      activeReviewFileIndex >= 0
+        ? (activeReviewSessionFiles[activeReviewFileIndex + 1] ??
+          activeReviewSessionFiles[activeReviewFileIndex - 1] ??
+          null)
+        : null;
 
     setDiffReviewStateByKey((current) => ({
       ...current,
@@ -1022,15 +1111,21 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
 
     if (activeRemainingReviewItems.length === 1) {
       markActiveVisibleDiffAccepted();
+      if (nextReviewFile && nextReviewFile.path !== activeFilePath) {
+        openReviewFile(nextReviewFile.path);
+      }
     }
   }, [
     activeFilePath,
+    activeReviewFileIndex,
+    activeReviewSessionFiles,
     activeRemainingReviewItems,
     activeReviewItems.length,
     activeSelectedReviewItem,
     activeVisibleDiffKey,
     activeVisibleDiffReviewKey,
     markActiveVisibleDiffAccepted,
+    openReviewFile,
   ]);
   const handleActiveDiffReviewKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -2011,11 +2106,38 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                             data-workspace-diff-review-status
                           >
                             {activeSelectedReviewItem
-                              ? `Change ${activeSelectedReviewPosition} of ${activeRemainingReviewItems.length} · ${activeSelectedReviewItem.lineLabel}`
+                              ? `${activeReviewFileCount > 1 && activeReviewFileIndex >= 0 ? `File ${activeReviewFileIndex + 1} of ${activeReviewFileCount} · ` : ""}Change ${activeSelectedReviewPosition} of ${activeRemainingReviewItems.length} · ${activeSelectedReviewItem.lineLabel}`
                               : `${activeRemainingReviewItems.length} changes remaining`}
                           </div>
                         </div>
                         <div className="flex items-center gap-1">
+                          {activeReviewFileCount > 1 ? (
+                            <>
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                onClick={() => moveActiveReviewFile(-1)}
+                                disabled={activeReviewFileIndex <= 0}
+                                aria-label="Review previous file"
+                              >
+                                Prev file
+                              </Button>
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                onClick={() => moveActiveReviewFile(1)}
+                                disabled={
+                                  activeReviewFileIndex < 0 ||
+                                  activeReviewFileIndex === activeReviewFileCount - 1
+                                }
+                                aria-label="Review next file"
+                              >
+                                Next file
+                              </Button>
+                            </>
+                          ) : null}
                           <Button
                             type="button"
                             size="xs"
@@ -2049,6 +2171,26 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                           </Button>
                         </div>
                       </div>
+                      {activeReviewFileCount > 1 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {activeReviewSessionFiles.map((reviewFile, index) => {
+                            const selected = reviewFile.path === activeFilePath;
+                            return (
+                              <Button
+                                key={reviewFile.path}
+                                type="button"
+                                size="xs"
+                                variant={selected ? "default" : "outline"}
+                                aria-pressed={selected}
+                                aria-label={`Review file ${index + 1}, ${reviewFile.path}`}
+                                onClick={() => selectActiveReviewFile(reviewFile.path)}
+                              >
+                                {index + 1}. {basenameOfPath(reviewFile.path)}
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                       <div className="mt-2 flex flex-wrap gap-1">
                         {activeRemainingReviewItems.map((reviewItem, index) => {
                           const selected = reviewItem.id === activeSelectedReviewItem?.id;

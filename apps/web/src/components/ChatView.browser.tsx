@@ -6449,6 +6449,197 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps accepted files out of review mode when revisiting tabs in a multi-file turn", async () => {
+    let readFileCallCount = 0;
+    const firstFilePath = "first-review.ts";
+    const secondFilePath = "second-review.ts";
+    const firstFileContents = "export const first = true;\n";
+    const secondFileContents = "export const second = true;\n";
+    const turnId = TurnId.make("turn-workspace-multi-file-review-navigation");
+    const turnDiffPatch = [
+      "diff --git a/first-review.ts b/first-review.ts",
+      "index 1111111..2222222 100644",
+      "--- a/first-review.ts",
+      "+++ b/first-review.ts",
+      "@@ -1 +1 @@",
+      "-export const first = false;",
+      "+export const first = true;",
+      "diff --git a/second-review.ts b/second-review.ts",
+      "index 3333333..4444444 100644",
+      "--- a/second-review.ts",
+      "+++ b/second-review.ts",
+      "@@ -1 +1 @@",
+      "-export const second = false;",
+      "+export const second = true;",
+    ].join("\n");
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-workspace-multi-file-review-target" as MessageId,
+      targetText: "workspace multi file review thread",
+    });
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                checkpoints: [
+                  {
+                    turnId,
+                    checkpointTurnCount: 2,
+                    checkpointRef: CheckpointRef.make(
+                      "checkpoint-workspace-multi-file-review-navigation",
+                    ),
+                    status: "ready",
+                    files: [
+                      { path: firstFilePath, kind: "modified", additions: 1, deletions: 1 },
+                      { path: secondFilePath, kind: "modified", additions: 1, deletions: 1 },
+                    ],
+                    assistantMessageId: null,
+                    completedAt: isoAt(2_500),
+                  },
+                ],
+              }
+            : thread,
+        ),
+      },
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsListDirectory) {
+          return {
+            ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+            entries: [
+              {
+                name: firstFilePath,
+                path: firstFilePath,
+                kind: "file" as const,
+              },
+              {
+                name: secondFilePath,
+                path: secondFilePath,
+                kind: "file" as const,
+              },
+            ],
+          };
+        }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          readFileCallCount += 1;
+          const contents =
+            body.relativePath === firstFilePath ? firstFileContents : secondFileContents;
+          return {
+            relativePath: body.relativePath,
+            contents,
+            isBinary: false,
+            tooLarge: false,
+            sizeBytes: contents.length,
+          };
+        }
+        if (body._tag === ORCHESTRATION_WS_METHODS.getTurnDiff) {
+          return {
+            threadId: THREAD_ID,
+            fromTurnCount: 1,
+            toTurnCount: 2,
+            diff: turnDiffPatch,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const firstWorkspaceFileButton = await waitForButtonContainingText(firstFilePath);
+      firstWorkspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            `button[aria-label="Review file 2, ${secondFilePath}"]`,
+          ),
+        `Unable to find review navigation button for "${secondFilePath}".`,
+      );
+
+      const acceptFirstFileButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Accept the current change"]',
+          ),
+        'Unable to find "Accept the current change" button for the first file.',
+      );
+      acceptFirstFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(2);
+          expect(
+            document.querySelector("[data-workspace-diff-review-status]")?.textContent,
+          ).toContain("Change 1 of 1");
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${firstFilePath}"]`),
+          ).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-tab-path="${secondFilePath}"]`),
+          ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const acceptSecondFileButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Accept the current change"]',
+          ),
+        'Unable to find "Accept the current change" button for the second file.',
+      );
+      acceptSecondFileButton.click();
+
+      await waitForElement(
+        () => document.querySelector('[data-workspace-file-mode="editor"]'),
+        "Expected workspace file pane to return to editor mode after accepting the final file.",
+      );
+
+      const firstTabButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            `[data-workspace-tab-path="${firstFilePath}"] > button`,
+          ),
+        `Unable to find workspace tab for "${firstFilePath}".`,
+      );
+      firstTabButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-workspace-file-mode="editor"]')).toBeTruthy();
+          expect(document.querySelector("[data-workspace-diff-review='controls']")).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${firstFilePath}"]`),
+          ).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${secondFilePath}"]`),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows a tooltip with the skill description when hovering a skill pill", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
