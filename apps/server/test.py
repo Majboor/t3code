@@ -47,6 +47,12 @@ def linked_list_to_string(head: ListNode | None) -> str:
     return " -> ".join(values) if values else "empty"
 
 
+def say_hello() -> str:
+    """Return a friendly greeting."""
+
+    return "Hello"
+
+
 def main() -> None:
     """Build, reverse, and print an example linked list."""
 
