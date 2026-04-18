@@ -28,18 +28,20 @@ import { createThreadSelectorByRef } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { useProjectSidebarOpen } from "../components/AppSidebarLayout.logic";
+import {
+  DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX,
+  DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_PX,
+  WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
+} from "../components/AppSidebarLayout.logic";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { useSettings } from "../hooks/useSettings";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const WorkspacePanel = lazy(() => import("../components/WorkspacePanel"));
-const RIGHT_PANEL_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_sidebar_width";
 const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(30rem,52vw,72rem)";
 const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 28 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
-const COMPACT_CHAT_MIN_WIDTH_WITH_PROJECTS_PX = 18 * 16;
-const COMPACT_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX = 22 * 16;
 type RightPanelKind = "diff" | "workspace";
 
 const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
@@ -161,8 +163,8 @@ const ThreadRightPanelInlineSidebar = (props: {
       const minimumChatWidth = !projectsSidebarOpen
         ? 0
         : terminalDrawerVisible
-          ? COMPACT_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX
-          : COMPACT_CHAT_MIN_WIDTH_WITH_PROJECTS_PX;
+          ? DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX
+          : DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_PX;
       const chatColumnWidth = chatColumn?.getBoundingClientRect().width ?? viewportContentWidth;
       const hasComposerOverflow = composerForm.scrollWidth > composerForm.clientWidth + 0.5;
       const overflowsViewport = formRect.width > viewportContentWidth + 0.5;
@@ -197,12 +199,13 @@ const ThreadRightPanelInlineSidebar = (props: {
       <Sidebar
         side={side}
         collapsible="offcanvas"
+        desktopPosition="inline"
         className={`${side === "left" ? "border-r" : "border-l"} border-border bg-card text-foreground`}
         revalidateWidthOn={revalidateWidthOn}
         resizable={{
           minWidth: RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH,
           shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
-          storageKey: RIGHT_PANEL_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
+          storageKey: WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
         {renderDiffContent && preferredPanel === "diff" ? <LazyDiffPanel mode="sidebar" /> : null}

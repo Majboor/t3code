@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useEffectEvent, type ReactNode } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   PanelLeftCloseIcon,
@@ -20,13 +20,16 @@ import ThreadSidebar from "./Sidebar";
 import { Sidebar, SidebarProvider, SidebarRail } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
+  PROJECT_SIDEBAR_DEFAULT_WIDTH_PX,
   PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX,
   PROJECT_SIDEBAR_MIN_WIDTH_PX,
   PROJECT_SIDEBAR_WIDTH_STORAGE_KEY,
+  getMinimumDevMainContentWidthPx,
+  rebalanceDevWorkspaceWidthBeforeProjectsOpen,
   useProjectSidebarOpen,
 } from "./AppSidebarLayout.logic";
-
-const PROJECT_SIDEBAR_DEV_MAIN_CONTENT_MIN_WIDTH_PX = 70 * 16;
+import { getLocalStorageItem } from "~/hooks/useLocalStorage";
+import { Schema } from "effect";
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
@@ -47,7 +50,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const [projectSidebarOpen, setProjectSidebarOpen] = useProjectSidebarOpen(desktopLayoutMode);
   const projectSidebarMainContentMinWidth =
     desktopLayoutMode === "dev"
-      ? PROJECT_SIDEBAR_DEV_MAIN_CONTENT_MIN_WIDTH_PX
+      ? getMinimumDevMainContentWidthPx(terminalOpen)
       : PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX;
   const projectsToggleShortcutLabel = shortcutLabelForCommand(keybindings, "projects.toggle", {
     context: {
@@ -55,6 +58,43 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       terminalOpen,
     },
   });
+
+  const toggleProjectSidebar = useEffectEvent(
+    (nextOpen: boolean | ((open: boolean) => boolean)) => {
+      setProjectSidebarOpen((previousOpen) => {
+        const requestedOpen = typeof nextOpen === "function" ? nextOpen(previousOpen) : nextOpen;
+        if (requestedOpen === previousOpen) {
+          return previousOpen;
+        }
+        if (
+          requestedOpen &&
+          desktopLayoutMode === "dev" &&
+          !isMobile &&
+          typeof document !== "undefined"
+        ) {
+          const projectSidebarWidth =
+            getLocalStorageItem(PROJECT_SIDEBAR_WIDTH_STORAGE_KEY, Schema.Finite) ??
+            PROJECT_SIDEBAR_DEFAULT_WIDTH_PX;
+          const layoutWidth =
+            document
+              .querySelector<HTMLElement>(
+                "[data-slot='sidebar-wrapper'][data-app-layout-mode='dev']",
+              )
+              ?.getBoundingClientRect().width ?? window.innerWidth;
+          const result = rebalanceDevWorkspaceWidthBeforeProjectsOpen({
+            layoutWidth,
+            projectSidebarWidth,
+            root: document,
+            terminalOpen,
+          });
+          if (!result.canOpen) {
+            return previousOpen;
+          }
+        }
+        return requestedOpen;
+      });
+    },
+  );
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -91,14 +131,14 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
       event.preventDefault();
       event.stopPropagation();
-      setProjectSidebarOpen((open) => !open);
+      toggleProjectSidebar((open) => !open);
     };
 
     window.addEventListener("keydown", onWindowKeyDown);
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown);
     };
-  }, [keybindings, setProjectSidebarOpen, terminalOpen]);
+  }, [keybindings, terminalOpen]);
 
   const projectSidebar = (
     <Sidebar
@@ -143,7 +183,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           open={projectSidebarOpen}
           side={projectSidebarSide}
           shortcutLabel={projectsToggleShortcutLabel}
-          onToggle={() => setProjectSidebarOpen((open) => !open)}
+          onToggle={() => toggleProjectSidebar((open) => !open)}
         />
       )}
     </SidebarProvider>

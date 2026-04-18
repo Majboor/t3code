@@ -6338,6 +6338,69 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("opens projects on smaller dev viewports without collapsing chat interactivity", async () => {
+    seedOpenThreadTerminalState();
+
+    const mounted = await mountChatView({
+      viewport: {
+        ...WIDE_FOOTER_VIEWPORT,
+        name: "dev-laptop-projects",
+        width: 1_280,
+      },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-dev-laptop-projects-target" as MessageId,
+        targetText: "dev laptop projects thread",
+      }),
+    });
+
+    try {
+      await switchDesktopLayoutMode("dev");
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const projectsToggle = await expectElementHitTestable(
+        queryProjectSidebarDesktopToggle,
+        "Projects toggle should be clickable on narrower dev viewports.",
+      );
+      projectsToggle.click();
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+          const chatWidth = queryDesktopColumnWidth("chat");
+          expect(chatWidth).not.toBeNull();
+          if (chatWidth !== null) {
+            expect(chatWidth).toBeGreaterThanOrEqual(22 * 16);
+          }
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await expectComposerActionsContained();
+      await expectElementHitTestable(
+        () => document.querySelector<HTMLElement>("[data-chat-composer-form='true']"),
+        "Composer should stay clickable after opening projects on a narrower dev viewport.",
+      );
+      await expectElementHitTestable(
+        () =>
+          document.querySelector<HTMLElement>(
+            "[data-layout-column='projects'] [data-testid='command-palette-trigger']",
+          ),
+        "Projects sidebar controls should remain clickable on a narrower dev viewport.",
+      );
+    } finally {
+      resetThreadTerminalState();
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the dev shell interactive after opening projects in the dev terminal layout", async () => {
     seedOpenThreadTerminalState();
 

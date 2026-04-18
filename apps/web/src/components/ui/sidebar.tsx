@@ -174,6 +174,7 @@ function Sidebar({
   side = "left",
   variant = "sidebar",
   collapsible = "offcanvas",
+  desktopPosition = "fixed",
   resizable = false,
   revalidateWidthOn,
   className,
@@ -183,6 +184,7 @@ function Sidebar({
   side?: "left" | "right";
   variant?: "sidebar" | "floating" | "inset";
   collapsible?: "offcanvas" | "icon" | "none";
+  desktopPosition?: "fixed" | "inline";
   resizable?: boolean | SidebarResizableOptions;
   revalidateWidthOn?: unknown;
 }) {
@@ -351,8 +353,12 @@ function Sidebar({
   return (
     <SidebarInstanceContext.Provider value={instanceContextValue}>
       <div
-        className="group peer hidden shrink-0 text-sidebar-foreground md:block"
+        className={cn(
+          "group peer hidden shrink-0 text-sidebar-foreground md:block",
+          desktopPosition === "inline" ? "relative h-full" : null,
+        )}
         data-collapsible={state === "collapsed" ? collapsible : ""}
+        data-desktop-position={desktopPosition}
         data-side={side}
         data-slot="sidebar"
         data-state={state}
@@ -373,7 +379,8 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+            "z-10 hidden w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+            desktopPosition === "inline" ? "absolute inset-y-0 h-full" : "fixed inset-y-0 h-svh",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -471,6 +478,7 @@ function resolveAcceptedSidebarWidth(input: {
 function SidebarRail({
   className,
   onClick,
+  onLostPointerCapture,
   onPointerCancel,
   onPointerDown,
   onPointerMove,
@@ -658,6 +666,18 @@ function SidebarRail({
     [endResizeInteraction, onPointerCancel],
   );
 
+  const handleLostPointerCapture = React.useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      onLostPointerCapture?.(event);
+      if (event.defaultPrevented) return;
+      const resizeState = resizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) return;
+      suppressClickRef.current = resizeState.moved;
+      stopResize(event.pointerId);
+    },
+    [onLostPointerCapture, stopResize],
+  );
+
   const handleClick = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       onClick?.(event);
@@ -683,6 +703,45 @@ function SidebarRail({
     }
     stopResize(resizeState.pointerId);
   }, [open, resolvedResizable, stopResize]);
+
+  React.useEffect(() => {
+    const handleGlobalPointerEnd = (event: PointerEvent) => {
+      const resizeState = resizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      suppressClickRef.current = resizeState.moved;
+      stopResize(event.pointerId);
+    };
+    const handleGlobalPointerDown = (event: PointerEvent) => {
+      const resizeState = resizeStateRef.current;
+      if (!resizeState || resizeState.pointerId === event.pointerId) {
+        return;
+      }
+      suppressClickRef.current = resizeState.moved;
+      stopResize(resizeState.pointerId);
+    };
+    const handleWindowBlur = () => {
+      const resizeState = resizeStateRef.current;
+      if (!resizeState) {
+        return;
+      }
+      suppressClickRef.current = resizeState.moved;
+      stopResize(resizeState.pointerId);
+    };
+
+    window.addEventListener("pointerup", handleGlobalPointerEnd, true);
+    window.addEventListener("pointercancel", handleGlobalPointerEnd, true);
+    window.addEventListener("pointerdown", handleGlobalPointerDown, true);
+    window.addEventListener("blur", handleWindowBlur);
+
+    return () => {
+      window.removeEventListener("pointerup", handleGlobalPointerEnd, true);
+      window.removeEventListener("pointercancel", handleGlobalPointerEnd, true);
+      window.removeEventListener("pointerdown", handleGlobalPointerDown, true);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, [stopResize]);
 
   React.useEffect(() => {
     if (!resolvedResizable?.storageKey || typeof window === "undefined") return;
@@ -726,6 +785,7 @@ function SidebarRail({
       data-sidebar="rail"
       data-slot="sidebar-rail"
       onClick={handleClick}
+      onLostPointerCapture={handleLostPointerCapture}
       onPointerCancel={handlePointerCancel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
