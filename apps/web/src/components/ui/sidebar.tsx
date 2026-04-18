@@ -27,6 +27,33 @@ const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
+const activeSidebarResizeCancels = new Set<() => void>();
+
+export function cancelActiveSidebarResizeInteractions(): void {
+  const callbacks = [...activeSidebarResizeCancels];
+  for (const callback of callbacks) {
+    callback();
+  }
+}
+
+function trySetPointerCapture(target: HTMLButtonElement, pointerId: number): void {
+  try {
+    target.setPointerCapture(pointerId);
+  } catch {
+    // Some environments can fail to activate pointer capture even though the drag
+    // interaction is otherwise valid. The resize lifecycle should still unwind cleanly.
+  }
+}
+
+function tryReleasePointerCapture(target: HTMLButtonElement, pointerId: number): void {
+  try {
+    if (target.hasPointerCapture(pointerId)) {
+      target.releasePointerCapture(pointerId);
+    }
+  } catch {
+    // Ignore inconsistent pointer-capture state during teardown.
+  }
+}
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
@@ -107,6 +134,7 @@ function SidebarProvider({
   const open = openProp ?? _open;
   const setOpen = React.useCallback(
     async (value: boolean | ((value: boolean) => boolean)) => {
+      cancelActiveSidebarResizeInteractions();
       const openState = typeof value === "function" ? value(open) : value;
       if (setOpenProp) {
         setOpenProp(openState);
@@ -488,6 +516,7 @@ function SidebarRail({
   const { open, toggleSidebar } = useSidebar();
   const sidebarInstance = React.useContext(SidebarInstanceContext);
   const railRef = React.useRef<HTMLButtonElement | null>(null);
+  const cancelActiveResizeRef = React.useRef<() => void>(() => {});
   const suppressClickRef = React.useRef(false);
   const resizeStateRef = React.useRef<{
     moved: boolean;
@@ -525,9 +554,8 @@ function SidebarRail({
       }
       resolvedResizable?.onResize?.(resizeState.width);
       resizeStateRef.current = null;
-      if (resizeState.rail.hasPointerCapture(pointerId)) {
-        resizeState.rail.releasePointerCapture(pointerId);
-      }
+      tryReleasePointerCapture(resizeState.rail, pointerId);
+      activeSidebarResizeCancels.delete(cancelActiveResizeRef.current);
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
     },
@@ -579,12 +607,21 @@ function SidebarRail({
         width: initialWidth,
         wrapper,
       };
+      cancelActiveResizeRef.current = () => {
+        const activeResizeState = resizeStateRef.current;
+        if (!activeResizeState) {
+          return;
+        }
+        suppressClickRef.current = activeResizeState.moved;
+        stopResize(activeResizeState.pointerId);
+      };
+      activeSidebarResizeCancels.add(cancelActiveResizeRef.current);
       wrapper.style.setProperty("--sidebar-width", `${initialWidth}px`);
-      event.currentTarget.setPointerCapture(event.pointerId);
+      trySetPointerCapture(event.currentTarget, event.pointerId);
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     },
-    [onPointerDown, open, resolvedResizable, sidebarInstance?.side],
+    [onPointerDown, open, resolvedResizable, sidebarInstance?.side, stopResize],
   );
 
   const handlePointerMove = React.useCallback(
@@ -764,6 +801,7 @@ function SidebarRail({
         stopResize(resizeState.pointerId);
         return;
       }
+      activeSidebarResizeCancels.delete(cancelActiveResizeRef.current);
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
     };

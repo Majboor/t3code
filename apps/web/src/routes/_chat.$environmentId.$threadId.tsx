@@ -28,11 +28,8 @@ import { createThreadSelectorByRef } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { useProjectSidebarOpen } from "../components/AppSidebarLayout.logic";
-import {
-  DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX,
-  DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_PX,
-  WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
-} from "../components/AppSidebarLayout.logic";
+import { WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY } from "../components/AppSidebarLayout.logic";
+import { canAcceptInlineWorkspaceSidebarWidth } from "../lib/inlineWorkspaceSidebarLayout";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { useSettings } from "../hooks/useSettings";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
@@ -41,7 +38,6 @@ const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const WorkspacePanel = lazy(() => import("../components/WorkspacePanel"));
 const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(30rem,52vw,72rem)";
 const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 28 * 16;
-const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 type RightPanelKind = "diff" | "workspace";
 
 const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
@@ -94,17 +90,21 @@ const ThreadRightPanelInlineSidebar = (props: {
   onOpenPreferredPanel: () => void;
   renderDiffContent: boolean;
   renderWorkspaceContent: boolean;
+  projectSidebarOpen: boolean;
   revalidateWidthOn?: unknown;
+  terminalOpen: boolean;
 }) => {
   const {
     open,
     onClose,
     onOpenPreferredPanel,
     preferredPanel,
+    projectSidebarOpen,
     renderDiffContent,
     renderWorkspaceContent,
     revalidateWidthOn,
     side,
+    terminalOpen,
   } = props;
   const onOpenChange = useCallback(
     (open: boolean) => {
@@ -118,73 +118,14 @@ const ThreadRightPanelInlineSidebar = (props: {
   );
   const shouldAcceptInlineSidebarWidth = useCallback(
     ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
-      const composerForm = document.querySelector<HTMLElement>("[data-chat-composer-form='true']");
-      if (!composerForm) return true;
-      const composerViewport = composerForm.parentElement;
-      if (!composerViewport) return true;
-      const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
-      wrapper.style.setProperty("--sidebar-width", `${nextWidth}px`);
-
-      const viewportStyle = window.getComputedStyle(composerViewport);
-      const viewportPaddingLeft = Number.parseFloat(viewportStyle.paddingLeft) || 0;
-      const viewportPaddingRight = Number.parseFloat(viewportStyle.paddingRight) || 0;
-      const viewportContentWidth = Math.max(
-        0,
-        composerViewport.clientWidth - viewportPaddingLeft - viewportPaddingRight,
-      );
-      const formRect = composerForm.getBoundingClientRect();
-      const composerFooter = composerForm.querySelector<HTMLElement>(
-        "[data-chat-composer-footer='true']",
-      );
-      const composerRightActions = composerForm.querySelector<HTMLElement>(
-        "[data-chat-composer-actions='right']",
-      );
-      const composerRightActionsWidth = composerRightActions?.getBoundingClientRect().width ?? 0;
-      const composerFooterGap = composerFooter
-        ? Number.parseFloat(window.getComputedStyle(composerFooter).columnGap) ||
-          Number.parseFloat(window.getComputedStyle(composerFooter).gap) ||
-          0
-        : 0;
-      const chatColumn = wrapper.querySelector<HTMLElement>("[data-layout-column='chat']");
-      const projectsSidebarContainer = document.querySelector<HTMLElement>(
-        "[data-layout-column='projects'][data-slot='sidebar-container']",
-      );
-      const projectsSidebarOpen =
-        projectsSidebarContainer?.closest<HTMLElement>("[data-slot='sidebar']")?.dataset.state ===
-        "expanded";
-      const terminalDrawerVisible = Array.from(
-        document.querySelectorAll<HTMLElement>(".thread-terminal-drawer"),
-      ).some((drawer) => {
-        const rect = drawer.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
+      return canAcceptInlineWorkspaceSidebarWidth({
+        nextWidth,
+        projectsSidebarOpen: projectSidebarOpen,
+        terminalOpen,
+        wrapper,
       });
-      const minimumComposerWidth =
-        COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX + composerRightActionsWidth + composerFooterGap;
-      const minimumChatWidth = !projectsSidebarOpen
-        ? 0
-        : terminalDrawerVisible
-          ? DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX
-          : DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_PX;
-      const chatColumnWidth = chatColumn?.getBoundingClientRect().width ?? viewportContentWidth;
-      const hasComposerOverflow = composerForm.scrollWidth > composerForm.clientWidth + 0.5;
-      const overflowsViewport = formRect.width > viewportContentWidth + 0.5;
-      const violatesMinimumComposerWidth = composerForm.clientWidth + 0.5 < minimumComposerWidth;
-      const violatesMinimumChatWidth = chatColumnWidth + 0.5 < minimumChatWidth;
-
-      if (previousSidebarWidth.length > 0) {
-        wrapper.style.setProperty("--sidebar-width", previousSidebarWidth);
-      } else {
-        wrapper.style.removeProperty("--sidebar-width");
-      }
-
-      return (
-        !hasComposerOverflow &&
-        !overflowsViewport &&
-        !violatesMinimumComposerWidth &&
-        !violatesMinimumChatWidth
-      );
     },
-    [],
+    [projectSidebarOpen, terminalOpen],
   );
 
   return (
@@ -408,9 +349,11 @@ function ChatThreadRouteView() {
       onOpenPreferredPanel={preferredPanel === "workspace" ? openWorkspace : openDiff}
       renderDiffContent={shouldRenderDiffContent}
       renderWorkspaceContent={shouldRenderWorkspaceContent}
+      projectSidebarOpen={projectSidebarOpen}
       revalidateWidthOn={
         desktopLayoutMode === "dev" ? `${projectSidebarOpen}:${terminalOpen}` : null
       }
+      terminalOpen={terminalOpen}
     />
   );
 

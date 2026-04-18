@@ -17,7 +17,12 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
 import ThreadSidebar from "./Sidebar";
-import { Sidebar, SidebarProvider, SidebarRail } from "./ui/sidebar";
+import {
+  cancelActiveSidebarResizeInteractions,
+  Sidebar,
+  SidebarProvider,
+  SidebarRail,
+} from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   PROJECT_SIDEBAR_DEFAULT_WIDTH_PX,
@@ -61,6 +66,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
   const toggleProjectSidebar = useEffectEvent(
     (nextOpen: boolean | ((open: boolean) => boolean)) => {
+      cancelActiveSidebarResizeInteractions();
       setProjectSidebarOpen((previousOpen) => {
         const requestedOpen = typeof nextOpen === "function" ? nextOpen(previousOpen) : nextOpen;
         if (requestedOpen === previousOpen) {

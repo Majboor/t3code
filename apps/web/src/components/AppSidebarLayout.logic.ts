@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { useCallback } from "react";
 import type { DesktopLayoutMode } from "@t3tools/contracts/settings";
 import { setLocalStorageItem, useLocalStorage } from "~/hooks/useLocalStorage";
+import { findLargestAcceptedInlineWorkspaceWidth } from "~/lib/inlineWorkspaceSidebarLayout";
 
 export const PROJECT_SIDEBAR_MIN_WIDTH_PX = 13 * 16;
 export const PROJECT_SIDEBAR_DEFAULT_WIDTH_PX = 16 * 16;
@@ -85,10 +86,22 @@ export function rebalanceDevWorkspaceWidthBeforeProjectsOpen(input: {
     return { canOpen: true, nextWorkspaceWidth: null };
   }
 
-  const nextWorkspaceWidth = Math.max(
+  const requestedWorkspaceWidth = Math.max(
     DEV_WORKSPACE_MIN_WIDTH_PX,
     Math.min(currentWorkspaceWidth, maximumWorkspaceWidth),
   );
+  const nextWorkspaceWidth = findLargestAcceptedInlineWorkspaceWidth({
+    currentWidth: currentWorkspaceWidth,
+    minWidth: DEV_WORKSPACE_MIN_WIDTH_PX,
+    projectsSidebarOpen: true,
+    requestedWidth: requestedWorkspaceWidth,
+    terminalOpen: input.terminalOpen,
+    wrapper: workspaceSidebarWrapper,
+  });
+  if (nextWorkspaceWidth === null) {
+    return { canOpen: false, nextWorkspaceWidth: null };
+  }
+
   if (nextWorkspaceWidth < currentWorkspaceWidth - 0.5) {
     workspaceSidebarWrapper.style.setProperty("--sidebar-width", `${nextWorkspaceWidth}px`);
     setLocalStorageItem(
