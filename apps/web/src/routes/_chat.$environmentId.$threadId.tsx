@@ -37,6 +37,8 @@ const RIGHT_PANEL_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_sidebar_w
 const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(30rem,52vw,72rem)";
 const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 28 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
+const COMPACT_CHAT_MIN_WIDTH_WITH_PROJECTS_PX = 18 * 16;
+const COMPACT_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX = 22 * 16;
 type RightPanelKind = "diff" | "workspace";
 
 const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
@@ -140,11 +142,31 @@ const ThreadRightPanelInlineSidebar = (props: {
           Number.parseFloat(window.getComputedStyle(composerFooter).gap) ||
           0
         : 0;
+      const chatColumn = wrapper.querySelector<HTMLElement>("[data-layout-column='chat']");
+      const projectsSidebarContainer = document.querySelector<HTMLElement>(
+        "[data-layout-column='projects'][data-slot='sidebar-container']",
+      );
+      const projectsSidebarOpen =
+        projectsSidebarContainer?.closest<HTMLElement>("[data-slot='sidebar']")?.dataset.state ===
+        "expanded";
+      const terminalDrawerVisible = Array.from(
+        document.querySelectorAll<HTMLElement>(".thread-terminal-drawer"),
+      ).some((drawer) => {
+        const rect = drawer.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
       const minimumComposerWidth =
         COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX + composerRightActionsWidth + composerFooterGap;
+      const minimumChatWidth = !projectsSidebarOpen
+        ? 0
+        : terminalDrawerVisible
+          ? COMPACT_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX
+          : COMPACT_CHAT_MIN_WIDTH_WITH_PROJECTS_PX;
+      const chatColumnWidth = chatColumn?.getBoundingClientRect().width ?? viewportContentWidth;
       const hasComposerOverflow = composerForm.scrollWidth > composerForm.clientWidth + 0.5;
       const overflowsViewport = formRect.width > viewportContentWidth + 0.5;
       const violatesMinimumComposerWidth = composerForm.clientWidth + 0.5 < minimumComposerWidth;
+      const violatesMinimumChatWidth = chatColumnWidth + 0.5 < minimumChatWidth;
 
       if (previousSidebarWidth.length > 0) {
         wrapper.style.setProperty("--sidebar-width", previousSidebarWidth);
@@ -152,7 +174,12 @@ const ThreadRightPanelInlineSidebar = (props: {
         wrapper.style.removeProperty("--sidebar-width");
       }
 
-      return !hasComposerOverflow && !overflowsViewport && !violatesMinimumComposerWidth;
+      return (
+        !hasComposerOverflow &&
+        !overflowsViewport &&
+        !violatesMinimumComposerWidth &&
+        !violatesMinimumChatWidth
+      );
     },
     [],
   );

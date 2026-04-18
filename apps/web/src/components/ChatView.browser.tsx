@@ -6220,10 +6220,33 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("rebalances the dev workspace rail when projects opens from a compact-chat layout", async () => {
-    window.localStorage.setItem("chat_right_panel_sidebar_width", "980");
+    window.localStorage.setItem("chat_right_panel_sidebar_width", "820");
+    useTerminalStateStore.setState({
+      terminalStateByThreadKey: {
+        [THREAD_KEY]: {
+          terminalOpen: true,
+          terminalHeight: 280,
+          terminalIds: ["default"],
+          runningTerminalIds: [],
+          activeTerminalId: "default",
+          terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
+          activeTerminalGroupId: "group-default",
+        },
+      },
+      terminalLaunchContextByThreadKey: {
+        [THREAD_KEY]: {
+          cwd: "/repo/project",
+          worktreePath: null,
+        },
+      },
+    });
 
     const mounted = await mountChatView({
-      viewport: WIDE_FOOTER_VIEWPORT,
+      viewport: {
+        ...WIDE_FOOTER_VIEWPORT,
+        name: "dev-terminal-inline",
+        width: 1_360,
+      },
       snapshot: createSnapshotForTargetUser({
         targetMessageId: "msg-user-dev-projects-rebalance-target" as MessageId,
         targetText: "dev projects rebalance thread",
@@ -6247,7 +6270,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(queryDesktopColumnLeft("projects")).not.toBeNull();
           expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
-          expect(queryDesktopColumnWidth("chat")).not.toBeNull();
+          const chatWidth = queryDesktopColumnWidth("chat");
+          expect(chatWidth).not.toBeNull();
+          if (chatWidth !== null) {
+            expect(chatWidth).toBeGreaterThanOrEqual(22 * 16);
+          }
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -6255,15 +6282,24 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       const chatColumn = queryDesktopColumnElement("chat");
       const projectsColumn = queryDesktopColumnElement("projects");
+      const terminalDrawer = document.querySelector<HTMLElement>(".thread-terminal-drawer");
       expect(chatColumn).not.toBeNull();
       expect(projectsColumn).not.toBeNull();
+      expect(terminalDrawer).not.toBeNull();
       if (chatColumn !== null && projectsColumn !== null) {
         const chatRect = chatColumn.getBoundingClientRect();
         const projectsRect = projectsColumn.getBoundingClientRect();
         expect(chatRect.right).toBeLessThanOrEqual(projectsRect.left + 0.5);
       }
+      if (terminalDrawer !== null && chatColumn !== null) {
+        expect(terminalDrawer.getBoundingClientRect().width).toBeGreaterThanOrEqual(22 * 16);
+      }
     } finally {
       window.localStorage.removeItem("chat_right_panel_sidebar_width");
+      useTerminalStateStore.setState({
+        terminalStateByThreadKey: {},
+        terminalLaunchContextByThreadKey: {},
+      });
       await mounted.cleanup();
     }
   });

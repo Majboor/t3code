@@ -120,6 +120,15 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       <SidebarRail />
     </Sidebar>
   );
+  const projectSidebarShell = (
+    <div
+      className={cn("hidden shrink-0 md:block", projectSidebarOpen ? "w-(--sidebar-width)" : "w-0")}
+      data-open={projectSidebarOpen ? "true" : "false"}
+      data-slot="project-sidebar-shell"
+    >
+      {projectSidebar}
+    </div>
+  );
 
   return (
     <SidebarProvider
@@ -127,8 +136,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       onOpenChange={setProjectSidebarOpen}
       open={projectSidebarOpen}
     >
-      {desktopLayoutMode === "dev" ? children : projectSidebar}
-      {desktopLayoutMode === "dev" ? projectSidebar : children}
+      {desktopLayoutMode === "dev" ? children : projectSidebarShell}
+      {desktopLayoutMode === "dev" ? projectSidebarShell : children}
       {!isMobile && (
         <ProjectSidebarDesktopToggle
           open={projectSidebarOpen}
