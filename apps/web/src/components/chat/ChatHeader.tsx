@@ -109,7 +109,7 @@ export const ChatHeader = memo(function ChatHeader({
         <SidebarTrigger
           aria-label={projectsTriggerTooltip}
           title={projectsTriggerTooltip}
-          className="size-7 shrink-0 [-webkit-app-region:no-drag]"
+          className="size-7 shrink-0 md:hidden [-webkit-app-region:no-drag]"
         />
 
         <h2
@@ -246,7 +246,7 @@ const InlinePanelToggles = memo(function InlinePanelToggles(props: {
   return (
     <div
       data-slot="chat-header-inline-toggles"
-      className="hidden shrink-0 items-center gap-2 @lg/header-actions:flex @3xl/header-actions:gap-3"
+      className="hidden shrink-0 items-center gap-2 @3xl/header-actions:flex"
     >
       <Tooltip>
         <TooltipTrigger

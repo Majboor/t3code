@@ -270,6 +270,17 @@ function ChatThreadRouteView() {
   const markWorkspaceOpened = useCallback(() => {
     markRightPanelOpened("workspace");
   }, [markRightPanelOpened]);
+
+  useEffect(() => {
+    if (workspaceOpen) {
+      markWorkspaceOpened();
+      return;
+    }
+    if (diffOpen) {
+      markDiffOpened();
+    }
+  }, [diffOpen, markDiffOpened, markWorkspaceOpened, workspaceOpen]);
+
   const closeDiff = useCallback(() => {
     if (!threadRef) {
       return;

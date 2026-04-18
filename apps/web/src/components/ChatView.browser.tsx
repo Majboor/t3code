@@ -1221,21 +1221,17 @@ function queryDesktopColumnLeft(column: "projects" | "chat" | "workspace"): numb
   return rect.left;
 }
 
-function getDesktopColumnLeft(column: "projects" | "chat" | "workspace"): number {
-  const left = queryDesktopColumnLeft(column);
-  if (left === null) {
-    throw new Error(`Unable to find visible ${column} column.`);
-  }
-  return left;
-}
-
 function getDesktopColumnOrder(): Array<"projects" | "chat" | "workspace"> {
   return (["projects", "chat", "workspace"] as const)
     .map((column) => ({
       column,
-      left: getDesktopColumnLeft(column),
+      left: queryDesktopColumnLeft(column),
     }))
-    .sort((left, right) => left.left - right.left)
+    .filter(
+      (entry): entry is { column: "projects" | "chat" | "workspace"; left: number } =>
+        entry.left !== null,
+    )
+    .toSorted((left, right) => left.left - right.left)
     .map((entry) => entry.column);
 }
 
@@ -1452,6 +1448,25 @@ async function waitForSendButton(): Promise<HTMLButtonElement> {
   );
 }
 
+async function ensureWorkspacePanelOpen(): Promise<void> {
+  if (queryDesktopColumnLeft("workspace") !== null) {
+    return;
+  }
+
+  const workspaceToggle = await waitForElement(
+    () => document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+    'Unable to find "Toggle workspace panel" button.',
+  );
+  workspaceToggle.click();
+
+  await vi.waitFor(
+    () => {
+      expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+    },
+    { timeout: 8_000, interval: 16 },
+  );
+}
+
 function findComposerProviderModelPicker(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>('[data-chat-provider-model-picker="true"]');
 }
@@ -1653,6 +1668,17 @@ async function dispatchInputKey(
 }
 
 async function switchDesktopLayoutMode(mode: "vibe" | "dev"): Promise<void> {
+  const visibleToggle = document.querySelector<HTMLButtonElement>(
+    mode === "vibe"
+      ? 'button[aria-label="Switch to vibe layout"]'
+      : 'button[aria-label="Switch to dev layout"]',
+  );
+  if (visibleToggle && visibleToggle.getBoundingClientRect().width > 0) {
+    visibleToggle.click();
+    await waitForLayout();
+    return;
+  }
+
   const trigger = await waitForElement(
     () => document.querySelector<HTMLButtonElement>('button[aria-label="View options"]'),
     'Unable to find "View options" button.',
@@ -1672,8 +1698,19 @@ async function switchDesktopLayoutMode(mode: "vibe" | "dev"): Promise<void> {
   await waitForLayout();
 }
 
-function queryProjectSidebarReopenAffordance(): HTMLButtonElement | null {
-  return document.querySelector<HTMLButtonElement>('button[data-slot="project-sidebar-reopen"]');
+function queryProjectSidebarDesktopToggle(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
+    'button[data-slot="project-sidebar-desktop-toggle"]',
+  );
+}
+
+async function clickDesktopProjectsToggle(): Promise<void> {
+  const toggle = await waitForElement(
+    queryProjectSidebarDesktopToggle,
+    "Unable to find desktop Projects toggle.",
+  );
+  toggle.click();
+  await waitForLayout();
 }
 
 async function mountChatView(options: {
@@ -5774,7 +5811,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("switches between vibe and dev desktop layouts with projects collapsed in dev", async () => {
+  it("switches between vibe and dev desktop layouts with mode-specific default panels", async () => {
     const snapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-layout-mode-target" as MessageId,
       targetText: "layout mode thread",
@@ -5785,17 +5822,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
-
       await vi.waitFor(
         () => {
-          expect(mounted.router.state.location.search.workspace).toBe("1");
-          expect(getDesktopColumnOrder()).toEqual(["projects", "chat", "workspace"]);
+          expect(getDesktopColumnOrder()).toEqual(["projects", "chat"]);
+          expect(queryDesktopColumnLeft("workspace")).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -5805,6 +5835,25 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).toBeNull();
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          const workspaceLeft = queryDesktopColumnLeft("workspace");
+          const chatLeft = queryDesktopColumnLeft("chat");
+          expect(workspaceLeft).not.toBeNull();
+          expect(chatLeft).not.toBeNull();
+          if (workspaceLeft !== null && chatLeft !== null) {
+            expect(workspaceLeft).toBeLessThan(chatLeft);
+          }
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await switchDesktopLayoutMode("vibe");
+
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+          expect(queryDesktopColumnLeft("workspace")).toBeNull();
+          expect(mounted.router.state.location.search.workspace).toBeUndefined();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -5891,7 +5940,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("preserves each desktop layout mode's projects sidebar open state across rapid switching", async () => {
+  it("restores the dev workspace shell across rapid layout switching", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -5908,7 +5957,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      dispatchProjectsToggleShortcut();
+      await clickDesktopProjectsToggle();
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).toBeNull();
@@ -5920,11 +5969,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).toBeNull();
+          expect(mounted.router.state.location.search.workspace).toBe("1");
         },
         { timeout: 8_000, interval: 16 },
       );
 
-      dispatchProjectsToggleShortcut();
+      await clickDesktopProjectsToggle();
       await vi.waitFor(
         () => {
           const projectsLeft = queryDesktopColumnLeft("projects");
@@ -5942,6 +5992,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).toBeNull();
+          expect(queryDesktopColumnLeft("workspace")).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -5949,6 +6000,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await switchDesktopLayoutMode("dev");
       await vi.waitFor(
         () => {
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
           const projectsLeft = queryDesktopColumnLeft("projects");
           const chatLeft = queryDesktopColumnLeft("chat");
           expect(projectsLeft).not.toBeNull();
@@ -5964,48 +6017,58 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("exposes a floating reopen affordance after the projects sidebar is collapsed in both layout modes", async () => {
+  it("keeps the desktop projects edge toggle usable in both layout modes", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
         targetMessageId: "msg-user-reopen-affordance-target" as MessageId,
-        targetText: "reopen affordance thread",
+        targetText: "edge toggle thread",
       }),
     });
 
     try {
+      const vibeToggle = await waitForElement(
+        queryProjectSidebarDesktopToggle,
+        "Desktop Projects toggle did not render in vibe mode.",
+      );
+      expect(vibeToggle.dataset.side).toBe("left");
+      expect(vibeToggle.dataset.open).toBe("true");
+
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
-      expect(queryProjectSidebarReopenAffordance()).toBeNull();
 
-      dispatchProjectsToggleShortcut();
-      const vibeReopen = await waitForElement(
-        queryProjectSidebarReopenAffordance,
-        "Floating reopen affordance did not appear in vibe mode after collapsing projects.",
+      vibeToggle.click();
+      await vi.waitFor(
+        () => {
+          const toggle = queryProjectSidebarDesktopToggle();
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+          expect(toggle?.dataset.open).toBe("false");
+        },
+        { timeout: 8_000, interval: 16 },
       );
-      expect(vibeReopen.dataset.side).toBe("left");
 
-      vibeReopen.click();
+      queryProjectSidebarDesktopToggle()?.click();
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).not.toBeNull();
-          expect(queryProjectSidebarReopenAffordance()).toBeNull();
+          expect(queryProjectSidebarDesktopToggle()?.dataset.open).toBe("true");
         },
         { timeout: 8_000, interval: 16 },
       );
 
       await switchDesktopLayoutMode("dev");
-      const devReopen = await waitForElement(
-        queryProjectSidebarReopenAffordance,
-        "Floating reopen affordance did not appear in dev mode when projects start collapsed.",
+      const devToggle = await waitForElement(
+        queryProjectSidebarDesktopToggle,
+        "Desktop Projects toggle did not render in dev mode.",
       );
-      expect(devReopen.dataset.side).toBe("right");
+      expect(devToggle.dataset.side).toBe("right");
+      expect(devToggle.dataset.open).toBe("false");
 
-      devReopen.click();
+      devToggle.click();
       await vi.waitFor(
         () => {
           const projectsLeft = queryDesktopColumnLeft("projects");
@@ -6015,7 +6078,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           if (projectsLeft !== null && chatLeft !== null) {
             expect(projectsLeft).toBeGreaterThan(chatLeft);
           }
-          expect(queryProjectSidebarReopenAffordance()).toBeNull();
+          expect(queryProjectSidebarDesktopToggle()?.dataset.open).toBe("true");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -6024,7 +6087,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("distinguishes the projects sidebar trigger from the workspace panel toggle", async () => {
+  it("distinguishes the desktop projects edge toggle from the workspace panel toggle", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -6058,18 +6121,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
     try {
       await waitForServerConfigToApply();
 
-      const projectsTrigger = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[data-slot="sidebar-trigger"]'),
-        "Unable to find Projects sidebar trigger.",
+      const projectsToggle = await waitForElement(
+        queryProjectSidebarDesktopToggle,
+        "Unable to find desktop Projects toggle.",
       );
-      expect(projectsTrigger.getAttribute("aria-label")).toContain("Projects sidebar");
+      expect(projectsToggle.getAttribute("aria-label")).toContain("Projects sidebar");
 
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       await vi.waitFor(
         () => {
@@ -6079,7 +6137,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      projectsTrigger.click();
+      projectsToggle.click();
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).toBeNull();
@@ -6093,16 +6151,31 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("keeps the projects sidebar reachable from the view overflow menu at narrow widths", async () => {
+  it("auto-collapses projects before the dev shell runs out of width", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
         targetMessageId: "msg-user-overflow-menu-target" as MessageId,
-        targetText: "overflow menu thread",
+        targetText: "resize stability thread",
       }),
     });
 
     try {
+      await switchDesktopLayoutMode("dev");
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const projectsToggle = await waitForElement(
+        queryProjectSidebarDesktopToggle,
+        "Desktop Projects toggle did not render in dev mode.",
+      );
+      projectsToggle.click();
+
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).not.toBeNull();
@@ -6110,35 +6183,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      await mounted.setContainerSize({ width: 640, height: 1_100 });
+      await mounted.setContainerSize({ width: 1_040, height: 1_100 });
 
-      await vi.waitFor(
-        () => {
-          const inlineToggles = document.querySelector<HTMLElement>(
-            '[data-slot="chat-header-inline-toggles"]',
-          );
-          expect(inlineToggles).not.toBeNull();
-          if (inlineToggles) {
-            expect(inlineToggles.getBoundingClientRect().width).toBe(0);
-          }
-          const overflowTrigger = document.querySelector<HTMLButtonElement>(
-            'button[aria-label="View options"]',
-          );
-          expect(overflowTrigger).not.toBeNull();
-          if (overflowTrigger) {
-            expect(overflowTrigger.getBoundingClientRect().width).toBeGreaterThan(0);
-          }
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      await switchDesktopLayoutMode("dev");
       await vi.waitFor(
         () => {
           expect(queryDesktopColumnLeft("projects")).toBeNull();
+          expect(queryProjectSidebarDesktopToggle()?.dataset.open).toBe("false");
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
+      await expectComposerActionsContained();
     } finally {
       await mounted.cleanup();
     }
@@ -6189,12 +6244,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       await vi.waitFor(
         () => {
@@ -6333,12 +6383,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
       workspaceFileButton.click();
@@ -6484,12 +6529,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
       workspaceFileButton.click();
@@ -6722,12 +6762,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
       workspaceFileButton.click();
@@ -6943,12 +6978,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
       workspaceFileButton.click();
@@ -7070,12 +7100,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
       workspaceFileButton.click();
@@ -7237,12 +7262,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const firstWorkspaceFileButton = await waitForButtonContainingText(firstFilePath);
       firstWorkspaceFileButton.click();
@@ -7393,12 +7413,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const firstWorkspaceFileButton = await waitForButtonContainingText(firstFilePath);
       firstWorkspaceFileButton.click();
@@ -7592,12 +7607,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
       workspaceFileButton.click();
@@ -7641,12 +7651,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button after refresh.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
       workspaceFileButton.click();
@@ -7784,12 +7789,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const workspaceToggle = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
-        'Unable to find "Toggle workspace panel" button.',
-      );
-      workspaceToggle.click();
+      await ensureWorkspacePanelOpen();
 
       const firstWorkspaceFileButton = await waitForButtonContainingText(firstFilePath);
       firstWorkspaceFileButton.click();

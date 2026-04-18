@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import Editor from "@monaco-editor/react";
 import { FileDiff } from "@pierre/diffs/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import type {
   GitWorkingTreeFileStatus,
   ProjectCreateEntryInput,
@@ -42,6 +42,7 @@ import { useTheme } from "~/hooks/useTheme";
 import { useTurnDiffSummaries } from "~/hooks/useTurnDiffSummaries";
 import { useWorkspaceAgentTurnDiff } from "~/hooks/useWorkspaceAgentTurnDiff";
 import { useWorkspaceWorkingTreeDiff } from "~/hooks/useWorkspaceWorkingTreeDiff";
+import { stripDiffSearchParams } from "~/diffRouteSearch";
 import { resolveDiffThemeName } from "~/lib/diffRendering";
 import { gitQueryKeys } from "~/lib/gitReactQuery";
 import { refreshGitStatus, useGitStatus } from "~/lib/gitStatusState";
@@ -72,6 +73,7 @@ import { basenameOfPath } from "~/vscode-icons";
 
 import { DiffStatLabel, FileStatusBadge, hasNonZeroStat } from "./chat/DiffStatLabel";
 import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
+import { WorkspaceAgentDiffPreview } from "./WorkspaceAgentDiffPreview";
 import {
   WorkspacePanelLoadingState,
   WorkspacePanelShell,
@@ -364,6 +366,7 @@ function buildWorkspaceReviewStorageScopeKey(input: {
 }
 
 export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const settings = useSettings();
   const { resolvedTheme } = useTheme();
@@ -1341,6 +1344,26 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     },
     [openFile, showFileViewForPath],
   );
+  const openSelectedTurnInDiffPanel = useCallback(
+    (turnId: TurnId, filePath: string) => {
+      if (!activeThread) {
+        return;
+      }
+
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+        },
+        search: (previous) => {
+          const rest = stripDiffSearchParams(previous);
+          return { ...rest, diff: "1", diffTurnId: turnId, diffFilePath: filePath };
+        },
+      });
+    },
+    [activeThread, navigate],
+  );
   const markActiveVisibleDiffAccepted = useCallback(() => {
     if (
       !activeFilePath ||
@@ -2163,7 +2186,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     <>
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {mode === "inline" ? (
-          <SidebarTrigger className="size-7 shrink-0 [-webkit-app-region:no-drag]" />
+          <SidebarTrigger className="size-7 shrink-0 md:hidden [-webkit-app-region:no-drag]" />
         ) : null}
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-foreground">{workspaceLabel}</div>
@@ -2654,6 +2677,23 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                       No inline diff is available for this file yet.
                     </div>
                   )}
+                  {activeInlineDiffSource === "checkpoint" &&
+                  activeThread &&
+                  activeFilePath &&
+                  activeFileDiffHistory.length > 0 ? (
+                    <WorkspaceAgentDiffPreview
+                      environmentId={activeThread.environmentId}
+                      threadId={activeThread.id}
+                      filePath={activeFilePath}
+                      fileHistory={activeFileDiffHistory}
+                      turnFilesByTurnId={workspaceAgentDiffTurnFilesByTurnId}
+                      selectedTurnId={selectedActiveDiffEntry?.turnId ?? null}
+                      resolvedTheme={resolvedTheme}
+                      onSelectTurnId={setSelectedDiffTurnId}
+                      onOpenFile={openReviewFile}
+                      onOpenFullDiff={openSelectedTurnInDiffPanel}
+                    />
+                  ) : null}
                 </div>
               ) : activeFileState ? (
                 <div className="h-full" data-workspace-file-mode="editor">

@@ -1,12 +1,17 @@
 import { useEffect, type ReactNode } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { PanelLeftOpenIcon, PanelRightOpenIcon } from "lucide-react";
+import {
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
+  PanelRightCloseIcon,
+  PanelRightOpenIcon,
+} from "lucide-react";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useSettings } from "../hooks/useSettings";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { resolveShortcutCommand } from "../keybindings";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { useServerKeybindings } from "../rpc/serverState";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
@@ -20,6 +25,8 @@ import {
   PROJECT_SIDEBAR_WIDTH_STORAGE_KEY,
   useProjectSidebarOpen,
 } from "./AppSidebarLayout.logic";
+
+const PROJECT_SIDEBAR_DEV_MAIN_CONTENT_MIN_WIDTH_PX = 70 * 16;
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
@@ -38,6 +45,16 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   );
   const projectSidebarSide = desktopLayoutMode === "dev" ? "right" : "left";
   const [projectSidebarOpen, setProjectSidebarOpen] = useProjectSidebarOpen(desktopLayoutMode);
+  const projectSidebarMainContentMinWidth =
+    desktopLayoutMode === "dev"
+      ? PROJECT_SIDEBAR_DEV_MAIN_CONTENT_MIN_WIDTH_PX
+      : PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX;
+  const projectsToggleShortcutLabel = shortcutLabelForCommand(keybindings, "projects.toggle", {
+    context: {
+      terminalFocus: false,
+      terminalOpen,
+    },
+  });
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -95,7 +112,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       resizable={{
         minWidth: PROJECT_SIDEBAR_MIN_WIDTH_PX,
         shouldAcceptWidth: ({ nextWidth, wrapper }) =>
-          wrapper.clientWidth - nextWidth >= PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX,
+          wrapper.clientWidth - nextWidth >= projectSidebarMainContentMinWidth,
         storageKey: PROJECT_SIDEBAR_WIDTH_STORAGE_KEY,
       }}
     >
@@ -103,8 +120,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       <SidebarRail />
     </Sidebar>
   );
-
-  const reopenAffordanceVisible = !isMobile && !projectSidebarOpen;
 
   return (
     <SidebarProvider
@@ -114,39 +129,60 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     >
       {desktopLayoutMode === "dev" ? children : projectSidebar}
       {desktopLayoutMode === "dev" ? projectSidebar : children}
-      {reopenAffordanceVisible && (
-        <ProjectSidebarReopenAffordance
+      {!isMobile && (
+        <ProjectSidebarDesktopToggle
+          open={projectSidebarOpen}
           side={projectSidebarSide}
-          onOpen={() => setProjectSidebarOpen(true)}
+          shortcutLabel={projectsToggleShortcutLabel}
+          onToggle={() => setProjectSidebarOpen((open) => !open)}
         />
       )}
     </SidebarProvider>
   );
 }
 
-function ProjectSidebarReopenAffordance({
+function ProjectSidebarDesktopToggle({
+  open,
   side,
-  onOpen,
+  shortcutLabel,
+  onToggle,
 }: {
+  open: boolean;
   side: "left" | "right";
-  onOpen: () => void;
+  shortcutLabel: string | null;
+  onToggle: () => void;
 }) {
-  const Icon = side === "left" ? PanelLeftOpenIcon : PanelRightOpenIcon;
+  const Icon =
+    side === "left"
+      ? open
+        ? PanelLeftCloseIcon
+        : PanelLeftOpenIcon
+      : open
+        ? PanelRightCloseIcon
+        : PanelRightOpenIcon;
+  const label = `${open ? "Hide" : "Show"} Projects sidebar`;
+  const tooltipLabel = shortcutLabel ? `${label} (${shortcutLabel})` : label;
+
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <button
             type="button"
-            aria-label="Open Projects sidebar"
-            data-slot="project-sidebar-reopen"
+            aria-label={tooltipLabel}
+            data-open={open ? "true" : "false"}
+            data-slot="project-sidebar-desktop-toggle"
             data-side={side}
-            onClick={onOpen}
+            onClick={onToggle}
             className={cn(
-              "pointer-events-auto fixed top-16 z-30 hidden h-9 w-6 items-center justify-center border border-border/60 bg-card/95 text-muted-foreground shadow-sm/10 transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:flex [-webkit-app-region:no-drag]",
+              "pointer-events-auto fixed top-16 z-30 hidden h-9 w-7 items-center justify-center border border-border/60 bg-card/95 text-muted-foreground shadow-sm/10 transition-[background-color,color,left,right] hover:bg-accent hover:text-accent-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring md:flex [-webkit-app-region:no-drag]",
               side === "left"
-                ? "left-0 rounded-r-md border-l-0"
-                : "right-0 rounded-l-md border-r-0",
+                ? open
+                  ? "left-[calc(var(--sidebar-width)-0.875rem)] rounded-md"
+                  : "left-0 rounded-r-md border-l-0"
+                : open
+                  ? "right-[calc(var(--sidebar-width)-0.875rem)] rounded-md"
+                  : "right-0 rounded-l-md border-r-0",
             )}
           >
             <Icon className="size-3.5" aria-hidden="true" />
@@ -154,7 +190,7 @@ function ProjectSidebarReopenAffordance({
         }
       />
       <TooltipPopup side={side === "left" ? "right" : "left"} align="center">
-        Open Projects sidebar
+        {tooltipLabel}
       </TooltipPopup>
     </Tooltip>
   );

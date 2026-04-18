@@ -119,6 +119,11 @@ import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
+import {
+  normalizeDesktopLayoutPanelPreference,
+  panelPreferenceFromRouteSearch,
+  useDesktopLayoutPanelPreferences,
+} from "./AppSidebarLayout.logic";
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
@@ -798,6 +803,7 @@ export default function ChatView(props: ChatViewProps) {
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const workspaceOpen = rawSearch.workspace === "1";
   const diffOpen = rawSearch.diff === "1";
+  const shouldUseDiffSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadRef = useMemo(
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
@@ -1430,6 +1436,7 @@ export default function ChatView(props: ChatViewProps) {
   const gitStatusQuery = useGitStatus({ environmentId, cwd: gitCwd });
   const keybindings = useServerKeybindings();
   const availableEditors = useServerAvailableEditors();
+  const { panelPreferenceByMode, setPanelPreferenceForMode } = useDesktopLayoutPanelPreferences();
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
@@ -1478,6 +1485,22 @@ export default function ChatView(props: ChatViewProps) {
       : (storeServerTerminalLaunchContext ?? null);
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  const activeDesktopPanelPreference = useMemo(
+    () =>
+      normalizeDesktopLayoutPanelPreference(panelPreferenceByMode[desktopLayoutMode], {
+        diffAvailable: isGitRepo,
+        workspaceAvailable: Boolean(activeWorkspaceRoot),
+      }),
+    [activeWorkspaceRoot, desktopLayoutMode, isGitRepo, panelPreferenceByMode],
+  );
+  const currentDesktopPanelPreference = useMemo(
+    () =>
+      panelPreferenceFromRouteSearch({
+        diffOpen,
+        workspaceOpen,
+      }),
+    [diffOpen, workspaceOpen],
+  );
   const terminalShortcutLabelOptions = useMemo(
     () => ({
       context: {
@@ -1516,10 +1539,52 @@ export default function ChatView(props: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "diff.toggle", nonTerminalShortcutLabelOptions),
     [keybindings, nonTerminalShortcutLabelOptions],
   );
+
+  useEffect(() => {
+    if (!isServerThread || shouldUseDiffSheet) {
+      return;
+    }
+    if (currentDesktopPanelPreference !== "none") {
+      return;
+    }
+    if (activeDesktopPanelPreference === "none") {
+      return;
+    }
+
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: {
+        environmentId,
+        threadId,
+      },
+      replace: true,
+      search: (previous) => {
+        const rest = stripDiffSearchParams(previous);
+        switch (activeDesktopPanelPreference) {
+          case "workspace":
+            return { ...rest, workspace: "1" };
+          case "diff":
+            return { ...rest, diff: "1" };
+          default:
+            return { ...rest, diff: undefined, workspace: undefined };
+        }
+      },
+    });
+  }, [
+    activeDesktopPanelPreference,
+    currentDesktopPanelPreference,
+    environmentId,
+    isServerThread,
+    navigate,
+    shouldUseDiffSheet,
+    threadId,
+  ]);
+
   const onToggleWorkspace = useCallback(() => {
     if (!isServerThread) {
       return;
     }
+    setPanelPreferenceForMode(desktopLayoutMode, workspaceOpen ? "none" : "workspace");
     if (!workspaceOpen) {
       onWorkspacePanelOpen?.();
     }
@@ -1536,11 +1601,21 @@ export default function ChatView(props: ChatViewProps) {
         return workspaceOpen ? { ...rest, workspace: undefined } : { ...rest, workspace: "1" };
       },
     });
-  }, [environmentId, isServerThread, navigate, onWorkspacePanelOpen, threadId, workspaceOpen]);
+  }, [
+    desktopLayoutMode,
+    environmentId,
+    isServerThread,
+    navigate,
+    onWorkspacePanelOpen,
+    setPanelPreferenceForMode,
+    threadId,
+    workspaceOpen,
+  ]);
   const onToggleDiff = useCallback(() => {
     if (!isServerThread) {
       return;
     }
+    setPanelPreferenceForMode(desktopLayoutMode, diffOpen ? "none" : "diff");
     if (!diffOpen) {
       onDiffPanelOpen?.();
     }
@@ -1556,7 +1631,16 @@ export default function ChatView(props: ChatViewProps) {
         return diffOpen ? { ...rest, diff: undefined } : { ...rest, diff: "1" };
       },
     });
-  }, [diffOpen, environmentId, isServerThread, navigate, onDiffPanelOpen, threadId]);
+  }, [
+    desktopLayoutMode,
+    diffOpen,
+    environmentId,
+    isServerThread,
+    navigate,
+    onDiffPanelOpen,
+    setPanelPreferenceForMode,
+    threadId,
+  ]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -3245,6 +3329,7 @@ export default function ChatView(props: ChatViewProps) {
       if (!isServerThread) {
         return;
       }
+      setPanelPreferenceForMode(desktopLayoutMode, "diff");
       onDiffPanelOpen?.();
       void navigate({
         to: "/$environmentId/$threadId",
@@ -3260,7 +3345,15 @@ export default function ChatView(props: ChatViewProps) {
         },
       });
     },
-    [environmentId, isServerThread, navigate, onDiffPanelOpen, threadId],
+    [
+      desktopLayoutMode,
+      environmentId,
+      isServerThread,
+      navigate,
+      onDiffPanelOpen,
+      setPanelPreferenceForMode,
+      threadId,
+    ],
   );
   // Both the Map and the revert handler are read from refs at call-time so
   // the callback reference is fully stable and never busts context identity.
@@ -3277,9 +3370,58 @@ export default function ChatView(props: ChatViewProps) {
   }, []);
   const onDesktopLayoutModeChange = useCallback(
     (mode: DesktopLayoutMode) => {
+      if (mode === desktopLayoutMode) {
+        return;
+      }
       updateSettings({ desktopLayoutMode: mode });
+      if (!isServerThread || shouldUseDiffSheet) {
+        return;
+      }
+
+      const targetPanelPreference = normalizeDesktopLayoutPanelPreference(
+        panelPreferenceByMode[mode],
+        {
+          diffAvailable: isGitRepo,
+          workspaceAvailable: Boolean(activeWorkspaceRoot),
+        },
+      );
+      if (currentDesktopPanelPreference === targetPanelPreference) {
+        return;
+      }
+
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId,
+          threadId,
+        },
+        replace: true,
+        search: (previous) => {
+          const rest = stripDiffSearchParams(previous);
+          switch (targetPanelPreference) {
+            case "workspace":
+              return { ...rest, workspace: "1" };
+            case "diff":
+              return { ...rest, diff: "1" };
+            default:
+              return { ...rest, diff: undefined, workspace: undefined };
+          }
+        },
+      });
     },
-    [updateSettings],
+    [
+      activeWorkspaceRoot,
+      currentDesktopPanelPreference,
+      desktopLayoutMode,
+      environmentId,
+      isGitRepo,
+      isServerThread,
+      navigate,
+      panelPreferenceByMode,
+      shouldUseDiffSheet,
+      threadId,
+      updateSettings,
+    ],
   );
 
   // Empty state: no active thread
