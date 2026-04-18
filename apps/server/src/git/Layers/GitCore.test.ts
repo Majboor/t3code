@@ -1682,6 +1682,34 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("tags working tree files with their change status", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "keep.md"), "# keep\n");
+        yield* writeTextFile(path.join(tmp, "rename-me.md"), "# original\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "seed working tree fixtures"]);
+
+        yield* writeTextFile(path.join(tmp, "keep.md"), "# keep updated\n");
+        yield* removePath(path.join(tmp, "README.md"));
+        yield* writeTextFile(path.join(tmp, "added-new.md"), "# new\n");
+        yield* writeTextFile(path.join(tmp, "untracked.md"), "# untracked\n");
+        yield* git(tmp, ["add", "added-new.md"]);
+        yield* git(tmp, ["mv", "rename-me.md", "renamed.md"]);
+
+        const core = yield* GitCore;
+        const details = yield* core.statusDetails(tmp);
+        const byPath = new Map(details.workingTree.files.map((file) => [file.path, file.status]));
+
+        expect(byPath.get("keep.md")).toBe("modified");
+        expect(byPath.get("README.md")).toBe("deleted");
+        expect(byPath.get("added-new.md")).toBe("added");
+        expect(byPath.get("untracked.md")).toBe("untracked");
+        expect(byPath.get("renamed.md")).toBe("renamed");
+      }),
+    );
+
     it.effect("returns a unified diff for tracked working tree changes", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

@@ -1,5 +1,11 @@
-import { scopeThreadRef } from "@t3tools/client-runtime";
-import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ScopedProjectRef,
+  ScopedThreadRef,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { DraftId } from "./composerDraftStore";
 
 export type ThreadRouteTarget =
@@ -36,6 +42,26 @@ export function resolveThreadRouteRef(
   }
 
   return scopeThreadRef(params.environmentId as EnvironmentId, params.threadId as ThreadId);
+}
+
+export function buildProjectRouteParams(ref: ScopedProjectRef): {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+} {
+  return {
+    environmentId: ref.environmentId,
+    projectId: ref.projectId,
+  };
+}
+
+export function resolveProjectRouteRef(
+  params: Partial<Record<"environmentId" | "projectId", string | undefined>>,
+): ScopedProjectRef | null {
+  if (!params.environmentId || !params.projectId) {
+    return null;
+  }
+
+  return scopeProjectRef(params.environmentId as EnvironmentId, params.projectId as ProjectId);
 }
 
 export function resolveThreadRouteTarget(

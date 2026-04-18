@@ -18,7 +18,7 @@ describe("workspaceLiveDiffBaselineState", () => {
       threadId: "thread-1" as never,
       cwd: "/repo/project",
       isRepo: true,
-      files: [{ path: "app.ts", insertions: 1, deletions: 0 }],
+      files: [{ path: "app.ts", status: "modified", insertions: 1, deletions: 0 }],
     });
 
     expect(
@@ -30,7 +30,7 @@ describe("workspaceLiveDiffBaselineState", () => {
     ).toEqual({
       cwd: "/repo/project",
       isRepo: true,
-      files: [{ path: "app.ts", insertions: 1, deletions: 0 }],
+      files: [{ path: "app.ts", status: "modified", insertions: 1, deletions: 0 }],
     });
 
     expect(

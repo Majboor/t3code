@@ -206,6 +206,23 @@ const GitStatusPr = Schema.Struct({
   state: GitStatusPrState,
 });
 
+export const GitWorkingTreeFileStatus = Schema.Literals([
+  "modified",
+  "added",
+  "deleted",
+  "renamed",
+  "untracked",
+]);
+export type GitWorkingTreeFileStatus = typeof GitWorkingTreeFileStatus.Type;
+
+export const GitWorkingTreeFile = Schema.Struct({
+  path: TrimmedNonEmptyStringSchema,
+  status: GitWorkingTreeFileStatus,
+  insertions: NonNegativeInt,
+  deletions: NonNegativeInt,
+});
+export type GitWorkingTreeFile = typeof GitWorkingTreeFile.Type;
+
 const GitStatusLocalShape = {
   isRepo: Schema.Boolean,
   hostingProvider: Schema.optional(GitHostingProvider),
@@ -214,13 +231,7 @@ const GitStatusLocalShape = {
   branch: Schema.NullOr(TrimmedNonEmptyStringSchema),
   hasWorkingTreeChanges: Schema.Boolean,
   workingTree: Schema.Struct({
-    files: Schema.Array(
-      Schema.Struct({
-        path: TrimmedNonEmptyStringSchema,
-        insertions: NonNegativeInt,
-        deletions: NonNegativeInt,
-      }),
-    ),
+    files: Schema.Array(GitWorkingTreeFile),
     insertions: NonNegativeInt,
     deletions: NonNegativeInt,
   }),

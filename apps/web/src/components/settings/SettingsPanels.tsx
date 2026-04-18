@@ -19,7 +19,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import { DEFAULT_UNIFIED_SETTINGS, type DesktopLayoutMode } from "@t3tools/contracts/settings";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Equal } from "effect";
 import { APP_VERSION } from "../../branding";
@@ -98,6 +98,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+
+const DESKTOP_LAYOUT_MODE_LABELS = {
+  vibe: "Vibe mode",
+  dev: "Dev mode",
+} satisfies Record<DesktopLayoutMode, string>;
 
 type InstallProviderSettings = {
   provider: ProviderKind;
@@ -432,6 +437,9 @@ export function useSettingsRestore(onRestored?: () => void) {
   const changedSettingLabels = useMemo(
     () => [
       ...(theme !== "system" ? ["Theme"] : []),
+      ...(settings.desktopLayoutMode !== DEFAULT_UNIFIED_SETTINGS.desktopLayoutMode
+        ? ["Desktop layout"]
+        : []),
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
@@ -462,6 +470,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
+      settings.desktopLayoutMode,
       settings.defaultThreadEnvMode,
       settings.diffWordWrap,
       settings.enableAssistantStreaming,
@@ -785,6 +794,45 @@ export function GeneralSettingsPanel() {
                     {option.label}
                   </SelectItem>
                 ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          title="Desktop layout"
+          description="Vibe keeps chat centered between Projects and Workspace. Dev puts Workspace first and moves Projects to the right."
+          resetAction={
+            settings.desktopLayoutMode !== DEFAULT_UNIFIED_SETTINGS.desktopLayoutMode ? (
+              <SettingResetButton
+                label="desktop layout"
+                onClick={() =>
+                  updateSettings({
+                    desktopLayoutMode: DEFAULT_UNIFIED_SETTINGS.desktopLayoutMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.desktopLayoutMode}
+              onValueChange={(value) => {
+                if (value === "vibe" || value === "dev") {
+                  updateSettings({ desktopLayoutMode: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Desktop layout mode">
+                <SelectValue>{DESKTOP_LAYOUT_MODE_LABELS[settings.desktopLayoutMode]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="vibe">
+                  {DESKTOP_LAYOUT_MODE_LABELS.vibe}
+                </SelectItem>
+                <SelectItem hideIndicator value="dev">
+                  {DESKTOP_LAYOUT_MODE_LABELS.dev}
+                </SelectItem>
               </SelectPopup>
             </Select>
           }

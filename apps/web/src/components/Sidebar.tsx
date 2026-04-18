@@ -1430,7 +1430,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "open-workspace" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1449,6 +1449,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               case "copy-path":
                 copyPathToClipboard(member.cwd, { path: member.cwd });
                 return;
+              case "open-workspace":
+                void router.navigate({
+                  to: "/project/$environmentId/$projectId",
+                  params: { environmentId: member.environmentId, projectId: member.id },
+                });
+                return;
               case "delete":
                 return handleRemoveProject(member);
             }
@@ -1463,7 +1469,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "open-workspace" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1520,6 +1526,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("rename", "Rename project"),
             buildTargetedItem("grouping", "Project grouping…"),
             ...projectCategoryMenuItems,
+            buildTargetedItem("open-workspace", "Open workspace"),
             buildTargetedItem("copy-path", "Copy Project Path"),
             buildTargetedItem("delete", "Remove project", {
               destructive: true,
@@ -1571,6 +1578,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       project.groupedProjectCount,
       project.memberProjects,
       resolvedProjectCategoryId,
+      router,
       suppressProjectClickForContextMenuRef,
     ],
   );

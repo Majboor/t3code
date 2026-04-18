@@ -110,7 +110,8 @@ import {
 } from "~/projectScripts";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings } from "../hooks/useSettings";
+import { type DesktopLayoutMode } from "@t3tools/contracts/settings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { resolveAppModelSelection } from "../modelSelection";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
@@ -614,9 +615,11 @@ export default function ChatView(props: ChatViewProps) {
     routeKind === "server" ? store.threadLastVisitedAtById[routeThreadKey] : undefined,
   );
   const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
+  const desktopLayoutMode = settings.desktopLayoutMode;
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   const rawSearch = useSearch({
@@ -3272,6 +3275,12 @@ export default function ChatView(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  const onDesktopLayoutModeChange = useCallback(
+    (mode: DesktopLayoutMode) => {
+      updateSettings({ desktopLayoutMode: mode });
+    },
+    [updateSettings],
+  );
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -3315,6 +3324,7 @@ export default function ChatView(props: ChatViewProps) {
           workspaceAvailable={Boolean(activeWorkspaceRoot)}
           workspaceOpen={workspaceOpen}
           diffOpen={diffOpen}
+          desktopLayoutMode={desktopLayoutMode}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
@@ -3322,6 +3332,7 @@ export default function ChatView(props: ChatViewProps) {
           onToggleTerminal={toggleTerminalVisibility}
           onToggleWorkspace={onToggleWorkspace}
           onToggleDiff={onToggleDiff}
+          onDesktopLayoutModeChange={onDesktopLayoutModeChange}
         />
       </header>
 

@@ -18,7 +18,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { GitCommandError, type GitBranch } from "@t3tools/contracts";
+import { GitCommandError, type GitBranch, type GitWorkingTreeFileStatus } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
 import { compactTraceAttributes } from "../../observability/Attributes.ts";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../../observability/Metrics.ts";
@@ -167,26 +167,71 @@ function chunkPathsForGitCheckIgnore(relativePaths: readonly string[]): string[]
   return chunks;
 }
 
-function parsePorcelainPath(line: string): string | null {
-  if (line.startsWith("? ") || line.startsWith("! ")) {
+interface ParsedPorcelainEntry {
+  path: string;
+  status: GitWorkingTreeFileStatus;
+}
+
+// Porcelain v2 status code to UI-facing file status. XY = index/worktree codes.
+// Deletion beats other codes so a staged-add + worktree-delete reads as deleted.
+function resolvePorcelainChangeStatus(xyCodes: string): GitWorkingTreeFileStatus {
+  const x = xyCodes.charAt(0);
+  const y = xyCodes.charAt(1);
+  if (x === "D" || y === "D") return "deleted";
+  if (x === "A" || y === "A") return "added";
+  return "modified";
+}
+
+function parsePorcelainEntry(line: string): ParsedPorcelainEntry | null {
+  if (line.startsWith("? ")) {
     const simple = line.slice(2).trim();
-    return simple.length > 0 ? simple : null;
+    return simple.length > 0 ? { path: simple, status: "untracked" } : null;
   }
 
-  if (!(line.startsWith("1 ") || line.startsWith("2 ") || line.startsWith("u "))) {
+  if (line.startsWith("! ")) {
     return null;
   }
 
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex >= 0) {
-    const fromTab = line.slice(tabIndex + 1);
-    const [filePath] = fromTab.split("\t");
-    return filePath?.trim().length ? filePath.trim() : null;
+  if (line.startsWith("1 ")) {
+    const rest = line.slice(2);
+    const xy = rest.slice(0, 2);
+    const tabIndex = rest.indexOf("\t");
+    const filePath =
+      tabIndex >= 0 ? rest.slice(tabIndex + 1) : (rest.trim().split(/\s+/g).at(-1) ?? "");
+    const trimmed = filePath.trim();
+    if (trimmed.length === 0) return null;
+    return { path: trimmed, status: resolvePorcelainChangeStatus(xy) };
   }
 
-  const parts = line.trim().split(/\s+/g);
-  const filePath = parts.at(-1) ?? "";
-  return filePath.length > 0 ? filePath : null;
+  if (line.startsWith("2 ")) {
+    // Porcelain v2 rename/copy entry: `2 XY sub mH mI mW hH hI X<score> <path>\t<origPath>`.
+    // We want the NEW path (before the tab), which is the last space-separated token preceding the tab.
+    const rest = line.slice(2);
+    const tabIndex = rest.indexOf("\t");
+    if (tabIndex < 0) return null;
+    const beforeTab = rest.slice(0, tabIndex);
+    const lastSpaceIndex = beforeTab.lastIndexOf(" ");
+    if (lastSpaceIndex < 0) return null;
+    const newPath = beforeTab.slice(lastSpaceIndex + 1).trim();
+    if (newPath.length === 0) return null;
+    return { path: newPath, status: "renamed" };
+  }
+
+  if (line.startsWith("u ")) {
+    const rest = line.slice(2);
+    const tabIndex = rest.indexOf("\t");
+    const filePath =
+      tabIndex >= 0 ? rest.slice(tabIndex + 1) : (rest.trim().split(/\s+/g).at(-1) ?? "");
+    const trimmed = filePath.trim();
+    if (trimmed.length === 0) return null;
+    return { path: trimmed, status: "modified" };
+  }
+
+  return null;
+}
+
+function parsePorcelainPath(line: string): string | null {
+  return parsePorcelainEntry(line)?.path ?? null;
 }
 
 function normalizeRelativePathInput(relativePath: string): string {
@@ -1288,7 +1333,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     let aheadCount = 0;
     let behindCount = 0;
     let hasWorkingTreeChanges = false;
-    const changedFilesWithoutNumstat = new Set<string>();
+    const statusByPath = new Map<string, GitWorkingTreeFileStatus>();
 
     for (const line of statusStdout.split(/\r?\n/g)) {
       if (line.startsWith("# branch.head ")) {
@@ -1310,8 +1355,10 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
       }
       if (line.trim().length > 0 && !line.startsWith("#")) {
         hasWorkingTreeChanges = true;
-        const pathValue = parsePorcelainPath(line);
-        if (pathValue) changedFilesWithoutNumstat.add(pathValue);
+        const entry = parsePorcelainEntry(line);
+        if (entry) {
+          statusByPath.set(entry.path, entry.status);
+        }
       }
     }
 
@@ -1334,19 +1381,31 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
 
     let insertions = 0;
     let deletions = 0;
-    const files = Array.from(fileStatMap.entries())
-      .map(([filePath, stat]) => {
-        insertions += stat.insertions;
-        deletions += stat.deletions;
-        return { path: filePath, insertions: stat.insertions, deletions: stat.deletions };
-      })
-      .toSorted((a, b) => a.path.localeCompare(b.path));
-
-    for (const filePath of changedFilesWithoutNumstat) {
-      if (fileStatMap.has(filePath)) continue;
-      files.push({ path: filePath, insertions: 0, deletions: 0 });
+    const filesByPath = new Map<
+      string,
+      { path: string; status: GitWorkingTreeFileStatus; insertions: number; deletions: number }
+    >();
+    for (const [filePath, stat] of fileStatMap) {
+      insertions += stat.insertions;
+      deletions += stat.deletions;
+      // numstat covers tracked changes only; for a file with a numstat entry but no porcelain
+      // record (rare — stems from transient index state), fall back to "modified".
+      const status = statusByPath.get(filePath) ?? "modified";
+      filesByPath.set(filePath, {
+        path: filePath,
+        status,
+        insertions: stat.insertions,
+        deletions: stat.deletions,
+      });
     }
-    files.sort((a, b) => a.path.localeCompare(b.path));
+
+    for (const [filePath, status] of statusByPath) {
+      if (filesByPath.has(filePath)) continue;
+      // Files with no numstat entry: typically untracked, deleted, or renamed-without-content-delta.
+      filesByPath.set(filePath, { path: filePath, status, insertions: 0, deletions: 0 });
+    }
+
+    const files = Array.from(filesByPath.values()).toSorted((a, b) => a.path.localeCompare(b.path));
 
     return {
       isRepo: true,

@@ -27,6 +27,7 @@ import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../st
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
+import { useSettings } from "../hooks/useSettings";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
@@ -81,6 +82,7 @@ const LazyWorkspacePanel = (props: { mode: WorkspacePanelMode }) => {
 
 const ThreadRightPanelInlineSidebar = (props: {
   open: boolean;
+  side: "left" | "right";
   preferredPanel: RightPanelKind;
   onClose: () => void;
   onOpenPreferredPanel: () => void;
@@ -94,6 +96,7 @@ const ThreadRightPanelInlineSidebar = (props: {
     preferredPanel,
     renderDiffContent,
     renderWorkspaceContent,
+    side,
   } = props;
   const onOpenChange = useCallback(
     (open: boolean) => {
@@ -157,12 +160,13 @@ const ThreadRightPanelInlineSidebar = (props: {
       open={open}
       onOpenChange={onOpenChange}
       className="w-auto min-h-0 flex-none bg-transparent"
+      data-layout-column="workspace"
       style={{ "--sidebar-width": RIGHT_PANEL_INLINE_DEFAULT_WIDTH } as React.CSSProperties}
     >
       <Sidebar
-        side="right"
+        side={side}
         collapsible="offcanvas"
-        className="border-l border-border bg-card text-foreground"
+        className={`${side === "left" ? "border-r" : "border-l"} border-border bg-card text-foreground`}
         resizable={{
           minWidth: RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH,
           shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
@@ -181,6 +185,7 @@ const ThreadRightPanelInlineSidebar = (props: {
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
+  const desktopLayoutMode = useSettings((settings) => settings.desktopLayoutMode);
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
@@ -328,35 +333,49 @@ function ChatThreadRouteView() {
   const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
   const shouldRenderWorkspaceContent = workspaceOpen || hasOpenedWorkspace;
   const rightPanelOpen = diffOpen || workspaceOpen;
+  const inlinePanelSide = desktopLayoutMode === "dev" ? "left" : "right";
+  const chatColumn = (
+    <SidebarInset
+      className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground"
+      data-layout-column="chat"
+    >
+      <ChatView
+        environmentId={threadRef.environmentId}
+        threadId={threadRef.threadId}
+        onDiffPanelOpen={markDiffOpened}
+        onWorkspacePanelOpen={markWorkspaceOpened}
+        reserveTitleBarControlInset={!rightPanelOpen}
+        routeKind="server"
+      />
+    </SidebarInset>
+  );
+  const inlineWorkspaceColumn = (
+    <ThreadRightPanelInlineSidebar
+      open={rightPanelOpen}
+      side={inlinePanelSide}
+      preferredPanel={preferredPanel}
+      onClose={closeDiff}
+      onOpenPreferredPanel={preferredPanel === "workspace" ? openWorkspace : openDiff}
+      renderDiffContent={shouldRenderDiffContent}
+      renderWorkspaceContent={shouldRenderWorkspaceContent}
+    />
+  );
 
   if (!shouldUseDiffSheet) {
     return (
       <>
-        <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView
-            environmentId={threadRef.environmentId}
-            threadId={threadRef.threadId}
-            onDiffPanelOpen={markDiffOpened}
-            onWorkspacePanelOpen={markWorkspaceOpened}
-            reserveTitleBarControlInset={!rightPanelOpen}
-            routeKind="server"
-          />
-        </SidebarInset>
-        <ThreadRightPanelInlineSidebar
-          open={rightPanelOpen}
-          preferredPanel={preferredPanel}
-          onClose={closeDiff}
-          onOpenPreferredPanel={preferredPanel === "workspace" ? openWorkspace : openDiff}
-          renderDiffContent={shouldRenderDiffContent}
-          renderWorkspaceContent={shouldRenderWorkspaceContent}
-        />
+        {desktopLayoutMode === "dev" ? inlineWorkspaceColumn : chatColumn}
+        {desktopLayoutMode === "dev" ? chatColumn : inlineWorkspaceColumn}
       </>
     );
   }
 
   return (
     <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <SidebarInset
+        className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground"
+        data-layout-column="chat"
+      >
         <ChatView
           environmentId={threadRef.environmentId}
           threadId={threadRef.threadId}

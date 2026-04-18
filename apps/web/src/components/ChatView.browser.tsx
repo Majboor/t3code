@@ -8,6 +8,7 @@ import {
   EnvironmentId,
   type EnvironmentApi,
   type GitStatusResult,
+  type GitWorkingTreeFileStatus,
   type MessageId,
   type OrchestrationReadModel,
   type ProjectId,
@@ -54,10 +55,11 @@ import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
 import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
+import { writeBrowserClientSettings } from "../clientPersistenceStorage";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 
-import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
+import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
 
 const gitStatusHarness = vi.hoisted(() => {
   const EMPTY_STATE = {
@@ -268,9 +270,19 @@ function createBaseServerConfig(): ServerConfig {
 }
 
 function createGitStatusSnapshot(input?: {
-  files?: Array<{ path: string; insertions: number; deletions: number }>;
+  files?: Array<{
+    path: string;
+    status?: GitWorkingTreeFileStatus;
+    insertions: number;
+    deletions: number;
+  }>;
 }): GitStatusResult {
-  const files = input?.files ?? [];
+  const files = (input?.files ?? []).map((file) => ({
+    path: file.path,
+    status: file.status ?? ("modified" as const),
+    insertions: file.insertions,
+    deletions: file.deletions,
+  }));
   return {
     isRepo: true,
     hasOriginRemote: true,
@@ -1179,6 +1191,54 @@ async function waitForElement<T extends Element>(
   return element;
 }
 
+function queryDesktopColumnLeft(column: "projects" | "chat" | "workspace"): number | null {
+  const target = (() => {
+    if (column === "chat") {
+      return document.querySelector<HTMLElement>("[data-layout-column='chat']");
+    }
+    return (
+      document.querySelector<HTMLElement>(
+        `[data-layout-column='${column}'][data-slot='sidebar-container']`,
+      ) ??
+      document.querySelector<HTMLElement>(
+        `[data-layout-column='${column}'] [data-slot='sidebar-container']`,
+      )
+    );
+  })();
+  if (!target) {
+    return null;
+  }
+  if (column !== "chat") {
+    const sidebarRoot = target.closest<HTMLElement>("[data-slot='sidebar']");
+    if (sidebarRoot?.dataset.state !== "expanded") {
+      return null;
+    }
+  }
+  const rect = target.getBoundingClientRect();
+  if (rect.width <= 0) {
+    return null;
+  }
+  return rect.left;
+}
+
+function getDesktopColumnLeft(column: "projects" | "chat" | "workspace"): number {
+  const left = queryDesktopColumnLeft(column);
+  if (left === null) {
+    throw new Error(`Unable to find visible ${column} column.`);
+  }
+  return left;
+}
+
+function getDesktopColumnOrder(): Array<"projects" | "chat" | "workspace"> {
+  return (["projects", "chat", "workspace"] as const)
+    .map((column) => ({
+      column,
+      left: getDesktopColumnLeft(column),
+    }))
+    .sort((left, right) => left.left - right.left)
+    .map((entry) => entry.column);
+}
+
 async function waitForURL(
   router: ReturnType<typeof getRouter>,
   predicate: (pathname: string) => boolean,
@@ -1496,6 +1556,19 @@ function dispatchChatNewShortcut(): void {
   );
 }
 
+function dispatchProjectsToggleShortcut(): void {
+  const useMetaForMod = isMacPlatform(navigator.platform);
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "b",
+      metaKey: useMetaForMod,
+      ctrlKey: !useMetaForMod,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
 async function triggerChatNewShortcutUntilPath(
   router: ReturnType<typeof getRouter>,
   predicate: (pathname: string) => boolean,
@@ -1579,16 +1652,47 @@ async function dispatchInputKey(
   await waitForLayout();
 }
 
+async function switchDesktopLayoutMode(mode: "vibe" | "dev"): Promise<void> {
+  const trigger = await waitForElement(
+    () => document.querySelector<HTMLButtonElement>('button[aria-label="View options"]'),
+    'Unable to find "View options" button.',
+  );
+  trigger.click();
+
+  const radioItemLabel = mode === "vibe" ? "Vibe" : "Dev";
+  const radioItem = await waitForElement(
+    () =>
+      (Array.from(document.querySelectorAll('[data-slot="menu-radio-item"]')).find((item) =>
+        item.textContent?.trim().startsWith(radioItemLabel),
+      ) ?? null) as HTMLElement | null,
+    `Unable to find "${radioItemLabel}" layout mode menu item.`,
+  );
+  radioItem.click();
+
+  await waitForLayout();
+}
+
+function queryProjectSidebarReopenAffordance(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>('button[data-slot="project-sidebar-reopen"]');
+}
+
 async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
   configureFixture?: (fixture: TestFixture) => void;
   resolveRpc?: (body: NormalizedWsRpcRequestBody) => unknown | undefined;
   initialPath?: string;
+  clientSettings?: Partial<ClientSettings>;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
   customWsRpcResolver = options.resolveRpc ?? null;
+  if (options.clientSettings) {
+    writeBrowserClientSettings({
+      ...DEFAULT_CLIENT_SETTINGS,
+      ...options.clientSettings,
+    });
+  }
   await setViewport(options.viewport);
   await waitForProductionStyles();
 
@@ -5670,6 +5774,376 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("switches between vibe and dev desktop layouts with projects collapsed in dev", async () => {
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-layout-mode-target" as MessageId,
+      targetText: "layout mode thread",
+    });
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot,
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          expect(getDesktopColumnOrder()).toEqual(["projects", "chat", "workspace"]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await switchDesktopLayoutMode("dev");
+
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("toggles the projects sidebar from a configured shortcut in vibe and dev layouts", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-projects-shortcut-target" as MessageId,
+        targetText: "projects shortcut thread",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "projects.toggle",
+              shortcut: {
+                key: "b",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      dispatchProjectsToggleShortcut();
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      dispatchProjectsToggleShortcut();
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await switchDesktopLayoutMode("dev");
+
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      dispatchProjectsToggleShortcut();
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("preserves each desktop layout mode's projects sidebar open state across rapid switching", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-layout-state-target" as MessageId,
+        targetText: "layout state thread",
+      }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      dispatchProjectsToggleShortcut();
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await switchDesktopLayoutMode("dev");
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      dispatchProjectsToggleShortcut();
+      await vi.waitFor(
+        () => {
+          const projectsLeft = queryDesktopColumnLeft("projects");
+          const chatLeft = queryDesktopColumnLeft("chat");
+          expect(projectsLeft).not.toBeNull();
+          expect(chatLeft).not.toBeNull();
+          if (projectsLeft !== null && chatLeft !== null) {
+            expect(projectsLeft).toBeGreaterThan(chatLeft);
+          }
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await switchDesktopLayoutMode("vibe");
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await switchDesktopLayoutMode("dev");
+      await vi.waitFor(
+        () => {
+          const projectsLeft = queryDesktopColumnLeft("projects");
+          const chatLeft = queryDesktopColumnLeft("chat");
+          expect(projectsLeft).not.toBeNull();
+          expect(chatLeft).not.toBeNull();
+          if (projectsLeft !== null && chatLeft !== null) {
+            expect(projectsLeft).toBeGreaterThan(chatLeft);
+          }
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("exposes a floating reopen affordance after the projects sidebar is collapsed in both layout modes", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-reopen-affordance-target" as MessageId,
+        targetText: "reopen affordance thread",
+      }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(queryProjectSidebarReopenAffordance()).toBeNull();
+
+      dispatchProjectsToggleShortcut();
+      const vibeReopen = await waitForElement(
+        queryProjectSidebarReopenAffordance,
+        "Floating reopen affordance did not appear in vibe mode after collapsing projects.",
+      );
+      expect(vibeReopen.dataset.side).toBe("left");
+
+      vibeReopen.click();
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+          expect(queryProjectSidebarReopenAffordance()).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await switchDesktopLayoutMode("dev");
+      const devReopen = await waitForElement(
+        queryProjectSidebarReopenAffordance,
+        "Floating reopen affordance did not appear in dev mode when projects start collapsed.",
+      );
+      expect(devReopen.dataset.side).toBe("right");
+
+      devReopen.click();
+      await vi.waitFor(
+        () => {
+          const projectsLeft = queryDesktopColumnLeft("projects");
+          const chatLeft = queryDesktopColumnLeft("chat");
+          expect(projectsLeft).not.toBeNull();
+          expect(chatLeft).not.toBeNull();
+          if (projectsLeft !== null && chatLeft !== null) {
+            expect(projectsLeft).toBeGreaterThan(chatLeft);
+          }
+          expect(queryProjectSidebarReopenAffordance()).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("distinguishes the projects sidebar trigger from the workspace panel toggle", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-outer-inner-toggle-target" as MessageId,
+        targetText: "outer inner toggle thread",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "projects.toggle",
+              shortcut: {
+                key: "b",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+
+      const projectsTrigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[data-slot="sidebar-trigger"]'),
+        "Unable to find Projects sidebar trigger.",
+      );
+      expect(projectsTrigger.getAttribute("aria-label")).toContain("Projects sidebar");
+
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          expect(getDesktopColumnOrder()).toEqual(["projects", "chat", "workspace"]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      projectsTrigger.click();
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the projects sidebar reachable from the view overflow menu at narrow widths", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-overflow-menu-target" as MessageId,
+        targetText: "overflow menu thread",
+      }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await mounted.setContainerSize({ width: 640, height: 1_100 });
+
+      await vi.waitFor(
+        () => {
+          const inlineToggles = document.querySelector<HTMLElement>(
+            '[data-slot="chat-header-inline-toggles"]',
+          );
+          expect(inlineToggles).not.toBeNull();
+          if (inlineToggles) {
+            expect(inlineToggles.getBoundingClientRect().width).toBe(0);
+          }
+          const overflowTrigger = document.querySelector<HTMLButtonElement>(
+            'button[aria-label="View options"]',
+          );
+          expect(overflowTrigger).not.toBeNull();
+          if (overflowTrigger) {
+            expect(overflowTrigger.getBoundingClientRect().width).toBeGreaterThan(0);
+          }
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await switchDesktopLayoutMode("dev");
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the workspace panel stable across prompt-driven thread updates", async () => {
     let listDirectoryCallCount = 0;
     let readFileCallCount = 0;
@@ -7008,6 +7482,193 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
     } finally {
       await mounted.cleanup();
+    }
+  });
+
+  it("keeps accepted checkpoint diffs hidden after a refresh", async () => {
+    localStorage.clear();
+
+    let readFileCallCount = 0;
+    const workspaceFilePath = "accepted-review.ts";
+    const workspaceFileContents = "export const accepted = true;\n";
+    const turnId = TurnId.make("turn-workspace-accepted-review-persisted");
+    const turnDiffPatch = [
+      "diff --git a/accepted-review.ts b/accepted-review.ts",
+      "index 1111111..2222222 100644",
+      "--- a/accepted-review.ts",
+      "+++ b/accepted-review.ts",
+      "@@ -1 +1 @@",
+      "-export const accepted = false;",
+      "+export const accepted = true;",
+    ].join("\n");
+
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-workspace-accepted-review-persisted-target" as MessageId,
+      targetText: "workspace accepted review persisted thread",
+    });
+    const checkpointSnapshot: OrchestrationReadModel = {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID
+          ? Object.assign({}, thread, {
+              checkpoints: [
+                {
+                  turnId,
+                  checkpointTurnCount: 2,
+                  checkpointRef: CheckpointRef.make(
+                    "checkpoint-workspace-accepted-review-persisted",
+                  ),
+                  status: "ready" as const,
+                  files: [
+                    {
+                      path: workspaceFilePath,
+                      kind: "modified" as const,
+                      additions: 1,
+                      deletions: 1,
+                    },
+                  ],
+                  assistantMessageId: null,
+                  completedAt: isoAt(2_500),
+                },
+              ],
+            })
+          : thread,
+      ),
+    };
+    const acceptedStorageKey = [
+      "t3code:workspace-accepted-diffs:v1",
+      "thread",
+      LOCAL_ENVIRONMENT_ID,
+      THREAD_ID,
+    ].join(":");
+    const reviewStorageKey = [
+      "t3code:workspace-diff-review:v1",
+      "thread",
+      LOCAL_ENVIRONMENT_ID,
+      THREAD_ID,
+    ].join(":");
+    const resolveRpc = (body: {
+      _tag: string;
+      relativePath?: string;
+      directoryPath?: string | null;
+    }) => {
+      if (body._tag === WS_METHODS.projectsListDirectory) {
+        return {
+          ...(body.directoryPath ? { directoryPath: body.directoryPath } : {}),
+          entries: [
+            {
+              name: workspaceFilePath,
+              path: workspaceFilePath,
+              kind: "file" as const,
+            },
+          ],
+        };
+      }
+      if (body._tag === WS_METHODS.projectsReadFile) {
+        readFileCallCount += 1;
+        return {
+          relativePath: body.relativePath ?? workspaceFilePath,
+          contents: workspaceFileContents,
+          isBinary: false,
+          tooLarge: false,
+          sizeBytes: workspaceFileContents.length,
+        };
+      }
+      if (body._tag === ORCHESTRATION_WS_METHODS.getTurnDiff) {
+        return {
+          threadId: THREAD_ID,
+          fromTurnCount: 1,
+          toTurnCount: 2,
+          diff: turnDiffPatch,
+        };
+      }
+      return undefined;
+    };
+
+    const firstMount = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: checkpointSnapshot,
+      resolveRpc,
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button.',
+      );
+      workspaceToggle.click();
+
+      const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
+      workspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBe(1);
+          expect(document.querySelector('[data-workspace-file-mode="diff"]')).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const acceptChangeButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Accept the current change"]',
+          ),
+        'Unable to find "Accept the current change" button.',
+      );
+      acceptChangeButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-workspace-file-mode="editor"]')).toBeTruthy();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${workspaceFilePath}"]`),
+          ).toBeNull();
+          expect(localStorage.getItem(acceptedStorageKey)).toContain(workspaceFilePath);
+          expect(localStorage.getItem(reviewStorageKey)).toContain(workspaceFilePath);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await firstMount.cleanup();
+    }
+
+    const secondMount = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: checkpointSnapshot,
+      resolveRpc,
+    });
+
+    try {
+      const workspaceToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Toggle workspace panel"]'),
+        'Unable to find "Toggle workspace panel" button after refresh.',
+      );
+      workspaceToggle.click();
+
+      const workspaceFileButton = await waitForButtonContainingText(workspaceFilePath);
+      workspaceFileButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(readFileCallCount).toBeGreaterThanOrEqual(2);
+          expect(document.querySelector("[data-workspace-diff-review='controls']")).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-tab-path="${workspaceFilePath}"]`),
+          ).toBeTruthy();
+          expect(
+            document.querySelector(`[data-workspace-entry-diff-state="${workspaceFilePath}"]`),
+          ).toBeNull();
+          expect(
+            document.querySelector(`[data-workspace-tab-diff-state="${workspaceFilePath}"]`),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await secondMount.cleanup();
     }
   });
 
