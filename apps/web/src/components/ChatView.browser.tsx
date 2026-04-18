@@ -1192,6 +1192,30 @@ async function waitForElement<T extends Element>(
 }
 
 function queryDesktopColumnLeft(column: "projects" | "chat" | "workspace"): number | null {
+  const target = queryDesktopColumnElement(column);
+  if (!target) {
+    return null;
+  }
+  const rect = target.getBoundingClientRect();
+  if (rect.width <= 0) {
+    return null;
+  }
+  return rect.left;
+}
+
+function queryDesktopColumnWidth(column: "projects" | "chat" | "workspace"): number | null {
+  const target = queryDesktopColumnElement(column);
+  if (!target) {
+    return null;
+  }
+  const rect = target.getBoundingClientRect();
+  if (rect.width <= 0) {
+    return null;
+  }
+  return rect.width;
+}
+
+function queryDesktopColumnElement(column: "projects" | "chat" | "workspace"): HTMLElement | null {
   const target = (() => {
     if (column === "chat") {
       return document.querySelector<HTMLElement>("[data-layout-column='chat']");
@@ -1214,11 +1238,7 @@ function queryDesktopColumnLeft(column: "projects" | "chat" | "workspace"): numb
       return null;
     }
   }
-  const rect = target.getBoundingClientRect();
-  if (rect.width <= 0) {
-    return null;
-  }
-  return rect.left;
+  return target;
 }
 
 function getDesktopColumnOrder(): Array<"projects" | "chat" | "workspace"> {
@@ -6195,6 +6215,55 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       await expectComposerActionsContained();
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("rebalances the dev workspace rail when projects opens from a compact-chat layout", async () => {
+    window.localStorage.setItem("chat_right_panel_sidebar_width", "980");
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-dev-projects-rebalance-target" as MessageId,
+        targetText: "dev projects rebalance thread",
+      }),
+    });
+
+    try {
+      await switchDesktopLayoutMode("dev");
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await clickDesktopProjectsToggle();
+
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+          expect(queryDesktopColumnWidth("chat")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await expectComposerActionsContained();
+
+      const chatColumn = queryDesktopColumnElement("chat");
+      const projectsColumn = queryDesktopColumnElement("projects");
+      expect(chatColumn).not.toBeNull();
+      expect(projectsColumn).not.toBeNull();
+      if (chatColumn !== null && projectsColumn !== null) {
+        const chatRect = chatColumn.getBoundingClientRect();
+        const projectsRect = projectsColumn.getBoundingClientRect();
+        expect(chatRect.right).toBeLessThanOrEqual(projectsRect.left + 0.5);
+      }
+    } finally {
+      window.localStorage.removeItem("chat_right_panel_sidebar_width");
       await mounted.cleanup();
     }
   });

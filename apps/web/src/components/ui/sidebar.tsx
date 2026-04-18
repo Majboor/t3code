@@ -175,6 +175,7 @@ function Sidebar({
   variant = "sidebar",
   collapsible = "offcanvas",
   resizable = false,
+  revalidateWidthOn,
   className,
   children,
   ...props
@@ -183,6 +184,7 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset";
   collapsible?: "offcanvas" | "icon" | "none";
   resizable?: boolean | SidebarResizableOptions;
+  revalidateWidthOn?: unknown;
 }) {
   const { isMobile, open, setOpen, state, openMobile, setOpenMobile } = useSidebar();
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(() => {
@@ -262,7 +264,7 @@ function Sidebar({
     }
 
     applyResizableWidthGuard();
-  }, [applyResizableWidthGuard, isMobile, resolvedResizable, state]);
+  }, [applyResizableWidthGuard, isMobile, revalidateWidthOn, resolvedResizable, state]);
 
   React.useEffect(() => {
     if (!resolvedResizable || isMobile || state === "collapsed") {
@@ -722,7 +724,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
   return (
     <main
       className={cn(
-        "relative flex min-w-0 w-full flex-1 flex-col bg-background",
+        "relative flex min-w-0 basis-0 flex-1 flex-col bg-background",
         "md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ms-2 md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ms-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm/5",
         className,
       )}

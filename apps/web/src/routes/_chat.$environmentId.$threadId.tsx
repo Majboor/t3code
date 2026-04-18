@@ -26,6 +26,7 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
+import { useProjectSidebarOpen } from "../components/AppSidebarLayout.logic";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { useSettings } from "../hooks/useSettings";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
@@ -88,6 +89,7 @@ const ThreadRightPanelInlineSidebar = (props: {
   onOpenPreferredPanel: () => void;
   renderDiffContent: boolean;
   renderWorkspaceContent: boolean;
+  revalidateWidthOn?: unknown;
 }) => {
   const {
     open,
@@ -96,6 +98,7 @@ const ThreadRightPanelInlineSidebar = (props: {
     preferredPanel,
     renderDiffContent,
     renderWorkspaceContent,
+    revalidateWidthOn,
     side,
   } = props;
   const onOpenChange = useCallback(
@@ -167,6 +170,7 @@ const ThreadRightPanelInlineSidebar = (props: {
         side={side}
         collapsible="offcanvas"
         className={`${side === "left" ? "border-r" : "border-l"} border-border bg-card text-foreground`}
+        revalidateWidthOn={revalidateWidthOn}
         resizable={{
           minWidth: RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH,
           shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
@@ -186,6 +190,7 @@ const ThreadRightPanelInlineSidebar = (props: {
 function ChatThreadRouteView() {
   const navigate = useNavigate();
   const desktopLayoutMode = useSettings((settings) => settings.desktopLayoutMode);
+  const [projectSidebarOpen] = useProjectSidebarOpen(desktopLayoutMode);
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
@@ -369,6 +374,7 @@ function ChatThreadRouteView() {
       onOpenPreferredPanel={preferredPanel === "workspace" ? openWorkspace : openDiff}
       renderDiffContent={shouldRenderDiffContent}
       renderWorkspaceContent={shouldRenderWorkspaceContent}
+      revalidateWidthOn={desktopLayoutMode === "dev" ? projectSidebarOpen : null}
     />
   );
 
