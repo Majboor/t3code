@@ -56,22 +56,26 @@ export function rebalanceDevWorkspaceWidthBeforeProjectsOpen(input: {
   projectSidebarWidth: number;
   root: ParentNode;
   terminalOpen: boolean;
-}): { canOpen: boolean; nextWorkspaceWidth: number | null } {
-  const mainContentWidth = input.layoutWidth - input.projectSidebarWidth;
-  if (mainContentWidth < PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX) {
-    return { canOpen: false, nextWorkspaceWidth: null };
-  }
-
-  const maximumWorkspaceWidth = mainContentWidth - getMinimumDevChatWidthPx(input.terminalOpen);
-  if (maximumWorkspaceWidth < DEV_WORKSPACE_MIN_WIDTH_PX) {
-    return { canOpen: false, nextWorkspaceWidth: null };
+}): {
+  canOpen: boolean;
+  nextProjectSidebarWidth: number | null;
+  nextWorkspaceWidth: number | null;
+} {
+  const maximumProjectSidebarWidth =
+    input.layoutWidth - getMinimumDevMainContentWidthPx(input.terminalOpen);
+  if (maximumProjectSidebarWidth < PROJECT_SIDEBAR_MIN_WIDTH_PX) {
+    return { canOpen: false, nextProjectSidebarWidth: null, nextWorkspaceWidth: null };
   }
 
   const workspaceSidebarWrapper = input.root.querySelector<HTMLElement>(
     "[data-layout-column='workspace'][data-slot='sidebar-wrapper']",
   );
   if (!workspaceSidebarWrapper) {
-    return { canOpen: true, nextWorkspaceWidth: null };
+    return {
+      canOpen: true,
+      nextProjectSidebarWidth: Math.min(input.projectSidebarWidth, maximumProjectSidebarWidth),
+      nextWorkspaceWidth: null,
+    };
   }
 
   const currentWorkspaceWidth =
@@ -83,35 +87,75 @@ export function rebalanceDevWorkspaceWidthBeforeProjectsOpen(input: {
       ?.getBoundingClientRect().width ||
     null;
   if (currentWorkspaceWidth === null) {
-    return { canOpen: true, nextWorkspaceWidth: null };
+    return {
+      canOpen: true,
+      nextProjectSidebarWidth: Math.min(input.projectSidebarWidth, maximumProjectSidebarWidth),
+      nextWorkspaceWidth: null,
+    };
   }
 
-  const requestedWorkspaceWidth = Math.max(
-    DEV_WORKSPACE_MIN_WIDTH_PX,
-    Math.min(currentWorkspaceWidth, maximumWorkspaceWidth),
+  const tryLayout = (projectSidebarWidth: number) => {
+    const mainContentWidth = input.layoutWidth - projectSidebarWidth;
+    if (mainContentWidth < PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX) {
+      return null;
+    }
+
+    const maximumWorkspaceWidth = mainContentWidth - getMinimumDevChatWidthPx(input.terminalOpen);
+    if (maximumWorkspaceWidth < DEV_WORKSPACE_MIN_WIDTH_PX) {
+      return null;
+    }
+
+    const requestedWorkspaceWidth = Math.max(
+      DEV_WORKSPACE_MIN_WIDTH_PX,
+      Math.min(currentWorkspaceWidth, maximumWorkspaceWidth),
+    );
+    const nextWorkspaceWidth = findLargestAcceptedInlineWorkspaceWidth({
+      currentWidth: currentWorkspaceWidth,
+      minWidth: DEV_WORKSPACE_MIN_WIDTH_PX,
+      projectsSidebarOpen: true,
+      requestedWidth: requestedWorkspaceWidth,
+      terminalOpen: input.terminalOpen,
+      wrapper: workspaceSidebarWrapper,
+    });
+    if (nextWorkspaceWidth === null) {
+      return null;
+    }
+    return { projectSidebarWidth, workspaceWidth: nextWorkspaceWidth };
+  };
+
+  const preferredProjectSidebarWidth = Math.max(
+    PROJECT_SIDEBAR_MIN_WIDTH_PX,
+    Math.min(input.projectSidebarWidth, maximumProjectSidebarWidth),
   );
-  const nextWorkspaceWidth = findLargestAcceptedInlineWorkspaceWidth({
-    currentWidth: currentWorkspaceWidth,
-    minWidth: DEV_WORKSPACE_MIN_WIDTH_PX,
-    projectsSidebarOpen: true,
-    requestedWidth: requestedWorkspaceWidth,
-    terminalOpen: input.terminalOpen,
-    wrapper: workspaceSidebarWrapper,
-  });
-  if (nextWorkspaceWidth === null) {
-    return { canOpen: false, nextWorkspaceWidth: null };
+
+  const preferredLayout = tryLayout(preferredProjectSidebarWidth);
+  const fallbackLayout =
+    preferredLayout ??
+    (preferredProjectSidebarWidth === PROJECT_SIDEBAR_MIN_WIDTH_PX
+      ? null
+      : tryLayout(PROJECT_SIDEBAR_MIN_WIDTH_PX));
+
+  if (fallbackLayout === null) {
+    return { canOpen: false, nextProjectSidebarWidth: null, nextWorkspaceWidth: null };
   }
 
-  if (nextWorkspaceWidth < currentWorkspaceWidth - 0.5) {
-    workspaceSidebarWrapper.style.setProperty("--sidebar-width", `${nextWorkspaceWidth}px`);
+  if (fallbackLayout.workspaceWidth < currentWorkspaceWidth - 0.5) {
+    workspaceSidebarWrapper.style.setProperty(
+      "--sidebar-width",
+      `${fallbackLayout.workspaceWidth}px`,
+    );
     setLocalStorageItem(
       WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
-      nextWorkspaceWidth,
+      fallbackLayout.workspaceWidth,
       Schema.Finite,
     );
   }
 
-  return { canOpen: true, nextWorkspaceWidth };
+  return {
+    canOpen: true,
+    nextProjectSidebarWidth: fallbackLayout.projectSidebarWidth,
+    nextWorkspaceWidth: fallbackLayout.workspaceWidth,
+  };
 }
 
 export function useProjectSidebarOpen(

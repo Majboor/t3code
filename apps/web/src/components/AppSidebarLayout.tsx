@@ -33,7 +33,7 @@ import {
   rebalanceDevWorkspaceWidthBeforeProjectsOpen,
   useProjectSidebarOpen,
 } from "./AppSidebarLayout.logic";
-import { getLocalStorageItem } from "~/hooks/useLocalStorage";
+import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { Schema } from "effect";
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
@@ -81,12 +81,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           const projectSidebarWidth =
             getLocalStorageItem(PROJECT_SIDEBAR_WIDTH_STORAGE_KEY, Schema.Finite) ??
             PROJECT_SIDEBAR_DEFAULT_WIDTH_PX;
-          const layoutWidth =
-            document
-              .querySelector<HTMLElement>(
-                "[data-slot='sidebar-wrapper'][data-app-layout-mode='dev']",
-              )
-              ?.getBoundingClientRect().width ?? window.innerWidth;
+          const appSidebarWrapper = document.querySelector<HTMLElement>(
+            "[data-slot='sidebar-wrapper'][data-app-layout-mode='dev']",
+          );
+          const layoutWidth = appSidebarWrapper?.getBoundingClientRect().width ?? window.innerWidth;
           const result = rebalanceDevWorkspaceWidthBeforeProjectsOpen({
             layoutWidth,
             projectSidebarWidth,
@@ -95,6 +93,17 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           });
           if (!result.canOpen) {
             return previousOpen;
+          }
+          if (result.nextProjectSidebarWidth !== null) {
+            appSidebarWrapper?.style.setProperty(
+              "--sidebar-width",
+              `${result.nextProjectSidebarWidth}px`,
+            );
+            setLocalStorageItem(
+              PROJECT_SIDEBAR_WIDTH_STORAGE_KEY,
+              result.nextProjectSidebarWidth,
+              Schema.Finite,
+            );
           }
         }
         return requestedOpen;

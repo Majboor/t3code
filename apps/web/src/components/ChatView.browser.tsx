@@ -6339,26 +6339,29 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("opens projects on smaller dev viewports without collapsing chat interactivity", async () => {
+    window.localStorage.setItem("chat_thread_sidebar_width", "420");
     seedOpenThreadTerminalState();
 
     const mounted = await mountChatView({
       viewport: {
         ...WIDE_FOOTER_VIEWPORT,
         name: "dev-laptop-projects",
-        width: 1_280,
+        width: 1_200,
       },
       snapshot: createSnapshotForTargetUser({
         targetMessageId: "msg-user-dev-laptop-projects-target" as MessageId,
         targetText: "dev laptop projects thread",
       }),
+      clientSettings: {
+        desktopLayoutMode: "dev",
+      },
     });
 
     try {
-      await switchDesktopLayoutMode("dev");
       await vi.waitFor(
         () => {
-          expect(mounted.router.state.location.search.workspace).toBe("1");
           expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -6379,6 +6382,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
           if (chatWidth !== null) {
             expect(chatWidth).toBeGreaterThanOrEqual(22 * 16);
           }
+          const projectsWidth = queryDesktopColumnWidth("projects");
+          expect(projectsWidth).not.toBeNull();
+          if (projectsWidth !== null) {
+            expect(projectsWidth).toBeLessThan(420);
+          }
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -6396,6 +6404,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Projects sidebar controls should remain clickable on a narrower dev viewport.",
       );
     } finally {
+      window.localStorage.removeItem("chat_thread_sidebar_width");
       resetThreadTerminalState();
       await mounted.cleanup();
     }
