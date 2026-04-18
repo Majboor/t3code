@@ -280,7 +280,20 @@ function Sidebar({
     const observer = new ResizeObserver(() => {
       applyResizableWidthGuard();
     });
-    observer.observe(wrapper);
+    const observedElements = new Set<HTMLElement>([wrapper]);
+    const parentElement = wrapper.parentElement;
+    if (parentElement instanceof HTMLElement) {
+      observedElements.add(parentElement);
+    }
+    const parentWrapper = wrapper.parentElement?.closest<HTMLElement>(
+      "[data-slot='sidebar-wrapper']",
+    );
+    if (parentWrapper) {
+      observedElements.add(parentWrapper);
+    }
+    for (const element of observedElements) {
+      observer.observe(element);
+    }
 
     return () => {
       observer.disconnect();
@@ -664,6 +677,14 @@ function SidebarRail({
   );
 
   React.useEffect(() => {
+    const resizeState = resizeStateRef.current;
+    if (!resizeState || (resolvedResizable && open)) {
+      return;
+    }
+    stopResize(resizeState.pointerId);
+  }, [open, resolvedResizable, stopResize]);
+
+  React.useEffect(() => {
     if (!resolvedResizable?.storageKey || typeof window === "undefined") return;
     const rail = railRef.current;
     if (!rail) return;
@@ -680,16 +701,14 @@ function SidebarRail({
   React.useEffect(() => {
     return () => {
       const resizeState = resizeStateRef.current;
-      if (resizeState?.rafId != null) {
-        window.cancelAnimationFrame(resizeState.rafId);
+      if (resizeState) {
+        stopResize(resizeState.pointerId);
+        return;
       }
-      resizeState?.transitionTargets.forEach((element) => {
-        element.style.removeProperty("transition-duration");
-      });
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
     };
-  }, []);
+  }, [stopResize]);
 
   return (
     <button

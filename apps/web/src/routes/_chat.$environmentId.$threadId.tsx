@@ -25,6 +25,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
+import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { useProjectSidebarOpen } from "../components/AppSidebarLayout.logic";
 import { RightPanelSheet } from "../components/RightPanelSheet";
@@ -217,10 +218,13 @@ const ThreadRightPanelInlineSidebar = (props: {
 function ChatThreadRouteView() {
   const navigate = useNavigate();
   const desktopLayoutMode = useSettings((settings) => settings.desktopLayoutMode);
-  const [projectSidebarOpen] = useProjectSidebarOpen(desktopLayoutMode);
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
+  const [projectSidebarOpen] = useProjectSidebarOpen(desktopLayoutMode);
+  const terminalOpen = useTerminalStateStore(
+    (state) => selectThreadTerminalState(state.terminalStateByThreadKey, threadRef).terminalOpen,
+  );
   const search = Route.useSearch();
   const bootstrapComplete = useStore(
     (store) => selectEnvironmentState(store, threadRef?.environmentId ?? null).bootstrapComplete,
@@ -401,7 +405,9 @@ function ChatThreadRouteView() {
       onOpenPreferredPanel={preferredPanel === "workspace" ? openWorkspace : openDiff}
       renderDiffContent={shouldRenderDiffContent}
       renderWorkspaceContent={shouldRenderWorkspaceContent}
-      revalidateWidthOn={desktopLayoutMode === "dev" ? projectSidebarOpen : null}
+      revalidateWidthOn={
+        desktopLayoutMode === "dev" ? `${projectSidebarOpen}:${terminalOpen}` : null
+      }
     />
   );
 

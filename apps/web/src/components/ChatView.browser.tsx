@@ -1733,6 +1733,32 @@ async function clickDesktopProjectsToggle(): Promise<void> {
   await waitForLayout();
 }
 
+function isElementHitTestable(element: HTMLElement): boolean {
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return false;
+  }
+  const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  if (!target) {
+    return false;
+  }
+  return target === element || element.contains(target) || target.contains(element);
+}
+
+async function expectElementHitTestable(
+  query: () => HTMLElement | null,
+  errorMessage: string,
+): Promise<HTMLElement> {
+  const element = await waitForElement(query, errorMessage);
+  await vi.waitFor(
+    () => {
+      expect(isElementHitTestable(element), errorMessage).toBe(true);
+    },
+    { timeout: 8_000, interval: 16 },
+  );
+  return element;
+}
+
 async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
@@ -1803,6 +1829,35 @@ async function mountChatView(options: {
     },
     router,
   };
+}
+
+function seedOpenThreadTerminalState() {
+  useTerminalStateStore.setState({
+    terminalStateByThreadKey: {
+      [THREAD_KEY]: {
+        terminalOpen: true,
+        terminalHeight: 280,
+        terminalIds: ["default"],
+        runningTerminalIds: [],
+        activeTerminalId: "default",
+        terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
+        activeTerminalGroupId: "group-default",
+      },
+    },
+    terminalLaunchContextByThreadKey: {
+      [THREAD_KEY]: {
+        cwd: "/repo/project",
+        worktreePath: null,
+      },
+    },
+  });
+}
+
+function resetThreadTerminalState() {
+  useTerminalStateStore.setState({
+    terminalStateByThreadKey: {},
+    terminalLaunchContextByThreadKey: {},
+  });
 }
 
 describe("ChatView timeline estimator parity (full app)", () => {
@@ -6221,25 +6276,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
   it("rebalances the dev workspace rail when projects opens from a compact-chat layout", async () => {
     window.localStorage.setItem("chat_right_panel_sidebar_width", "820");
-    useTerminalStateStore.setState({
-      terminalStateByThreadKey: {
-        [THREAD_KEY]: {
-          terminalOpen: true,
-          terminalHeight: 280,
-          terminalIds: ["default"],
-          runningTerminalIds: [],
-          activeTerminalId: "default",
-          terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
-          activeTerminalGroupId: "group-default",
-        },
-      },
-      terminalLaunchContextByThreadKey: {
-        [THREAD_KEY]: {
-          cwd: "/repo/project",
-          worktreePath: null,
-        },
-      },
-    });
+    seedOpenThreadTerminalState();
 
     const mounted = await mountChatView({
       viewport: {
@@ -6296,10 +6333,180 @@ describe("ChatView timeline estimator parity (full app)", () => {
       }
     } finally {
       window.localStorage.removeItem("chat_right_panel_sidebar_width");
-      useTerminalStateStore.setState({
-        terminalStateByThreadKey: {},
-        terminalLaunchContextByThreadKey: {},
+      resetThreadTerminalState();
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the dev shell interactive after opening projects in the dev terminal layout", async () => {
+    seedOpenThreadTerminalState();
+
+    const mounted = await mountChatView({
+      viewport: {
+        ...WIDE_FOOTER_VIEWPORT,
+        name: "dev-drag-open-projects",
+        width: 1_420,
+      },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-dev-drag-projects-target" as MessageId,
+        targetText: "dev drag projects thread",
+      }),
+    });
+
+    try {
+      await switchDesktopLayoutMode("dev");
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const projectsToggle = await expectElementHitTestable(
+        queryProjectSidebarDesktopToggle,
+        "Projects toggle should remain hit-testable before opening the rail in the dev terminal layout.",
+      );
+      projectsToggle.click();
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await expectComposerActionsContained();
+      await expectElementHitTestable(
+        () =>
+          document.querySelector<HTMLElement>(
+            "[data-layout-column='projects'] [data-testid='command-palette-trigger']",
+          ),
+        "Projects sidebar controls should remain clickable after opening the rail in the dev terminal layout.",
+      );
+      const composerForm = await expectElementHitTestable(
+        () => document.querySelector<HTMLElement>("[data-chat-composer-form='true']"),
+        "Composer should remain clickable after opening projects from a compact dev layout.",
+      );
+      expect(document.body.style.cursor).toBe("");
+      expect(document.body.style.userSelect).toBe("");
+
+      const composerRect = composerForm.getBoundingClientRect();
+      const projectsRect = queryDesktopColumnElement("projects")?.getBoundingClientRect();
+      const workspaceRect = queryDesktopColumnElement("workspace")?.getBoundingClientRect();
+      expect(projectsRect).toBeDefined();
+      expect(workspaceRect).toBeDefined();
+      if (projectsRect && workspaceRect) {
+        expect(workspaceRect.right).toBeLessThanOrEqual(composerRect.left + 0.5);
+        expect(composerRect.right).toBeLessThanOrEqual(projectsRect.left + 0.5);
+      }
+
+      const reopenedToggle = await expectElementHitTestable(
+        queryProjectSidebarDesktopToggle,
+        "Projects toggle should still be clickable after opening the rail.",
+      );
+      reopenedToggle.click();
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      resetThreadTerminalState();
+      await mounted.cleanup();
+    }
+  });
+
+  it("revalidates the dev shell when the viewport changes after opening projects", async () => {
+    seedOpenThreadTerminalState();
+
+    const mounted = await mountChatView({
+      viewport: {
+        ...WIDE_FOOTER_VIEWPORT,
+        name: "dev-viewport-revalidate",
+        width: 1_440,
+      },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-dev-viewport-projects-target" as MessageId,
+        targetText: "dev viewport projects thread",
+      }),
+    });
+
+    try {
+      await switchDesktopLayoutMode("dev");
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.search.workspace).toBe("1");
+          expect(queryDesktopColumnLeft("workspace")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const projectsToggle = await expectElementHitTestable(
+        queryProjectSidebarDesktopToggle,
+        "Projects toggle should be hit-testable before resizing the viewport.",
+      );
+      projectsToggle.click();
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          expect(queryDesktopColumnLeft("projects")).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await mounted.setViewport({
+        ...WIDE_FOOTER_VIEWPORT,
+        name: "dev-viewport-revalidate-small",
+        width: 1_240,
+        height: 1_100,
       });
+
+      await vi.waitFor(
+        () => {
+          const projectsColumn = queryDesktopColumnElement("projects");
+          const workspaceColumn = queryDesktopColumnElement("workspace");
+          const chatColumn = queryDesktopColumnElement("chat");
+          expect(chatColumn).not.toBeNull();
+
+          if (projectsColumn === null) {
+            expect(queryProjectSidebarDesktopToggle()?.dataset.open).toBe("false");
+            return;
+          }
+
+          expect(workspaceColumn).not.toBeNull();
+          const chatWidth = chatColumn?.getBoundingClientRect().width ?? 0;
+          expect(chatWidth).toBeGreaterThanOrEqual(22 * 16);
+          if (workspaceColumn !== null && chatColumn !== null) {
+            const workspaceRect = workspaceColumn.getBoundingClientRect();
+            const chatRect = chatColumn.getBoundingClientRect();
+            const nextProjectsRect = projectsColumn.getBoundingClientRect();
+            expect(workspaceRect.right).toBeLessThanOrEqual(chatRect.left + 0.5);
+            expect(chatRect.right).toBeLessThanOrEqual(nextProjectsRect.left + 0.5);
+          }
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await expectComposerActionsContained();
+      await expectElementHitTestable(
+        queryProjectSidebarDesktopToggle,
+        "Projects toggle should remain clickable after a viewport resize.",
+      );
+      await expectElementHitTestable(
+        () => document.querySelector<HTMLElement>("[data-chat-composer-form='true']"),
+        "Composer should remain clickable after a viewport resize.",
+      );
+      expect(document.body.style.cursor).toBe("");
+      expect(document.body.style.userSelect).toBe("");
+    } finally {
+      resetThreadTerminalState();
       await mounted.cleanup();
     }
   });
