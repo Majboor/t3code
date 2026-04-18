@@ -32,7 +32,7 @@ import { Debouncer } from "@tanstack/react-pacer";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
-import { useGitStatus } from "~/lib/gitStatusState";
+import { refreshGitStatus, useGitStatus } from "~/lib/gitStatusState";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
@@ -110,7 +110,8 @@ import {
 } from "~/projectScripts";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings } from "../hooks/useSettings";
+import { type DesktopLayoutMode } from "@t3tools/contracts/settings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { resolveAppModelSelection } from "../modelSelection";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
@@ -118,6 +119,11 @@ import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
+import {
+  normalizeDesktopLayoutPanelPreference,
+  panelPreferenceFromRouteSearch,
+  useDesktopLayoutPanelPreferences,
+} from "./AppSidebarLayout.logic";
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
@@ -174,6 +180,10 @@ import {
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
+import {
+  clearPendingWorkspaceLiveDiffBaselineForThread,
+  setPendingWorkspaceLiveDiffBaselineForThread,
+} from "~/lib/workspaceLiveDiffBaselineState";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -318,6 +328,7 @@ type ChatViewProps =
       environmentId: EnvironmentId;
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
+      onWorkspacePanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       routeKind: "server";
       draftId?: never;
@@ -326,6 +337,7 @@ type ChatViewProps =
       environmentId: EnvironmentId;
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
+      onWorkspacePanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       routeKind: "draft";
       draftId: DraftId;
@@ -585,6 +597,7 @@ export default function ChatView(props: ChatViewProps) {
     threadId,
     routeKind,
     onDiffPanelOpen,
+    onWorkspacePanelOpen,
     reserveTitleBarControlInset = true,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
@@ -607,9 +620,11 @@ export default function ChatView(props: ChatViewProps) {
     routeKind === "server" ? store.threadLastVisitedAtById[routeThreadKey] : undefined,
   );
   const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
+  const desktopLayoutMode = settings.desktopLayoutMode;
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   const rawSearch = useSearch({
@@ -786,7 +801,9 @@ export default function ChatView(props: ChatViewProps) {
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
+  const workspaceOpen = rawSearch.workspace === "1";
   const diffOpen = rawSearch.diff === "1";
+  const shouldUseDiffSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadRef = useMemo(
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
@@ -1419,6 +1436,7 @@ export default function ChatView(props: ChatViewProps) {
   const gitStatusQuery = useGitStatus({ environmentId, cwd: gitCwd });
   const keybindings = useServerKeybindings();
   const availableEditors = useServerAvailableEditors();
+  const { panelPreferenceByMode, setPanelPreferenceForMode } = useDesktopLayoutPanelPreferences();
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
@@ -1426,12 +1444,63 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const capturePendingWorkspaceLiveDiffBaseline = useCallback(
+    async (threadId: ThreadId, cwd: string | null | undefined) => {
+      if (!cwd) {
+        return;
+      }
+
+      const baselineStatus =
+        gitStatusQuery.data ??
+        (await refreshGitStatus({
+          environmentId,
+          cwd,
+        }));
+      if (!baselineStatus) {
+        return;
+      }
+
+      setPendingWorkspaceLiveDiffBaselineForThread({
+        environmentId,
+        threadId,
+        cwd,
+        isRepo: baselineStatus.isRepo,
+        files: baselineStatus.isRepo ? baselineStatus.workingTree.files : [],
+      });
+    },
+    [environmentId, gitStatusQuery.data],
+  );
+  const clearPendingWorkspaceLiveDiffBaseline = useCallback(
+    (threadId: ThreadId) => {
+      clearPendingWorkspaceLiveDiffBaselineForThread({
+        environmentId,
+        threadId,
+      });
+    },
+    [environmentId],
+  );
   const activeTerminalLaunchContext =
     terminalLaunchContext?.threadId === activeThreadId
       ? terminalLaunchContext
       : (storeServerTerminalLaunchContext ?? null);
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  const activeDesktopPanelPreference = useMemo(
+    () =>
+      normalizeDesktopLayoutPanelPreference(panelPreferenceByMode[desktopLayoutMode], {
+        diffAvailable: isGitRepo,
+        workspaceAvailable: Boolean(activeWorkspaceRoot),
+      }),
+    [activeWorkspaceRoot, desktopLayoutMode, isGitRepo, panelPreferenceByMode],
+  );
+  const currentDesktopPanelPreference = useMemo(
+    () =>
+      panelPreferenceFromRouteSearch({
+        diffOpen,
+        workspaceOpen,
+      }),
+    [diffOpen, workspaceOpen],
+  );
   const terminalShortcutLabelOptions = useMemo(
     () => ({
       context: {
@@ -1470,10 +1539,83 @@ export default function ChatView(props: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "diff.toggle", nonTerminalShortcutLabelOptions),
     [keybindings, nonTerminalShortcutLabelOptions],
   );
+
+  useEffect(() => {
+    if (!isServerThread || shouldUseDiffSheet) {
+      return;
+    }
+    if (currentDesktopPanelPreference !== "none") {
+      return;
+    }
+    if (activeDesktopPanelPreference === "none") {
+      return;
+    }
+
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: {
+        environmentId,
+        threadId,
+      },
+      replace: true,
+      search: (previous) => {
+        const rest = stripDiffSearchParams(previous);
+        switch (activeDesktopPanelPreference) {
+          case "workspace":
+            return { ...rest, workspace: "1" };
+          case "diff":
+            return { ...rest, diff: "1" };
+          default:
+            return { ...rest, diff: undefined, workspace: undefined };
+        }
+      },
+    });
+  }, [
+    activeDesktopPanelPreference,
+    currentDesktopPanelPreference,
+    environmentId,
+    isServerThread,
+    navigate,
+    shouldUseDiffSheet,
+    threadId,
+  ]);
+
+  const onToggleWorkspace = useCallback(() => {
+    if (!isServerThread) {
+      return;
+    }
+    setPanelPreferenceForMode(desktopLayoutMode, workspaceOpen ? "none" : "workspace");
+    if (!workspaceOpen) {
+      onWorkspacePanelOpen?.();
+    }
+
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: {
+        environmentId,
+        threadId,
+      },
+      replace: true,
+      search: (previous) => {
+        const rest = stripDiffSearchParams(previous);
+        return workspaceOpen ? { ...rest, workspace: undefined } : { ...rest, workspace: "1" };
+      },
+    });
+  }, [
+    desktopLayoutMode,
+    environmentId,
+    isServerThread,
+    navigate,
+    onWorkspacePanelOpen,
+    setPanelPreferenceForMode,
+    threadId,
+    workspaceOpen,
+  ]);
   const onToggleDiff = useCallback(() => {
     if (!isServerThread) {
       return;
     }
+    setPanelPreferenceForMode(desktopLayoutMode, diffOpen ? "none" : "diff");
     if (!diffOpen) {
       onDiffPanelOpen?.();
     }
@@ -1489,7 +1631,16 @@ export default function ChatView(props: ChatViewProps) {
         return diffOpen ? { ...rest, diff: undefined } : { ...rest, diff: "1" };
       },
     });
-  }, [diffOpen, environmentId, isServerThread, navigate, onDiffPanelOpen, threadId]);
+  }, [
+    desktopLayoutMode,
+    diffOpen,
+    environmentId,
+    isServerThread,
+    navigate,
+    onDiffPanelOpen,
+    setPanelPreferenceForMode,
+    threadId,
+  ]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -2591,6 +2742,7 @@ export default function ChatView(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
+      await capturePendingWorkspaceLiveDiffBaseline(threadIdForSend, activeWorkspaceRoot);
       beginLocalDispatch({ preparingWorktree: false });
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
@@ -2611,6 +2763,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       turnStartSucceeded = true;
     })().catch(async (err: unknown) => {
+      clearPendingWorkspaceLiveDiffBaseline(threadIdForSend);
       if (
         !turnStartSucceeded &&
         promptRef.current.length === 0 &&
@@ -2873,6 +3026,7 @@ export default function ChatView(props: ChatViewProps) {
       sendInFlightRef.current = true;
       beginLocalDispatch({ preparingWorktree: false });
       setThreadError(threadIdForSend, null);
+      await capturePendingWorkspaceLiveDiffBaseline(threadIdForSend, activeWorkspaceRoot);
 
       // Scroll to the current end *before* adding the optimistic message.
       isAtEndRef.current = true;
@@ -2940,6 +3094,7 @@ export default function ChatView(props: ChatViewProps) {
         }
         sendInFlightRef.current = false;
       } catch (err) {
+        clearPendingWorkspaceLiveDiffBaseline(threadIdForSend);
         setOptimisticUserMessages((existing) =>
           existing.filter((message) => message.id !== messageIdForSend),
         );
@@ -2953,8 +3108,11 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
+      activeWorkspaceRoot,
       activeProposedPlan,
       beginLocalDispatch,
+      capturePendingWorkspaceLiveDiffBaseline,
+      clearPendingWorkspaceLiveDiffBaseline,
       isConnecting,
       isSendBusy,
       isServerThread,
@@ -3030,26 +3188,28 @@ export default function ChatView(props: ChatViewProps) {
         createdAt,
       })
       .then(() => {
-        return api.orchestration.dispatchCommand({
-          type: "thread.turn.start",
-          commandId: newCommandId(),
-          threadId: nextThreadId,
-          message: {
-            messageId: newMessageId(),
-            role: "user",
-            text: outgoingImplementationPrompt,
-            attachments: [],
-          },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: nextThreadTitle,
-          runtimeMode,
-          interactionMode: "default",
-          sourceProposedPlan: {
-            threadId: activeThread.id,
-            planId: activeProposedPlan.id,
-          },
-          createdAt,
-        });
+        return capturePendingWorkspaceLiveDiffBaseline(nextThreadId, activeWorkspaceRoot).then(() =>
+          api.orchestration.dispatchCommand({
+            type: "thread.turn.start",
+            commandId: newCommandId(),
+            threadId: nextThreadId,
+            message: {
+              messageId: newMessageId(),
+              role: "user",
+              text: outgoingImplementationPrompt,
+              attachments: [],
+            },
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: nextThreadTitle,
+            runtimeMode,
+            interactionMode: "default",
+            sourceProposedPlan: {
+              threadId: activeThread.id,
+              planId: activeProposedPlan.id,
+            },
+            createdAt,
+          }),
+        );
       })
       .then(() => {
         return waitForStartedServerThread(scopeThreadRef(activeThread.environmentId, nextThreadId));
@@ -3066,6 +3226,7 @@ export default function ChatView(props: ChatViewProps) {
         });
       })
       .catch(async (err: unknown) => {
+        clearPendingWorkspaceLiveDiffBaseline(nextThreadId);
         await api.orchestration
           .dispatchCommand({
             type: "thread.delete",
@@ -3084,9 +3245,12 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeProject,
     activeProposedPlan,
+    activeWorkspaceRoot,
     activeThreadBranch,
     activeThread,
     beginLocalDispatch,
+    capturePendingWorkspaceLiveDiffBaseline,
+    clearPendingWorkspaceLiveDiffBaseline,
     isConnecting,
     isSendBusy,
     isServerThread,
@@ -3165,6 +3329,7 @@ export default function ChatView(props: ChatViewProps) {
       if (!isServerThread) {
         return;
       }
+      setPanelPreferenceForMode(desktopLayoutMode, "diff");
       onDiffPanelOpen?.();
       void navigate({
         to: "/$environmentId/$threadId",
@@ -3180,7 +3345,15 @@ export default function ChatView(props: ChatViewProps) {
         },
       });
     },
-    [environmentId, isServerThread, navigate, onDiffPanelOpen, threadId],
+    [
+      desktopLayoutMode,
+      environmentId,
+      isServerThread,
+      navigate,
+      onDiffPanelOpen,
+      setPanelPreferenceForMode,
+      threadId,
+    ],
   );
   // Both the Map and the revert handler are read from refs at call-time so
   // the callback reference is fully stable and never busts context identity.
@@ -3195,6 +3368,61 @@ export default function ChatView(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  const onDesktopLayoutModeChange = useCallback(
+    (mode: DesktopLayoutMode) => {
+      if (mode === desktopLayoutMode) {
+        return;
+      }
+      updateSettings({ desktopLayoutMode: mode });
+      if (!isServerThread || shouldUseDiffSheet) {
+        return;
+      }
+
+      const targetPanelPreference = normalizeDesktopLayoutPanelPreference(
+        panelPreferenceByMode[mode],
+        {
+          diffAvailable: isGitRepo,
+          workspaceAvailable: Boolean(activeWorkspaceRoot),
+        },
+      );
+      if (currentDesktopPanelPreference === targetPanelPreference) {
+        return;
+      }
+
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId,
+          threadId,
+        },
+        replace: true,
+        search: (previous) => {
+          const rest = stripDiffSearchParams(previous);
+          switch (targetPanelPreference) {
+            case "workspace":
+              return { ...rest, workspace: "1" };
+            case "diff":
+              return { ...rest, diff: "1" };
+            default:
+              return { ...rest, diff: undefined, workspace: undefined };
+          }
+        },
+      });
+    },
+    [
+      activeWorkspaceRoot,
+      currentDesktopPanelPreference,
+      desktopLayoutMode,
+      environmentId,
+      isGitRepo,
+      isServerThread,
+      navigate,
+      panelPreferenceByMode,
+      shouldUseDiffSheet,
+      threadId,
+      updateSettings,
+    ],
+  );
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -3235,13 +3463,18 @@ export default function ChatView(props: ChatViewProps) {
           terminalToggleShortcutLabel={terminalToggleShortcutLabel}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
+          workspaceAvailable={Boolean(activeWorkspaceRoot)}
+          workspaceOpen={workspaceOpen}
           diffOpen={diffOpen}
+          desktopLayoutMode={desktopLayoutMode}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
+          onToggleWorkspace={onToggleWorkspace}
           onToggleDiff={onToggleDiff}
+          onDesktopLayoutModeChange={onDesktopLayoutModeChange}
         />
       </header>
 

@@ -71,4 +71,26 @@ describe("parseDiffRouteSearch", () => {
       diff: "1",
     });
   });
+
+  it("parses the workspace panel toggle independently of diff state", () => {
+    expect(
+      parseDiffRouteSearch({
+        workspace: true,
+      }),
+    ).toEqual({
+      workspace: "1",
+    });
+
+    expect(
+      parseDiffRouteSearch({
+        diff: "1",
+        workspace: 1,
+        diffTurnId: "turn-1",
+      }),
+    ).toEqual({
+      diff: "1",
+      diffTurnId: "turn-1",
+      workspace: "1",
+    });
+  });
 });

@@ -531,6 +531,7 @@ describe("wsApi", () => {
     const clientSettings = {
       confirmThreadArchive: true,
       confirmThreadDelete: false,
+      desktopLayoutMode: "dev" as const,
       diffWordWrap: true,
       sidebarProjectGroupingMode: "repository_path" as const,
       sidebarProjectGroupingOverrides: {
@@ -588,6 +589,7 @@ describe("wsApi", () => {
     const clientSettings = {
       confirmThreadArchive: true,
       confirmThreadDelete: false,
+      desktopLayoutMode: "dev" as const,
       diffWordWrap: true,
       sidebarProjectGroupingMode: "repository_path" as const,
       sidebarProjectGroupingOverrides: {

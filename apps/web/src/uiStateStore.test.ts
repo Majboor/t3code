@@ -2,13 +2,18 @@ import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  addProjectCategory,
+  assignProjectsToCategory,
   clearThreadUi,
+  deleteProjectCategory,
   markThreadUnread,
   reorderProjects,
+  setProjectCategoryExpanded,
   setProjectExpanded,
   setThreadChangedFilesExpanded,
   syncProjects,
   syncThreads,
+  updateProjectCategory,
   type UiState,
 } from "./uiStateStore";
 
@@ -16,6 +21,10 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
     projectExpandedById: {},
     projectOrder: [],
+    projectCategories: [],
+    projectCategoryAssignmentsByPhysicalKey: {},
+    projectCategoryExpandedById: {},
+    projectCategoryOrder: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     ...overrides,
@@ -297,6 +306,109 @@ describe("uiStateStore pure functions", () => {
 
     expect(next.projectExpandedById[project1]).toBe(false);
     expect(next.projectOrder).toEqual([project1]);
+  });
+
+  it("addProjectCategory appends a new category and keeps its order stable", () => {
+    const initialState = makeUiState({
+      projectCategories: [{ id: "cat-apps", name: "Apps", parentId: null }],
+      projectCategoryOrder: ["cat-apps"],
+    });
+
+    const next = addProjectCategory(initialState, {
+      id: "cat-mobile",
+      name: "Mobile",
+      parentId: "cat-apps",
+    });
+
+    expect(next.projectCategories).toEqual([
+      { id: "cat-apps", name: "Apps", parentId: null },
+      { id: "cat-mobile", name: "Mobile", parentId: "cat-apps" },
+    ]);
+    expect(next.projectCategoryOrder).toEqual(["cat-apps", "cat-mobile"]);
+  });
+
+  it("updateProjectCategory rejects cyclic parents by moving the category to the top level", () => {
+    const initialState = makeUiState({
+      projectCategories: [
+        { id: "cat-parent", name: "Parent", parentId: null },
+        { id: "cat-child", name: "Child", parentId: "cat-parent" },
+      ],
+      projectCategoryOrder: ["cat-parent", "cat-child"],
+    });
+
+    const next = updateProjectCategory(initialState, {
+      id: "cat-parent",
+      name: "Parent",
+      parentId: "cat-child",
+    });
+
+    expect(next.projectCategories).toEqual([
+      { id: "cat-parent", name: "Parent", parentId: null },
+      { id: "cat-child", name: "Child", parentId: "cat-parent" },
+    ]);
+  });
+
+  it("deleteProjectCategory reparents children and moves assignments to the parent", () => {
+    const initialState = makeUiState({
+      projectCategories: [
+        { id: "cat-apps", name: "Apps", parentId: null },
+        { id: "cat-mobile", name: "Mobile", parentId: "cat-apps" },
+        { id: "cat-ios", name: "iOS", parentId: "cat-mobile" },
+      ],
+      projectCategoryAssignmentsByPhysicalKey: {
+        "project-1": "cat-mobile",
+        "project-2": "cat-ios",
+      },
+      projectCategoryExpandedById: {
+        "cat-mobile": false,
+        "cat-ios": false,
+      },
+      projectCategoryOrder: ["cat-apps", "cat-mobile", "cat-ios"],
+    });
+
+    const next = deleteProjectCategory(initialState, "cat-mobile");
+
+    expect(next.projectCategories).toEqual([
+      { id: "cat-apps", name: "Apps", parentId: null },
+      { id: "cat-ios", name: "iOS", parentId: "cat-apps" },
+    ]);
+    expect(next.projectCategoryAssignmentsByPhysicalKey).toEqual({
+      "project-1": "cat-apps",
+      "project-2": "cat-ios",
+    });
+    expect(next.projectCategoryExpandedById).toEqual({
+      "cat-ios": false,
+    });
+    expect(next.projectCategoryOrder).toEqual(["cat-apps", "cat-ios"]);
+  });
+
+  it("assignProjectsToCategory sets and clears physical project assignments", () => {
+    const initialState = makeUiState({
+      projectCategories: [{ id: "cat-apps", name: "Apps", parentId: null }],
+    });
+
+    const assigned = assignProjectsToCategory(initialState, ["project-1", "project-2"], "cat-apps");
+    expect(assigned.projectCategoryAssignmentsByPhysicalKey).toEqual({
+      "project-1": "cat-apps",
+      "project-2": "cat-apps",
+    });
+
+    const cleared = assignProjectsToCategory(assigned, ["project-1"], null);
+    expect(cleared.projectCategoryAssignmentsByPhysicalKey).toEqual({
+      "project-2": "cat-apps",
+    });
+  });
+
+  it("setProjectCategoryExpanded stores only collapsed overrides", () => {
+    const initialState = makeUiState();
+
+    const collapsed = setProjectCategoryExpanded(initialState, "cat-apps", false);
+    expect(collapsed.projectCategoryExpandedById).toEqual({
+      "cat-apps": false,
+    });
+
+    const expanded = setProjectCategoryExpanded(collapsed, "cat-apps", true);
+    expect(expanded.projectCategoryExpandedById).toEqual({});
   });
 
   it("clearThreadUi removes visit state for deleted threads", () => {

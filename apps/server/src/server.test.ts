@@ -862,6 +862,55 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("auto-authenticates loopback web sessions on first load", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          mode: "web",
+          host: "127.0.0.1",
+        },
+      });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      const sessionResponse = yield* Effect.promise(() => fetch(sessionUrl));
+      const sessionBody = (yield* Effect.promise(() => sessionResponse.json())) as {
+        readonly authenticated: boolean;
+        readonly role?: string;
+        readonly sessionMethod?: string;
+        readonly auth: {
+          readonly policy: string;
+          readonly bootstrapMethods: ReadonlyArray<string>;
+        };
+      };
+      const cookie = sessionResponse.headers.get("set-cookie");
+
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionBody.authenticated, true);
+      assert.equal(sessionBody.role, "owner");
+      assert.equal(sessionBody.sessionMethod, "browser-session-cookie");
+      assert.equal(sessionBody.auth.policy, "loopback-browser");
+      assert.deepEqual(sessionBody.auth.bootstrapMethods, ["one-time-token"]);
+      assert.isDefined(cookie);
+
+      const pairingUrl = yield* getHttpServerUrl("/api/auth/pairing-token");
+      const pairingResponse = yield* Effect.promise(() =>
+        fetch(pairingUrl, {
+          method: "POST",
+          headers: {
+            cookie: cookie?.split(";")[0] ?? "",
+          },
+        }),
+      );
+      const pairingBody = (yield* Effect.promise(() => pairingResponse.json())) as {
+        readonly credential: string;
+      };
+
+      assert.equal(pairingResponse.status, 200);
+      assert.equal(typeof pairingBody.credential, "string");
+      assert.isTrue(pairingBody.credential.length > 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("bootstraps a browser session and authenticates the session endpoint via cookie", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

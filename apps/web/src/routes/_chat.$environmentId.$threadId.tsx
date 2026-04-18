@@ -10,6 +10,11 @@ import {
   DiffPanelShell,
   type DiffPanelMode,
 } from "../components/DiffPanelShell";
+import {
+  WorkspacePanelLoadingState,
+  WorkspacePanelShell,
+  type WorkspacePanelMode,
+} from "../components/WorkspacePanelShell";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import {
   type DiffRouteSearch,
@@ -22,13 +27,16 @@ import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../st
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
+import { useSettings } from "../hooks/useSettings";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
-const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
-const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
-const DIFF_INLINE_SIDEBAR_MIN_WIDTH = 26 * 16;
+const WorkspacePanel = lazy(() => import("../components/WorkspacePanel"));
+const RIGHT_PANEL_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_sidebar_width";
+const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(30rem,52vw,72rem)";
+const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 28 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
+type RightPanelKind = "diff" | "workspace";
 
 const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
   return (
@@ -48,22 +56,57 @@ const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
   );
 };
 
-const DiffPanelInlineSidebar = (props: {
-  diffOpen: boolean;
-  onCloseDiff: () => void;
-  onOpenDiff: () => void;
+const WorkspaceLoadingFallback = (props: { mode: WorkspacePanelMode }) => {
+  return (
+    <WorkspacePanelShell
+      mode={props.mode}
+      header={
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-foreground">Workspace</div>
+          <div className="text-[11px] text-muted-foreground/70">Loading editor…</div>
+        </div>
+      }
+    >
+      <WorkspacePanelLoadingState label="Loading workspace editor..." />
+    </WorkspacePanelShell>
+  );
+};
+
+const LazyWorkspacePanel = (props: { mode: WorkspacePanelMode }) => {
+  return (
+    <Suspense fallback={<WorkspaceLoadingFallback mode={props.mode} />}>
+      <WorkspacePanel mode={props.mode} />
+    </Suspense>
+  );
+};
+
+const ThreadRightPanelInlineSidebar = (props: {
+  open: boolean;
+  side: "left" | "right";
+  preferredPanel: RightPanelKind;
+  onClose: () => void;
+  onOpenPreferredPanel: () => void;
   renderDiffContent: boolean;
+  renderWorkspaceContent: boolean;
 }) => {
-  const { diffOpen, onCloseDiff, onOpenDiff, renderDiffContent } = props;
+  const {
+    open,
+    onClose,
+    onOpenPreferredPanel,
+    preferredPanel,
+    renderDiffContent,
+    renderWorkspaceContent,
+    side,
+  } = props;
   const onOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
-        onOpenDiff();
+        onOpenPreferredPanel();
         return;
       }
-      onCloseDiff();
+      onClose();
     },
-    [onCloseDiff, onOpenDiff],
+    [onClose, onOpenPreferredPanel],
   );
   const shouldAcceptInlineSidebarWidth = useCallback(
     ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
@@ -114,22 +157,26 @@ const DiffPanelInlineSidebar = (props: {
   return (
     <SidebarProvider
       defaultOpen={false}
-      open={diffOpen}
+      open={open}
       onOpenChange={onOpenChange}
       className="w-auto min-h-0 flex-none bg-transparent"
-      style={{ "--sidebar-width": DIFF_INLINE_DEFAULT_WIDTH } as React.CSSProperties}
+      data-layout-column="workspace"
+      style={{ "--sidebar-width": RIGHT_PANEL_INLINE_DEFAULT_WIDTH } as React.CSSProperties}
     >
       <Sidebar
-        side="right"
+        side={side}
         collapsible="offcanvas"
-        className="border-l border-border bg-card text-foreground"
+        className={`${side === "left" ? "border-r" : "border-l"} border-border bg-card text-foreground`}
         resizable={{
-          minWidth: DIFF_INLINE_SIDEBAR_MIN_WIDTH,
+          minWidth: RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH,
           shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
-          storageKey: DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
+          storageKey: RIGHT_PANEL_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        {renderDiffContent ? <LazyDiffPanel mode="sidebar" /> : null}
+        {renderDiffContent && preferredPanel === "diff" ? <LazyDiffPanel mode="sidebar" /> : null}
+        {renderWorkspaceContent && preferredPanel === "workspace" ? (
+          <LazyWorkspacePanel mode="sidebar" />
+        ) : null}
         <SidebarRail />
       </Sidebar>
     </SidebarProvider>
@@ -138,6 +185,7 @@ const DiffPanelInlineSidebar = (props: {
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
+  const desktopLayoutMode = useSettings((settings) => settings.desktopLayoutMode);
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
@@ -165,28 +213,74 @@ function ChatThreadRouteView() {
   const routeThreadExists = threadExists || draftThreadExists;
   const serverThreadStarted = threadHasStarted(serverThread);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
+  const workspaceOpen = search.workspace === "1";
   const diffOpen = search.diff === "1";
   const shouldUseDiffSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const currentThreadKey = threadRef ? `${threadRef.environmentId}:${threadRef.threadId}` : null;
   const [diffPanelMountState, setDiffPanelMountState] = useState(() => ({
     threadKey: currentThreadKey,
     hasOpenedDiff: diffOpen,
+    hasOpenedWorkspace: workspaceOpen,
+    lastOpenedPanel: (workspaceOpen ? "workspace" : "diff") as RightPanelKind,
   }));
   const hasOpenedDiff =
     diffPanelMountState.threadKey === currentThreadKey
       ? diffPanelMountState.hasOpenedDiff
       : diffOpen;
+  const hasOpenedWorkspace =
+    diffPanelMountState.threadKey === currentThreadKey
+      ? diffPanelMountState.hasOpenedWorkspace
+      : workspaceOpen;
+  const preferredPanel =
+    diffPanelMountState.threadKey === currentThreadKey
+      ? diffPanelMountState.lastOpenedPanel
+      : workspaceOpen
+        ? "workspace"
+        : "diff";
+  const markRightPanelOpened = useCallback(
+    (panel: RightPanelKind) => {
+      setDiffPanelMountState((previous) => {
+        if (
+          previous.threadKey === currentThreadKey &&
+          previous.lastOpenedPanel === panel &&
+          ((panel === "diff" && previous.hasOpenedDiff) ||
+            (panel === "workspace" && previous.hasOpenedWorkspace))
+        ) {
+          return previous;
+        }
+        return {
+          threadKey: currentThreadKey,
+          hasOpenedDiff:
+            previous.threadKey === currentThreadKey
+              ? previous.hasOpenedDiff || panel === "diff"
+              : panel === "diff",
+          hasOpenedWorkspace:
+            previous.threadKey === currentThreadKey
+              ? previous.hasOpenedWorkspace || panel === "workspace"
+              : panel === "workspace",
+          lastOpenedPanel: panel,
+        };
+      });
+    },
+    [currentThreadKey],
+  );
   const markDiffOpened = useCallback(() => {
-    setDiffPanelMountState((previous) => {
-      if (previous.threadKey === currentThreadKey && previous.hasOpenedDiff) {
-        return previous;
-      }
-      return {
-        threadKey: currentThreadKey,
-        hasOpenedDiff: true,
-      };
-    });
-  }, [currentThreadKey]);
+    markRightPanelOpened("diff");
+  }, [markRightPanelOpened]);
+  const markWorkspaceOpened = useCallback(() => {
+    markRightPanelOpened("workspace");
+  }, [markRightPanelOpened]);
+
+  useEffect(() => {
+    if (workspaceOpen) {
+      markWorkspaceOpened();
+      return;
+    }
+    if (diffOpen) {
+      markDiffOpened();
+    }
+  }, [diffOpen, markDiffOpened, markWorkspaceOpened, workspaceOpen]);
+
   const closeDiff = useCallback(() => {
     if (!threadRef) {
       return;
@@ -194,7 +288,7 @@ function ChatThreadRouteView() {
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
-      search: { diff: undefined },
+      search: stripDiffSearchParams,
     });
   }, [navigate, threadRef]);
   const openDiff = useCallback(() => {
@@ -211,6 +305,20 @@ function ChatThreadRouteView() {
       },
     });
   }, [markDiffOpened, navigate, threadRef]);
+  const openWorkspace = useCallback(() => {
+    if (!threadRef) {
+      return;
+    }
+    markWorkspaceOpened();
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(threadRef),
+      search: (previous) => {
+        const rest = stripDiffSearchParams(previous);
+        return { ...rest, workspace: "1" };
+      },
+    });
+  }, [markWorkspaceOpened, navigate, threadRef]);
 
   useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
@@ -234,41 +342,66 @@ function ChatThreadRouteView() {
   }
 
   const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
+  const shouldRenderWorkspaceContent = workspaceOpen || hasOpenedWorkspace;
+  const rightPanelOpen = diffOpen || workspaceOpen;
+  const inlinePanelSide = desktopLayoutMode === "dev" ? "left" : "right";
+  const chatColumn = (
+    <SidebarInset
+      className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground"
+      data-layout-column="chat"
+    >
+      <ChatView
+        environmentId={threadRef.environmentId}
+        threadId={threadRef.threadId}
+        onDiffPanelOpen={markDiffOpened}
+        onWorkspacePanelOpen={markWorkspaceOpened}
+        reserveTitleBarControlInset={!rightPanelOpen}
+        routeKind="server"
+      />
+    </SidebarInset>
+  );
+  const inlineWorkspaceColumn = (
+    <ThreadRightPanelInlineSidebar
+      open={rightPanelOpen}
+      side={inlinePanelSide}
+      preferredPanel={preferredPanel}
+      onClose={closeDiff}
+      onOpenPreferredPanel={preferredPanel === "workspace" ? openWorkspace : openDiff}
+      renderDiffContent={shouldRenderDiffContent}
+      renderWorkspaceContent={shouldRenderWorkspaceContent}
+    />
+  );
 
   if (!shouldUseDiffSheet) {
     return (
       <>
-        <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView
-            environmentId={threadRef.environmentId}
-            threadId={threadRef.threadId}
-            onDiffPanelOpen={markDiffOpened}
-            reserveTitleBarControlInset={!diffOpen}
-            routeKind="server"
-          />
-        </SidebarInset>
-        <DiffPanelInlineSidebar
-          diffOpen={diffOpen}
-          onCloseDiff={closeDiff}
-          onOpenDiff={openDiff}
-          renderDiffContent={shouldRenderDiffContent}
-        />
+        {desktopLayoutMode === "dev" ? inlineWorkspaceColumn : chatColumn}
+        {desktopLayoutMode === "dev" ? chatColumn : inlineWorkspaceColumn}
       </>
     );
   }
 
   return (
     <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <SidebarInset
+        className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground"
+        data-layout-column="chat"
+      >
         <ChatView
           environmentId={threadRef.environmentId}
           threadId={threadRef.threadId}
           onDiffPanelOpen={markDiffOpened}
+          onWorkspacePanelOpen={markWorkspaceOpened}
           routeKind="server"
         />
       </SidebarInset>
-      <RightPanelSheet open={diffOpen} onClose={closeDiff}>
-        {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
+      <RightPanelSheet open={rightPanelOpen} onClose={closeDiff}>
+        {shouldRenderDiffContent && preferredPanel === "diff" ? (
+          <LazyDiffPanel mode="sheet" />
+        ) : null}
+        {shouldRenderWorkspaceContent && preferredPanel === "workspace" ? (
+          <LazyWorkspacePanel mode="sheet" />
+        ) : null}
       </RightPanelSheet>
     </>
   );
@@ -277,7 +410,7 @@ function ChatThreadRouteView() {
 export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
   validateSearch: (search) => parseDiffRouteSearch(search),
   search: {
-    middlewares: [retainSearchParams<DiffRouteSearch>(["diff"])],
+    middlewares: [retainSearchParams<DiffRouteSearch>(["diff", "workspace"])],
   },
   component: ChatThreadRouteView,
 });

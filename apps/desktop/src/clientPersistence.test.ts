@@ -51,6 +51,7 @@ function makeSecretStorage(available: boolean): DesktopSecretStorage {
 const clientSettings: ClientSettings = {
   confirmThreadArchive: true,
   confirmThreadDelete: false,
+  desktopLayoutMode: "dev",
   diffWordWrap: true,
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {

@@ -13,6 +13,8 @@ import {
   GitActionProgressEvent,
   GitCheckoutInput,
   GitCheckoutResult,
+  GitGetWorkingTreeDiffInput,
+  GitGetWorkingTreeDiffResult,
   GitCommandError,
   GitCreateBranchInput,
   GitCreateBranchResult,
@@ -49,6 +51,15 @@ import {
   OrchestrationRpcSchemas,
 } from "./orchestration.ts";
 import {
+  ProjectCreateEntryError,
+  ProjectCreateEntryInput,
+  ProjectCreateEntryResult,
+  ProjectListDirectoryError,
+  ProjectListDirectoryInput,
+  ProjectListDirectoryResult,
+  ProjectReadFileError,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
   ProjectSearchEntriesError,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
@@ -82,8 +93,11 @@ export const WS_METHODS = {
   projectsList: "projects.list",
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
+  projectsListDirectory: "projects.listDirectory",
+  projectsReadFile: "projects.readFile",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  projectsCreateEntry: "projects.createEntry",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -94,6 +108,7 @@ export const WS_METHODS = {
   // Git methods
   gitPull: "git.pull",
   gitRefreshStatus: "git.refreshStatus",
+  gitGetWorkingTreeDiff: "git.getWorkingTreeDiff",
   gitRunStackedAction: "git.runStackedAction",
   gitListBranches: "git.listBranches",
   gitCreateWorktree: "git.createWorktree",
@@ -162,10 +177,28 @@ export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntr
   error: ProjectSearchEntriesError,
 });
 
+export const WsProjectsListDirectoryRpc = Rpc.make(WS_METHODS.projectsListDirectory, {
+  payload: ProjectListDirectoryInput,
+  success: ProjectListDirectoryResult,
+  error: ProjectListDirectoryError,
+});
+
+export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
+  payload: ProjectReadFileInput,
+  success: ProjectReadFileResult,
+  error: ProjectReadFileError,
+});
+
 export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: ProjectWriteFileError,
+});
+
+export const WsProjectsCreateEntryRpc = Rpc.make(WS_METHODS.projectsCreateEntry, {
+  payload: ProjectCreateEntryInput,
+  success: ProjectCreateEntryResult,
+  error: ProjectCreateEntryError,
 });
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
@@ -196,6 +229,12 @@ export const WsGitRefreshStatusRpc = Rpc.make(WS_METHODS.gitRefreshStatus, {
   payload: GitStatusInput,
   success: GitStatusResult,
   error: GitManagerServiceError,
+});
+
+export const WsGitGetWorkingTreeDiffRpc = Rpc.make(WS_METHODS.gitGetWorkingTreeDiff, {
+  payload: GitGetWorkingTreeDiffInput,
+  success: GitGetWorkingTreeDiffResult,
+  error: GitCommandError,
 });
 
 export const WsGitRunStackedActionRpc = Rpc.make(WS_METHODS.gitRunStackedAction, {
@@ -362,12 +401,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsProjectsSearchEntriesRpc,
+  WsProjectsListDirectoryRpc,
+  WsProjectsReadFileRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsCreateEntryRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsSubscribeGitStatusRpc,
   WsGitPullRpc,
   WsGitRefreshStatusRpc,
+  WsGitGetWorkingTreeDiffRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,

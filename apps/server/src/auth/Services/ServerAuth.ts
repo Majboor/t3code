@@ -36,6 +36,13 @@ export interface ServerAuthShape {
   readonly getSessionState: (
     request: HttpServerRequest.HttpServerRequest,
   ) => Effect.Effect<AuthSessionState, never>;
+  readonly issueLoopbackOwnerSession: (requestMetadata: AuthClientMetadata) => Effect.Effect<
+    {
+      readonly response: AuthBootstrapResult;
+      readonly sessionToken: string;
+    },
+    AuthError
+  >;
   readonly exchangeBootstrapCredential: (
     credential: string,
     requestMetadata: AuthClientMetadata,

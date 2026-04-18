@@ -13,6 +13,8 @@ import type {
   GitCheckoutResult,
   GitCreateBranchInput,
   GitCreateBranchResult,
+  GitGetWorkingTreeDiffInput,
+  GitGetWorkingTreeDiffResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitInitInput,
@@ -152,6 +154,13 @@ export interface GitCoreShape {
    * Read Git status for a repository.
    */
   readonly status: (input: GitStatusInput) => Effect.Effect<GitStatusResult, GitCommandError>;
+
+  /**
+   * Read a unified diff for one working tree path relative to cwd.
+   */
+  readonly getWorkingTreeDiff: (
+    input: GitGetWorkingTreeDiffInput,
+  ) => Effect.Effect<GitGetWorkingTreeDiffResult, GitCommandError>;
 
   /**
    * Read detailed working tree / branch status for a repository.

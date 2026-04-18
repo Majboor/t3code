@@ -184,7 +184,7 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none";
   resizable?: boolean | SidebarResizableOptions;
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
+  const { isMobile, open, setOpen, state, openMobile, setOpenMobile } = useSidebar();
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(() => {
     if (isMobile || collapsible === "none" || !resizable) {
       return null;
@@ -203,6 +203,87 @@ function Sidebar({
     () => ({ side, resizable: resolvedResizable }),
     [resolvedResizable, side],
   );
+  const desktopSidebarRef = React.useRef<HTMLDivElement | null>(null);
+
+  const applyResizableWidthGuard = React.useCallback(
+    (requestedWidth?: number) => {
+      if (isMobile || state === "collapsed" || !resolvedResizable) {
+        return;
+      }
+
+      const sidebarRoot = desktopSidebarRef.current;
+      const wrapper = sidebarRoot?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+      const sidebarContainer = sidebarRoot?.querySelector<HTMLElement>(
+        "[data-slot='sidebar-container']",
+      );
+      const rail = sidebarRoot?.querySelector<HTMLButtonElement>("[data-slot='sidebar-rail']");
+      if (!sidebarRoot || !wrapper || !sidebarContainer || !rail) {
+        return;
+      }
+
+      const measuredWidth = sidebarContainer.getBoundingClientRect().width;
+      const currentWidth = Number.isFinite(measuredWidth) && measuredWidth > 0 ? measuredWidth : 0;
+      const storedWidth =
+        resolvedResizable.storageKey !== null
+          ? getLocalStorageItem(resolvedResizable.storageKey, Schema.Finite)
+          : null;
+      const nextRequestedWidth =
+        requestedWidth ??
+        (currentWidth > 0 ? currentWidth : (storedWidth ?? resolvedResizable.minWidth));
+      const acceptedWidth = resolveAcceptedSidebarWidth({
+        currentWidth: currentWidth > 0 ? currentWidth : nextRequestedWidth,
+        requestedWidth: nextRequestedWidth,
+        rail,
+        resolvedResizable,
+        side,
+        sidebarRoot,
+        wrapper,
+      });
+
+      if (acceptedWidth === null) {
+        if (collapsible === "offcanvas" && open) {
+          void setOpen(false);
+        }
+        return;
+      }
+
+      wrapper.style.setProperty("--sidebar-width", `${acceptedWidth}px`);
+      resolvedResizable.onResize?.(acceptedWidth);
+      if (resolvedResizable.storageKey) {
+        setLocalStorageItem(resolvedResizable.storageKey, acceptedWidth, Schema.Finite);
+      }
+    },
+    [collapsible, isMobile, open, resolvedResizable, setOpen, side, state],
+  );
+
+  React.useLayoutEffect(() => {
+    if (!resolvedResizable || isMobile || state === "collapsed") {
+      return;
+    }
+
+    applyResizableWidthGuard();
+  }, [applyResizableWidthGuard, isMobile, resolvedResizable, state]);
+
+  React.useEffect(() => {
+    if (!resolvedResizable || isMobile || state === "collapsed") {
+      return;
+    }
+
+    const sidebarRoot = desktopSidebarRef.current;
+    const wrapper = sidebarRoot?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    if (!wrapper) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      applyResizableWidthGuard();
+    });
+    observer.observe(wrapper);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [applyResizableWidthGuard, isMobile, resolvedResizable, state]);
 
   if (collapsible === "none") {
     return (
@@ -261,6 +342,7 @@ function Sidebar({
         data-slot="sidebar"
         data-state={state}
         data-variant={variant}
+        ref={desktopSidebarRef}
       >
         {/* This is what handles the sidebar gap on desktop */}
         <div
@@ -326,6 +408,49 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 
 function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptions): number {
   return Math.max(options.minWidth, Math.min(width, options.maxWidth));
+}
+
+function resolveAcceptedSidebarWidth(input: {
+  currentWidth: number;
+  requestedWidth: number;
+  rail: HTMLButtonElement;
+  resolvedResizable: SidebarResolvedResizableOptions;
+  side: "left" | "right";
+  sidebarRoot: HTMLElement;
+  wrapper: HTMLElement;
+}): number | null {
+  const requestedWidth = clampSidebarWidth(input.requestedWidth, input.resolvedResizable);
+  const acceptsWidth = (nextWidth: number) =>
+    input.resolvedResizable.shouldAcceptWidth?.({
+      currentWidth: input.currentWidth,
+      nextWidth,
+      rail: input.rail,
+      side: input.side,
+      sidebarRoot: input.sidebarRoot,
+      wrapper: input.wrapper,
+    }) ?? true;
+
+  if (acceptsWidth(requestedWidth)) {
+    return requestedWidth;
+  }
+
+  const minimumWidth = clampSidebarWidth(input.resolvedResizable.minWidth, input.resolvedResizable);
+  if (!acceptsWidth(minimumWidth)) {
+    return null;
+  }
+
+  let low = minimumWidth;
+  let high = requestedWidth;
+  while (high - low > 1) {
+    const candidate = Math.floor((high + low) / 2);
+    if (acceptsWidth(candidate)) {
+      low = candidate;
+    } else {
+      high = candidate;
+    }
+  }
+
+  return low;
 }
 
 function SidebarRail({

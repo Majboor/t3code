@@ -5,6 +5,8 @@ import type {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitGetWorkingTreeDiffInput,
+  GitGetWorkingTreeDiffResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitInitInput,
@@ -20,6 +22,12 @@ import type {
 } from "./git.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type {
+  ProjectCreateEntryInput,
+  ProjectCreateEntryResult,
+  ProjectListDirectoryInput,
+  ProjectListDirectoryResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -242,8 +250,11 @@ export interface EnvironmentApi {
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
   projects: {
+    listDirectory: (input: ProjectListDirectoryInput) => Promise<ProjectListDirectoryResult>;
+    readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
+    createEntry: (input: ProjectCreateEntryInput) => Promise<ProjectCreateEntryResult>;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
@@ -261,6 +272,7 @@ export interface EnvironmentApi {
     ) => Promise<GitPreparePullRequestThreadResult>;
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     refreshStatus: (input: GitStatusInput) => Promise<GitStatusResult>;
+    getWorkingTreeDiff: (input: GitGetWorkingTreeDiffInput) => Promise<GitGetWorkingTreeDiffResult>;
     onStatus: (
       input: GitStatusInput,
       callback: (status: GitStatusResult) => void,
