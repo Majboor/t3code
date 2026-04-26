@@ -30,6 +30,7 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { Debouncer } from "@tanstack/react-pacer";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { refreshGitStatus, useGitStatus } from "~/lib/gitStatusState";
@@ -149,6 +150,10 @@ import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./Branch
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import {
+  resolveDesktopLayoutModeDefinition,
+  resolveDesktopLayoutModeDefinitions,
+} from "../desktopLayoutModes";
+import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
@@ -184,6 +189,7 @@ import {
   clearPendingWorkspaceLiveDiffBaselineForThread,
   setPendingWorkspaceLiveDiffBaselineForThread,
 } from "~/lib/workspaceLiveDiffBaselineState";
+import { hashWorkspaceChangeText } from "~/lib/workspaceLiveDiffs";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -332,6 +338,8 @@ type ChatViewProps =
       reserveTitleBarControlInset?: boolean;
       routeKind: "server";
       draftId?: never;
+      terminalPortalHost?: HTMLElement | null;
+      compactComposerWhenIdle?: boolean;
     }
   | {
       environmentId: EnvironmentId;
@@ -341,6 +349,8 @@ type ChatViewProps =
       reserveTitleBarControlInset?: boolean;
       routeKind: "draft";
       draftId: DraftId;
+      terminalPortalHost?: HTMLElement | null;
+      compactComposerWhenIdle?: boolean;
     };
 
 interface TerminalLaunchContext {
@@ -599,6 +609,8 @@ export default function ChatView(props: ChatViewProps) {
     onDiffPanelOpen,
     onWorkspacePanelOpen,
     reserveTitleBarControlInset = true,
+    terminalPortalHost = null,
+    compactComposerWhenIdle = false,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const routeThreadRef = useMemo(
@@ -625,6 +637,14 @@ export default function ChatView(props: ChatViewProps) {
     (store) => store.setStickyModelSelection,
   );
   const desktopLayoutMode = settings.desktopLayoutMode;
+  const desktopLayoutDefinition = useMemo(
+    () => resolveDesktopLayoutModeDefinition(settings),
+    [settings],
+  );
+  const desktopLayoutModeDefinitions = useMemo(
+    () => resolveDesktopLayoutModeDefinitions(settings),
+    [settings],
+  );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   const rawSearch = useSearch({
@@ -1460,12 +1480,27 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      const baselineFiles = baselineStatus.isRepo ? baselineStatus.workingTree.files : [];
+      const api = readEnvironmentApi(environmentId);
+      const filesWithDiffSignatures =
+        api && baselineFiles.length > 0
+          ? await Promise.all(
+              baselineFiles.map(async (file) => {
+                const diffSignature = await api.git
+                  .getWorkingTreeDiff({ cwd, relativePath: file.path })
+                  .then((result) => hashWorkspaceChangeText(result.diff))
+                  .catch(() => undefined);
+                return diffSignature ? { ...file, diffSignature } : file;
+              }),
+            )
+          : baselineFiles;
+
       setPendingWorkspaceLiveDiffBaselineForThread({
         environmentId,
         threadId,
         cwd,
         isRepo: baselineStatus.isRepo,
-        files: baselineStatus.isRepo ? baselineStatus.workingTree.files : [],
+        files: filesWithDiffSignatures,
       });
     },
     [environmentId, gitStatusQuery.data],
@@ -1483,15 +1518,25 @@ export default function ChatView(props: ChatViewProps) {
     terminalLaunchContext?.threadId === activeThreadId
       ? terminalLaunchContext
       : (storeServerTerminalLaunchContext ?? null);
+  const autoOpenedPanelToastKeyRef = useRef<string | null>(null);
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
   const activeDesktopPanelPreference = useMemo(
     () =>
-      normalizeDesktopLayoutPanelPreference(panelPreferenceByMode[desktopLayoutMode], {
-        diffAvailable: isGitRepo,
-        workspaceAvailable: Boolean(activeWorkspaceRoot),
-      }),
-    [activeWorkspaceRoot, desktopLayoutMode, isGitRepo, panelPreferenceByMode],
+      normalizeDesktopLayoutPanelPreference(
+        panelPreferenceByMode[desktopLayoutMode] ?? desktopLayoutDefinition.autoOpenPanel,
+        {
+          diffAvailable: isGitRepo,
+          workspaceAvailable: Boolean(activeWorkspaceRoot),
+        },
+      ),
+    [
+      activeWorkspaceRoot,
+      desktopLayoutDefinition.autoOpenPanel,
+      desktopLayoutMode,
+      isGitRepo,
+      panelPreferenceByMode,
+    ],
   );
   const currentDesktopPanelPreference = useMemo(
     () =>
@@ -1562,21 +1607,77 @@ export default function ChatView(props: ChatViewProps) {
         const rest = stripDiffSearchParams(previous);
         switch (activeDesktopPanelPreference) {
           case "workspace":
-            return { ...rest, workspace: "1" };
+            return {
+              ...rest,
+              diff: undefined,
+              diffFilePath: undefined,
+              diffTurnId: undefined,
+              workspace: "1",
+            };
           case "diff":
-            return { ...rest, diff: "1" };
+            return { ...rest, diff: "1", workspace: undefined };
           default:
-            return { ...rest, diff: undefined, workspace: undefined };
+            return {
+              ...rest,
+              diff: undefined,
+              diffFilePath: undefined,
+              diffTurnId: undefined,
+              workspace: undefined,
+            };
         }
       },
     });
+    const toastKey = `${environmentId}:${threadId}:${desktopLayoutMode}:${activeDesktopPanelPreference}`;
+    if (
+      settings.desktopLayoutAutoOpenToast &&
+      desktopLayoutDefinition.showAutoOpenToast &&
+      autoOpenedPanelToastKeyRef.current !== toastKey
+    ) {
+      autoOpenedPanelToastKeyRef.current = toastKey;
+      toastManager.add({
+        type: "info",
+        title: `${desktopLayoutDefinition.label} opened ${activeDesktopPanelPreference}`,
+        description: "Undo closes it and keeps this mode focused on chat.",
+        timeout: 0,
+        data: {
+          dismissAfterVisibleMs: 7_000,
+          hideCopyButton: true,
+        },
+        actionProps: {
+          children: "Undo",
+          onClick: () => {
+            setPanelPreferenceForMode(desktopLayoutMode, "none");
+            void navigate({
+              to: "/$environmentId/$threadId",
+              params: {
+                environmentId,
+                threadId,
+              },
+              replace: true,
+              search: (previous) => ({
+                ...stripDiffSearchParams(previous),
+                diff: undefined,
+                diffFilePath: undefined,
+                diffTurnId: undefined,
+                workspace: undefined,
+              }),
+            });
+          },
+        },
+      });
+    }
   }, [
     activeDesktopPanelPreference,
+    desktopLayoutDefinition.label,
+    desktopLayoutDefinition.showAutoOpenToast,
+    desktopLayoutMode,
     currentDesktopPanelPreference,
     environmentId,
     isServerThread,
     navigate,
+    settings.desktopLayoutAutoOpenToast,
     shouldUseDiffSheet,
+    setPanelPreferenceForMode,
     threadId,
   ]);
 
@@ -1598,7 +1699,21 @@ export default function ChatView(props: ChatViewProps) {
       replace: true,
       search: (previous) => {
         const rest = stripDiffSearchParams(previous);
-        return workspaceOpen ? { ...rest, workspace: undefined } : { ...rest, workspace: "1" };
+        return workspaceOpen
+          ? {
+              ...rest,
+              diff: undefined,
+              diffFilePath: undefined,
+              diffTurnId: undefined,
+              workspace: undefined,
+            }
+          : {
+              ...rest,
+              diff: undefined,
+              diffFilePath: undefined,
+              diffTurnId: undefined,
+              workspace: "1",
+            };
       },
     });
   }, [
@@ -1628,7 +1743,21 @@ export default function ChatView(props: ChatViewProps) {
       replace: true,
       search: (previous) => {
         const rest = stripDiffSearchParams(previous);
-        return diffOpen ? { ...rest, diff: undefined } : { ...rest, diff: "1" };
+        return diffOpen
+          ? {
+              ...rest,
+              diff: undefined,
+              diffFilePath: undefined,
+              diffTurnId: undefined,
+              workspace: undefined,
+            }
+          : {
+              ...rest,
+              diff: "1",
+              diffFilePath: undefined,
+              diffTurnId: undefined,
+              workspace: undefined,
+            };
       },
     });
   }, [
@@ -3373,54 +3502,172 @@ export default function ChatView(props: ChatViewProps) {
       if (mode === desktopLayoutMode) {
         return;
       }
-      updateSettings({ desktopLayoutMode: mode });
-      if (!isServerThread || shouldUseDiffSheet) {
-        return;
-      }
-
-      const targetPanelPreference = normalizeDesktopLayoutPanelPreference(
-        panelPreferenceByMode[mode],
-        {
-          diffAvailable: isGitRepo,
-          workspaceAvailable: Boolean(activeWorkspaceRoot),
-        },
-      );
-      if (currentDesktopPanelPreference === targetPanelPreference) {
-        return;
-      }
-
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: {
-          environmentId,
-          threadId,
-        },
-        replace: true,
-        search: (previous) => {
-          const rest = stripDiffSearchParams(previous);
-          switch (targetPanelPreference) {
-            case "workspace":
-              return { ...rest, workspace: "1" };
-            case "diff":
-              return { ...rest, diff: "1" };
-            default:
-              return { ...rest, diff: undefined, workspace: undefined };
+      const nextModeDefinition =
+        desktopLayoutModeDefinitions.find((definition) => definition.id === mode) ??
+        desktopLayoutDefinition;
+      const nextPanelPreference =
+        nextModeDefinition.layout === "dev" && activeWorkspaceRoot ? "workspace" : "none";
+      const previousPanelPreference = currentDesktopPanelPreference;
+      const previousTerminalOpen = Boolean(terminalState.terminalOpen);
+      const restorePanelSearch = diffOpen
+        ? {
+            diff: "1" as const,
+            diffTurnId: rawSearch.diffTurnId,
+            diffFilePath: rawSearch.diffFilePath,
+            workspace: undefined,
           }
-        },
-      });
+        : workspaceOpen
+          ? {
+              diff: undefined,
+              diffTurnId: undefined,
+              diffFilePath: undefined,
+              workspace: "1" as const,
+            }
+          : null;
+      const showLayoutTransitionToast = (
+        title: string,
+        description: string,
+        onUndo: () => void,
+      ) => {
+        if (!settings.desktopLayoutAutoOpenToast) {
+          return;
+        }
+        toastManager.add({
+          type: "info",
+          title,
+          description,
+          timeout: 0,
+          data: {
+            dismissAfterVisibleMs: 7_000,
+            hideCopyButton: true,
+          },
+          actionProps: {
+            children: "Undo",
+            onClick: onUndo,
+          },
+        });
+      };
+
+      updateSettings({ desktopLayoutMode: mode });
+
+      setPanelPreferenceForMode(mode, nextPanelPreference);
+      if (previousTerminalOpen) {
+        setTerminalOpen(false);
+        showLayoutTransitionToast(
+          "Closed terminal",
+          `${nextModeDefinition.label} keeps the terminal tucked away while the layout settles.`,
+          () => setTerminalOpen(true),
+        );
+      }
+
+      if (isServerThread && previousPanelPreference !== nextPanelPreference) {
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId,
+            threadId,
+          },
+          replace: true,
+          search: (previous) => {
+            const rest = stripDiffSearchParams(previous);
+            switch (nextPanelPreference) {
+              case "workspace":
+                return {
+                  ...rest,
+                  diff: undefined,
+                  diffFilePath: undefined,
+                  diffTurnId: undefined,
+                  workspace: "1",
+                };
+              default:
+                return {
+                  ...rest,
+                  diff: undefined,
+                  diffFilePath: undefined,
+                  diffTurnId: undefined,
+                  workspace: undefined,
+                };
+            }
+          },
+        });
+
+        if (previousPanelPreference !== "none" && restorePanelSearch) {
+          const hiddenPanelLabel = previousPanelPreference === "diff" ? "changes" : "workspace";
+          showLayoutTransitionToast(
+            `Closed ${hiddenPanelLabel}`,
+            `${nextModeDefinition.label} moved back to its default view.`,
+            () => {
+              setPanelPreferenceForMode(mode, previousPanelPreference);
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: {
+                  environmentId,
+                  threadId,
+                },
+                replace: true,
+                search: (previous) => ({
+                  ...stripDiffSearchParams(previous),
+                  ...restorePanelSearch,
+                }),
+              });
+            },
+          );
+        }
+
+        if (nextPanelPreference === "workspace" && previousPanelPreference !== "workspace") {
+          showLayoutTransitionToast(
+            "Opened workspace",
+            `${nextModeDefinition.label} brought the code beside chat.`,
+            () => {
+              setPanelPreferenceForMode(mode, "none");
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: {
+                  environmentId,
+                  threadId,
+                },
+                replace: true,
+                search: (previous) => ({
+                  ...stripDiffSearchParams(previous),
+                  diff: undefined,
+                  diffFilePath: undefined,
+                  diffTurnId: undefined,
+                  workspace: undefined,
+                }),
+              });
+            },
+          );
+        }
+      } else if (isServerThread && nextPanelPreference === "workspace") {
+        setPanelPreferenceForMode(mode, "workspace");
+        if (!workspaceOpen) {
+          showLayoutTransitionToast(
+            "Workspace ready",
+            `${nextModeDefinition.label} will open the workspace when it is available.`,
+            () => setPanelPreferenceForMode(mode, "none"),
+          );
+        }
+      }
     },
     [
       activeWorkspaceRoot,
       currentDesktopPanelPreference,
+      desktopLayoutDefinition,
       desktopLayoutMode,
+      desktopLayoutModeDefinitions,
+      diffOpen,
       environmentId,
-      isGitRepo,
       isServerThread,
       navigate,
-      panelPreferenceByMode,
-      shouldUseDiffSheet,
+      rawSearch.diffFilePath,
+      rawSearch.diffTurnId,
+      settings.desktopLayoutAutoOpenToast,
+      setPanelPreferenceForMode,
+      setTerminalOpen,
+      terminalState.terminalOpen,
       threadId,
       updateSettings,
+      workspaceOpen,
     ],
   );
 
@@ -3467,6 +3714,7 @@ export default function ChatView(props: ChatViewProps) {
           workspaceOpen={workspaceOpen}
           diffOpen={diffOpen}
           desktopLayoutMode={desktopLayoutMode}
+          desktopLayoutModeDefinitions={desktopLayoutModeDefinitions}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
@@ -3574,6 +3822,7 @@ export default function ChatView(props: ChatViewProps) {
               resolvedTheme={resolvedTheme}
               settings={settings}
               gitCwd={gitCwd}
+              compactWhenIdle={compactComposerWhenIdle}
               promptRef={promptRef}
               composerImagesRef={composerImagesRef}
               composerTerminalContextsRef={composerTerminalContextsRef}
@@ -3663,22 +3912,29 @@ export default function ChatView(props: ChatViewProps) {
       </div>
       {/* end horizontal flex container */}
 
-      {mountedTerminalThreadRefs.map(({ key: mountedThreadKey, threadRef: mountedThreadRef }) => (
-        <PersistentThreadTerminalDrawer
-          key={mountedThreadKey}
-          threadRef={mountedThreadRef}
-          threadId={mountedThreadRef.threadId}
-          visible={mountedThreadKey === activeThreadKey && terminalState.terminalOpen}
-          launchContext={
-            mountedThreadKey === activeThreadKey ? (activeTerminalLaunchContext ?? null) : null
-          }
-          focusRequestId={mountedThreadKey === activeThreadKey ? terminalFocusRequestId : 0}
-          splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
-          newShortcutLabel={newTerminalShortcutLabel ?? undefined}
-          closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
-          onAddTerminalContext={addTerminalContextToDraft}
-        />
-      ))}
+      {(() => {
+        const terminalDrawerNodes = mountedTerminalThreadRefs.map(
+          ({ key: mountedThreadKey, threadRef: mountedThreadRef }) => (
+            <PersistentThreadTerminalDrawer
+              key={mountedThreadKey}
+              threadRef={mountedThreadRef}
+              threadId={mountedThreadRef.threadId}
+              visible={mountedThreadKey === activeThreadKey && terminalState.terminalOpen}
+              launchContext={
+                mountedThreadKey === activeThreadKey ? (activeTerminalLaunchContext ?? null) : null
+              }
+              focusRequestId={mountedThreadKey === activeThreadKey ? terminalFocusRequestId : 0}
+              splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
+              newShortcutLabel={newTerminalShortcutLabel ?? undefined}
+              closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
+              onAddTerminalContext={addTerminalContextToDraft}
+            />
+          ),
+        );
+        return terminalPortalHost
+          ? createPortal(terminalDrawerNodes, terminalPortalHost)
+          : terminalDrawerNodes;
+      })()}
       {shouldUsePlanSidebarSheet ? (
         <RightPanelSheet open={planSidebarOpen} onClose={closePlanSidebar}>
           <PlanSidebar

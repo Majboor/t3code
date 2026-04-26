@@ -4,7 +4,7 @@ import { useMemo } from "react";
 
 import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
 
-import { getRenderablePatch, resolveFileDiffPath } from "../lib/patchDiff";
+import { diffPathMatchesTarget, getRenderablePatch, resolveFileDiffPath } from "../lib/patchDiff";
 import { type WorkspaceAgentFileDiff } from "../lib/workspaceAgentDiffs";
 
 export function useWorkspaceAgentTurnDiff(input: {
@@ -55,9 +55,10 @@ export function useWorkspaceAgentTurnDiff(input: {
     if (!input.targetFilePath || !renderablePatch || renderablePatch.kind !== "files") {
       return null;
     }
+    const targetPath = input.targetFilePath;
     return (
-      renderablePatch.files.find(
-        (fileDiff) => resolveFileDiffPath(fileDiff) === input.targetFilePath,
+      renderablePatch.files.find((fileDiff) =>
+        diffPathMatchesTarget(resolveFileDiffPath(fileDiff), targetPath),
       ) ?? null
     );
   }, [input.targetFilePath, renderablePatch]);

@@ -118,6 +118,25 @@ export function resolveFileDiffPath(fileDiff: Pick<FileDiffMetadata, "name" | "p
   return raw;
 }
 
+function normalizeComparableDiffPath(pathValue: string): string {
+  return pathValue
+    .replaceAll("\\", "/")
+    .replace(/^(?:a|b)\//, "")
+    .replace(/^\.\//, "")
+    .replace(/^(?:\.\.\/)+/, "")
+    .replace(/^\/+|\/+$/g, "");
+}
+
+export function diffPathMatchesTarget(diffPath: string, targetPath: string): boolean {
+  const normalizedDiffPath = normalizeComparableDiffPath(diffPath);
+  const normalizedTargetPath = normalizeComparableDiffPath(targetPath);
+  return (
+    normalizedDiffPath === normalizedTargetPath ||
+    normalizedDiffPath.endsWith(`/${normalizedTargetPath}`) ||
+    normalizedTargetPath.endsWith(`/${normalizedDiffPath}`)
+  );
+}
+
 export function buildFileDiffRenderKey(
   fileDiff: Pick<FileDiffMetadata, "cacheKey" | "name" | "prevName">,
 ): string {

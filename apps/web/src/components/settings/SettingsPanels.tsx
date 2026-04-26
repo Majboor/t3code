@@ -19,7 +19,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
-import { DEFAULT_UNIFIED_SETTINGS, type DesktopLayoutMode } from "@t3tools/contracts/settings";
+import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Equal } from "effect";
 import { APP_VERSION } from "../../branding";
@@ -61,6 +61,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "..
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -77,6 +78,10 @@ import {
   useServerObservability,
   useServerProviders,
 } from "../../rpc/serverState";
+import {
+  DESKTOP_LAYOUT_MODES_JSON_EXAMPLE,
+  resolveDesktopLayoutModeDefinitions,
+} from "../../desktopLayoutModes";
 
 const THEME_OPTIONS = [
   {
@@ -99,10 +104,10 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-const DESKTOP_LAYOUT_MODE_LABELS = {
+const DESKTOP_LAYOUT_MODE_LABELS: Record<string, string> = {
   vibe: "Vibe mode",
   dev: "Dev mode",
-} satisfies Record<DesktopLayoutMode, string>;
+};
 
 type InstallProviderSettings = {
   provider: ProviderKind;
@@ -440,6 +445,13 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.desktopLayoutMode !== DEFAULT_UNIFIED_SETTINGS.desktopLayoutMode
         ? ["Desktop layout"]
         : []),
+      ...(settings.desktopLayoutModesJson !== DEFAULT_UNIFIED_SETTINGS.desktopLayoutModesJson
+        ? ["Desktop layout modes"]
+        : []),
+      ...(settings.desktopLayoutAutoOpenToast !==
+      DEFAULT_UNIFIED_SETTINGS.desktopLayoutAutoOpenToast
+        ? ["Desktop layout toast"]
+        : []),
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
@@ -471,6 +483,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
       settings.desktopLayoutMode,
+      settings.desktopLayoutModesJson,
+      settings.desktopLayoutAutoOpenToast,
       settings.defaultThreadEnvMode,
       settings.diffWordWrap,
       settings.enableAssistantStreaming,
@@ -504,6 +518,38 @@ export function GeneralSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
+  const desktopLayoutModeDefinitions = useMemo(
+    () => resolveDesktopLayoutModeDefinitions(settings),
+    [settings],
+  );
+  const desktopLayoutModesJsonValid = useMemo(() => {
+    if (!settings.desktopLayoutModesJson.trim()) {
+      return true;
+    }
+    try {
+      JSON.parse(settings.desktopLayoutModesJson);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [settings.desktopLayoutModesJson]);
+  const importDesktopLayoutModesJson = useCallback(
+    async (file: File | undefined) => {
+      if (!file) {
+        return;
+      }
+      try {
+        updateSettings({ desktopLayoutModesJson: await file.text() });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not import layout modes",
+          description: error instanceof Error ? error.message : "The JSON file could not be read.",
+        });
+      }
+    },
+    [updateSettings],
+  );
   const [openingPathByTarget, setOpeningPathByTarget] = useState({
     keybindings: false,
     logsDirectory: false,
@@ -818,23 +864,117 @@ export function GeneralSettingsPanel() {
             <Select
               value={settings.desktopLayoutMode}
               onValueChange={(value) => {
-                if (value === "vibe" || value === "dev") {
+                if (
+                  value &&
+                  desktopLayoutModeDefinitions.some((definition) => definition.id === value)
+                ) {
                   updateSettings({ desktopLayoutMode: value });
                 }
               }}
             >
               <SelectTrigger className="w-full sm:w-40" aria-label="Desktop layout mode">
-                <SelectValue>{DESKTOP_LAYOUT_MODE_LABELS[settings.desktopLayoutMode]}</SelectValue>
+                <SelectValue>
+                  {desktopLayoutModeDefinitions.find(
+                    (definition) => definition.id === settings.desktopLayoutMode,
+                  )?.label ??
+                    DESKTOP_LAYOUT_MODE_LABELS[settings.desktopLayoutMode] ??
+                    settings.desktopLayoutMode}
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="vibe">
-                  {DESKTOP_LAYOUT_MODE_LABELS.vibe}
-                </SelectItem>
-                <SelectItem hideIndicator value="dev">
-                  {DESKTOP_LAYOUT_MODE_LABELS.dev}
-                </SelectItem>
+                {desktopLayoutModeDefinitions.map((definition) => (
+                  <SelectItem hideIndicator key={definition.id} value={definition.id}>
+                    {definition.label}
+                  </SelectItem>
+                ))}
               </SelectPopup>
             </Select>
+          }
+        />
+
+        <SettingsRow
+          title="Layout auto-open toast"
+          description="Show an undo toast when a layout opens its default panel automatically."
+          resetAction={
+            settings.desktopLayoutAutoOpenToast !==
+            DEFAULT_UNIFIED_SETTINGS.desktopLayoutAutoOpenToast ? (
+              <SettingResetButton
+                label="layout auto-open toast"
+                onClick={() =>
+                  updateSettings({
+                    desktopLayoutAutoOpenToast: DEFAULT_UNIFIED_SETTINGS.desktopLayoutAutoOpenToast,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.desktopLayoutAutoOpenToast}
+              onCheckedChange={(checked) => updateSettings({ desktopLayoutAutoOpenToast: checked })}
+              aria-label="Show layout auto-open toast"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Layout modes JSON"
+          description="Import or edit layout modes. Dev and Vibe are defaults; custom modes can choose a Vibe or Dev shell and a default panel."
+          resetAction={
+            settings.desktopLayoutModesJson !== DEFAULT_UNIFIED_SETTINGS.desktopLayoutModesJson ? (
+              <SettingResetButton
+                label="layout modes"
+                onClick={() =>
+                  updateSettings({
+                    desktopLayoutModesJson: DEFAULT_UNIFIED_SETTINGS.desktopLayoutModesJson,
+                    desktopLayoutMode: DEFAULT_UNIFIED_SETTINGS.desktopLayoutMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full flex-col gap-2 sm:max-w-xl">
+              <Textarea
+                className="min-h-40 font-mono text-xs"
+                spellCheck={false}
+                value={settings.desktopLayoutModesJson || DESKTOP_LAYOUT_MODES_JSON_EXAMPLE}
+                onChange={(event) => updateSettings({ desktopLayoutModesJson: event.target.value })}
+                aria-label="Layout modes JSON"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  type="file"
+                  accept="application/json,.json"
+                  className="max-w-56"
+                  aria-label="Import layout modes JSON"
+                  onChange={(event) => {
+                    void importDesktopLayoutModesJson(event.currentTarget.files?.[0]);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    updateSettings({ desktopLayoutModesJson: DESKTOP_LAYOUT_MODES_JSON_EXAMPLE })
+                  }
+                >
+                  Use example
+                </Button>
+                <span
+                  className={cn(
+                    "text-xs",
+                    desktopLayoutModesJsonValid ? "text-muted-foreground" : "text-destructive",
+                  )}
+                >
+                  {desktopLayoutModesJsonValid
+                    ? `${desktopLayoutModeDefinitions.length} mode${desktopLayoutModeDefinitions.length === 1 ? "" : "s"} available`
+                    : "Invalid JSON"}
+                </span>
+              </div>
+            </div>
           }
         />
 

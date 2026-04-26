@@ -532,6 +532,8 @@ describe("wsApi", () => {
       confirmThreadArchive: true,
       confirmThreadDelete: false,
       desktopLayoutMode: "dev" as const,
+      desktopLayoutModesJson: "",
+      desktopLayoutAutoOpenToast: true,
       diffWordWrap: true,
       sidebarProjectGroupingMode: "repository_path" as const,
       sidebarProjectGroupingOverrides: {
@@ -590,6 +592,8 @@ describe("wsApi", () => {
       confirmThreadArchive: true,
       confirmThreadDelete: false,
       desktopLayoutMode: "dev" as const,
+      desktopLayoutModesJson: "",
+      desktopLayoutAutoOpenToast: true,
       diffWordWrap: true,
       sidebarProjectGroupingMode: "repository_path" as const,
       sidebarProjectGroupingOverrides: {

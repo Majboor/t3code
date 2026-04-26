@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { type DesktopLayoutMode } from "@t3tools/contracts/settings";
 import { scopeThreadRef } from "@t3tools/client-runtime";
+import { useNavigate } from "@tanstack/react-router";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
@@ -15,14 +16,17 @@ import {
   EllipsisIcon,
   FilesIcon,
   LayoutPanelLeftIcon,
+  PanelLeftCloseIcon,
+  PanelLeftIcon,
+  PanelRightCloseIcon,
+  PanelRightIcon,
   TerminalSquareIcon,
+  SettingsIcon,
 } from "lucide-react";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
-import { Toggle as ToggleGroupItem, ToggleGroup } from "../ui/toggle-group";
 import {
   Menu,
   MenuGroup,
@@ -34,9 +38,10 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
-import { SidebarTrigger } from "../ui/sidebar";
+import { useSidebar } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { shortcutLabelForCommand } from "~/keybindings";
+import type { DesktopLayoutModeDefinition } from "~/desktopLayoutModes";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -59,6 +64,7 @@ interface ChatHeaderProps {
   workspaceOpen: boolean;
   diffOpen: boolean;
   desktopLayoutMode: DesktopLayoutMode;
+  desktopLayoutModeDefinitions: readonly DesktopLayoutModeDefinition[];
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
@@ -90,6 +96,7 @@ export const ChatHeader = memo(function ChatHeader({
   workspaceOpen,
   diffOpen,
   desktopLayoutMode,
+  desktopLayoutModeDefinitions,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -99,41 +106,42 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleDiff,
   onDesktopLayoutModeChange,
 }: ChatHeaderProps) {
+  const activeLayoutDefinition =
+    desktopLayoutModeDefinitions.find((definition) => definition.id === desktopLayoutMode) ??
+    desktopLayoutModeDefinitions[0];
   const projectsToggleShortcutLabel = shortcutLabelForCommand(keybindings, "projects.toggle");
   const projectsTriggerTooltip = projectsToggleShortcutLabel
     ? `Toggle Projects sidebar (${projectsToggleShortcutLabel})`
     : "Toggle Projects sidebar";
+  const projectsSidebarSide = activeLayoutDefinition?.layout === "dev" ? "right" : "left";
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
-        <SidebarTrigger
-          aria-label={projectsTriggerTooltip}
-          title={projectsTriggerTooltip}
-          className="size-7 shrink-0 md:hidden [-webkit-app-region:no-drag]"
-        />
+        <HeaderProjectsTrigger side={projectsSidebarSide} tooltip={projectsTriggerTooltip} />
 
-        <h2
-          className="min-w-0 shrink truncate text-sm font-medium text-foreground"
-          title={activeThreadTitle}
-        >
-          {activeThreadTitle}
-        </h2>
-        {activeProjectName && (
-          <Badge variant="outline" className="min-w-0 shrink overflow-hidden">
-            <span className="min-w-0 truncate">{activeProjectName}</span>
-          </Badge>
-        )}
-        {activeProjectName && !isGitRepo && (
-          <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
-            No Git
-          </Badge>
-        )}
+        <div className="min-w-0 flex-1 @sm/header-actions:flex @sm/header-actions:items-center @sm/header-actions:gap-2">
+          <h2
+            className="min-w-0 truncate text-[13px] font-medium leading-tight text-foreground @sm/header-actions:text-sm"
+            title={activeThreadTitle}
+          >
+            {activeThreadTitle}
+          </h2>
+          {activeProjectName && (
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 @sm/header-actions:mt-0 @sm/header-actions:shrink-0">
+              <span
+                className="min-w-0 truncate text-[11px] font-medium text-muted-foreground/78 @sm/header-actions:max-w-36 @sm/header-actions:rounded-md @sm/header-actions:border @sm/header-actions:border-border/70 @sm/header-actions:px-1.5 @sm/header-actions:py-0.5 @sm/header-actions:text-xs @sm/header-actions:text-foreground"
+                title={activeProjectName}
+              >
+                {activeProjectName}
+              </span>
+              {!isGitRepo ? (
+                <span className="shrink-0 text-[10px] font-medium text-amber-700">No Git</span>
+              ) : null}
+            </div>
+          )}
+        </div>
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3">
-        <DesktopLayoutToggle
-          desktopLayoutMode={desktopLayoutMode}
-          onDesktopLayoutModeChange={onDesktopLayoutModeChange}
-        />
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
@@ -174,6 +182,7 @@ export const ChatHeader = memo(function ChatHeader({
         />
         <ViewOverflowMenu
           desktopLayoutMode={desktopLayoutMode}
+          desktopLayoutModeDefinitions={desktopLayoutModeDefinitions}
           onDesktopLayoutModeChange={onDesktopLayoutModeChange}
           terminalAvailable={terminalAvailable}
           terminalOpen={terminalOpen}
@@ -192,41 +201,34 @@ export const ChatHeader = memo(function ChatHeader({
   );
 });
 
-const DesktopLayoutToggle = memo(function DesktopLayoutToggle(props: {
-  desktopLayoutMode: DesktopLayoutMode;
-  onDesktopLayoutModeChange: (mode: DesktopLayoutMode) => void;
+const HeaderProjectsTrigger = memo(function HeaderProjectsTrigger(props: {
+  side: "left" | "right";
+  tooltip: string;
 }) {
+  const { openMobile, toggleSidebar } = useSidebar();
+  const Icon =
+    props.side === "right"
+      ? openMobile
+        ? PanelRightCloseIcon
+        : PanelRightIcon
+      : openMobile
+        ? PanelLeftCloseIcon
+        : PanelLeftIcon;
+
   return (
-    <div className="hidden shrink-0 @md/header-actions:flex">
-      <ToggleGroup
-        aria-label="Desktop layout mode"
-        className="shrink-0 [-webkit-app-region:no-drag]"
-        variant="outline"
-        size="xs"
-        value={[props.desktopLayoutMode]}
-        onValueChange={(value) => {
-          const nextMode = value[0];
-          if (nextMode === "vibe" || nextMode === "dev") {
-            props.onDesktopLayoutModeChange(nextMode);
-          }
-        }}
-      >
-        <ToggleGroupItem
-          aria-label="Switch to vibe layout"
-          title="Vibe layout: Projects, Chat, Workspace"
-          value="vibe"
-        >
-          Vibe
-        </ToggleGroupItem>
-        <ToggleGroupItem
-          aria-label="Switch to dev layout"
-          title="Dev layout: Workspace, Chat, Projects"
-          value="dev"
-        >
-          Dev
-        </ToggleGroupItem>
-      </ToggleGroup>
-    </div>
+    <Button
+      aria-label={props.tooltip}
+      title={props.tooltip}
+      className="size-7 shrink-0 md:hidden [-webkit-app-region:no-drag]"
+      data-sidebar="trigger"
+      data-slot="chat-header-projects-trigger"
+      onClick={toggleSidebar}
+      size="icon"
+      variant="ghost"
+    >
+      <Icon aria-hidden="true" className="size-4" />
+      <span className="sr-only">Toggle Projects sidebar</span>
+    </Button>
   );
 });
 
@@ -324,6 +326,7 @@ const InlinePanelToggles = memo(function InlinePanelToggles(props: {
 
 const ViewOverflowMenu = memo(function ViewOverflowMenu(props: {
   desktopLayoutMode: DesktopLayoutMode;
+  desktopLayoutModeDefinitions: readonly DesktopLayoutModeDefinition[];
   onDesktopLayoutModeChange: (mode: DesktopLayoutMode) => void;
   terminalAvailable: boolean;
   terminalOpen: boolean;
@@ -337,6 +340,7 @@ const ViewOverflowMenu = memo(function ViewOverflowMenu(props: {
   onToggleWorkspace: () => void;
   onToggleDiff: () => void;
 }) {
+  const navigate = useNavigate();
   return (
     <Menu>
       <Tooltip>
@@ -363,14 +367,24 @@ const ViewOverflowMenu = memo(function ViewOverflowMenu(props: {
           <MenuRadioGroup
             value={props.desktopLayoutMode}
             onValueChange={(value) => {
-              if (value === "vibe" || value === "dev") {
+              if (
+                value &&
+                props.desktopLayoutModeDefinitions.some((definition) => definition.id === value)
+              ) {
                 props.onDesktopLayoutModeChange(value);
               }
             }}
           >
-            <MenuRadioItem value="vibe">Vibe · Projects · Chat · Workspace</MenuRadioItem>
-            <MenuRadioItem value="dev">Dev · Workspace · Chat · Projects</MenuRadioItem>
+            {props.desktopLayoutModeDefinitions.map((definition) => (
+              <MenuRadioItem key={definition.id} value={definition.id}>
+                {definition.label} · {definition.description}
+              </MenuRadioItem>
+            ))}
           </MenuRadioGroup>
+          <MenuItem onClick={() => void navigate({ to: "/settings/general" })}>
+            <SettingsIcon className="size-3.5" aria-hidden="true" />
+            Layout settings
+          </MenuItem>
         </MenuGroup>
         <MenuSeparator />
         <MenuGroup>

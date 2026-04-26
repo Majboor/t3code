@@ -15,7 +15,7 @@ export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"])
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 
-export const DesktopLayoutMode = Schema.Literals(["vibe", "dev"]);
+export const DesktopLayoutMode = TrimmedNonEmptyString;
 export type DesktopLayoutMode = typeof DesktopLayoutMode.Type;
 export const DEFAULT_DESKTOP_LAYOUT_MODE: DesktopLayoutMode = "vibe";
 
@@ -41,6 +41,8 @@ export const ClientSettingsSchema = Schema.Struct({
   desktopLayoutMode: DesktopLayoutMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_DESKTOP_LAYOUT_MODE)),
   ),
+  desktopLayoutModesJson: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  desktopLayoutAutoOpenToast: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),

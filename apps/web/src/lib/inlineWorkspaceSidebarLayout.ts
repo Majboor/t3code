@@ -6,6 +6,8 @@ import {
 export const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 
 export function canAcceptInlineWorkspaceSidebarWidth(input: {
+  currentWidth?: number;
+  measureWithoutMutatingLayout?: boolean;
   nextWidth: number;
   projectsSidebarOpen: boolean;
   terminalOpen: boolean;
@@ -15,17 +17,7 @@ export function canAcceptInlineWorkspaceSidebarWidth(input: {
   if (!composerForm) return true;
   const composerViewport = composerForm.parentElement;
   if (!composerViewport) return true;
-  const previousSidebarWidth = input.wrapper.style.getPropertyValue("--sidebar-width");
-  input.wrapper.style.setProperty("--sidebar-width", `${input.nextWidth}px`);
 
-  const viewportStyle = window.getComputedStyle(composerViewport);
-  const viewportPaddingLeft = Number.parseFloat(viewportStyle.paddingLeft) || 0;
-  const viewportPaddingRight = Number.parseFloat(viewportStyle.paddingRight) || 0;
-  const viewportContentWidth = Math.max(
-    0,
-    composerViewport.clientWidth - viewportPaddingLeft - viewportPaddingRight,
-  );
-  const formRect = composerForm.getBoundingClientRect();
   const composerFooter = composerForm.querySelector<HTMLElement>(
     "[data-chat-composer-footer='true']",
   );
@@ -46,6 +38,33 @@ export function canAcceptInlineWorkspaceSidebarWidth(input: {
     : input.terminalOpen
       ? DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX
       : DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_PX;
+
+  if (input.measureWithoutMutatingLayout) {
+    const viewportMetrics = measureComposerViewport(composerViewport);
+    const viewportContentWidth = viewportMetrics.contentWidth;
+    const formRect = composerForm.getBoundingClientRect();
+    const chatColumnWidth = chatColumn?.getBoundingClientRect().width ?? viewportContentWidth;
+    const currentSidebarWidth = resolveCurrentInlineWorkspaceWidth(input);
+    const projectedChatDelta = currentSidebarWidth - input.nextWidth;
+    const projectedViewportContentWidth = Math.max(0, viewportContentWidth + projectedChatDelta);
+    const projectedFormClientWidth = Math.max(0, composerForm.clientWidth + projectedChatDelta);
+    const projectedFormWidth = Math.max(0, formRect.width + projectedChatDelta);
+    const projectedChatColumnWidth = Math.max(0, chatColumnWidth + projectedChatDelta);
+
+    return (
+      composerForm.scrollWidth <= projectedFormClientWidth + 0.5 &&
+      projectedFormWidth <= projectedViewportContentWidth + 0.5 &&
+      projectedFormClientWidth + 0.5 >= minimumComposerWidth &&
+      projectedChatColumnWidth + 0.5 >= minimumChatWidth
+    );
+  }
+
+  const previousSidebarWidth = input.wrapper.style.getPropertyValue("--sidebar-width");
+  input.wrapper.style.setProperty("--sidebar-width", `${input.nextWidth}px`);
+
+  const viewportMetrics = measureComposerViewport(composerViewport);
+  const viewportContentWidth = viewportMetrics.contentWidth;
+  const formRect = composerForm.getBoundingClientRect();
   const chatColumnWidth = chatColumn?.getBoundingClientRect().width ?? viewportContentWidth;
   const hasComposerOverflow = composerForm.scrollWidth > composerForm.clientWidth + 0.5;
   const overflowsViewport = formRect.width > viewportContentWidth + 0.5;
@@ -66,6 +85,48 @@ export function canAcceptInlineWorkspaceSidebarWidth(input: {
   );
 }
 
+function measureComposerViewport(composerViewport: HTMLElement): {
+  contentWidth: number;
+} {
+  const viewportStyle = window.getComputedStyle(composerViewport);
+  const viewportPaddingLeft = Number.parseFloat(viewportStyle.paddingLeft) || 0;
+  const viewportPaddingRight = Number.parseFloat(viewportStyle.paddingRight) || 0;
+  return {
+    contentWidth: Math.max(
+      0,
+      composerViewport.clientWidth - viewportPaddingLeft - viewportPaddingRight,
+    ),
+  };
+}
+
+function resolveCurrentInlineWorkspaceWidth(input: {
+  currentWidth?: number;
+  nextWidth: number;
+  wrapper: HTMLElement;
+}): number {
+  if (input.currentWidth !== undefined && Number.isFinite(input.currentWidth)) {
+    return input.currentWidth;
+  }
+
+  const configuredWidth = Number.parseFloat(
+    window.getComputedStyle(input.wrapper).getPropertyValue("--sidebar-width"),
+  );
+  if (Number.isFinite(configuredWidth) && configuredWidth > 0) {
+    return configuredWidth;
+  }
+
+  const containerWidth =
+    input.wrapper
+      .querySelector<HTMLElement>("[data-slot='sidebar-container']")
+      ?.getBoundingClientRect().width ?? 0;
+  if (Number.isFinite(containerWidth) && containerWidth > 0) {
+    return containerWidth;
+  }
+
+  const wrapperWidth = input.wrapper.getBoundingClientRect().width;
+  return Number.isFinite(wrapperWidth) && wrapperWidth > 0 ? wrapperWidth : input.nextWidth;
+}
+
 export function findLargestAcceptedInlineWorkspaceWidth(input: {
   currentWidth: number;
   minWidth: number;
@@ -76,6 +137,8 @@ export function findLargestAcceptedInlineWorkspaceWidth(input: {
 }): number | null {
   const acceptsWidth = (nextWidth: number) =>
     canAcceptInlineWorkspaceSidebarWidth({
+      currentWidth: input.currentWidth,
+      measureWithoutMutatingLayout: true,
       nextWidth,
       projectsSidebarOpen: input.projectsSidebarOpen,
       terminalOpen: input.terminalOpen,

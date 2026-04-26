@@ -1,6 +1,6 @@
-import { RotateCcwIcon } from "lucide-react";
+import { ArrowLeftIcon, RotateCcwIcon } from "lucide-react";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 import { Button } from "../components/ui/button";
@@ -12,13 +12,16 @@ function SettingsContentLayout() {
   const { changedSettingLabels, restoreDefaults } = useSettingsRestore(() =>
     setRestoreSignal((value) => value + 1),
   );
+  const goBack = useCallback(() => {
+    window.history.back();
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
-        window.history.back();
+        goBack();
       }
     };
 
@@ -26,7 +29,7 @@ function SettingsContentLayout() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, []);
+  }, [goBack]);
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
@@ -34,6 +37,16 @@ function SettingsContentLayout() {
         {!isElectron && (
           <header className="border-b border-border px-3 py-2 sm:px-5">
             <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Back to chat"
+                title="Back to chat"
+                onClick={goBack}
+              >
+                <ArrowLeftIcon className="size-4" />
+              </Button>
               <SidebarTrigger className="size-7 shrink-0 md:hidden" />
               <span className="text-sm font-medium text-foreground">Settings</span>
               <div className="ms-auto flex items-center gap-2">
@@ -53,6 +66,17 @@ function SettingsContentLayout() {
 
         {isElectron && (
           <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5 wco:h-[env(titlebar-area-height)] wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]">
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Back to chat"
+              title="Back to chat"
+              className="me-2 [-webkit-app-region:no-drag]"
+              onClick={goBack}
+            >
+              <ArrowLeftIcon className="size-4" />
+            </Button>
             <SidebarTrigger className="size-7 shrink-0 md:hidden [-webkit-app-region:no-drag]" />
             <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
               Settings

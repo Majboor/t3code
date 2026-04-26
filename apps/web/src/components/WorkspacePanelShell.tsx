@@ -5,15 +5,18 @@ import { cn } from "~/lib/utils";
 
 import { Skeleton } from "./ui/skeleton";
 
-export type WorkspacePanelMode = "inline" | "sheet" | "sidebar";
+export type WorkspacePanelMode = "compact" | "inline" | "sheet" | "sidebar";
 
 function getWorkspacePanelHeaderRowClassName(mode: WorkspacePanelMode) {
   const shouldUseDragRegion = isElectron && mode !== "sheet";
   return cn(
-    "flex items-center justify-between gap-2 px-4 wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]",
+    "flex items-center justify-between gap-2 wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]",
+    mode === "compact" ? "px-3" : "px-4",
     shouldUseDragRegion
       ? "drag-region h-[52px] border-b border-border wco:h-[env(titlebar-area-height)]"
-      : "h-12 wco:max-h-[env(titlebar-area-height)]",
+      : mode === "compact"
+        ? "h-11 wco:max-h-[env(titlebar-area-height)]"
+        : "h-12 wco:max-h-[env(titlebar-area-height)]",
   );
 }
 

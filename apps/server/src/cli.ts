@@ -75,6 +75,7 @@ const BootstrapEnvelopeSchema = Schema.Struct({
   t3Home: Schema.optional(Schema.String),
   devUrl: Schema.optional(Schema.URLFromString),
   noBrowser: Schema.optional(Schema.Boolean),
+  unsafeNoAuth: Schema.optional(Schema.Boolean),
   desktopBootstrapToken: Schema.optional(Schema.String),
   autoBootstrapProjectFromCwd: Schema.optional(Schema.Boolean),
   logWebSocketEvents: Schema.optional(Schema.Boolean),
@@ -106,6 +107,12 @@ const devUrlFlag = Flag.string("dev-url").pipe(
 );
 const noBrowserFlag = Flag.boolean("no-browser").pipe(
   Flag.withDescription("Disable automatic browser opening."),
+  Flag.optional,
+);
+const unsafeNoAuthFlag = Flag.boolean("unsafe-no-auth").pipe(
+  Flag.withDescription(
+    "Disable pairing and auto-issue owner browser sessions. Unsafe on shared or public networks.",
+  ),
   Flag.optional,
 );
 const bootstrapFdFlag = Flag.integer("bootstrap-fd").pipe(
@@ -162,6 +169,19 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  unsafeNoAuth: Config.boolean("T3CODE_UNSAFE_NO_AUTH").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  basicAuthUsername: Config.string("T3CODE_BASIC_AUTH_USER").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  basicAuthPassword: Config.string("T3CODE_BASIC_AUTH_PASSWORD").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  basicAuthRealm: Config.string("T3CODE_BASIC_AUTH_REALM").pipe(Config.withDefault("T3 Code")),
   bootstrapFd: Config.int("T3CODE_BOOTSTRAP_FD").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -184,6 +204,7 @@ interface CliServerFlags {
   readonly cwd: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
   readonly noBrowser: Option.Option<boolean>;
+  readonly unsafeNoAuth: Option.Option<boolean>;
   readonly bootstrapFd: Option.Option<number>;
   readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
   readonly logWebSocketEvents: Option.Option<boolean>;
@@ -230,6 +251,7 @@ export const resolveServerConfig = (
       cwd: flags.cwd ?? Option.none(),
       devUrl: flags.devUrl ?? Option.none(),
       noBrowser: flags.noBrowser ?? Option.none(),
+      unsafeNoAuth: flags.unsafeNoAuth ?? Option.none(),
       bootstrapFd: flags.bootstrapFd ?? Option.none(),
       autoBootstrapProjectFromCwd: flags.autoBootstrapProjectFromCwd ?? Option.none(),
       logWebSocketEvents: flags.logWebSocketEvents ?? Option.none(),
@@ -304,6 +326,10 @@ export const resolveServerConfig = (
       ),
       () => mode === "desktop",
     );
+    const unsafeNoAuth =
+      Option.getOrUndefined(normalizedFlags.unsafeNoAuth) === true ||
+      env.unsafeNoAuth === true ||
+      bootstrap?.unsafeNoAuth === true;
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
@@ -363,6 +389,10 @@ export const resolveServerConfig = (
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,
+      unsafeNoAuth,
+      basicAuthUsername: env.basicAuthUsername?.trim() || undefined,
+      basicAuthPassword: env.basicAuthPassword?.trim() || undefined,
+      basicAuthRealm: env.basicAuthRealm.trim() || "T3 Code",
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
     };
@@ -383,6 +413,7 @@ const resolveCliAuthConfig = (
       cwd: Option.none(),
       devUrl: flags.devUrl ?? Option.none(),
       noBrowser: Option.none(),
+      unsafeNoAuth: Option.none(),
       bootstrapFd: Option.none(),
       autoBootstrapProjectFromCwd: Option.none(),
       logWebSocketEvents: Option.none(),
@@ -763,6 +794,7 @@ const sharedServerCommandFlags = {
   ),
   devUrl: devUrlFlag,
   noBrowser: noBrowserFlag,
+  unsafeNoAuth: unsafeNoAuthFlag,
   bootstrapFd: bootstrapFdFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
@@ -1116,7 +1148,7 @@ const startCommand = Command.make("start", { ...sharedServerCommandFlags }).pipe
 
 const serveCommand = Command.make("serve", { ...sharedServerCommandFlags }).pipe(
   Command.withDescription(
-    "Run the T3 Code server without opening a browser and print headless pairing details.",
+    "Run the T3 Code server without opening a browser and print headless access details.",
   ),
   Command.withHandler((flags) =>
     runServerCommand(flags, {

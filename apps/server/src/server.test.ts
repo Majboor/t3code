@@ -365,6 +365,10 @@ const buildAppUnderTest = (options?: {
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,
+      unsafeNoAuth: false,
+      basicAuthUsername: undefined,
+      basicAuthPassword: undefined,
+      basicAuthRealm: "T3 Code",
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       ...options?.config,
@@ -908,6 +912,90 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(pairingResponse.status, 200);
       assert.equal(typeof pairingBody.credential, "string");
       assert.isTrue(pairingBody.credential.length > 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("auto-authenticates remote sessions when unsafe no-auth is enabled", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          mode: "web",
+          host: "0.0.0.0",
+          unsafeNoAuth: true,
+          basicAuthUsername: undefined,
+          basicAuthPassword: undefined,
+          basicAuthRealm: "T3 Code",
+        },
+      });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      const sessionResponse = yield* Effect.promise(() => fetch(sessionUrl));
+      const sessionBody = (yield* Effect.promise(() => sessionResponse.json())) as {
+        readonly authenticated: boolean;
+        readonly role?: string;
+        readonly sessionMethod?: string;
+        readonly auth: {
+          readonly policy: string;
+          readonly bootstrapMethods: ReadonlyArray<string>;
+        };
+      };
+      const cookie = sessionResponse.headers.get("set-cookie");
+
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionBody.authenticated, true);
+      assert.equal(sessionBody.role, "owner");
+      assert.equal(sessionBody.sessionMethod, "browser-session-cookie");
+      assert.equal(sessionBody.auth.policy, "unsafe-no-auth");
+      assert.deepEqual(sessionBody.auth.bootstrapMethods, []);
+      assert.isDefined(cookie);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("requires Basic Auth before unsafe no-auth session bootstrap", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          mode: "web",
+          host: "0.0.0.0",
+          unsafeNoAuth: false,
+          basicAuthUsername: "admin",
+          basicAuthPassword: "secret",
+          basicAuthRealm: "T3 Staging",
+        },
+      });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      const unauthenticatedResponse = yield* Effect.promise(() => fetch(sessionUrl));
+
+      assert.equal(unauthenticatedResponse.status, 401);
+      assert.equal(
+        unauthenticatedResponse.headers.get("www-authenticate"),
+        'Basic realm="T3 Staging", charset="UTF-8"',
+      );
+
+      const basicCredential = Buffer.from("admin:secret", "utf8").toString("base64");
+      const authenticatedResponse = yield* Effect.promise(() =>
+        fetch(sessionUrl, {
+          headers: {
+            authorization: `Basic ${basicCredential}`,
+          },
+        }),
+      );
+      const authenticatedBody = (yield* Effect.promise(() => authenticatedResponse.json())) as {
+        readonly authenticated: boolean;
+        readonly role?: string;
+        readonly auth: {
+          readonly policy: string;
+          readonly bootstrapMethods: ReadonlyArray<string>;
+        };
+      };
+
+      assert.equal(authenticatedResponse.status, 200);
+      assert.equal(authenticatedBody.authenticated, true);
+      assert.equal(authenticatedBody.role, "owner");
+      assert.equal(authenticatedBody.auth.policy, "unsafe-no-auth");
+      assert.deepEqual(authenticatedBody.auth.bootstrapMethods, []);
+      assert.isDefined(authenticatedResponse.headers.get("set-cookie"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -34,7 +34,12 @@ import {
   providerTurnMetricAttributes,
   withMetrics,
 } from "../../observability/Metrics.ts";
-import { ProviderValidationError } from "../Errors.ts";
+import {
+  ProviderValidationError,
+  type ProviderAdapterError,
+  type ProviderServiceError,
+} from "../Errors.ts";
+import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
@@ -197,6 +202,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     Stream.runForEach(adapter.streamEvents, processRuntimeEvent).pipe(Effect.forkScoped),
   ).pipe(Effect.asVoid);
 
+  type RoutableSession = {
+    readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
+    readonly threadId: ThreadId;
+    readonly isActive: boolean;
+  };
+
+  type ActiveSessionMatch = {
+    readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
+    readonly session: ProviderSession;
+  };
+
   const recoverSessionForThread = Effect.fn("recoverSessionForThread")(function* (input: {
     readonly binding: ProviderRuntimeBinding;
     readonly operation: string;
@@ -269,33 +285,83 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
-  const resolveRoutableSession = Effect.fn("resolveRoutableSession")(function* (input: {
+  const adoptActiveSessionWithoutBinding = (input: {
+    readonly threadId: ThreadId;
+    readonly operation: string;
+  }): Effect.Effect<RoutableSession | undefined, ProviderServiceError> =>
+    Effect.gen(function* () {
+      const activeMatches: ReadonlyArray<ActiveSessionMatch> = (yield* Effect.forEach(
+        adapters,
+        (adapter) =>
+          adapter
+            .listSessions()
+            .pipe(
+              Effect.map(
+                (sessions): ReadonlyArray<ActiveSessionMatch> =>
+                  sessions
+                    .filter((session) => session.threadId === input.threadId)
+                    .map((session) => ({ adapter, session })),
+              ),
+            ),
+      )).flatMap((matches) => matches);
+
+      if (activeMatches.length > 1) {
+        return yield* toValidationError(
+          input.operation,
+          `Cannot route thread '${input.threadId}' because multiple active provider sessions exist and no persisted provider binding is available to disambiguate them.`,
+        );
+      }
+
+      const match = activeMatches[0];
+      if (!match) {
+        return undefined;
+      }
+
+      yield* upsertSessionBinding(match.session, input.threadId);
+      yield* analytics.record("provider.session.recovered", {
+        provider: match.session.provider,
+        strategy: "adopt-existing-missing-binding",
+        hasResumeCursor: match.session.resumeCursor !== undefined,
+      });
+      return {
+        adapter: match.adapter,
+        threadId: input.threadId,
+        isActive: true,
+      } satisfies RoutableSession;
+    });
+
+  const resolveRoutableSession = (input: {
     readonly threadId: ThreadId;
     readonly operation: string;
     readonly allowRecovery: boolean;
-  }) {
-    const bindingOption = yield* directory.getBinding(input.threadId);
-    const binding = Option.getOrUndefined(bindingOption);
-    if (!binding) {
-      return yield* toValidationError(
-        input.operation,
-        `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
-      );
-    }
-    const adapter = yield* registry.getByProvider(binding.provider);
+  }): Effect.Effect<RoutableSession, ProviderServiceError> =>
+    Effect.gen(function* () {
+      const bindingOption = yield* directory.getBinding(input.threadId);
+      const binding = Option.getOrUndefined(bindingOption);
+      if (!binding) {
+        const adopted = yield* adoptActiveSessionWithoutBinding(input);
+        if (adopted) {
+          return adopted;
+        }
+        return yield* toValidationError(
+          input.operation,
+          `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
+        );
+      }
+      const adapter = yield* registry.getByProvider(binding.provider);
 
-    const hasRequestedSession = yield* adapter.hasSession(input.threadId);
-    if (hasRequestedSession) {
-      return { adapter, threadId: input.threadId, isActive: true } as const;
-    }
+      const hasRequestedSession = yield* adapter.hasSession(input.threadId);
+      if (hasRequestedSession) {
+        return { adapter, threadId: input.threadId, isActive: true };
+      }
 
-    if (!input.allowRecovery) {
-      return { adapter, threadId: input.threadId, isActive: false } as const;
-    }
+      if (!input.allowRecovery) {
+        return { adapter, threadId: input.threadId, isActive: false };
+      }
 
-    const recovered = yield* recoverSessionForThread({ binding, operation: input.operation });
-    return { adapter: recovered.adapter, threadId: input.threadId, isActive: true } as const;
-  });
+      const recovered = yield* recoverSessionForThread({ binding, operation: input.operation });
+      return { adapter: recovered.adapter, threadId: input.threadId, isActive: true };
+    });
 
   const stopStaleSessionsForThread = Effect.fn("stopStaleSessionsForThread")(function* (input: {
     readonly threadId: ThreadId;

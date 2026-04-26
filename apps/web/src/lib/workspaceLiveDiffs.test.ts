@@ -54,4 +54,33 @@ describe("buildWorkspaceLiveTurnDiffStatByPath", () => {
       deletions: 10,
     });
   });
+
+  it("surfaces a patch signature change even when stat counts are unchanged", () => {
+    const liveDiffs = buildWorkspaceLiveTurnDiffStatByPath(
+      [
+        {
+          path: "src/app.ts",
+          status: "modified",
+          insertions: 1,
+          deletions: 1,
+          diffSignature: "after",
+        },
+      ],
+      [
+        {
+          path: "src/app.ts",
+          status: "modified",
+          insertions: 1,
+          deletions: 1,
+          diffSignature: "before",
+        },
+      ],
+    );
+
+    expect(liveDiffs.get("src/app.ts")).toEqual({
+      additions: 1,
+      deletions: 1,
+      diffSignature: "after",
+    });
+  });
 });

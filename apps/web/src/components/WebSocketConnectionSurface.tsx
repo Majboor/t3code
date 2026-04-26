@@ -142,6 +142,7 @@ export function WebSocketConnectionCoordinator() {
           type: "error",
           title: "Reconnect failed",
           description: error instanceof Error ? error.message : "Unable to restart the WebSocket.",
+          timeout: 0,
           data: {
             dismissAfterVisibleMs: 8_000,
             hideCopyButton: true,

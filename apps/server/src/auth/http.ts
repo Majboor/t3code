@@ -37,13 +37,18 @@ export const authSessionRouteLayer = HttpRouter.add(
     const serverAuth = yield* ServerAuth;
     const sessions = yield* SessionCredentialService;
     const session = yield* serverAuth.getSessionState(request);
-    if (session.authenticated || session.auth.policy !== "loopback-browser") {
+    if (
+      session.authenticated ||
+      (session.auth.policy !== "loopback-browser" && session.auth.policy !== "unsafe-no-auth")
+    ) {
       return HttpServerResponse.jsonUnsafe(session, { status: 200 });
     }
 
-    const localSession = yield* serverAuth.issueLoopbackOwnerSession(
-      deriveAuthClientMetadata({ request }),
-    );
+    const requestMetadata = deriveAuthClientMetadata({ request });
+    const localSession =
+      session.auth.policy === "unsafe-no-auth"
+        ? yield* serverAuth.issueUnsafeNoAuthOwnerSession(requestMetadata)
+        : yield* serverAuth.issueLoopbackOwnerSession(requestMetadata);
 
     return yield* HttpServerResponse.jsonUnsafe(
       {

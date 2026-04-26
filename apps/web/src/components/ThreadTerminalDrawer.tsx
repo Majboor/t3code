@@ -1084,7 +1084,7 @@ export default function ThreadTerminalDrawer({
 
   return (
     <aside
-      className="thread-terminal-drawer relative flex min-w-0 shrink-0 flex-col overflow-hidden border-t border-border/80 bg-background"
+      className="thread-terminal-drawer relative flex min-w-0 shrink-0 flex-col overflow-hidden border-t border-border/80 bg-background transition-[height,opacity] duration-500 ease-out motion-reduce:transition-none"
       style={{ height: `${drawerHeight}px` }}
     >
       <div

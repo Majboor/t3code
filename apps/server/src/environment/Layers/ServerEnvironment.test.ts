@@ -37,6 +37,10 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     devUrl: undefined,
     noBrowser: false,
     startupPresentation: "browser",
+    unsafeNoAuth: false,
+    basicAuthUsername: undefined,
+    basicAuthPassword: undefined,
+    basicAuthRealm: "T3 Code",
   } satisfies ServerConfigShape;
 });
 

@@ -52,6 +52,8 @@ const clientSettings: ClientSettings = {
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   desktopLayoutMode: "dev",
+  desktopLayoutModesJson: "",
+  desktopLayoutAutoOpenToast: true,
   diffWordWrap: true,
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {

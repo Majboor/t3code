@@ -5,6 +5,7 @@ import type { TurnDiffSummary } from "../types";
 export interface WorkspaceAgentDiffStat {
   additions: number;
   deletions: number;
+  diffSignature?: string | undefined;
 }
 
 export interface WorkspaceAgentFileDiff {

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
+import { resolveDesktopLayoutModeDefinition } from "../desktopLayoutModes";
 import { useSettings } from "../hooks/useSettings";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -39,6 +40,9 @@ import { Schema } from "effect";
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const desktopLayoutMode = useSettings((settings) => settings.desktopLayoutMode);
+  const desktopLayoutDefinition = useSettings((settings) =>
+    resolveDesktopLayoutModeDefinition(settings),
+  );
   const keybindings = useServerKeybindings();
   const isMobile = useIsMobile();
   const routeTarget = useParams({
@@ -51,10 +55,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       ? selectThreadTerminalState(state.terminalStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
-  const projectSidebarSide = desktopLayoutMode === "dev" ? "right" : "left";
+  const projectSidebarSide = desktopLayoutDefinition.layout === "dev" ? "right" : "left";
   const [projectSidebarOpen, setProjectSidebarOpen] = useProjectSidebarOpen(desktopLayoutMode);
   const projectSidebarMainContentMinWidth =
-    desktopLayoutMode === "dev"
+    desktopLayoutDefinition.layout === "dev"
       ? getMinimumDevMainContentWidthPx(terminalOpen)
       : PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX;
   const projectsToggleShortcutLabel = shortcutLabelForCommand(keybindings, "projects.toggle", {
@@ -74,7 +78,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         }
         if (
           requestedOpen &&
-          desktopLayoutMode === "dev" &&
+          desktopLayoutDefinition.layout === "dev" &&
           !isMobile &&
           typeof document !== "undefined"
         ) {
@@ -82,7 +86,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             getLocalStorageItem(PROJECT_SIDEBAR_WIDTH_STORAGE_KEY, Schema.Finite) ??
             PROJECT_SIDEBAR_DEFAULT_WIDTH_PX;
           const appSidebarWrapper = document.querySelector<HTMLElement>(
-            "[data-slot='sidebar-wrapper'][data-app-layout-mode='dev']",
+            "[data-slot='sidebar-wrapper'][data-app-layout-layout='dev']",
           );
           const layoutWidth = appSidebarWrapper?.getBoundingClientRect().width ?? window.innerWidth;
           const result = rebalanceDevWorkspaceWidthBeforeProjectsOpen({
@@ -188,11 +192,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   return (
     <SidebarProvider
       data-app-layout-mode={desktopLayoutMode}
+      data-app-layout-layout={desktopLayoutDefinition.layout}
       onOpenChange={setProjectSidebarOpen}
       open={projectSidebarOpen}
     >
-      {desktopLayoutMode === "dev" ? children : projectSidebarShell}
-      {desktopLayoutMode === "dev" ? projectSidebarShell : children}
+      {desktopLayoutDefinition.layout === "dev" ? children : projectSidebarShell}
+      {desktopLayoutDefinition.layout === "dev" ? projectSidebarShell : children}
       {!isMobile && (
         <ProjectSidebarDesktopToggle
           open={projectSidebarOpen}

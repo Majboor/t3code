@@ -1710,6 +1710,33 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("scopes working tree status to the requested cwd", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* makeDirectory(path.join(tmp, "apps/server"));
+        yield* makeDirectory(path.join(tmp, "apps/web"));
+        yield* writeTextFile(path.join(tmp, "apps/server/test.py"), "print('server')\n");
+        yield* writeTextFile(path.join(tmp, "apps/web/app.ts"), "export const app = true;\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "seed workspaces"]);
+
+        yield* writeTextFile(path.join(tmp, "apps/server/test.py"), "print('server updated')\n");
+        yield* writeTextFile(path.join(tmp, "apps/web/app.ts"), "export const app = false;\n");
+
+        const core = yield* GitCore;
+        const details = yield* core.statusDetails(path.join(tmp, "apps/server"));
+
+        expect(details.workingTree.files.map((file) => file.path)).toEqual(["test.py"]);
+        expect(details.workingTree.files[0]).toMatchObject({
+          path: "test.py",
+          status: "modified",
+          insertions: 1,
+          deletions: 1,
+        });
+      }),
+    );
+
     it.effect("returns a unified diff for tracked working tree changes", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

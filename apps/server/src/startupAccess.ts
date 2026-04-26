@@ -9,8 +9,9 @@ import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 
 export interface HeadlessServeAccessInfo {
   readonly connectionString: string;
-  readonly token: string;
-  readonly pairingUrl: string;
+  readonly authMode: "basic-auth" | "pairing" | "unsafe-no-auth";
+  readonly token?: string;
+  readonly pairingUrl?: string;
 }
 
 type NetworkInterfacesMap = ReturnType<typeof networkInterfaces>;
@@ -120,15 +121,29 @@ export const renderTerminalQrCode = (value: string, margin = 2): string => {
 };
 
 export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
-  [
-    "T3 Code server is ready.",
-    `Connection string: ${accessInfo.connectionString}`,
-    `Token: ${accessInfo.token}`,
-    `Pairing URL: ${accessInfo.pairingUrl}`,
-    "",
-    renderTerminalQrCode(accessInfo.pairingUrl),
-    "",
-  ].join("\n");
+  accessInfo.authMode === "basic-auth"
+    ? [
+        "T3 Code server is ready.",
+        `Connection string: ${accessInfo.connectionString}`,
+        "Authentication: Basic Auth",
+        "",
+      ].join("\n")
+    : accessInfo.authMode === "unsafe-no-auth"
+      ? [
+          "T3 Code server is ready.",
+          `Connection string: ${accessInfo.connectionString}`,
+          "Authentication: disabled (--unsafe-no-auth)",
+          "",
+        ].join("\n")
+      : [
+          "T3 Code server is ready.",
+          `Connection string: ${accessInfo.connectionString}`,
+          `Token: ${accessInfo.token}`,
+          `Pairing URL: ${accessInfo.pairingUrl}`,
+          "",
+          renderTerminalQrCode(accessInfo.pairingUrl ?? ""),
+          "",
+        ].join("\n");
 
 export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessInfo")(function* () {
   const serverConfig = yield* ServerConfig;
@@ -138,10 +153,23 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
     serverConfig.host,
     resolveListeningPort(httpServer.address, serverConfig.port),
   );
+  if (serverConfig.basicAuthUsername && serverConfig.basicAuthPassword) {
+    return {
+      connectionString,
+      authMode: "basic-auth",
+    } satisfies HeadlessServeAccessInfo;
+  }
+  if (serverConfig.unsafeNoAuth) {
+    return {
+      connectionString,
+      authMode: "unsafe-no-auth",
+    } satisfies HeadlessServeAccessInfo;
+  }
   const issued = yield* serverAuth.issuePairingCredential({ role: "owner" });
 
   return {
     connectionString,
+    authMode: "pairing",
     token: issued.credential,
     pairingUrl: buildPairingUrl(connectionString, issued.credential),
   } satisfies HeadlessServeAccessInfo;

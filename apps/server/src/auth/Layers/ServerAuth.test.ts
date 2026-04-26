@@ -141,6 +141,33 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
     ),
   );
 
+  it.effect(
+    "issues owner sessions without a pairing credential when unsafe no-auth is enabled",
+    () =>
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+
+        const issued = yield* serverAuth.issueUnsafeNoAuthOwnerSession(requestMetadata);
+        const verified = yield* serverAuth.authenticateHttpRequest(
+          makeCookieRequest(issued.sessionToken),
+        );
+
+        expect(issued.response.authenticated).toBe(true);
+        expect(issued.response.role).toBe("owner");
+        expect(issued.response.sessionMethod).toBe("browser-session-cookie");
+        expect(verified.role).toBe("owner");
+        expect(verified.subject).toBe("unsafe-no-auth-owner");
+      }).pipe(
+        Effect.provide(
+          makeServerAuthLayer({
+            mode: "web",
+            host: "0.0.0.0",
+            unsafeNoAuth: true,
+          }),
+        ),
+      ),
+  );
+
   it.effect("lists pairing links and revokes other client sessions while keeping the owner", () =>
     Effect.gen(function* () {
       const serverAuth = yield* ServerAuth;

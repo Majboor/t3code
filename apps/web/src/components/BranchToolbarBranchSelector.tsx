@@ -573,10 +573,10 @@ export function BranchToolbarBranchSelector({
     >
       <ComboboxTrigger
         render={<Button variant="ghost" size="xs" />}
-        className="text-muted-foreground/70 hover:text-foreground/80"
+        className="min-w-0 max-w-full text-muted-foreground/70 hover:text-foreground/80"
         disabled={(isBranchesSearchPending && branches.length === 0) || isBranchActionPending}
       >
-        <span className="max-w-[240px] truncate">{triggerLabel}</span>
+        <span className="min-w-0 max-w-full truncate">{triggerLabel}</span>
         <ChevronDownIcon />
       </ComboboxTrigger>
       <ComboboxPopup align="end" side="top" className="w-80">

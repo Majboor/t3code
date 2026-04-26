@@ -63,6 +63,10 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly noBrowser: boolean;
   readonly startupPresentation: StartupPresentation;
   readonly desktopBootstrapToken: string | undefined;
+  readonly unsafeNoAuth: boolean;
+  readonly basicAuthUsername: string | undefined;
+  readonly basicAuthPassword: string | undefined;
+  readonly basicAuthRealm: string;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
 }
@@ -161,6 +165,10 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           port: 0,
           host: undefined,
           desktopBootstrapToken: undefined,
+          unsafeNoAuth: false,
+          basicAuthUsername: undefined,
+          basicAuthPassword: undefined,
+          basicAuthRealm: "T3 Code",
           staticDir: undefined,
           devUrl,
           noBrowser: false,

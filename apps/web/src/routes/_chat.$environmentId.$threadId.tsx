@@ -1,5 +1,16 @@
 import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+} from "react";
+import { cn } from "../lib/utils";
+import { resolveDesktopLayoutModeDefinition } from "../desktopLayoutModes";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
@@ -38,6 +49,8 @@ const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const WorkspacePanel = lazy(() => import("../components/WorkspacePanel"));
 const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(30rem,52vw,72rem)";
 const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 28 * 16;
+const COMPACT_PANEL_MIN_HEIGHT_PX = 180;
+const COMPACT_CHAT_MIN_HEIGHT_PX = 220;
 type RightPanelKind = "diff" | "workspace";
 
 const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
@@ -48,11 +61,11 @@ const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
   );
 };
 
-const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
+const LazyDiffPanel = (props: { mode: DiffPanelMode; onClose?: () => void }) => {
   return (
     <DiffWorkerPoolProvider>
       <Suspense fallback={<DiffLoadingFallback mode={props.mode} />}>
-        <DiffPanel mode={props.mode} />
+        <DiffPanel mode={props.mode} {...(props.onClose ? { onClose: props.onClose } : {})} />
       </Suspense>
     </DiffWorkerPoolProvider>
   );
@@ -74,10 +87,18 @@ const WorkspaceLoadingFallback = (props: { mode: WorkspacePanelMode }) => {
   );
 };
 
-const LazyWorkspacePanel = (props: { mode: WorkspacePanelMode }) => {
+const LazyWorkspacePanel = (props: {
+  mode: WorkspacePanelMode;
+  onClose?: () => void;
+  onOpenDiff?: () => void;
+}) => {
   return (
     <Suspense fallback={<WorkspaceLoadingFallback mode={props.mode} />}>
-      <WorkspacePanel mode={props.mode} />
+      <WorkspacePanel
+        mode={props.mode}
+        {...(props.onClose ? { onClose: props.onClose } : {})}
+        {...(props.onOpenDiff ? { onOpenDiff: props.onOpenDiff } : {})}
+      />
     </Suspense>
   );
 };
@@ -117,8 +138,20 @@ const ThreadRightPanelInlineSidebar = (props: {
     [onClose, onOpenPreferredPanel],
   );
   const shouldAcceptInlineSidebarWidth = useCallback(
-    ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
+    ({
+      currentWidth,
+      nextWidth,
+      phase,
+      wrapper,
+    }: {
+      currentWidth: number;
+      nextWidth: number;
+      phase: "drag" | "guard";
+      wrapper: HTMLElement;
+    }) => {
       return canAcceptInlineWorkspaceSidebarWidth({
+        currentWidth,
+        measureWithoutMutatingLayout: phase === "guard",
         nextWidth,
         projectsSidebarOpen: projectSidebarOpen,
         terminalOpen,
@@ -133,8 +166,8 @@ const ThreadRightPanelInlineSidebar = (props: {
       defaultOpen={false}
       open={open}
       onOpenChange={onOpenChange}
-      className="w-auto min-h-0 flex-none bg-transparent"
-      data-layout-column="workspace"
+      className="w-auto min-h-0 flex-none bg-transparent transition-[width] duration-500 ease-out motion-reduce:transition-none"
+      data-layout-column={preferredPanel}
       style={{ "--sidebar-width": RIGHT_PANEL_INLINE_DEFAULT_WIDTH } as React.CSSProperties}
     >
       <Sidebar
@@ -149,9 +182,11 @@ const ThreadRightPanelInlineSidebar = (props: {
           storageKey: WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        {renderDiffContent && preferredPanel === "diff" ? <LazyDiffPanel mode="sidebar" /> : null}
+        {renderDiffContent && preferredPanel === "diff" ? (
+          <LazyDiffPanel mode="sidebar" onClose={onClose} />
+        ) : null}
         {renderWorkspaceContent && preferredPanel === "workspace" ? (
-          <LazyWorkspacePanel mode="sidebar" />
+          <LazyWorkspacePanel mode="sidebar" onClose={onClose} />
         ) : null}
         <SidebarRail />
       </Sidebar>
@@ -162,6 +197,9 @@ const ThreadRightPanelInlineSidebar = (props: {
 function ChatThreadRouteView() {
   const navigate = useNavigate();
   const desktopLayoutMode = useSettings((settings) => settings.desktopLayoutMode);
+  const desktopLayoutDefinition = useSettings((settings) =>
+    resolveDesktopLayoutModeDefinition(settings),
+  );
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
@@ -203,6 +241,7 @@ function ChatThreadRouteView() {
     hasOpenedWorkspace: workspaceOpen,
     lastOpenedPanel: (workspaceOpen ? "workspace" : "diff") as RightPanelKind,
   }));
+  const [devTerminalHost, setDevTerminalHost] = useState<HTMLDivElement | null>(null);
   const hasOpenedDiff =
     diffPanelMountState.threadKey === currentThreadKey
       ? diffPanelMountState.hasOpenedDiff
@@ -252,12 +291,12 @@ function ChatThreadRouteView() {
   }, [markRightPanelOpened]);
 
   useEffect(() => {
-    if (workspaceOpen) {
-      markWorkspaceOpened();
-      return;
-    }
     if (diffOpen) {
       markDiffOpened();
+      return;
+    }
+    if (workspaceOpen) {
+      markWorkspaceOpened();
     }
   }, [diffOpen, markDiffOpened, markWorkspaceOpened, workspaceOpen]);
 
@@ -268,7 +307,13 @@ function ChatThreadRouteView() {
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
-      search: stripDiffSearchParams,
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        diff: undefined,
+        diffFilePath: undefined,
+        diffTurnId: undefined,
+        workspace: undefined,
+      }),
     });
   }, [navigate, threadRef]);
   const openDiff = useCallback(() => {
@@ -281,7 +326,13 @@ function ChatThreadRouteView() {
       params: buildThreadRouteParams(threadRef),
       search: (previous) => {
         const rest = stripDiffSearchParams(previous);
-        return { ...rest, diff: "1" };
+        return {
+          ...rest,
+          diff: "1",
+          diffFilePath: undefined,
+          diffTurnId: undefined,
+          workspace: undefined,
+        };
       },
     });
   }, [markDiffOpened, navigate, threadRef]);
@@ -295,7 +346,13 @@ function ChatThreadRouteView() {
       params: buildThreadRouteParams(threadRef),
       search: (previous) => {
         const rest = stripDiffSearchParams(previous);
-        return { ...rest, workspace: "1" };
+        return {
+          ...rest,
+          diff: undefined,
+          diffFilePath: undefined,
+          diffTurnId: undefined,
+          workspace: "1",
+        };
       },
     });
   }, [markWorkspaceOpened, navigate, threadRef]);
@@ -317,17 +374,96 @@ function ChatThreadRouteView() {
     finalizePromotedDraftThreadByRef(threadRef);
   }, [draftThread?.promotedTo, serverThreadStarted, threadRef]);
 
+  const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
+  const shouldRenderWorkspaceContent = workspaceOpen || hasOpenedWorkspace;
+  const rightPanelOpen = diffOpen || workspaceOpen;
+  const activePanel: RightPanelKind = diffOpen
+    ? "diff"
+    : workspaceOpen
+      ? "workspace"
+      : preferredPanel;
+  const shouldUseCompactRightPanelLayout = shouldUseDiffSheet && rightPanelOpen;
+  const threadIsRunning = serverThread?.session?.orchestrationStatus === "running";
+  const compactPanelDefaultHeightVh =
+    activePanel === "workspace" ? (threadIsRunning ? 42 : 56) : 48;
+  const [compactPanelHeightVhByPanel, setCompactPanelHeightVhByPanel] = useState<
+    Record<RightPanelKind, number>
+  >({
+    diff: 48,
+    workspace: 56,
+  });
+  const compactPanelResizeRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeightPx: number;
+  } | null>(null);
+  const compactPanelHeightVh = compactPanelHeightVhByPanel[activePanel];
+  const setCompactPanelHeightFromPx = useCallback((panel: RightPanelKind, nextHeightPx: number) => {
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const maxHeightPx = Math.max(
+      COMPACT_PANEL_MIN_HEIGHT_PX,
+      viewportHeight - COMPACT_CHAT_MIN_HEIGHT_PX,
+    );
+    const clampedHeightPx = Math.min(
+      Math.max(nextHeightPx, COMPACT_PANEL_MIN_HEIGHT_PX),
+      maxHeightPx,
+    );
+    const nextHeightVh = (clampedHeightPx / Math.max(viewportHeight, 1)) * 100;
+    setCompactPanelHeightVhByPanel((current) => ({
+      ...current,
+      [panel]: Number(nextHeightVh.toFixed(2)),
+    }));
+  }, []);
+  const startCompactPanelResize = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!shouldUseCompactRightPanelLayout) {
+        return;
+      }
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+      compactPanelResizeRef.current = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startHeightPx: (compactPanelHeightVh / 100) * viewportHeight,
+      };
+    },
+    [compactPanelHeightVh, shouldUseCompactRightPanelLayout],
+  );
+  const moveCompactPanelResize = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const resize = compactPanelResizeRef.current;
+      if (!resize || resize.pointerId !== event.pointerId) {
+        return;
+      }
+      setCompactPanelHeightFromPx(
+        activePanel,
+        resize.startHeightPx + event.clientY - resize.startY,
+      );
+    },
+    [activePanel, setCompactPanelHeightFromPx],
+  );
+  const stopCompactPanelResize = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    const resize = compactPanelResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) {
+      return;
+    }
+    compactPanelResizeRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }, []);
+
   if (!threadRef || !bootstrapComplete || !routeThreadExists) {
     return null;
   }
 
-  const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
-  const shouldRenderWorkspaceContent = workspaceOpen || hasOpenedWorkspace;
-  const rightPanelOpen = diffOpen || workspaceOpen;
-  const inlinePanelSide = desktopLayoutMode === "dev" ? "left" : "right";
+  const inlinePanelSide = desktopLayoutDefinition.layout === "dev" ? "left" : "right";
+  const isInlineDevLayout = !shouldUseDiffSheet && desktopLayoutDefinition.layout === "dev";
   const chatColumn = (
     <SidebarInset
-      className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground"
+      className={cn(
+        "min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground",
+        shouldUseCompactRightPanelLayout ? "h-full flex-1" : isInlineDevLayout ? "flex-1" : "h-dvh",
+      )}
       data-layout-column="chat"
     >
       <ChatView
@@ -337,6 +473,8 @@ function ChatThreadRouteView() {
         onWorkspacePanelOpen={markWorkspaceOpened}
         reserveTitleBarControlInset={!rightPanelOpen}
         routeKind="server"
+        terminalPortalHost={isInlineDevLayout ? devTerminalHost : null}
+        compactComposerWhenIdle={shouldUseCompactRightPanelLayout}
       />
     </SidebarInset>
   );
@@ -344,24 +482,73 @@ function ChatThreadRouteView() {
     <ThreadRightPanelInlineSidebar
       open={rightPanelOpen}
       side={inlinePanelSide}
-      preferredPanel={preferredPanel}
+      preferredPanel={activePanel}
       onClose={closeDiff}
-      onOpenPreferredPanel={preferredPanel === "workspace" ? openWorkspace : openDiff}
+      onOpenPreferredPanel={activePanel === "workspace" ? openWorkspace : openDiff}
       renderDiffContent={shouldRenderDiffContent}
       renderWorkspaceContent={shouldRenderWorkspaceContent}
       projectSidebarOpen={projectSidebarOpen}
       revalidateWidthOn={
-        desktopLayoutMode === "dev" ? `${projectSidebarOpen}:${terminalOpen}` : null
+        desktopLayoutDefinition.layout === "dev" ? `${projectSidebarOpen}:${terminalOpen}` : null
       }
       terminalOpen={terminalOpen}
     />
   );
 
+  if (shouldUseCompactRightPanelLayout) {
+    return (
+      <div className="flex h-dvh min-h-0 min-w-0 flex-1 flex-col bg-background">
+        <div
+          className="relative shrink-0 overflow-hidden border-b border-border bg-background transition-[height] duration-500 ease-out motion-reduce:transition-none"
+          data-layout-column={activePanel}
+          style={{
+            height: `clamp(${COMPACT_PANEL_MIN_HEIGHT_PX}px, ${compactPanelHeightVh || compactPanelDefaultHeightVh}dvh, calc(100dvh - ${COMPACT_CHAT_MIN_HEIGHT_PX}px))`,
+          }}
+        >
+          {activePanel === "diff" && shouldRenderDiffContent ? (
+            <LazyDiffPanel mode="compact" onClose={closeDiff} />
+          ) : null}
+          {activePanel === "workspace" && shouldRenderWorkspaceContent ? (
+            <LazyWorkspacePanel mode="compact" onClose={closeDiff} onOpenDiff={openDiff} />
+          ) : null}
+          <div
+            role="separator"
+            aria-label="Resize panel"
+            aria-orientation="horizontal"
+            className="absolute inset-x-0 bottom-[-5px] z-20 flex h-2 cursor-row-resize items-center justify-center"
+            onPointerDown={startCompactPanelResize}
+            onPointerMove={moveCompactPanelResize}
+            onPointerUp={stopCompactPanelResize}
+            onPointerCancel={stopCompactPanelResize}
+          >
+            <div className="h-px w-12 rounded-full bg-border transition-colors" />
+          </div>
+        </div>
+        <div className="flex min-h-[14rem] min-w-0 flex-1 overflow-hidden">{chatColumn}</div>
+      </div>
+    );
+  }
+
   if (!shouldUseDiffSheet) {
+    if (desktopLayoutDefinition.layout === "dev") {
+      return (
+        <div className="flex h-dvh min-h-0 min-w-0 flex-1 flex-col" data-layout-column="dev-main">
+          <div className="flex min-h-0 min-w-0 flex-1">
+            {inlineWorkspaceColumn}
+            {chatColumn}
+          </div>
+          <div
+            ref={setDevTerminalHost}
+            data-slot="dev-terminal-host"
+            className="flex min-w-0 shrink-0 flex-col"
+          />
+        </div>
+      );
+    }
     return (
       <>
-        {desktopLayoutMode === "dev" ? inlineWorkspaceColumn : chatColumn}
-        {desktopLayoutMode === "dev" ? chatColumn : inlineWorkspaceColumn}
+        {chatColumn}
+        {inlineWorkspaceColumn}
       </>
     );
   }
@@ -381,10 +568,10 @@ function ChatThreadRouteView() {
         />
       </SidebarInset>
       <RightPanelSheet open={rightPanelOpen} onClose={closeDiff}>
-        {shouldRenderDiffContent && preferredPanel === "diff" ? (
-          <LazyDiffPanel mode="sheet" />
+        {shouldRenderDiffContent && activePanel === "diff" ? (
+          <LazyDiffPanel mode="sheet" onClose={closeDiff} />
         ) : null}
-        {shouldRenderWorkspaceContent && preferredPanel === "workspace" ? (
+        {shouldRenderWorkspaceContent && activePanel === "workspace" ? (
           <LazyWorkspacePanel mode="sheet" />
         ) : null}
       </RightPanelSheet>

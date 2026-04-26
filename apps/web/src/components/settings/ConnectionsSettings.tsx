@@ -809,7 +809,7 @@ export function ConnectionsSettings() {
   const canManageLocalBackend = currentSessionRole === "owner";
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
-    : currentAuthPolicy === "remote-reachable";
+    : currentAuthPolicy === "remote-reachable" || currentAuthPolicy === "unsafe-no-auth";
 
   const handleDesktopServerExposureChange = useCallback(
     async (checked: boolean) => {
@@ -1202,7 +1202,7 @@ export function ConnectionsSettings() {
               <SettingsRow
                 title="Network access"
                 description={
-                  currentAuthPolicy === "remote-reachable"
+                  currentAuthPolicy === "remote-reachable" || currentAuthPolicy === "unsafe-no-auth"
                     ? "This backend is already configured for remote access. Network exposure changes must be made where the server is launched."
                     : "This backend is only reachable on this machine. Restart it with a non-loopback host to enable remote pairing."
                 }

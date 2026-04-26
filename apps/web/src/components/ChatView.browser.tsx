@@ -61,6 +61,10 @@ import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test
 
 import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
 
+function gitStatusKeyFor(target: { environmentId: string | null; cwd: string | null }): string {
+  return target.environmentId && target.cwd ? `${target.environmentId}:${target.cwd}` : "null";
+}
+
 const gitStatusHarness = vi.hoisted(() => {
   const EMPTY_STATE = {
     data: null,
@@ -79,8 +83,6 @@ const gitStatusHarness = vi.hoisted(() => {
     }
   >();
 
-  const keyFor = (target: { environmentId: string | null; cwd: string | null }) =>
-    target.environmentId && target.cwd ? `${target.environmentId}:${target.cwd}` : "null";
   const emit = () => {
     for (const listener of listeners) {
       listener();
@@ -89,20 +91,20 @@ const gitStatusHarness = vi.hoisted(() => {
 
   const refreshMock = vi.fn(
     async (target: { environmentId: string | null; cwd: string | null }) => {
-      return stateByKey.get(keyFor(target))?.data ?? null;
+      return stateByKey.get(gitStatusKeyFor(target))?.data ?? null;
     },
   );
 
   return {
     refreshMock,
     read(target: { environmentId: string | null; cwd: string | null }) {
-      return stateByKey.get(keyFor(target)) ?? EMPTY_STATE;
+      return stateByKey.get(gitStatusKeyFor(target)) ?? EMPTY_STATE;
     },
     set(
       target: { environmentId: string | null; cwd: string | null },
       data: GitStatusResult | null,
     ) {
-      stateByKey.set(keyFor(target), {
+      stateByKey.set(gitStatusKeyFor(target), {
         data,
         error: null,
         cause: null,
@@ -1688,17 +1690,6 @@ async function dispatchInputKey(
 }
 
 async function switchDesktopLayoutMode(mode: "vibe" | "dev"): Promise<void> {
-  const visibleToggle = document.querySelector<HTMLButtonElement>(
-    mode === "vibe"
-      ? 'button[aria-label="Switch to vibe layout"]'
-      : 'button[aria-label="Switch to dev layout"]',
-  );
-  if (visibleToggle && visibleToggle.getBoundingClientRect().width > 0) {
-    visibleToggle.click();
-    await waitForLayout();
-    return;
-  }
-
   const trigger = await waitForElement(
     () => document.querySelector<HTMLButtonElement>('button[aria-label="View options"]'),
     'Unable to find "View options" button.',
@@ -7583,8 +7574,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         ...snapshot,
         threads: snapshot.threads.map((thread) =>
           thread.id === THREAD_ID
-            ? {
-                ...thread,
+            ? Object.assign({}, thread, {
                 checkpoints: [
                   {
                     turnId,
@@ -7599,7 +7589,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
                     completedAt: isoAt(2_000),
                   },
                 ],
-              }
+              })
             : thread,
         ),
       },
@@ -7732,8 +7722,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         ...snapshot,
         threads: snapshot.threads.map((thread) =>
           thread.id === THREAD_ID
-            ? {
-                ...thread,
+            ? Object.assign({}, thread, {
                 checkpoints: [
                   {
                     turnId,
@@ -7750,7 +7739,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
                     completedAt: isoAt(2_500),
                   },
                 ],
-              }
+              })
             : thread,
         ),
       },

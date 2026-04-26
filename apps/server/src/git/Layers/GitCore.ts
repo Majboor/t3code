@@ -230,10 +230,6 @@ function parsePorcelainEntry(line: string): ParsedPorcelainEntry | null {
   return null;
 }
 
-function parsePorcelainPath(line: string): string | null {
-  return parsePorcelainEntry(line)?.path ?? null;
-}
-
 function normalizeRelativePathInput(relativePath: string): string {
   return relativePath.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
 }
@@ -1281,7 +1277,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     const statusResult = yield* executeGit(
       "GitCore.statusDetails.status",
       cwd,
-      ["status", "--porcelain=2", "--branch"],
+      ["status", "--porcelain=2", "--branch", "--", "."],
       {
         allowNonZeroExit: true,
       },
@@ -1296,7 +1292,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
       return yield* createGitCommandError(
         "GitCore.statusDetails.status",
         cwd,
-        ["status", "--porcelain=2", "--branch"],
+        ["status", "--porcelain=2", "--branch", "--", "."],
         stderr || "git status failed",
       );
     }
@@ -1304,11 +1300,20 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     const [unstagedNumstatStdout, stagedNumstatStdout, defaultRefResult, hasOriginRemote] =
       yield* Effect.all(
         [
-          runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat"]),
+          runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, [
+            "diff",
+            "--relative",
+            "--numstat",
+            "--",
+            ".",
+          ]),
           runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
             "diff",
+            "--relative",
             "--cached",
             "--numstat",
+            "--",
+            ".",
           ]),
           executeGit(
             "GitCore.statusDetails.defaultRef",
@@ -1496,6 +1501,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
       if (!hasUntrackedFile) {
         const diff = yield* readDiffOutput("GitCore.getWorkingTreeDiff.diff", input.cwd, [
           "diff",
+          "--relative",
           "--minimal",
           "HEAD",
           "--",

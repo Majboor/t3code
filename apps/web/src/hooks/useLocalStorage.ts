@@ -39,6 +39,19 @@ export const removeLocalStorageItem = (key: string) => {
   isomorphicLocalStorage.removeItem(key);
 };
 
+export const removeLocalStorageItemsWithPrefix = (prefix: string) => {
+  const keysToRemove: string[] = [];
+  for (let index = 0; index < isomorphicLocalStorage.length; index += 1) {
+    const key = isomorphicLocalStorage.key(index);
+    if (key !== null && key.startsWith(prefix)) {
+      keysToRemove.push(key);
+    }
+  }
+  for (const key of keysToRemove) {
+    isomorphicLocalStorage.removeItem(key);
+  }
+};
+
 const LOCAL_STORAGE_CHANGE_EVENT = "t3code:local_storage_change";
 
 interface LocalStorageChangeDetail {

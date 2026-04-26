@@ -1,7 +1,17 @@
 "use client";
 
 import { Toast } from "@base-ui/react/toast";
-import { useEffect, useMemo, type CSSProperties } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type CSSProperties,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useParams } from "@tanstack/react-router";
 import { type ScopedThreadRef, type ThreadId } from "@t3tools/contracts";
 import {
@@ -15,7 +25,6 @@ import {
 } from "lucide-react";
 
 import { cn } from "~/lib/utils";
-import { buttonVariants } from "~/components/ui/button";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { resolveThreadRouteTarget } from "~/threadRoutes";
@@ -36,7 +45,10 @@ export type ThreadToastData = {
 const toastManager = Toast.createToastManager<ThreadToastData>();
 const anchoredToastManager = Toast.createToastManager<ThreadToastData>();
 type ToastId = ReturnType<typeof toastManager.add>;
-const threadToastVisibleTimeoutRemainingMs = new Map<ToastId, number>();
+type ToastActionProps = ButtonHTMLAttributes<HTMLButtonElement> & { children?: ReactNode };
+type ToastManagerLike = {
+  close: (toastId?: string) => void;
+};
 
 const TOAST_ICONS = {
   error: CircleAlertIcon,
@@ -62,6 +74,229 @@ function CopyErrorButton({ text }: { text: string }) {
         <CopyIcon className="size-3.5" />
       )}
     </button>
+  );
+}
+
+function ToastActionButton({
+  actionProps,
+  toastId,
+  manager,
+}: {
+  actionProps: ToastActionProps;
+  toastId: ToastId;
+  manager: ToastManagerLike;
+}) {
+  const { children, className, onClick, type, ...props } = actionProps;
+
+  return (
+    <button
+      {...props}
+      className={cn(
+        "h-6 shrink-0 cursor-pointer rounded-md border border-border/70 bg-background/40 px-2 text-[11px] font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring",
+        className,
+      )}
+      data-slot="toast-action"
+      onClick={(event: MouseEvent<HTMLButtonElement>) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) {
+          manager.close(toastId);
+        }
+      }}
+      type={type ?? "button"}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ToastDismissProgress({
+  dismissAfterVisibleMs,
+  onComplete,
+}: {
+  dismissAfterVisibleMs: number | undefined;
+  onComplete: () => void;
+}) {
+  const onCompleteRef = useRef(onComplete);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [pathState, setPathState] = useState<{
+    height: number;
+    path: string;
+    width: number;
+  } | null>(null);
+  const [progress, setProgress] = useState(0);
+  const hasMeasuredPath = pathState !== null;
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  useLayoutEffect(() => {
+    const svg = svgRef.current;
+    const element = svg?.parentElement;
+    if (!svg || !element || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const updatePath = () => {
+      const bounds = element.getBoundingClientRect();
+      const width = Math.max(0, bounds.width);
+      const height = Math.max(0, bounds.height);
+      if (width <= 0 || height <= 0) {
+        setPathState(null);
+        return;
+      }
+
+      const styles = window.getComputedStyle(element);
+      const radius = Number.parseFloat(styles.borderTopLeftRadius) || 0;
+      const inset = 0.75;
+      const right = Math.max(inset, width - inset);
+      const bottom = Math.max(inset, height - inset);
+      const curve = Math.max(
+        0,
+        Math.min(radius - inset, (right - inset) / 2, (bottom - inset) / 2),
+      );
+      const left = inset;
+      const top = inset;
+
+      const nextPathState = {
+        height,
+        path: [
+          `M ${left + curve} ${top}`,
+          `H ${right - curve}`,
+          `Q ${right} ${top} ${right} ${top + curve}`,
+          `V ${bottom - curve}`,
+          `Q ${right} ${bottom} ${right - curve} ${bottom}`,
+          `H ${left + curve}`,
+          `Q ${left} ${bottom} ${left} ${bottom - curve}`,
+          `V ${top + curve}`,
+          `Q ${left} ${top} ${left + curve} ${top}`,
+          "Z",
+        ].join(" "),
+        width,
+      };
+
+      setPathState((previousPathState) => {
+        if (
+          previousPathState &&
+          previousPathState.height === nextPathState.height &&
+          previousPathState.width === nextPathState.width &&
+          previousPathState.path === nextPathState.path
+        ) {
+          return previousPathState;
+        }
+        return nextPathState;
+      });
+    };
+
+    updatePath();
+    const observer = new ResizeObserver(updatePath);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!dismissAfterVisibleMs || dismissAfterVisibleMs <= 0 || !hasMeasuredPath) {
+      return;
+    }
+
+    let animationFrameId: number | null = null;
+    let closeFrameId: number | null = null;
+    let elapsedMs = 0;
+    let lastFrameMs: number | null = null;
+    let completed = false;
+
+    setProgress(0);
+
+    const finish = () => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      setProgress(1);
+      closeFrameId = window.requestAnimationFrame(() => {
+        onCompleteRef.current();
+      });
+    };
+
+    const tick = (currentFrameMs: number) => {
+      if (completed) {
+        return;
+      }
+
+      if (document.visibilityState !== "visible") {
+        lastFrameMs = null;
+        animationFrameId = window.requestAnimationFrame(tick);
+        return;
+      }
+
+      if (lastFrameMs === null) {
+        lastFrameMs = currentFrameMs;
+      }
+
+      elapsedMs += currentFrameMs - lastFrameMs;
+      lastFrameMs = currentFrameMs;
+
+      const nextProgress = Math.min(1, elapsedMs / dismissAfterVisibleMs);
+      setProgress(nextProgress);
+
+      if (nextProgress >= 1) {
+        finish();
+        return;
+      }
+
+      animationFrameId = window.requestAnimationFrame(tick);
+    };
+
+    animationFrameId = window.requestAnimationFrame(tick);
+
+    return () => {
+      completed = true;
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      if (closeFrameId !== null) {
+        window.cancelAnimationFrame(closeFrameId);
+      }
+    };
+  }, [dismissAfterVisibleMs, hasMeasuredPath]);
+
+  if (!dismissAfterVisibleMs || dismissAfterVisibleMs <= 0) {
+    return null;
+  }
+
+  return (
+    <svg
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 z-10 rounded-[inherit]"
+      data-slot="toast-dismiss-progress"
+      preserveAspectRatio="none"
+      ref={svgRef}
+      viewBox={pathState ? `0 0 ${pathState.width} ${pathState.height}` : "0 0 1 1"}
+    >
+      {pathState && (
+        <>
+          <path
+            className="stroke-ring/8"
+            d={pathState.path}
+            fill="none"
+            pathLength="1"
+            strokeWidth="1"
+            vectorEffect="non-scaling-stroke"
+          />
+          <path
+            className="stroke-ring/55"
+            d={pathState.path}
+            fill="none"
+            pathLength="1"
+            strokeDasharray="1"
+            strokeDashoffset={1 - progress}
+            strokeLinecap="round"
+            strokeWidth="1.25"
+            vectorEffect="non-scaling-stroke"
+          />
+        </>
+      )}
+    </svg>
   );
 }
 
@@ -100,84 +335,6 @@ function useActiveThreadRefFromRoute(): ScopedThreadRef | null {
   }, [activeDraftSession, routeTarget]);
 }
 
-function ThreadToastVisibleAutoDismiss({
-  toastId,
-  dismissAfterVisibleMs,
-}: {
-  toastId: ToastId;
-  dismissAfterVisibleMs: number | undefined;
-}) {
-  useEffect(() => {
-    if (!dismissAfterVisibleMs || dismissAfterVisibleMs <= 0) return;
-    if (typeof window === "undefined" || typeof document === "undefined") return;
-
-    let remainingMs = threadToastVisibleTimeoutRemainingMs.get(toastId) ?? dismissAfterVisibleMs;
-    let startedAtMs: number | null = null;
-    let timeoutId: number | null = null;
-    let closed = false;
-
-    const clearTimer = () => {
-      if (timeoutId === null) return;
-      window.clearTimeout(timeoutId);
-      timeoutId = null;
-    };
-
-    const closeToast = () => {
-      if (closed) return;
-      closed = true;
-      threadToastVisibleTimeoutRemainingMs.delete(toastId);
-      toastManager.close(toastId);
-    };
-
-    const pause = () => {
-      if (startedAtMs === null) return;
-      remainingMs = Math.max(0, remainingMs - (Date.now() - startedAtMs));
-      startedAtMs = null;
-      clearTimer();
-      threadToastVisibleTimeoutRemainingMs.set(toastId, remainingMs);
-    };
-
-    const start = () => {
-      if (closed || startedAtMs !== null) return;
-      if (remainingMs <= 0) {
-        closeToast();
-        return;
-      }
-      startedAtMs = Date.now();
-      clearTimer();
-      timeoutId = window.setTimeout(() => {
-        remainingMs = 0;
-        startedAtMs = null;
-        closeToast();
-      }, remainingMs);
-    };
-
-    const syncTimer = () => {
-      const shouldRun = document.visibilityState === "visible" && document.hasFocus();
-      if (shouldRun) {
-        start();
-        return;
-      }
-      pause();
-    };
-
-    syncTimer();
-    document.addEventListener("visibilitychange", syncTimer);
-    window.addEventListener("focus", syncTimer);
-    window.addEventListener("blur", syncTimer);
-
-    return () => {
-      document.removeEventListener("visibilitychange", syncTimer);
-      window.removeEventListener("focus", syncTimer);
-      window.removeEventListener("blur", syncTimer);
-      pause();
-      clearTimer();
-    };
-  }, [dismissAfterVisibleMs, toastId]);
-
-  return null;
-}
-
 function ToastProvider({ children, position = "top-right", ...props }: ToastProviderProps) {
   return (
     <Toast.Provider toastManager={toastManager} {...props}>
@@ -196,20 +353,11 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
   );
   const visibleToastLayout = buildVisibleToastLayout(visibleToasts);
 
-  useEffect(() => {
-    const activeToastIds = new Set(toasts.map((toast) => toast.id));
-    for (const toastId of threadToastVisibleTimeoutRemainingMs.keys()) {
-      if (!activeToastIds.has(toastId)) {
-        threadToastVisibleTimeoutRemainingMs.delete(toastId);
-      }
-    }
-  }, [toasts]);
-
   return (
     <Toast.Portal data-slot="toast-portal">
       <Toast.Viewport
         className={cn(
-          "fixed z-100 mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-90 [--toast-header-offset:52px] [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
+          "fixed z-100 mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-80 [--toast-header-offset:52px] [--toast-inset:--spacing(3)] sm:[--toast-inset:--spacing(6)]",
           // Vertical positioning
           "data-[position*=top]:top-[calc(var(--toast-inset)+var(--toast-header-offset))]",
           "data-[position*=bottom]:bottom-(--toast-inset)",
@@ -236,7 +384,7 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
           return (
             <Toast.Root
               className={cn(
-                "absolute z-[calc(9999-var(--toast-index))] h-(--toast-calc-height) w-full select-none rounded-lg border bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+                "absolute z-[calc(9999-var(--toast-index))] h-auto w-full select-none rounded-md border bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-md/5 [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
                 // Base positioning using data-position
                 "data-[position*=right]:right-0 data-[position*=right]:left-auto",
                 "data-[position*=left]:right-auto data-[position*=left]:left-0",
@@ -248,16 +396,13 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                 "data-[position*=top]:after:top-full",
                 "data-[position*=bottom]:after:bottom-full",
                 // Define some variables
-                // Base UI exposes a shared front-most height for the collapsed stack.
-                // If that shared measurement is briefly stale, long content can render
-                // outside the card until hover expands the toast and swaps to its own height.
-                "[--toast-calc-height:max(var(--toast-frontmost-height,var(--toast-height)),var(--toast-height))] [--toast-gap:--spacing(3)] [--toast-peek:--spacing(3)] [--toast-scale:calc(max(0,1-(var(--toast-index)*.1)))] [--toast-shrink:calc(1-var(--toast-scale))]",
+                "[--toast-gap:--spacing(3)] [--toast-peek:--spacing(3)] [--toast-scale:calc(max(0,1-(var(--toast-index)*.1)))] [--toast-shrink:calc(1-var(--toast-scale))]",
                 // Define offset-y variable
                 "data-[position*=top]:[--toast-calc-offset-y:calc(var(--toast-offset-y)+var(--toast-index)*var(--toast-gap)+var(--toast-swipe-movement-y))]",
                 "data-[position*=bottom]:[--toast-calc-offset-y:calc(var(--toast-offset-y)*-1+var(--toast-index)*var(--toast-gap)*-1+var(--toast-swipe-movement-y))]",
                 // Default state transform
-                "data-[position*=top]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)+(var(--toast-index)*var(--toast-peek))+(var(--toast-shrink)*var(--toast-calc-height))))_scale(var(--toast-scale))]",
-                "data-[position*=bottom]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--toast-peek))-(var(--toast-shrink)*var(--toast-calc-height))))_scale(var(--toast-scale))]",
+                "data-[position*=top]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)+(var(--toast-index)*var(--toast-peek))+(var(--toast-shrink)*var(--toast-height))))_scale(var(--toast-scale))]",
+                "data-[position*=bottom]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--toast-peek))-(var(--toast-shrink)*var(--toast-height))))_scale(var(--toast-scale))]",
                 // Limited state
                 "data-limited:opacity-0",
                 // Expanded state
@@ -298,21 +443,21 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
               }
               toast={toast}
             >
-              <ThreadToastVisibleAutoDismiss
-                dismissAfterVisibleMs={toast.data?.dismissAfterVisibleMs}
-                toastId={toast.id}
-              />
               <Toast.Content
                 className={cn(
-                  "pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3.5 py-3 text-sm transition-opacity duration-250 data-expanded:opacity-100",
+                  "pointer-events-auto relative flex items-center justify-between gap-1.5 overflow-hidden rounded-[inherit] px-3 py-2 text-xs transition-opacity duration-250 data-expanded:opacity-100",
                   hideCollapsedContent &&
                     "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
                 )}
               >
+                <ToastDismissProgress
+                  dismissAfterVisibleMs={toast.data?.dismissAfterVisibleMs}
+                  onComplete={() => toastManager.close(toast.id)}
+                />
                 <div className="flex min-w-0 flex-1 gap-2">
                   {Icon && (
                     <div
-                      className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
+                      className="[&>svg]:h-lh [&>svg]:w-3.5 [&_svg]:pointer-events-none [&_svg]:shrink-0"
                       data-slot="toast-icon"
                     >
                       <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
@@ -322,7 +467,7 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <div className="flex items-center justify-between gap-1">
                       <Toast.Title
-                        className="min-w-0 wrap-break-word font-medium"
+                        className="min-w-0 wrap-break-word font-medium leading-snug"
                         data-slot="toast-title"
                       />
                       {toast.type === "error" &&
@@ -330,18 +475,17 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                         !toast.data?.hideCopyButton && <CopyErrorButton text={toast.description} />}
                     </div>
                     <Toast.Description
-                      className="min-w-0 select-text wrap-break-word text-muted-foreground"
+                      className="min-w-0 select-text wrap-break-word text-muted-foreground leading-snug"
                       data-slot="toast-description"
                     />
                   </div>
                 </div>
                 {toast.actionProps && (
-                  <Toast.Action
-                    className={cn(buttonVariants({ size: "xs" }), "shrink-0")}
-                    data-slot="toast-action"
-                  >
-                    {toast.actionProps.children}
-                  </Toast.Action>
+                  <ToastActionButton
+                    actionProps={toast.actionProps}
+                    manager={toastManager}
+                    toastId={toast.id}
+                  />
                 )}
               </Toast.Content>
             </Toast.Root>
@@ -381,7 +525,7 @@ function AnchoredToasts() {
 
             return (
               <Toast.Positioner
-                className="z-100 max-w-[min(--spacing(64),var(--available-width))]"
+                className="z-100 max-w-[min(--spacing(80),var(--available-width))]"
                 data-slot="toast-positioner"
                 key={toast.id}
                 sideOffset={positionerProps.sideOffset ?? 4}
@@ -392,21 +536,25 @@ function AnchoredToasts() {
                     "relative text-balance border bg-popover not-dark:bg-clip-padding text-popover-foreground text-xs transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
                     tooltipStyle
                       ? "rounded-md shadow-md/5 before:rounded-[calc(var(--radius-md)-1px)]"
-                      : "rounded-lg shadow-lg/5 before:rounded-[calc(var(--radius-lg)-1px)]",
+                      : "rounded-md shadow-md/5 before:rounded-[calc(var(--radius-md)-1px)]",
                   )}
                   data-slot="toast-popup"
                   toast={toast}
                 >
+                  <ToastDismissProgress
+                    dismissAfterVisibleMs={toast.data?.dismissAfterVisibleMs}
+                    onComplete={() => anchoredToastManager.close(toast.id)}
+                  />
                   {tooltipStyle ? (
                     <Toast.Content className="pointer-events-auto px-2 py-1">
                       <Toast.Title data-slot="toast-title" />
                     </Toast.Content>
                   ) : (
-                    <Toast.Content className="pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3.5 py-3 text-sm">
+                    <Toast.Content className="pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3 py-2 text-xs">
                       <div className="flex min-w-0 flex-1 gap-2">
                         {Icon && (
                           <div
-                            className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
+                            className="[&>svg]:h-lh [&>svg]:w-3.5 [&_svg]:pointer-events-none [&_svg]:shrink-0"
                             data-slot="toast-icon"
                           >
                             <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
@@ -416,7 +564,7 @@ function AnchoredToasts() {
                         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                           <div className="flex items-center gap-1">
                             <Toast.Title
-                              className="min-w-0 wrap-break-word font-medium"
+                              className="min-w-0 wrap-break-word font-medium leading-snug"
                               data-slot="toast-title"
                             />
                             {toast.type === "error" &&
@@ -426,18 +574,17 @@ function AnchoredToasts() {
                               )}
                           </div>
                           <Toast.Description
-                            className="min-w-0 select-text wrap-break-word text-muted-foreground"
+                            className="min-w-0 select-text wrap-break-word text-muted-foreground leading-snug"
                             data-slot="toast-description"
                           />
                         </div>
                       </div>
                       {toast.actionProps && (
-                        <Toast.Action
-                          className={cn(buttonVariants({ size: "xs" }), "shrink-0")}
-                          data-slot="toast-action"
-                        >
-                          {toast.actionProps.children}
-                        </Toast.Action>
+                        <ToastActionButton
+                          actionProps={toast.actionProps}
+                          manager={anchoredToastManager}
+                          toastId={toast.id}
+                        />
                       )}
                     </Toast.Content>
                   )}

@@ -1,5 +1,5 @@
 import { FileDiff, Virtualizer } from "@pierre/diffs/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import type { TurnId } from "@t3tools/contracts";
@@ -9,6 +9,7 @@ import {
   Columns2Icon,
   Rows3Icon,
   TextWrapIcon,
+  XIcon,
 } from "lucide-react";
 import {
   type WheelEvent as ReactWheelEvent,
@@ -19,8 +20,9 @@ import {
   useState,
 } from "react";
 import { openInPreferredEditor } from "../editorPreferences";
-import { useGitStatus } from "~/lib/gitStatusState";
 import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
+import { gitQueryKeys, gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
+import { refreshGitStatus, useGitStatus } from "~/lib/gitStatusState";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { resolvePathLinkTarget } from "../terminal-links";
@@ -39,6 +41,11 @@ import { createThreadSelectorByRef } from "../storeSelectors";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { useSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
+import {
+  buildWorkspaceLiveTurnDiffStatByPath,
+  hashWorkspaceChangeText,
+} from "../lib/workspaceLiveDiffs";
+import { peekPendingWorkspaceLiveDiffBaselineForThread } from "../lib/workspaceLiveDiffBaselineState";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 
@@ -47,12 +54,14 @@ type DiffThemeType = "light" | "dark";
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
+  onClose?: () => void;
 }
 
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
-export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
+export default function DiffPanel({ mode = "inline", onClose }: DiffPanelProps) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const settings = useSettings();
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("stacked");
@@ -82,11 +91,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       : undefined,
   );
   const activeCwd = activeThread?.worktreePath ?? activeProject?.cwd;
-  const gitStatusQuery = useGitStatus({
+  const gitStatus = useGitStatus({
     environmentId: activeThread?.environmentId ?? null,
     cwd: activeCwd ?? null,
   });
-  const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const orderedTurnDiffSummaries = useMemo(
@@ -111,6 +119,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       ? undefined
       : (orderedTurnDiffSummaries.find((summary) => summary.turnId === selectedTurnId) ??
         orderedTurnDiffSummaries[0]);
+  const hasBackControl = typeof onClose === "function";
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
@@ -163,7 +172,6 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       fromTurnCount: activeCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
-      enabled: isGitRepo,
     }),
   );
   const selectedTurnCheckpointDiff = selectedTurn
@@ -180,7 +188,165 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         ? "Failed to load checkpoint diff."
         : null;
 
-  const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
+  const pendingWorkingTreeBaseline =
+    activeThread && activeCwd
+      ? peekPendingWorkspaceLiveDiffBaselineForThread({
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+          cwd: activeCwd,
+        })
+      : null;
+  const statChangedFallbackWorkingTreeFiles = useMemo(() => {
+    if (!pendingWorkingTreeBaseline?.isRepo || !gitStatus.data?.isRepo) {
+      return [];
+    }
+
+    return Array.from(
+      buildWorkspaceLiveTurnDiffStatByPath(
+        gitStatus.data.workingTree.files,
+        pendingWorkingTreeBaseline.files,
+      ).entries(),
+    )
+      .map(([path, stat]) => ({ path, stat }))
+      .toSorted((left, right) =>
+        left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+      );
+  }, [gitStatus.data, pendingWorkingTreeBaseline]);
+  const fallbackWorkingTreeCandidateFiles = useMemo(() => {
+    if (!pendingWorkingTreeBaseline?.isRepo || !gitStatus.data?.isRepo) {
+      return [];
+    }
+
+    const candidateByPath = new Map(
+      statChangedFallbackWorkingTreeFiles.map((file) => [file.path, file]),
+    );
+    const currentFileByPath = new Map(
+      gitStatus.data.workingTree.files.map((file) => [file.path.replaceAll("\\", "/"), file]),
+    );
+
+    for (const baselineFile of pendingWorkingTreeBaseline.files) {
+      const path = baselineFile.path.replaceAll("\\", "/");
+      if (!baselineFile.diffSignature || candidateByPath.has(path)) {
+        continue;
+      }
+
+      const currentFile = currentFileByPath.get(path);
+      if (!currentFile) {
+        continue;
+      }
+
+      candidateByPath.set(path, {
+        path,
+        stat: {
+          additions: currentFile.insertions,
+          deletions: currentFile.deletions,
+        },
+      });
+    }
+
+    return Array.from(candidateByPath.values()).toSorted((left, right) =>
+      left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+    );
+  }, [gitStatus.data, pendingWorkingTreeBaseline, statChangedFallbackWorkingTreeFiles]);
+  const fallbackWorkingTreeCandidateSignature = useMemo(
+    () => fallbackWorkingTreeCandidateFiles.map((file) => file.path).join("\n"),
+    [fallbackWorkingTreeCandidateFiles],
+  );
+  useEffect(() => {
+    if (
+      !diffOpen ||
+      selectedTurnId !== null ||
+      !activeThread ||
+      !activeCwd ||
+      fallbackWorkingTreeCandidateFiles.length === 0
+    ) {
+      return;
+    }
+
+    void queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.workingTreeDiffs(activeThread.environmentId, activeCwd),
+    });
+  }, [
+    activeCwd,
+    activeThread,
+    diffOpen,
+    fallbackWorkingTreeCandidateFiles.length,
+    fallbackWorkingTreeCandidateSignature,
+    gitStatus.data,
+    queryClient,
+    selectedTurnId,
+  ]);
+  const fallbackWorkingTreeDiffQueries = useQueries({
+    queries: fallbackWorkingTreeCandidateFiles.map((file) =>
+      gitWorkingTreeDiffQueryOptions({
+        environmentId: activeThread?.environmentId ?? null,
+        cwd: activeCwd ?? null,
+        relativePath: file.path,
+        enabled: diffOpen && selectedTurnId === null,
+      }),
+    ),
+  });
+  const fallbackWorkingTreeFiles = useMemo(() => {
+    if (!pendingWorkingTreeBaseline?.isRepo || !gitStatus.data?.isRepo) {
+      return [];
+    }
+
+    const statChangedPaths = new Set(statChangedFallbackWorkingTreeFiles.map((file) => file.path));
+    const baselineDiffSignatureByPath = new Map(
+      pendingWorkingTreeBaseline.files
+        .filter((file) => file.diffSignature)
+        .map((file) => [file.path.replaceAll("\\", "/"), file.diffSignature as string]),
+    );
+
+    return fallbackWorkingTreeCandidateFiles.filter((file, index) => {
+      if (statChangedPaths.has(file.path)) {
+        return true;
+      }
+
+      const baselineDiffSignature = baselineDiffSignatureByPath.get(file.path);
+      const currentDiff = fallbackWorkingTreeDiffQueries[index]?.data?.diff;
+      return (
+        baselineDiffSignature !== undefined &&
+        currentDiff !== undefined &&
+        hashWorkspaceChangeText(currentDiff) !== baselineDiffSignature
+      );
+    });
+  }, [
+    fallbackWorkingTreeCandidateFiles,
+    fallbackWorkingTreeDiffQueries,
+    gitStatus.data,
+    pendingWorkingTreeBaseline,
+    statChangedFallbackWorkingTreeFiles,
+  ]);
+  const isLoadingWorkingTreeFallback =
+    selectedTurnId === null &&
+    fallbackWorkingTreeCandidateFiles.length > 0 &&
+    fallbackWorkingTreeDiffQueries.some((query) => query.isLoading || query.isFetching);
+  const shouldShowWorkingTreeFallback =
+    selectedTurnId === null &&
+    (fallbackWorkingTreeFiles.length > 0 || isLoadingWorkingTreeFallback);
+  const fallbackWorkingTreePatch = useMemo(
+    () =>
+      fallbackWorkingTreeDiffQueries
+        .map((query, index) =>
+          fallbackWorkingTreeFiles.some(
+            (file) => file.path === fallbackWorkingTreeCandidateFiles[index]?.path,
+          )
+            ? (query.data?.diff.trimEnd() ?? "")
+            : "",
+        )
+        .filter((diff) => diff.length > 0)
+        .join("\n"),
+    [fallbackWorkingTreeCandidateFiles, fallbackWorkingTreeDiffQueries, fallbackWorkingTreeFiles],
+  );
+  const fallbackWorkingTreeError =
+    fallbackWorkingTreeDiffQueries.find((query) => query.error instanceof Error)?.error ?? null;
+
+  const selectedPatch = shouldShowWorkingTreeFallback
+    ? fallbackWorkingTreePatch
+    : selectedTurn
+      ? selectedTurnCheckpointDiff
+      : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
   const renderablePatch = useMemo(
@@ -198,13 +364,23 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       }),
     );
   }, [renderablePatch]);
-
   useEffect(() => {
     if (diffOpen && !previousDiffOpenRef.current) {
       setDiffWordWrap(settings.diffWordWrap);
     }
     previousDiffOpenRef.current = diffOpen;
   }, [diffOpen, settings.diffWordWrap]);
+
+  useEffect(() => {
+    if (!diffOpen || !activeThread || !activeCwd) {
+      return;
+    }
+
+    void refreshGitStatus({
+      environmentId: activeThread.environmentId,
+      cwd: activeCwd,
+    }).catch(() => undefined);
+  }, [activeCwd, activeThread, diffOpen]);
 
   useEffect(() => {
     if (!selectedFilePath || !patchViewportRef.current) {
@@ -318,13 +494,14 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
           type="button"
           className={cn(
             "absolute left-0 top-1/2 z-20 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-md border bg-background/90 text-muted-foreground transition-colors",
-            canScrollTurnStripLeft
+            hasBackControl || canScrollTurnStripLeft
               ? "border-border/70 hover:border-border hover:text-foreground"
               : "cursor-not-allowed border-border/40 text-muted-foreground/40",
           )}
-          onClick={() => scrollTurnStripBy(-180)}
-          disabled={!canScrollTurnStripLeft}
-          aria-label="Scroll turn list left"
+          onClick={hasBackControl ? onClose : () => scrollTurnStripBy(-180)}
+          disabled={!hasBackControl && !canScrollTurnStripLeft}
+          aria-label={hasBackControl ? "Back to conversation" : "Scroll turn list left"}
+          title={hasBackControl ? "Back to conversation" : "Scroll turn list left"}
         >
           <ChevronLeftIcon className="size-3.5" />
         </button>
@@ -344,7 +521,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         </button>
         <div
           ref={turnStripRef}
-          className="turn-chip-strip flex gap-1 overflow-x-auto px-8 py-0.5"
+          className={cn(
+            "turn-chip-strip flex gap-1 overflow-x-auto px-8 py-0.5",
+            mode === "compact" && "px-7",
+          )}
           style={
             canScrollTurnStripLeft || canScrollTurnStripRight
               ? {
@@ -368,7 +548,9 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                   : "border-border/70 bg-background/70 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
               )}
             >
-              <div className="text-[10px] leading-tight font-medium">All turns</div>
+              <div className="text-[10px] leading-tight font-medium">
+                {shouldShowWorkingTreeFallback ? "Current changes" : "All turns"}
+              </div>
             </div>
           </button>
           {orderedTurnDiffSummaries.map((summary) => (
@@ -436,6 +618,17 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         >
           <TextWrapIcon className="size-3" />
         </Toggle>
+        {onClose ? (
+          <button
+            type="button"
+            className="inline-flex size-7 items-center justify-center rounded-md border border-border/70 bg-background/80 text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            onClick={onClose}
+            aria-label="Close changes panel"
+            title="Close changes panel"
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        ) : null}
       </div>
     </>
   );
@@ -446,13 +639,9 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.
         </div>
-      ) : !isGitRepo ? (
+      ) : orderedTurnDiffSummaries.length === 0 && !shouldShowWorkingTreeFallback ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
-          Turn diffs are unavailable because this project is not a git repository.
-        </div>
-      ) : orderedTurnDiffSummaries.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
-          No completed turns yet.
+          No completed turn diffs yet.
         </div>
       ) : (
         <>
@@ -460,14 +649,25 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
             ref={patchViewportRef}
             className="diff-panel-viewport min-h-0 min-w-0 flex-1 overflow-hidden"
           >
-            {checkpointDiffError && !renderablePatch && (
-              <div className="px-3">
-                <p className="mb-2 text-[11px] text-red-500/80">{checkpointDiffError}</p>
-              </div>
-            )}
+            {(checkpointDiffError || fallbackWorkingTreeError instanceof Error) &&
+              !renderablePatch && (
+                <div className="px-3">
+                  <p className="mb-2 text-[11px] text-red-500/80">
+                    {fallbackWorkingTreeError instanceof Error
+                      ? fallbackWorkingTreeError.message
+                      : checkpointDiffError}
+                  </p>
+                </div>
+              )}
             {!renderablePatch ? (
-              isLoadingCheckpointDiff ? (
-                <DiffPanelLoadingState label="Loading checkpoint diff..." />
+              isLoadingCheckpointDiff || isLoadingWorkingTreeFallback ? (
+                <DiffPanelLoadingState
+                  label={
+                    shouldShowWorkingTreeFallback
+                      ? "Loading current workspace changes..."
+                      : "Loading checkpoint diff..."
+                  }
+                />
               ) : (
                 <div className="flex h-full items-center justify-center px-3 py-2 text-xs text-muted-foreground/70">
                   <p>

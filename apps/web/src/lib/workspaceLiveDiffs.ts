@@ -8,10 +8,21 @@ export interface WorkspaceWorkingTreeFileStat {
   status: GitWorkingTreeFileStatus;
   insertions: number;
   deletions: number;
+  diffSignature?: string | undefined;
 }
 
 interface WorkspaceBaselineEntry extends WorkspaceAgentDiffStat {
   status: GitWorkingTreeFileStatus;
+  diffSignature?: string | undefined;
+}
+
+export function hashWorkspaceChangeText(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function buildWorkspaceWorkingTreeBaselineMap(
@@ -29,6 +40,7 @@ function buildWorkspaceWorkingTreeBaselineMap(
       additions: file.insertions,
       deletions: file.deletions,
       status: file.status,
+      diffSignature: file.diffSignature,
     });
   }
 
@@ -56,13 +68,17 @@ export function buildWorkspaceLiveTurnDiffStatByPath(
     const currentStat: WorkspaceAgentDiffStat = {
       additions: file.insertions,
       deletions: file.deletions,
+      ...(file.diffSignature ? { diffSignature: file.diffSignature } : {}),
     };
     const baseline = baselineByPath.get(path);
     if (
       baseline !== undefined &&
       baseline.additions === currentStat.additions &&
       baseline.deletions === currentStat.deletions &&
-      baseline.status === file.status
+      baseline.status === file.status &&
+      (baseline.diffSignature === undefined ||
+        file.diffSignature === undefined ||
+        baseline.diffSignature === file.diffSignature)
     ) {
       continue;
     }

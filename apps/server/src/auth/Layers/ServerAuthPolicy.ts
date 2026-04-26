@@ -9,22 +9,28 @@ import { isLoopbackHost, isWildcardHost } from "../../startupAccess.ts";
 export const makeServerAuthPolicy = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const isRemoteReachable = isWildcardHost(config.host) || !isLoopbackHost(config.host);
+  const isBasicAuthEnabled =
+    config.basicAuthUsername !== undefined && config.basicAuthPassword !== undefined;
 
   const policy =
-    config.mode === "desktop"
-      ? isRemoteReachable
-        ? "remote-reachable"
-        : "desktop-managed-local"
-      : isRemoteReachable
-        ? "remote-reachable"
-        : "loopback-browser";
+    isBasicAuthEnabled || config.unsafeNoAuth
+      ? "unsafe-no-auth"
+      : config.mode === "desktop"
+        ? isRemoteReachable
+          ? "remote-reachable"
+          : "desktop-managed-local"
+        : isRemoteReachable
+          ? "remote-reachable"
+          : "loopback-browser";
 
   const bootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
-    policy === "desktop-managed-local"
-      ? ["desktop-bootstrap"]
-      : config.mode === "desktop" && policy === "remote-reachable"
-        ? ["desktop-bootstrap", "one-time-token"]
-        : ["one-time-token"];
+    policy === "unsafe-no-auth"
+      ? []
+      : policy === "desktop-managed-local"
+        ? ["desktop-bootstrap"]
+        : config.mode === "desktop" && policy === "remote-reachable"
+          ? ["desktop-bootstrap", "one-time-token"]
+          : ["one-time-token"];
 
   const descriptor: ServerAuthDescriptor = {
     policy,

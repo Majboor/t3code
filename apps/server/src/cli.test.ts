@@ -74,6 +74,10 @@ const makeCliTestServerConfig = (baseDir: string) =>
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,
+      unsafeNoAuth: false,
+      basicAuthUsername: undefined,
+      basicAuthPassword: undefined,
+      basicAuthRealm: "T3 Code",
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
     } satisfies ServerConfigShape;

@@ -15,12 +15,15 @@ import {
   ChevronRightIcon,
   FilePlus2Icon,
   FileWarningIcon,
+  FilesIcon,
   FolderClosedIcon,
   FolderPlusIcon,
+  GitCompareArrowsIcon,
   HardDriveUploadIcon,
   LoaderCircleIcon,
   RefreshCcwIcon,
   SaveIcon,
+  XIcon,
 } from "lucide-react";
 import {
   type ChangeEvent,
@@ -56,9 +59,13 @@ import {
   buildWorkspaceFocusedFileDiff,
   type WorkspaceDiffReviewItem,
 } from "~/lib/workspaceDiffReview";
-import { takePendingWorkspaceLiveDiffBaselineForThread } from "~/lib/workspaceLiveDiffBaselineState";
+import {
+  peekPendingWorkspaceLiveDiffBaselineForThread,
+  takePendingWorkspaceLiveDiffBaselineForThread,
+} from "~/lib/workspaceLiveDiffBaselineState";
 import {
   buildWorkspaceLiveTurnDiffStatByPath,
+  hashWorkspaceChangeText,
   type WorkspaceWorkingTreeFileStat,
 } from "~/lib/workspaceLiveDiffs";
 import {
@@ -96,7 +103,10 @@ import { toastManager } from "./ui/toast";
 
 const ROOT_DIRECTORY_KEY = "";
 const EMPTY_WORKSPACE_FILE_DIFF_HISTORY: ReadonlyArray<WorkspaceAgentFileDiff> = [];
-const EMPTY_WORKSPACE_DIFF_STAT_MAP = new Map<string, { additions: number; deletions: number }>();
+const EMPTY_WORKSPACE_DIFF_STAT_MAP = new Map<
+  string,
+  { additions: number; deletions: number; diffSignature?: string | undefined }
+>();
 const EMPTY_WORKSPACE_DIFF_REVIEW_ITEMS: ReadonlyArray<WorkspaceDiffReviewItem> = [];
 const EMPTY_WORKSPACE_DIFF_REVIEW_IDS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACE_WORKING_TREE_FILES: ReadonlyArray<WorkspaceWorkingTreeFileStat> = [];
@@ -106,9 +116,11 @@ const WORKSPACE_DIFF_REVIEW_STORAGE_PREFIX = "t3code:workspace-diff-review:v1";
 function buildWorkspaceLiveDiffKey(
   turnKey: string,
   pathValue: string,
-  stat: { additions: number; deletions: number },
+  stat: { additions: number; deletions: number; diffSignature?: string | undefined },
 ): string {
-  return `working-tree:${turnKey}:${pathValue}:${stat.additions}:${stat.deletions}`;
+  return `working-tree:${turnKey}:${pathValue}:${stat.additions}:${stat.deletions}:${
+    stat.diffSignature ?? ""
+  }`;
 }
 
 function buildWorkspaceCheckpointDiffKey(entry: WorkspaceAgentFileDiff): string {
@@ -119,6 +131,21 @@ function buildWorkspaceReviewSessionKey(turnId: TurnId, pathValue: string): stri
   return `turn:${turnId}:${pathValue}`;
 }
 
+function buildWorkspaceCurrentReviewSessionKey(scopeKey: string, pathValue: string): string {
+  return `current:${scopeKey}:${pathValue}`;
+}
+
+function isWorkspaceRelativePath(pathValue: string): boolean {
+  const normalizedPath = pathValue.replaceAll("\\", "/").replace(/^\.\/+/, "");
+  return (
+    normalizedPath.length > 0 &&
+    !normalizedPath.startsWith("/") &&
+    normalizedPath !== ".." &&
+    !normalizedPath.startsWith("../") &&
+    !normalizedPath.includes("/../")
+  );
+}
+
 interface WorkspaceResolvedFileDiffState {
   source: "working-tree" | "checkpoint";
   sessionKey: string;
@@ -126,6 +153,7 @@ interface WorkspaceResolvedFileDiffState {
   stat: {
     additions: number;
     deletions: number;
+    diffSignature?: string | undefined;
   };
 }
 
@@ -139,10 +167,16 @@ interface WorkspaceReviewFileEntry extends WorkspaceResolvedFileDiffState {
   path: string;
 }
 
+type WorkspaceLiveDiffBaselineSource = "pending" | "status";
+
 interface WorkspaceCompletedLiveDiffState {
   turnId: TurnId;
   turnKey: string;
-  statByPath: ReadonlyMap<string, { additions: number; deletions: number }>;
+  source: WorkspaceLiveDiffBaselineSource;
+  statByPath: ReadonlyMap<
+    string,
+    { additions: number; deletions: number; diffSignature?: string | undefined }
+  >;
 }
 
 interface WorkspaceGitStatusSnapshot {
@@ -320,6 +354,8 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
 
 interface WorkspacePanelProps {
   mode?: WorkspacePanelMode;
+  onClose?: () => void;
+  onOpenDiff?: () => void;
 }
 
 type WorkspaceFileViewMode = "editor" | "diff";
@@ -341,6 +377,7 @@ const WorkspaceDiffReviewStateByKeySchema = Schema.Record(
   Schema.String,
   WorkspaceDiffReviewStateSchema,
 );
+type WorkspaceDiffReviewState = typeof WorkspaceDiffReviewStateSchema.Type;
 
 function buildWorkspaceReviewStorageScopeKey(input: {
   environmentId: string | null;
@@ -365,7 +402,11 @@ function buildWorkspaceReviewStorageScopeKey(input: {
   return "inactive";
 }
 
-export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps) {
+export default function WorkspacePanel({
+  mode = "inline",
+  onClose,
+  onOpenDiff,
+}: WorkspacePanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const settings = useSettings();
@@ -424,9 +465,13 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   );
   const workspaceAgentDiffHistoryByPath = workspaceAgentDiffIndex.fileHistoryByPath;
   const workspaceAgentDiffTurnFilesByTurnId = workspaceAgentDiffIndex.turnFilesByTurnId;
-  const currentWorkspaceWorkingTreeFiles = gitStatus.data?.isRepo
-    ? gitStatus.data.workingTree.files
-    : EMPTY_WORKSPACE_WORKING_TREE_FILES;
+  const currentWorkspaceWorkingTreeFiles = useMemo(
+    () =>
+      gitStatus.data?.isRepo
+        ? gitStatus.data.workingTree.files.filter((file) => isWorkspaceRelativePath(file.path))
+        : EMPTY_WORKSPACE_WORKING_TREE_FILES,
+    [gitStatus.data?.isRepo, gitStatus.data?.workingTree.files],
+  );
   const currentWorkspaceWorkingTreeFilesRef = useRef(currentWorkspaceWorkingTreeFiles);
   currentWorkspaceWorkingTreeFilesRef.current = currentWorkspaceWorkingTreeFiles;
   const workingTreeStatusByPath = useMemo(() => {
@@ -468,6 +513,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     path: null,
     kind: null,
   });
+  const [compactExplorerOpen, setCompactExplorerOpen] = useState(true);
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [loadingFilePath, setLoadingFilePath] = useState<string | null>(null);
@@ -508,6 +554,11 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   openTabsRef.current = openTabs;
   const expandedDirectoriesByPathRef = useRef(expandedDirectoriesByPath);
   expandedDirectoriesByPathRef.current = expandedDirectoriesByPath;
+  const activeFileState = activeFilePath ? (fileStateByPath[activeFilePath] ?? null) : null;
+  const activeFileDraft =
+    activeFilePath && activeFileState && !activeFileState.isBinary && !activeFileState.tooLarge
+      ? (draftByPath[activeFilePath] ?? activeFileState.contents)
+      : "";
   const observedWorkspaceDiffSignatureRef = useRef("");
   const hasObservedWorkspaceDiffBaselineRef = useRef(false);
   const observedLiveWorkspaceDiffSignatureRef = useRef("");
@@ -517,6 +568,8 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const [liveDiffBaselineFiles, setLiveDiffBaselineFiles] = useState<
     ReadonlyArray<WorkspaceWorkingTreeFileStat>
   >(EMPTY_WORKSPACE_WORKING_TREE_FILES);
+  const [liveDiffBaselineSource, setLiveDiffBaselineSource] =
+    useState<WorkspaceLiveDiffBaselineSource | null>(null);
   const latestRunningLiveDiffRef = useRef<WorkspaceCompletedLiveDiffState | null>(null);
   const [completedLiveDiffState, setCompletedLiveDiffState] =
     useState<WorkspaceCompletedLiveDiffState | null>(null);
@@ -638,6 +691,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     setLoadingDirectoriesByPath({});
     setExpandedDirectoriesByPath({});
     setSelectedEntry({ path: null, kind: null });
+    setCompactExplorerOpen(true);
     setOpenTabs([]);
     setActiveFilePath(null);
     setLoadingFilePath(null);
@@ -651,6 +705,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     setLiveDiffBaselineTurnKey(null);
     liveDiffBaselinePendingTurnKeyRef.current = null;
     setLiveDiffBaselineFiles(EMPTY_WORKSPACE_WORKING_TREE_FILES);
+    setLiveDiffBaselineSource(null);
     latestRunningLiveDiffRef.current = null;
     setCompletedLiveDiffState(null);
     observedWorkspaceDiffSignatureRef.current = "";
@@ -665,7 +720,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     setExpandedDirectoriesByPath({ [ROOT_DIRECTORY_KEY]: true });
     setSelectedEntry({ path: null, kind: "directory" });
     void loadDirectory(null);
-  }, [activeWorkspaceRoot, loadDirectory]);
+  }, [activeWorkspaceRoot, loadDirectory, workspaceReviewStorageScopeKey]);
 
   const openFile = useCallback(
     (relativePath: string) => {
@@ -759,15 +814,23 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
               ? currentWorkspaceWorkingTreeFilesRef.current
               : EMPTY_WORKSPACE_WORKING_TREE_FILES
             : null;
+    const immediateBaselineSource: WorkspaceLiveDiffBaselineSource | null =
+      pendingDispatchBaseline !== null
+        ? "pending"
+        : committedBaselineSnapshot !== null || hasCurrentGitStatusSnapshotRef.current
+          ? "status"
+          : null;
 
     if (immediateBaselineFiles !== null) {
       setLiveDiffBaselineFiles(immediateBaselineFiles);
+      setLiveDiffBaselineSource(immediateBaselineSource ?? "status");
       setLiveDiffBaselineTurnKey(activeRunningTurnKey);
       liveDiffBaselinePendingTurnKeyRef.current = null;
     } else {
       setLiveDiffBaselineTurnKey(null);
       liveDiffBaselinePendingTurnKeyRef.current = activeRunningTurnKey;
       setLiveDiffBaselineFiles(EMPTY_WORKSPACE_WORKING_TREE_FILES);
+      setLiveDiffBaselineSource(null);
     }
 
     let cancelled = false;
@@ -787,6 +850,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
             ? currentWorkspaceWorkingTreeFilesRef.current
             : EMPTY_WORKSPACE_WORKING_TREE_FILES;
         setLiveDiffBaselineFiles(baselineFiles);
+        setLiveDiffBaselineSource("status");
         setLiveDiffBaselineTurnKey(activeRunningTurnKey);
         if (liveDiffBaselinePendingTurnKeyRef.current === activeRunningTurnKey) {
           liveDiffBaselinePendingTurnKeyRef.current = null;
@@ -801,6 +865,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
           ? currentWorkspaceWorkingTreeFilesRef.current
           : EMPTY_WORKSPACE_WORKING_TREE_FILES;
         setLiveDiffBaselineFiles(baselineFiles);
+        setLiveDiffBaselineSource("status");
         setLiveDiffBaselineTurnKey(activeRunningTurnKey);
         if (liveDiffBaselinePendingTurnKeyRef.current === activeRunningTurnKey) {
           liveDiffBaselinePendingTurnKeyRef.current = null;
@@ -853,6 +918,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       const runningLiveDiffState: WorkspaceCompletedLiveDiffState = {
         turnId: activeRunningTurnId,
         turnKey: activeRunningTurnKey,
+        source: liveDiffBaselineSource ?? "status",
         statByPath: liveWorkspaceDiffStatByPath,
       };
       latestRunningLiveDiffRef.current = runningLiveDiffState;
@@ -878,13 +944,19 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       }
       return latestRunningLiveDiff;
     });
-  }, [activeRunningTurnId, activeRunningTurnKey, liveWorkspaceDiffStatByPath]);
+  }, [
+    activeRunningTurnId,
+    activeRunningTurnKey,
+    liveDiffBaselineSource,
+    liveWorkspaceDiffStatByPath,
+  ]);
 
-  const activeFileState = activeFilePath ? (fileStateByPath[activeFilePath] ?? null) : null;
-  const activeFileDraft =
-    activeFilePath && activeFileState && !activeFileState.isBinary && !activeFileState.tooLarge
-      ? (draftByPath[activeFilePath] ?? activeFileState.contents)
-      : "";
+  useEffect(() => {
+    if (mode === "compact" && !activeFilePath) {
+      setCompactExplorerOpen(true);
+    }
+  }, [activeFilePath, mode]);
+
   const dirtyFilePathSet = useMemo(() => {
     const dirtyPaths = new Set<string>();
     for (const tabPath of openTabs) {
@@ -941,24 +1013,196 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     refreshCleanOpenFiles,
     refreshExpandedDirectories,
   ]);
+  const pendingWorkspaceLiveDiffBaseline =
+    activeThread && activeWorkspaceRoot
+      ? peekPendingWorkspaceLiveDiffBaselineForThread({
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+          cwd: activeWorkspaceRoot,
+        })
+      : null;
+  const hasPendingWorkspaceLiveDiffBaseline = pendingWorkspaceLiveDiffBaseline !== null;
+  const pendingWorkspaceDiffStatByPath = useMemo(() => {
+    if (
+      activeRunningTurnKey !== null ||
+      !pendingWorkspaceLiveDiffBaseline?.isRepo ||
+      !gitStatus.data?.isRepo
+    ) {
+      return EMPTY_WORKSPACE_DIFF_STAT_MAP;
+    }
+
+    return buildWorkspaceLiveTurnDiffStatByPath(
+      currentWorkspaceWorkingTreeFiles,
+      pendingWorkspaceLiveDiffBaseline.files,
+    );
+  }, [
+    activeRunningTurnKey,
+    currentWorkspaceWorkingTreeFiles,
+    gitStatus.data?.isRepo,
+    pendingWorkspaceLiveDiffBaseline,
+  ]);
+  const shouldUsePendingWorkspaceReview =
+    activeRunningTurnKey === null && hasPendingWorkspaceLiveDiffBaseline;
+  const activeLatestTurnId = activeThread?.latestTurn?.turnId ?? null;
+  const activeLatestTurnKey =
+    activeLatestTurnId !== null && activeThread
+      ? `${activeThread.environmentId}:${activeThread.id}:${activeLatestTurnId}`
+      : null;
+  useEffect(() => {
+    if (
+      activeRunningTurnKey !== null ||
+      !activeEnvironmentId ||
+      !activeWorkspaceRoot ||
+      !hasPendingWorkspaceLiveDiffBaseline ||
+      !activeThread?.latestTurn?.completedAt
+    ) {
+      return;
+    }
+
+    void refreshGitStatus({
+      environmentId: activeEnvironmentId,
+      cwd: activeWorkspaceRoot,
+    }).catch(() => undefined);
+    void queryClient.invalidateQueries({
+      queryKey: workspaceQueryKeys.all,
+    });
+    void queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
+    });
+  }, [
+    activeEnvironmentId,
+    activeRunningTurnKey,
+    activeThread?.latestTurn?.completedAt,
+    activeWorkspaceRoot,
+    hasPendingWorkspaceLiveDiffBaseline,
+    queryClient,
+  ]);
   const activeFileDiffHistory = activeFilePath
     ? (workspaceAgentDiffHistoryByPath.get(activeFilePath) ?? EMPTY_WORKSPACE_FILE_DIFF_HISTORY)
     : EMPTY_WORKSPACE_FILE_DIFF_HISTORY;
+  const activeFilePendingWorkspaceDiffStat =
+    activeFilePath !== null ? (pendingWorkspaceDiffStatByPath.get(activeFilePath) ?? null) : null;
   const activeFileCompletedLiveDiffStat =
-    activeFilePath !== null && activeFileDiffHistory.length === 0
+    activeFilePath !== null
       ? (completedLiveDiffState?.statByPath.get(activeFilePath) ?? null)
       : null;
-  const activeFileDirty = activeFilePath ? dirtyFilePathSet.has(activeFilePath) : false;
-  const activeFileLiveDiffStat =
-    activeFilePath !== null
-      ? (liveWorkspaceDiffStatByPath.get(activeFilePath) ?? activeFileCompletedLiveDiffStat ?? null)
+  const activeFileReviewCompletedLiveDiffStat = shouldUsePendingWorkspaceReview
+    ? null
+    : completedLiveDiffState?.source === "pending"
+      ? activeFileCompletedLiveDiffStat
       : null;
+  const activeFileDirty = activeFilePath ? dirtyFilePathSet.has(activeFilePath) : false;
+  const activeFileStatOnlyLiveDiffStat =
+    activeFilePath !== null ? (liveWorkspaceDiffStatByPath.get(activeFilePath) ?? null) : null;
+  const activeFileBaselineDiffSignature =
+    activeFilePath !== null
+      ? (liveDiffBaselineFiles.find((file) => file.path.replaceAll("\\", "/") === activeFilePath)
+          ?.diffSignature ??
+        pendingWorkspaceLiveDiffBaseline?.files.find(
+          (file) => file.path.replaceAll("\\", "/") === activeFilePath,
+        )?.diffSignature ??
+        null)
+      : null;
+  const activeFileMayHavePatchOnlyLiveDiff = activeFileBaselineDiffSignature !== null;
+  const {
+    activeDiffQuery: activeWorkingTreeDiffQuery,
+    diffError: activeWorkingTreeDiffError,
+    renderableFile: activeWorkingTreeRenderableFile,
+    renderablePatch: activeWorkingTreeRenderablePatch,
+  } = useWorkspaceWorkingTreeDiff({
+    environmentId: activeEnvironmentId,
+    cwd: activeWorkspaceRoot,
+    relativePath: activeFilePath,
+    resolvedTheme,
+    cacheScope: "workspace-working-tree",
+    enabled:
+      activeFilePath !== null &&
+      !activeFileDirty &&
+      (activeFileStatOnlyLiveDiffStat !== null ||
+        activeFileReviewCompletedLiveDiffStat !== null ||
+        activeFileMayHavePatchOnlyLiveDiff),
+  });
+  useEffect(() => {
+    if (
+      !activeFileMayHavePatchOnlyLiveDiff ||
+      !activeEnvironmentId ||
+      !activeWorkspaceRoot ||
+      !activeFilePath
+    ) {
+      return;
+    }
+
+    void queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.workingTreeDiff(
+        activeEnvironmentId,
+        activeWorkspaceRoot,
+        activeFilePath,
+      ),
+    });
+  }, [
+    activeEnvironmentId,
+    activeFileMayHavePatchOnlyLiveDiff,
+    activeFilePath,
+    activeWorkspaceRoot,
+    currentWorkspaceWorkingTreeFiles,
+    queryClient,
+  ]);
+  const activeFilePatchOnlyLiveDiffStat = useMemo(() => {
+    if (activeFilePath === null || activeFileBaselineDiffSignature === null) {
+      return null;
+    }
+
+    const currentDiff = activeWorkingTreeDiffQuery.data?.diff;
+    if (currentDiff === undefined) {
+      return null;
+    }
+
+    const currentDiffSignature = hashWorkspaceChangeText(currentDiff);
+    if (currentDiffSignature === activeFileBaselineDiffSignature) {
+      return null;
+    }
+
+    const currentFile = currentWorkspaceWorkingTreeFiles.find(
+      (file) => file.path.replaceAll("\\", "/") === activeFilePath,
+    );
+    return {
+      additions: currentFile?.insertions ?? 0,
+      deletions: currentFile?.deletions ?? 0,
+      diffSignature: currentDiffSignature,
+    };
+  }, [
+    activeFileBaselineDiffSignature,
+    activeFilePath,
+    activeWorkingTreeDiffQuery.data?.diff,
+    currentWorkspaceWorkingTreeFiles,
+  ]);
+  const activeFileLiveDiffStat =
+    activeFilePatchOnlyLiveDiffStat ??
+    activeFileStatOnlyLiveDiffStat ??
+    activeFilePendingWorkspaceDiffStat ??
+    activeFileReviewCompletedLiveDiffStat;
   const activeFileLiveDiffTurnId =
     activeRunningTurnId ??
-    (activeFileCompletedLiveDiffStat ? (completedLiveDiffState?.turnId ?? null) : null);
+    (activeFilePendingWorkspaceDiffStat || activeFilePatchOnlyLiveDiffStat
+      ? activeLatestTurnId
+      : null) ??
+    (activeFileReviewCompletedLiveDiffStat ? (completedLiveDiffState?.turnId ?? null) : null) ??
+    null;
   const activeFileLiveDiffTurnKey =
     activeRunningTurnKey ??
-    (activeFileCompletedLiveDiffStat ? (completedLiveDiffState?.turnKey ?? null) : null);
+    (activeFilePendingWorkspaceDiffStat || activeFilePatchOnlyLiveDiffStat
+      ? activeLatestTurnKey
+      : null) ??
+    (activeFileReviewCompletedLiveDiffStat ? (completedLiveDiffState?.turnKey ?? null) : null) ??
+    (activeFilePath !== null && activeFileLiveDiffStat !== null
+      ? `current:${workspaceReviewStorageScopeKey}`
+      : null);
+  const activeFileLiveDiffSessionKey =
+    activeFilePath === null || !activeFileLiveDiffStat
+      ? null
+      : activeFileLiveDiffTurnId
+        ? buildWorkspaceReviewSessionKey(activeFileLiveDiffTurnId, activeFilePath)
+        : buildWorkspaceCurrentReviewSessionKey(workspaceReviewStorageScopeKey, activeFilePath);
   const activeFileHasLiveDiff = activeFileLiveDiffStat !== null;
   const selectedActiveDiffEntry =
     (selectedDiffTurnId
@@ -981,24 +1225,11 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
   const activeVisibleDiffSessionKey =
     activeFilePath === null
       ? null
-      : activeFileHasLiveDiff && activeFileLiveDiffTurnId
-        ? buildWorkspaceReviewSessionKey(activeFileLiveDiffTurnId, activeFilePath)
+      : activeFileHasLiveDiff
+        ? activeFileLiveDiffSessionKey
         : selectedActiveDiffEntry
           ? buildWorkspaceReviewSessionKey(selectedActiveDiffEntry.turnId, activeFilePath)
           : null;
-  const {
-    activeDiffQuery: activeWorkingTreeDiffQuery,
-    diffError: activeWorkingTreeDiffError,
-    renderableFile: activeWorkingTreeRenderableFile,
-    renderablePatch: activeWorkingTreeRenderablePatch,
-  } = useWorkspaceWorkingTreeDiff({
-    environmentId: activeEnvironmentId,
-    cwd: activeWorkspaceRoot,
-    relativePath: activeFilePath,
-    resolvedTheme,
-    cacheScope: "workspace-working-tree",
-    enabled: activeFilePath !== null && !activeFileDirty && activeFileHasLiveDiff,
-  });
   const {
     activeDiffQuery: activeInlineDiffQuery,
     diffError: activeInlineDiffError,
@@ -1033,10 +1264,12 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       ? activeWorkingTreeDiffQuery.isLoading
       : activeInlineDiffQuery.isLoading;
   const activeVisibleDiffReviewKey =
-    activeVisibleDiffSessionKey ??
-    (activeRenderableInlineFile !== null
-      ? buildFileDiffRenderKey(activeRenderableInlineFile)
-      : activeVisibleDiffKey);
+    activeInlineDiffSource === "working-tree"
+      ? activeVisibleDiffKey
+      : (activeVisibleDiffSessionKey ??
+        (activeRenderableInlineFile !== null
+          ? buildFileDiffRenderKey(activeRenderableInlineFile)
+          : activeVisibleDiffKey));
   const activeReviewItems = useMemo(
     () =>
       activeRenderableInlineFile
@@ -1107,9 +1340,12 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     activeRenderableInlineFile !== null && activeSelectedReviewItem !== null
       ? buildWorkspaceFocusedFileDiff(activeRenderableInlineFile, activeSelectedReviewItem)
       : activeRenderableInlineFile;
-  const activeReviewSessionFiles = useMemo<ReadonlyArray<WorkspaceReviewFileEntry>>(() => {
-    if (activeInlineDiffSource === "working-tree" && activeRunningTurnKey !== null) {
+  const currentWorkspaceReviewSessionFiles = useMemo<
+    ReadonlyArray<WorkspaceReviewFileEntry>
+  >(() => {
+    if (activeRunningTurnKey !== null) {
       return Array.from(liveWorkspaceDiffStatByPath.entries())
+        .filter(([pathValue]) => isWorkspaceRelativePath(pathValue))
         .map(([pathValue, stat]) => ({
           path: pathValue,
           source: "working-tree" as const,
@@ -1130,12 +1366,30 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         );
     }
 
-    if (
-      activeInlineDiffSource === "working-tree" &&
-      activeRunningTurnKey === null &&
-      completedLiveDiffState
-    ) {
+    if (shouldUsePendingWorkspaceReview) {
+      const pendingTurnKey =
+        activeLatestTurnKey ?? `current:${workspaceReviewStorageScopeKey}:pending`;
+      return Array.from(pendingWorkspaceDiffStatByPath.entries())
+        .filter(([pathValue]) => isWorkspaceRelativePath(pathValue))
+        .map(([pathValue, stat]) => ({
+          path: pathValue,
+          source: "working-tree" as const,
+          sessionKey:
+            activeLatestTurnId !== null
+              ? buildWorkspaceReviewSessionKey(activeLatestTurnId, pathValue)
+              : buildWorkspaceCurrentReviewSessionKey(workspaceReviewStorageScopeKey, pathValue),
+          visibilityKey: buildWorkspaceLiveDiffKey(pendingTurnKey, pathValue, stat),
+          stat,
+        }))
+        .filter((entry) => !isWorkspaceDiffAccepted(acceptedDiffStateByPath[entry.path], entry))
+        .toSorted((left, right) =>
+          left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+        );
+    }
+
+    if (completedLiveDiffState?.source === "pending") {
       return Array.from(completedLiveDiffState.statByPath.entries())
+        .filter(([pathValue]) => isWorkspaceRelativePath(pathValue))
         .map(([pathValue, stat]) => ({
           path: pathValue,
           source: "working-tree" as const,
@@ -1147,6 +1401,32 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         .toSorted((left, right) =>
           left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
         );
+    }
+
+    return [];
+  }, [
+    acceptedDiffStateByPath,
+    activeLatestTurnId,
+    activeLatestTurnKey,
+    activeRunningTurnId,
+    activeRunningTurnKey,
+    completedLiveDiffState,
+    liveWorkspaceDiffStatByPath,
+    pendingWorkspaceDiffStatByPath,
+    shouldUsePendingWorkspaceReview,
+    workspaceReviewStorageScopeKey,
+  ]);
+  const visibleWorkspaceReviewSessionFiles = useMemo(
+    () =>
+      currentWorkspaceReviewSessionFiles.filter(
+        (entry) => !(entry.path === activeFilePath && activeVisibleDiffFullyAccepted),
+      ),
+    [activeFilePath, activeVisibleDiffFullyAccepted, currentWorkspaceReviewSessionFiles],
+  );
+
+  const activeReviewSessionFiles = useMemo<ReadonlyArray<WorkspaceReviewFileEntry>>(() => {
+    if (activeInlineDiffSource === "working-tree") {
+      return visibleWorkspaceReviewSessionFiles;
     }
 
     if (activeInlineDiffSource === "checkpoint" && selectedActiveDiffEntry) {
@@ -1164,12 +1444,9 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     return [];
   }, [
     acceptedDiffStateByPath,
-    completedLiveDiffState,
     activeInlineDiffSource,
-    activeRunningTurnId,
-    activeRunningTurnKey,
-    liveWorkspaceDiffStatByPath,
     selectedActiveDiffEntry,
+    visibleWorkspaceReviewSessionFiles,
     workspaceAgentDiffTurnFilesByTurnId,
   ]);
   const activeReviewFileIndex =
@@ -1213,7 +1490,9 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         .toSorted(([leftPath], [rightPath]) => leftPath.localeCompare(rightPath))
         .map(
           ([pathValue, stat]) =>
-            `${pathValue.replaceAll("\\", "/")}:${stat.additions}:${stat.deletions}`,
+            `${pathValue.replaceAll("\\", "/")}:${stat.additions}:${stat.deletions}:${
+              stat.diffSignature ?? ""
+            }`,
         )
         .join("||"),
     [liveWorkspaceDiffStatByPath],
@@ -1310,9 +1589,9 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     },
     [
       acceptedDiffStateByPath,
-      completedLiveDiffState,
       activeRunningTurnId,
       activeRunningTurnKey,
+      completedLiveDiffState,
       liveWorkspaceDiffStatByPath,
       workspaceAgentDiffHistoryByPath,
     ],
@@ -1584,45 +1863,6 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
       return { ...current, [activeFilePath]: "diff" };
     });
   }, [activeFileDirty, activeFilePath, resolveLatestVisibleDiffState]);
-
-  useEffect(() => {
-    if (
-      !activeFilePath ||
-      !activeVisibleDiffKey ||
-      !activeVisibleDiffSessionKey ||
-      !activeInlineDiffSource ||
-      activeReviewItems.length === 0 ||
-      activeRemainingReviewItems.length === 0
-    ) {
-      return;
-    }
-
-    setAcceptedDiffStateByPath((current) => {
-      const acceptedState = current[activeFilePath];
-      if (
-        !acceptedState ||
-        !isWorkspaceDiffAccepted(acceptedState, {
-          source: activeInlineDiffSource,
-          sessionKey: activeVisibleDiffSessionKey,
-          visibilityKey: activeVisibleDiffKey,
-        })
-      ) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[activeFilePath];
-      return next;
-    });
-  }, [
-    activeFilePath,
-    activeInlineDiffSource,
-    activeRemainingReviewItems.length,
-    activeReviewItems.length,
-    activeVisibleDiffKey,
-    activeVisibleDiffSessionKey,
-    setAcceptedDiffStateByPath,
-  ]);
 
   useEffect(() => {
     if (activeRunningTurnId === null || activeRunningTurnKey === null) {
@@ -1911,9 +2151,45 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         ...current,
         [activeFilePath]: nextFileState,
       }));
+      setAcceptedDiffStateByPath((current) => {
+        if (!current[activeFilePath]) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[activeFilePath];
+        return next;
+      });
+      setDiffReviewStateByKey((current) => {
+        const normalizedActiveFilePath = activeFilePath.replaceAll("\\", "/");
+        let next: Record<string, WorkspaceDiffReviewState> | null = null;
+
+        for (const key of Object.keys(current)) {
+          if (!key.startsWith("working-tree:") || !key.includes(`:${normalizedActiveFilePath}:`)) {
+            continue;
+          }
+
+          if (next === null) {
+            next = { ...current };
+          }
+          delete next[key];
+        }
+
+        return next ?? current;
+      });
       await queryClient.invalidateQueries({
         queryKey: workspaceQueryKeys.file(activeEnvironmentId, activeWorkspaceRoot, activeFilePath),
       });
+      await queryClient.invalidateQueries({
+        queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.all,
+      });
+      void refreshGitStatus({
+        environmentId: activeEnvironmentId,
+        cwd: activeWorkspaceRoot,
+      }).catch(() => undefined);
       toastManager.add({
         type: "success",
         title: "File saved",
@@ -1936,6 +2212,8 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
     activeWorkspaceRoot,
     draftByPath,
     queryClient,
+    setAcceptedDiffStateByPath,
+    setDiffReviewStateByKey,
   ]);
 
   useEffect(() => {
@@ -2196,7 +2474,41 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
         </div>
       </div>
       <div className="flex items-center gap-1 [-webkit-app-region:no-drag]">
-        <span className="rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        {mode === "compact" ? (
+          <Button
+            type="button"
+            variant={compactExplorerOpen ? "default" : "outline"}
+            size="xs"
+            onClick={() => setCompactExplorerOpen((open) => !open)}
+            aria-label={compactExplorerOpen ? "Hide workspace files" : "Show workspace files"}
+          >
+            <FilesIcon className="size-3" />
+            Files
+          </Button>
+        ) : null}
+        {mode === "compact" && onOpenDiff ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon-xs"
+                  onClick={onOpenDiff}
+                  aria-label="Open changes panel"
+                />
+              }
+            >
+              <GitCompareArrowsIcon className="size-3" />
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">Open changes panel</TooltipPopup>
+          </Tooltip>
+        ) : null}
+        <span
+          className={cn(
+            "rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70",
+            mode === "compact" && "hidden min-[380px]:inline",
+          )}
+        >
           {workspaceScopeLabel}
         </span>
         <Tooltip>
@@ -2235,6 +2547,23 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
           </TooltipTrigger>
           <TooltipPopup side="bottom">Save active file</TooltipPopup>
         </Tooltip>
+        {onClose ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon-xs"
+                  onClick={onClose}
+                  aria-label="Close workspace panel"
+                />
+              }
+            >
+              <XIcon className="size-3" />
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">Close workspace panel</TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
     </>
   );
@@ -2262,8 +2591,23 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
 
   return (
     <WorkspacePanelShell mode={mode} header={header}>
-      <div className="grid min-h-0 flex-1 grid-cols-[16rem_minmax(0,1fr)]">
-        <div className="flex min-h-0 min-w-0 flex-col border-r border-border/60 bg-card/15">
+      <div
+        className={cn(
+          "grid min-h-0 flex-1",
+          mode === "compact"
+            ? compactExplorerOpen
+              ? "grid-rows-[minmax(8rem,34%)_minmax(0,1fr)]"
+              : "grid-rows-[0_minmax(0,1fr)]"
+            : "grid-cols-[16rem_minmax(0,1fr)]",
+        )}
+      >
+        <div
+          className={cn(
+            "flex min-h-0 min-w-0 flex-col overflow-hidden bg-card/15",
+            mode === "compact" ? "border-b border-border/60" : "border-r border-border/60",
+          )}
+          aria-hidden={mode === "compact" && !compactExplorerOpen}
+        >
           <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
             <button
               type="button"
@@ -2360,6 +2704,48 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
               void uploadFilesToDirectory([...event.dataTransfer.files], null);
             }}
           >
+            {visibleWorkspaceReviewSessionFiles.length > 0 ? (
+              <div className="mb-2 border-b border-border/50 pb-2">
+                <div className="mb-1 px-1 text-[11px] font-medium text-muted-foreground/80">
+                  Changes
+                </div>
+                <div className="space-y-0.5">
+                  {visibleWorkspaceReviewSessionFiles.map((entry) => (
+                    <button
+                      key={`workspace-change:${entry.path}`}
+                      type="button"
+                      className={cn(
+                        "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+                        entry.path === activeFilePath
+                          ? "bg-accent text-accent-foreground"
+                          : "text-muted-foreground/85 hover:bg-accent/50 hover:text-foreground",
+                      )}
+                      onClick={() => openReviewFile(entry.path)}
+                    >
+                      <VscodeEntryIcon
+                        pathValue={entry.path}
+                        kind="file"
+                        theme={resolvedTheme}
+                        className="size-3.5 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{entry.path}</span>
+                      {hasNonZeroStat(entry.stat) ? (
+                        <span className="shrink-0 font-mono text-[10px] tabular-nums">
+                          <DiffStatLabel
+                            additions={entry.stat.additions}
+                            deletions={entry.stat.deletions}
+                          />
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                          changed
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {rootEntries && rootEntries.length > 0 ? (
               <div className="space-y-0.5">{renderExplorerEntries(rootEntries, 0)}</div>
             ) : (
@@ -2457,9 +2843,8 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
 
           <div className="flex min-h-0 flex-1 flex-col">
             {activeFilePath &&
-            activeFileState &&
-            !activeFileState.isBinary &&
-            !activeFileState.tooLarge ? (
+            ((activeFileState && !activeFileState.isBinary && !activeFileState.tooLarge) ||
+              canShowActiveInlineDiff) ? (
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 px-3 py-2">
                 <div className="min-w-0">
                   <div className="truncate text-xs font-medium text-foreground">
@@ -2521,7 +2906,7 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                   </div>
                   <div className="text-xs text-muted-foreground/70">{activeFilePath}</div>
                 </div>
-              ) : activeFileState && activeFileViewMode === "diff" && canShowActiveInlineDiff ? (
+              ) : activeFileViewMode === "diff" && canShowActiveInlineDiff ? (
                 <div
                   className="h-full overflow-auto bg-background/70 p-2"
                   data-workspace-file-mode="diff"
@@ -2546,29 +2931,32 @@ export default function WorkspacePanel({ mode = "inline" }: WorkspacePanelProps)
                             : `${activeRemainingReviewItems.length} change${activeRemainingReviewItems.length === 1 ? "" : "s"} remaining`}
                         </div>
                         <div className="flex items-center gap-1">
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() => moveActiveReviewSelection(-1)}
-                            disabled={activeSelectedReviewPosition <= 1}
-                            aria-label="Review previous change"
-                          >
-                            Prev
-                          </Button>
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() => moveActiveReviewSelection(1)}
-                            disabled={
-                              activeRemainingReviewItems.length <= 1 ||
-                              activeSelectedReviewPosition === activeRemainingReviewItems.length
-                            }
-                            aria-label="Review next change"
-                          >
-                            Next
-                          </Button>
+                          {activeRemainingReviewItems.length > 1 ? (
+                            <>
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                onClick={() => moveActiveReviewSelection(-1)}
+                                disabled={activeSelectedReviewPosition <= 1}
+                                aria-label="Review previous change"
+                              >
+                                Prev
+                              </Button>
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                onClick={() => moveActiveReviewSelection(1)}
+                                disabled={
+                                  activeSelectedReviewPosition === activeRemainingReviewItems.length
+                                }
+                                aria-label="Review next change"
+                              >
+                                Next
+                              </Button>
+                            </>
+                          ) : null}
                           <Button
                             type="button"
                             size="xs"

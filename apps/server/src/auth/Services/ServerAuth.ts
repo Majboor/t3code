@@ -43,6 +43,13 @@ export interface ServerAuthShape {
     },
     AuthError
   >;
+  readonly issueUnsafeNoAuthOwnerSession: (requestMetadata: AuthClientMetadata) => Effect.Effect<
+    {
+      readonly response: AuthBootstrapResult;
+      readonly sessionToken: string;
+    },
+    AuthError
+  >;
   readonly exchangeBootstrapCredential: (
     credential: string,
     requestMetadata: AuthClientMetadata,

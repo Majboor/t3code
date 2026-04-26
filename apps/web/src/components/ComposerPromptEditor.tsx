@@ -891,6 +891,7 @@ interface ComposerPromptEditorProps {
   skills: ReadonlyArray<ServerProviderSkill>;
   disabled: boolean;
   placeholder: string;
+  minimized?: boolean;
   className?: string;
   onRemoveTerminalContext: (contextId: string) => void;
   onChange: (
@@ -1404,6 +1405,7 @@ function ComposerPromptEditorInner({
   skills,
   disabled,
   placeholder,
+  minimized = false,
   className,
   onRemoveTerminalContext,
   onChange,
@@ -1624,7 +1626,8 @@ function ComposerPromptEditorInner({
           contentEditable={
             <ContentEditable
               className={cn(
-                "block max-h-[200px] min-h-17.5 w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-relaxed text-foreground focus:outline-none",
+                "block w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-relaxed text-foreground focus:outline-none",
+                minimized ? "max-h-24 min-h-8" : "max-h-[200px] min-h-17.5",
                 className,
               )}
               data-testid="composer-editor"
@@ -1665,6 +1668,7 @@ export const ComposerPromptEditor = forwardRef<
     skills,
     disabled,
     placeholder,
+    minimized = false,
     className,
     onRemoveTerminalContext,
     onChange,
@@ -1704,6 +1708,7 @@ export const ComposerPromptEditor = forwardRef<
         skills={skills}
         disabled={disabled}
         placeholder={placeholder}
+        minimized={minimized}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}
         onPaste={onPaste}

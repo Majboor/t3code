@@ -405,6 +405,7 @@ export interface ChatComposerProps {
   resolvedTheme: "light" | "dark";
   settings: UnifiedSettings;
   gitCwd: string | null;
+  compactWhenIdle?: boolean;
 
   // Refs the parent needs kept in sync
   promptRef: React.MutableRefObject<string>;
@@ -492,6 +493,7 @@ export const ChatComposer = memo(
       resolvedTheme,
       settings,
       gitCwd,
+      compactWhenIdle = false,
       promptRef,
       composerImagesRef,
       composerTerminalContextsRef,
@@ -680,6 +682,14 @@ export const ChatComposer = memo(
         }),
       [composerImages.length, composerTerminalContexts, prompt],
     );
+    const composerHasVisibleDraft =
+      prompt.trim().length > 0 ||
+      composerImages.length > 0 ||
+      composerTerminalContexts.length > 0 ||
+      activePendingApproval !== null ||
+      activePendingProgress !== null ||
+      pendingUserInputs.length > 0;
+    const shouldMinimizeIdleComposer = compactWhenIdle && !composerHasVisibleDraft;
 
     // ------------------------------------------------------------------
     // Derived: composer trigger / menu
@@ -1717,12 +1727,17 @@ export const ChatComposer = memo(
       <form
         ref={composerFormRef}
         onSubmit={onSend}
-        className="mx-auto w-full min-w-0 max-w-208"
+        className={cn(
+          "mx-auto w-full min-w-0 max-w-208 transition-[max-width] duration-150",
+          shouldMinimizeIdleComposer && "max-w-none",
+        )}
         data-chat-composer-form="true"
+        data-chat-composer-idle-compact={shouldMinimizeIdleComposer ? "true" : "false"}
       >
         <div
           className={cn(
-            "group rounded-[22px] p-px transition-colors duration-200",
+            "group p-px transition-colors duration-200",
+            shouldMinimizeIdleComposer ? "rounded-2xl" : "rounded-[22px]",
             composerProviderState.composerFrameClassName,
           )}
           onDragEnter={onComposerDragEnter}
@@ -1732,7 +1747,8 @@ export const ChatComposer = memo(
         >
           <div
             className={cn(
-              "rounded-[20px] border bg-card transition-colors duration-200 has-focus-visible:border-ring/45",
+              "border bg-card transition-colors duration-200 has-focus-visible:border-ring/45",
+              shouldMinimizeIdleComposer ? "rounded-[15px]" : "rounded-[20px]",
               isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border",
               composerProviderState.composerSurfaceClassName,
             )}
@@ -1888,6 +1904,7 @@ export const ChatComposer = memo(
                           : "Ask anything, @tag files/folders, or use / to show available commands"
                 }
                 disabled={isConnecting || isComposerApprovalState}
+                minimized={shouldMinimizeIdleComposer}
               />
             </div>
 

@@ -731,6 +731,40 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("adopts an active session for sendTurn when the persisted binding is missing", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+
+      const initial = yield* provider.startSession(asThreadId("thread-adopt-send-turn"), {
+        provider: "codex",
+        threadId: asThreadId("thread-adopt-send-turn"),
+        cwd: "/tmp/project-adopt-send-turn",
+        runtimeMode: "full-access",
+      });
+
+      yield* directory.remove(initial.threadId);
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+
+      yield* provider.sendTurn({
+        threadId: initial.threadId,
+        input: "adopt active session",
+        attachments: [],
+      });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+
+      const restoredBinding = yield* directory.getBinding(initial.threadId);
+      assert.equal(Option.isSome(restoredBinding), true);
+      if (Option.isSome(restoredBinding)) {
+        assert.equal(restoredBinding.value.provider, "codex");
+        assert.equal(restoredBinding.value.threadId, initial.threadId);
+      }
+    }),
+  );
+
   it.effect("recovers stale claudeAgent sessions for sendTurn using persisted cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

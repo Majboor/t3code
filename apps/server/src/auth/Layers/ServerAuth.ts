@@ -33,6 +33,7 @@ type BootstrapExchangeResult = {
 };
 
 const LOOPBACK_OWNER_SUBJECT = "loopback-local-owner";
+const UNSAFE_NO_AUTH_OWNER_SUBJECT = "unsafe-no-auth-owner";
 
 const AUTHORIZATION_PREFIX = "Bearer ";
 const WEBSOCKET_TOKEN_QUERY_PARAM = "wsToken";
@@ -137,6 +138,16 @@ export const makeServerAuth = Effect.gen(function* () {
         Effect.map(toBootstrapExchangeResult),
       );
 
+  const issueOwnerBrowserSession = (
+    subject: string,
+    requestMetadata: AuthClientMetadata,
+  ): Effect.Effect<BootstrapExchangeResult, AuthError> =>
+    issueBrowserSession({
+      role: "owner",
+      subject,
+      requestMetadata,
+    });
+
   const authenticateRequest = (request: HttpServerRequest.HttpServerRequest) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request);
@@ -174,12 +185,11 @@ export const makeServerAuth = Effect.gen(function* () {
 
   const issueLoopbackOwnerSession: ServerAuthShape["issueLoopbackOwnerSession"] = (
     requestMetadata,
-  ) =>
-    issueBrowserSession({
-      role: "owner",
-      subject: LOOPBACK_OWNER_SUBJECT,
-      requestMetadata,
-    });
+  ) => issueOwnerBrowserSession(LOOPBACK_OWNER_SUBJECT, requestMetadata);
+
+  const issueUnsafeNoAuthOwnerSession: ServerAuthShape["issueUnsafeNoAuthOwnerSession"] = (
+    requestMetadata,
+  ) => issueOwnerBrowserSession(UNSAFE_NO_AUTH_OWNER_SUBJECT, requestMetadata);
 
   const exchangeBootstrapCredential: ServerAuthShape["exchangeBootstrapCredential"] = (
     credential,
@@ -405,6 +415,7 @@ export const makeServerAuth = Effect.gen(function* () {
     getDescriptor: () => Effect.succeed(descriptor),
     getSessionState,
     issueLoopbackOwnerSession,
+    issueUnsafeNoAuthOwnerSession,
     exchangeBootstrapCredential,
     exchangeBootstrapCredentialForBearerSession,
     issuePairingCredential,

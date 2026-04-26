@@ -12,13 +12,21 @@ describe("workspaceLiveDiffBaselineState", () => {
     resetWorkspaceLiveDiffBaselineStateForTests();
   });
 
-  it("stores and consumes a pending baseline for the matching thread and cwd", () => {
+  it("stores a pending baseline and returns it on subsequent reads with matching cwd", () => {
     setPendingWorkspaceLiveDiffBaselineForThread({
       environmentId: "environment-local" as never,
       threadId: "thread-1" as never,
       cwd: "/repo/project",
       isRepo: true,
-      files: [{ path: "app.ts", status: "modified", insertions: 1, deletions: 0 }],
+      files: [
+        {
+          path: "app.ts",
+          status: "modified",
+          insertions: 1,
+          deletions: 0,
+          diffSignature: "before",
+        },
+      ],
     });
 
     expect(
@@ -30,7 +38,15 @@ describe("workspaceLiveDiffBaselineState", () => {
     ).toEqual({
       cwd: "/repo/project",
       isRepo: true,
-      files: [{ path: "app.ts", status: "modified", insertions: 1, deletions: 0 }],
+      files: [
+        {
+          path: "app.ts",
+          status: "modified",
+          insertions: 1,
+          deletions: 0,
+          diffSignature: "before",
+        },
+      ],
     });
 
     expect(
@@ -39,7 +55,19 @@ describe("workspaceLiveDiffBaselineState", () => {
         threadId: "thread-1" as never,
         cwd: "/repo/project",
       }),
-    ).toBeNull();
+    ).toEqual({
+      cwd: "/repo/project",
+      isRepo: true,
+      files: [
+        {
+          path: "app.ts",
+          status: "modified",
+          insertions: 1,
+          deletions: 0,
+          diffSignature: "before",
+        },
+      ],
+    });
   });
 
   it("drops a pending baseline when the workspace root no longer matches", () => {

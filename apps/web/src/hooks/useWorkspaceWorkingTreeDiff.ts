@@ -4,7 +4,7 @@ import { useMemo } from "react";
 
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 
-import { getRenderablePatch, resolveFileDiffPath } from "../lib/patchDiff";
+import { diffPathMatchesTarget, getRenderablePatch, resolveFileDiffPath } from "../lib/patchDiff";
 
 export function useWorkspaceWorkingTreeDiff(input: {
   environmentId: EnvironmentId | null;
@@ -36,9 +36,10 @@ export function useWorkspaceWorkingTreeDiff(input: {
     if (!input.relativePath || !renderablePatch || renderablePatch.kind !== "files") {
       return null;
     }
+    const targetPath = input.relativePath;
     return (
-      renderablePatch.files.find(
-        (fileDiff) => resolveFileDiffPath(fileDiff) === input.relativePath,
+      renderablePatch.files.find((fileDiff) =>
+        diffPathMatchesTarget(resolveFileDiffPath(fileDiff), targetPath),
       ) ?? null
     );
   }, [input.relativePath, renderablePatch]);

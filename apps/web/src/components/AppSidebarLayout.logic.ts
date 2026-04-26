@@ -16,19 +16,16 @@ export const DEV_CHAT_MIN_WIDTH_WITH_PROJECTS_AND_TERMINAL_PX = 24 * 16;
 const PROJECT_SIDEBAR_OPEN_STATE_STORAGE_KEY = "t3code:project-sidebar-open:v1";
 const DESKTOP_LAYOUT_PANEL_PREFERENCE_STORAGE_KEY = "t3code:desktop-layout-panels:v1";
 
-const ProjectSidebarOpenStateSchema = Schema.Struct({
-  vibe: Schema.Boolean,
-  dev: Schema.Boolean,
-});
+const ProjectSidebarOpenStateSchema = Schema.Record(Schema.String, Schema.Boolean);
 type ProjectSidebarOpenState = typeof ProjectSidebarOpenStateSchema.Type;
 
 const DesktopLayoutPanelPreferenceSchema = Schema.Literals(["none", "workspace", "diff"]);
 export type DesktopLayoutPanelPreference = typeof DesktopLayoutPanelPreferenceSchema.Type;
 
-const DesktopLayoutPanelPreferencesSchema = Schema.Struct({
-  vibe: DesktopLayoutPanelPreferenceSchema,
-  dev: DesktopLayoutPanelPreferenceSchema,
-});
+const DesktopLayoutPanelPreferencesSchema = Schema.Record(
+  Schema.String,
+  DesktopLayoutPanelPreferenceSchema,
+);
 type DesktopLayoutPanelPreferences = typeof DesktopLayoutPanelPreferencesSchema.Type;
 
 const DEFAULT_OPEN_STATE: ProjectSidebarOpenState = {
@@ -63,13 +60,27 @@ export function rebalanceDevWorkspaceWidthBeforeProjectsOpen(input: {
 } {
   const maximumProjectSidebarWidth =
     input.layoutWidth - getMinimumDevMainContentWidthPx(input.terminalOpen);
-  if (maximumProjectSidebarWidth < PROJECT_SIDEBAR_MIN_WIDTH_PX) {
-    return { canOpen: false, nextProjectSidebarWidth: null, nextWorkspaceWidth: null };
-  }
-
   const workspaceSidebarWrapper = input.root.querySelector<HTMLElement>(
     "[data-layout-column='workspace'][data-slot='sidebar-wrapper']",
   );
+
+  const applyWorkspaceWidth = (width: number) => {
+    if (!workspaceSidebarWrapper) return;
+    workspaceSidebarWrapper.style.setProperty("--sidebar-width", `${width}px`);
+    setLocalStorageItem(WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY, width, Schema.Finite);
+  };
+
+  if (maximumProjectSidebarWidth < PROJECT_SIDEBAR_MIN_WIDTH_PX) {
+    if (workspaceSidebarWrapper) {
+      applyWorkspaceWidth(DEV_WORKSPACE_MIN_WIDTH_PX);
+    }
+    return {
+      canOpen: true,
+      nextProjectSidebarWidth: PROJECT_SIDEBAR_MIN_WIDTH_PX,
+      nextWorkspaceWidth: workspaceSidebarWrapper ? DEV_WORKSPACE_MIN_WIDTH_PX : null,
+    };
+  }
+
   if (!workspaceSidebarWrapper) {
     return {
       canOpen: true,
@@ -94,20 +105,27 @@ export function rebalanceDevWorkspaceWidthBeforeProjectsOpen(input: {
     };
   }
 
+  const currentChatWidth =
+    input.root.querySelector<HTMLElement>("[data-layout-column='chat']")?.getBoundingClientRect()
+      .width ?? Math.max(0, input.layoutWidth - currentWorkspaceWidth);
+  const minimumChatWidth = getMinimumDevChatWidthPx(input.terminalOpen);
+  const preferredChatWidth = Math.max(minimumChatWidth, currentChatWidth);
+
   const tryLayout = (projectSidebarWidth: number) => {
     const mainContentWidth = input.layoutWidth - projectSidebarWidth;
     if (mainContentWidth < PROJECT_SIDEBAR_MAIN_CONTENT_MIN_WIDTH_PX) {
       return null;
     }
 
-    const maximumWorkspaceWidth = mainContentWidth - getMinimumDevChatWidthPx(input.terminalOpen);
+    const maximumWorkspaceWidth = mainContentWidth - minimumChatWidth;
     if (maximumWorkspaceWidth < DEV_WORKSPACE_MIN_WIDTH_PX) {
       return null;
     }
 
+    const preferredWorkspaceWidth = mainContentWidth - preferredChatWidth;
     const requestedWorkspaceWidth = Math.max(
       DEV_WORKSPACE_MIN_WIDTH_PX,
-      Math.min(currentWorkspaceWidth, maximumWorkspaceWidth),
+      Math.min(currentWorkspaceWidth, maximumWorkspaceWidth, preferredWorkspaceWidth),
     );
     const nextWorkspaceWidth = findLargestAcceptedInlineWorkspaceWidth({
       currentWidth: currentWorkspaceWidth,
@@ -117,10 +135,7 @@ export function rebalanceDevWorkspaceWidthBeforeProjectsOpen(input: {
       terminalOpen: input.terminalOpen,
       wrapper: workspaceSidebarWrapper,
     });
-    if (nextWorkspaceWidth === null) {
-      return null;
-    }
-    return { projectSidebarWidth, workspaceWidth: nextWorkspaceWidth };
+    return { projectSidebarWidth, workspaceWidth: nextWorkspaceWidth ?? requestedWorkspaceWidth };
   };
 
   const preferredProjectSidebarWidth = Math.max(
@@ -136,19 +151,16 @@ export function rebalanceDevWorkspaceWidthBeforeProjectsOpen(input: {
       : tryLayout(PROJECT_SIDEBAR_MIN_WIDTH_PX));
 
   if (fallbackLayout === null) {
-    return { canOpen: false, nextProjectSidebarWidth: null, nextWorkspaceWidth: null };
+    applyWorkspaceWidth(DEV_WORKSPACE_MIN_WIDTH_PX);
+    return {
+      canOpen: true,
+      nextProjectSidebarWidth: PROJECT_SIDEBAR_MIN_WIDTH_PX,
+      nextWorkspaceWidth: DEV_WORKSPACE_MIN_WIDTH_PX,
+    };
   }
 
   if (fallbackLayout.workspaceWidth < currentWorkspaceWidth - 0.5) {
-    workspaceSidebarWrapper.style.setProperty(
-      "--sidebar-width",
-      `${fallbackLayout.workspaceWidth}px`,
-    );
-    setLocalStorageItem(
-      WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
-      fallbackLayout.workspaceWidth,
-      Schema.Finite,
-    );
+    applyWorkspaceWidth(fallbackLayout.workspaceWidth);
   }
 
   return {
@@ -167,11 +179,12 @@ export function useProjectSidebarOpen(
     ProjectSidebarOpenStateSchema,
   );
 
-  const open = state[mode];
+  const open = state[mode] ?? DEFAULT_OPEN_STATE[mode as keyof typeof DEFAULT_OPEN_STATE] ?? false;
   const setOpen = useCallback(
     (value: boolean | ((prev: boolean) => boolean)) => {
       setState((previous) => {
-        const previousOpen = previous[mode];
+        const previousOpen =
+          previous[mode] ?? DEFAULT_OPEN_STATE[mode as keyof typeof DEFAULT_OPEN_STATE] ?? false;
         const nextOpen =
           typeof value === "function" ? (value as (prev: boolean) => boolean)(previousOpen) : value;
         if (nextOpen === previousOpen) {
@@ -209,7 +222,10 @@ export function useDesktopLayoutPanelPreferences(): {
         | ((prev: DesktopLayoutPanelPreference) => DesktopLayoutPanelPreference),
     ) => {
       setPanelPreferenceByMode((previous) => {
-        const previousPreference = previous[mode];
+        const previousPreference =
+          previous[mode] ??
+          DEFAULT_PANEL_PREFERENCES[mode as keyof typeof DEFAULT_PANEL_PREFERENCES] ??
+          "none";
         const nextPreference =
           typeof value === "function"
             ? (value as (prev: DesktopLayoutPanelPreference) => DesktopLayoutPanelPreference)(
