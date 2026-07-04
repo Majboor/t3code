@@ -40,10 +40,18 @@ export interface WorkLogEntry {
   command?: string;
   rawCommand?: string;
   changedFiles?: ReadonlyArray<string>;
+  media?: ReadonlyArray<WorkLogMedia>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+}
+
+export interface WorkLogMedia {
+  kind: "image";
+  src: string;
+  alt: string;
+  savedPath?: string;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -500,6 +508,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       : null;
   const commandPreview = extractToolCommand(payload);
   const changedFiles = extractChangedFiles(payload);
+  const media = extractWorkLogMedia(payload);
   const title = extractToolTitle(payload);
   const isTaskActivity = activity.kind === "task.progress" || activity.kind === "task.completed";
   const taskSummary =
@@ -547,6 +556,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (changedFiles.length > 0) {
     entry.changedFiles = changedFiles;
+  }
+  if (media.length > 0) {
+    entry.media = media;
   }
   if (title) {
     entry.toolTitle = title;
@@ -897,6 +909,53 @@ function extractWorkLogRequestKind(
     return payload.requestKind;
   }
   return requestKindFromRequestType(payload?.requestType) ?? undefined;
+}
+
+function normalizeGeneratedImageSource(value: string): string | null {
+  if (value.startsWith("data:image/")) {
+    return value;
+  }
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    return `data:image/png;base64,${value}`;
+  }
+  return null;
+}
+
+function extractWorkLogMedia(payload: Record<string, unknown> | null): WorkLogMedia[] {
+  const data = asRecord(payload?.data);
+  const item = asRecord(data?.item);
+  const itemType = asTrimmedString(item?.type)?.toLowerCase();
+  const isImageGeneration =
+    payload?.itemType === "image_view" ||
+    itemType === "imagegeneration" ||
+    itemType === "image_generation";
+  if (!isImageGeneration) {
+    return [];
+  }
+
+  const result = asTrimmedString(item?.result) ?? asTrimmedString(data?.result);
+  if (!result) {
+    return [];
+  }
+  const src = normalizeGeneratedImageSource(result);
+  if (!src) {
+    return [];
+  }
+
+  const alt =
+    asTrimmedString(item?.revisedPrompt) ??
+    asTrimmedString(data?.revisedPrompt) ??
+    "Generated image";
+  const savedPath = asTrimmedString(item?.savedPath) ?? asTrimmedString(data?.savedPath);
+
+  return [
+    {
+      kind: "image",
+      src,
+      alt,
+      ...(savedPath ? { savedPath } : {}),
+    },
+  ];
 }
 
 function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {

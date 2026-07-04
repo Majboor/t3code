@@ -138,4 +138,37 @@ describe("ChatMarkdown", () => {
       await screen.unmount();
     }
   });
+
+  it("renders markdown image and gif URLs as responsive media", async () => {
+    const screen = await render(
+      <ChatMarkdown
+        text="![Preview](https://example.com/artwork.gif?cache=1)"
+        cwd="/repo/project"
+      />,
+    );
+
+    try {
+      const image = page.getByRole("img", { name: "Preview" });
+      await expect.element(image).toBeInTheDocument();
+      await expect.element(image).toHaveAttribute("src", "https://example.com/artwork.gif?cache=1");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("renders video links as inline playable media", async () => {
+    const screen = await render(
+      <ChatMarkdown text="[Demo](https://example.com/demo.mp4)" cwd="/repo/project" />,
+    );
+
+    try {
+      const video = document.querySelector("video.chat-markdown-media");
+      expect(video).toBeInstanceOf(HTMLVideoElement);
+      expect(video).toHaveAttribute("src", "https://example.com/demo.mp4");
+      expect(video).toHaveAttribute("controls");
+      expect(video).toHaveAttribute("playsinline");
+    } finally {
+      await screen.unmount();
+    }
+  });
 });

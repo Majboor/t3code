@@ -4,6 +4,7 @@ import { FileDiff } from "@pierre/diffs/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type {
+  ContextMenuItem,
   GitWorkingTreeFileStatus,
   ProjectCreateEntryInput,
   ProjectDirectoryEntry,
@@ -29,6 +30,7 @@ import {
   type ChangeEvent,
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   memo,
   useCallback,
   useEffect,
@@ -73,7 +75,9 @@ import {
   workspaceQueryKeys,
   workspaceReadFileQueryOptions,
 } from "~/lib/workspaceReactQuery";
+import { openInPreferredEditor } from "~/editorPreferences";
 import { cn } from "~/lib/utils";
+import { readLocalApi } from "~/localApi";
 import { selectProjectByRef, useStore } from "~/store";
 import { resolveProjectRouteRef, resolveThreadRouteRef } from "~/threadRoutes";
 import { basenameOfPath } from "~/vscode-icons";
@@ -227,6 +231,34 @@ function joinRelativePath(directoryPath: string | null, name: string): string {
   return directoryPath ? `${directoryPath}/${normalizedName}` : normalizedName;
 }
 
+function absoluteWorkspaceEntryPath(workspaceRoot: string, relativePath: string | null): string {
+  const normalizedRoot = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/g, "");
+  if (!relativePath) return normalizedRoot;
+  return `${normalizedRoot}/${relativePath.replaceAll("\\", "/").replace(/^\/+/g, "")}`;
+}
+
+function fileUrlForPath(absolutePath: string): string {
+  const url = new URL("file://");
+  url.pathname = absolutePath;
+  return url.href;
+}
+
+function markdownLinkForWorkspaceEntry(label: string, absolutePath: string): string {
+  return `[${label}](${fileUrlForPath(absolutePath)})`;
+}
+
+async function copyWorkspaceText(value: string, copiedLabel: string) {
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Clipboard API unavailable.");
+  }
+  await navigator.clipboard.writeText(value);
+  toastManager.add({
+    type: "success",
+    title: `${copiedLabel} copied`,
+    description: value,
+  });
+}
+
 function hasDraggedFiles(event: DragEvent<HTMLElement>): boolean {
   return [...event.dataTransfer.items].some((item) => item.kind === "file");
 }
@@ -258,6 +290,10 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   onToggleDirectory: (directoryPath: string) => void;
   onOpenFile: (relativePath: string) => void;
   onSelectEntry: (entry: Pick<ProjectDirectoryEntry, "kind" | "path">) => void;
+  onContextMenu: (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    entry: Pick<ProjectDirectoryEntry, "kind" | "path">,
+  ) => void;
   onDirectoryDrop: (event: DragEvent<HTMLButtonElement>, directoryPath: string) => void;
   onDirectoryDragOver: (event: DragEvent<HTMLButtonElement>, directoryPath: string) => void;
   onDirectoryDragLeave: (event: DragEvent<HTMLButtonElement>, directoryPath: string) => void;
@@ -283,6 +319,7 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
             props.onSelectEntry(entry);
             props.onToggleDirectory(entry.path);
           }}
+          onContextMenu={(event) => props.onContextMenu(event, entry)}
           onDragOver={(event) => props.onDirectoryDragOver(event, entry.path)}
           onDragLeave={(event) => props.onDirectoryDragLeave(event, entry.path)}
           onDrop={(event) => props.onDirectoryDrop(event, entry.path)}
@@ -324,6 +361,7 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
         props.onSelectEntry(entry);
         props.onOpenFile(entry.path);
       }}
+      onContextMenu={(event) => props.onContextMenu(event, entry)}
     >
       <VscodeEntryIcon
         pathValue={entry.path}
@@ -359,6 +397,14 @@ interface WorkspacePanelProps {
 }
 
 type WorkspaceFileViewMode = "editor" | "diff";
+type WorkspaceEntryContextAction =
+  | "open"
+  | "open-editor"
+  | "reveal"
+  | "copy-relative-path"
+  | "copy-full-path"
+  | "copy-file-url"
+  | "copy-markdown-link";
 
 const WorkspaceAcceptedDiffStateSchema = Schema.Struct({
   source: Schema.Literals(["working-tree", "checkpoint"]),
@@ -754,6 +800,120 @@ export default function WorkspacePanel({
       }
     },
     [directoryEntriesByPath, loadDirectory],
+  );
+
+  const runWorkspaceEntryContextAction = useCallback(
+    async (
+      action: WorkspaceEntryContextAction,
+      entry: { path: string | null; kind: "file" | "directory" },
+    ) => {
+      if (!activeWorkspaceRoot) {
+        return;
+      }
+
+      const absolutePath = absoluteWorkspaceEntryPath(activeWorkspaceRoot, entry.path);
+      const relativePath = entry.path ?? ".";
+      const linkLabel = entry.path ?? workspaceLabel;
+
+      try {
+        if (action === "open") {
+          if (entry.kind === "file" && entry.path) {
+            openFile(entry.path);
+            return;
+          }
+          if (entry.kind === "directory" && entry.path) {
+            toggleDirectory(entry.path);
+          }
+          return;
+        }
+
+        if (action === "copy-relative-path") {
+          await copyWorkspaceText(relativePath, "Relative path");
+          return;
+        }
+        if (action === "copy-full-path") {
+          await copyWorkspaceText(absolutePath, "Full path");
+          return;
+        }
+        if (action === "copy-file-url") {
+          await copyWorkspaceText(fileUrlForPath(absolutePath), "File URL");
+          return;
+        }
+        if (action === "copy-markdown-link") {
+          await copyWorkspaceText(
+            markdownLinkForWorkspaceEntry(linkLabel, absolutePath),
+            "Markdown link",
+          );
+          return;
+        }
+
+        const api = readLocalApi();
+        if (!api) {
+          throw new Error("Local app API unavailable.");
+        }
+
+        if (action === "reveal") {
+          await api.shell.openInEditor(absolutePath, "file-manager");
+          return;
+        }
+
+        await openInPreferredEditor(api, absolutePath);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Workspace action failed",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      }
+    },
+    [activeWorkspaceRoot, openFile, toggleDirectory, workspaceLabel],
+  );
+
+  const showWorkspaceEntryContextMenu = useCallback(
+    (
+      event: ReactMouseEvent<HTMLButtonElement>,
+      entry: { path: string | null; kind: "file" | "directory" },
+    ) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      setSelectedEntry(entry);
+
+      const copyItems: ContextMenuItem<WorkspaceEntryContextAction>[] = [
+        { id: "copy-relative-path", label: "Copy Relative Path" },
+        { id: "copy-full-path", label: "Copy Full Path" },
+        { id: "copy-file-url", label: "Copy File URL" },
+        { id: "copy-markdown-link", label: "Copy Markdown Link" },
+      ];
+      const items: ContextMenuItem<WorkspaceEntryContextAction>[] = [
+        ...(entry.path
+          ? [
+              {
+                id: "open" as const,
+                label: entry.kind === "file" ? "Open in Workspace" : "Expand / Collapse",
+              },
+            ]
+          : []),
+        { id: "open-editor", label: "Open in Editor" },
+        { id: "reveal", label: "Reveal in Finder" },
+        { id: "copy-relative-path", label: "Copy", children: copyItems },
+      ];
+
+      const api = readLocalApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Workspace menu unavailable",
+        });
+        return;
+      }
+
+      void api.contextMenu.show(items, { x: event.clientX, y: event.clientY }).then((action) => {
+        if (!action) return;
+        return runWorkspaceEntryContextAction(action, entry);
+      });
+    },
+    [runWorkspaceEntryContextAction],
   );
 
   const refreshExpandedDirectories = useCallback(() => {
@@ -2433,6 +2593,7 @@ export default function WorkspacePanel({
             onToggleDirectory={toggleDirectory}
             onOpenFile={openFile}
             onSelectEntry={setSelectedEntry}
+            onContextMenu={showWorkspaceEntryContextMenu}
             onDirectoryDrop={handleDirectoryDrop}
             onDirectoryDragOver={handleDirectoryDragOver}
             onDirectoryDragLeave={handleDirectoryDragLeave}
@@ -2455,6 +2616,7 @@ export default function WorkspacePanel({
       resolvedTheme,
       resolveLatestVisibleDiffState,
       selectedEntry.path,
+      showWorkspaceEntryContextMenu,
       toggleDirectory,
       workingTreeStatusByPath,
     ],
@@ -2616,6 +2778,9 @@ export default function WorkspacePanel({
                 selectedEntry.path === null && "bg-accent text-accent-foreground",
               )}
               onClick={() => setSelectedEntry({ path: null, kind: "directory" })}
+              onContextMenu={(event) =>
+                showWorkspaceEntryContextMenu(event, { path: null, kind: "directory" })
+              }
             >
               <VscodeEntryIcon
                 pathValue={workspaceLabel}
@@ -2721,6 +2886,12 @@ export default function WorkspacePanel({
                           : "text-muted-foreground/85 hover:bg-accent/50 hover:text-foreground",
                       )}
                       onClick={() => openReviewFile(entry.path)}
+                      onContextMenu={(event) =>
+                        showWorkspaceEntryContextMenu(event, {
+                          path: entry.path,
+                          kind: "file",
+                        })
+                      }
                     >
                       <VscodeEntryIcon
                         pathValue={entry.path}

@@ -309,6 +309,34 @@ label:has(> select#reasoning-effort) select {
   opacity: 0.8;
 }
 
+.chat-markdown-media-link {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  text-decoration: none;
+}
+
+.chat-markdown-media {
+  display: block;
+  width: auto;
+  max-width: min(100%, 44rem);
+  max-height: min(70vh, 32rem);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--muted) 72%, var(--background));
+  object-fit: contain;
+}
+
+.chat-markdown video.chat-markdown-media {
+  width: min(100%, 44rem);
+  aspect-ratio: 16 / 9;
+}
+
+.chat-markdown p > .chat-markdown-media-link,
+.chat-markdown p > .chat-markdown-media {
+  margin: 0.65rem 0;
+}
+
 .chat-markdown blockquote {
   border-left: 2px solid var(--border);
   padding-left: 0.8rem;

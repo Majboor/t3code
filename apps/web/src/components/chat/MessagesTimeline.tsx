@@ -943,6 +943,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+  const media = workEntry.media ?? [];
+  const ctx = use(TimelineRowCtx);
 
   return (
     <div className="rounded-lg px-1 py-1">
@@ -1014,6 +1016,36 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               +{(workEntry.changedFiles?.length ?? 0) - 4}
             </span>
           )}
+        </div>
+      )}
+      {media.length > 0 && (
+        <div className="mt-2 grid max-w-[min(100%,36rem)] grid-cols-1 gap-2 pl-7">
+          {media.map((item) => {
+            const savedPathSegments = item.savedPath?.split("/") ?? [];
+            const name = item.savedPath
+              ? savedPathSegments.findLast((segment) => segment.length > 0) || item.alt
+              : item.alt;
+            return (
+              <button
+                key={`${workEntry.id}:media:${item.savedPath ?? item.alt}`}
+                type="button"
+                className="overflow-hidden rounded-lg border border-border/70 bg-background/70 text-left shadow-sm transition-colors hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={`Preview ${name}`}
+                onClick={() => {
+                  ctx.onImageExpand({
+                    images: [{ src: item.src, name }],
+                    index: 0,
+                  });
+                }}
+              >
+                <img
+                  src={item.src}
+                  alt={item.alt}
+                  className="block max-h-[28rem] w-full object-contain"
+                />
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

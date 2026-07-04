@@ -894,6 +894,41 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("extracts generated image media from Codex image-generation lifecycle payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "generated-image",
+        kind: "tool.completed",
+        summary: "Image view",
+        payload: {
+          itemType: "image_view",
+          title: "Image view",
+          data: {
+            item: {
+              type: "imageGeneration",
+              result: "iVBORw0KGgo=",
+              revisedPrompt: "A calm desk with a glowing monitor",
+              savedPath: "/Users/hico/.codex/generated_images/ig.png",
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      itemType: "image_view",
+      media: [
+        {
+          kind: "image",
+          src: "data:image/png;base64,iVBORw0KGgo=",
+          alt: "A calm desk with a glowing monitor",
+          savedPath: "/Users/hico/.codex/generated_images/ig.png",
+        },
+      ],
+    });
+  });
+
   it("extracts changed file paths for file-change tool activities", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

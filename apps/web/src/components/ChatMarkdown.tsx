@@ -256,6 +256,94 @@ const MARKDOWN_FILE_LINK_CLASS_NAME =
   "chat-markdown-file-link relative top-[2px] max-w-full no-underline";
 const MARKDOWN_FILE_LINK_ICON_CLASS_NAME = "chat-markdown-file-link-icon size-3.5 shrink-0";
 const MARKDOWN_FILE_LINK_LABEL_CLASS_NAME = "chat-markdown-file-link-label truncate";
+const IMAGE_MEDIA_EXTENSIONS = new Set([
+  "apng",
+  "avif",
+  "bmp",
+  "gif",
+  "heic",
+  "heif",
+  "jpg",
+  "jpeg",
+  "png",
+  "svg",
+  "tif",
+  "tiff",
+  "webp",
+]);
+const VIDEO_MEDIA_EXTENSIONS = new Set(["m4v", "mov", "mp4", "mpeg", "mpg", "ogg", "ogv", "webm"]);
+
+type MarkdownMediaKind = "image" | "video";
+
+function extensionFromUrl(value: string): string | null {
+  try {
+    const url = new URL(value, "https://t3code.local");
+    const path = url.pathname;
+    const lastDotIndex = path.lastIndexOf(".");
+    if (lastDotIndex < 0 || lastDotIndex === path.length - 1) return null;
+    return path.slice(lastDotIndex + 1).toLowerCase();
+  } catch {
+    const path = value.split(/[?#]/, 1)[0] ?? "";
+    const lastDotIndex = path.lastIndexOf(".");
+    if (lastDotIndex < 0 || lastDotIndex === path.length - 1) return null;
+    return path.slice(lastDotIndex + 1).toLowerCase();
+  }
+}
+
+function resolveMarkdownMediaKind(value: string | undefined): MarkdownMediaKind | null {
+  const source = value?.trim();
+  if (!source) return null;
+  const lowerSource = source.toLowerCase();
+  if (lowerSource.startsWith("data:image/")) return "image";
+  if (lowerSource.startsWith("data:video/")) return "video";
+  if (lowerSource.startsWith("blob:")) return null;
+
+  const extension = extensionFromUrl(source);
+  if (!extension) return null;
+  if (IMAGE_MEDIA_EXTENSIONS.has(extension)) return "image";
+  if (VIDEO_MEDIA_EXTENSIONS.has(extension)) return "video";
+  return null;
+}
+
+function isSafeMarkdownMediaUrl(value: string): boolean {
+  const transformed = defaultUrlTransform(value);
+  if (transformed) return true;
+  const lowerValue = value.trim().toLowerCase();
+  return lowerValue.startsWith("data:image/") || lowerValue.startsWith("data:video/");
+}
+
+function MarkdownMedia({
+  src,
+  alt,
+  kind,
+}: {
+  src: string;
+  alt: string | undefined;
+  kind: MarkdownMediaKind;
+}) {
+  if (!isSafeMarkdownMediaUrl(src)) {
+    return <span>{alt || src}</span>;
+  }
+
+  if (kind === "video") {
+    return (
+      <video
+        className="chat-markdown-media"
+        src={src}
+        title={alt}
+        controls
+        playsInline
+        preload="metadata"
+      />
+    );
+  }
+
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer" className="chat-markdown-media-link">
+      <img className="chat-markdown-media" src={src} alt={alt ?? ""} loading="lazy" />
+    </a>
+  );
+}
 
 function pathParentSegments(path: string): string[] {
   const normalized = path.replaceAll("\\", "/");
@@ -501,6 +589,13 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
         const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
         const fileLinkMeta = normalizedHref ? markdownFileLinkMetaByHref.get(normalizedHref) : null;
         if (!fileLinkMeta) {
+          const mediaKind = resolveMarkdownMediaKind(href);
+          if (href && mediaKind) {
+            return (
+              <MarkdownMedia src={href} alt={nodeToPlainText(props.children)} kind={mediaKind} />
+            );
+          }
+
           return <a {...props} href={href} target="_blank" rel="noopener noreferrer" />;
         }
 
@@ -547,6 +642,11 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
             </CodeHighlightErrorBoundary>
           </MarkdownCodeBlock>
         );
+      },
+      img({ node: _node, src, alt }) {
+        const mediaKind = resolveMarkdownMediaKind(src) ?? "image";
+        if (!src) return null;
+        return <MarkdownMedia src={src} alt={alt} kind={mediaKind} />;
       },
     }),
     [
