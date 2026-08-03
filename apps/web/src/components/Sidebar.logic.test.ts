@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Collision } from "@dnd-kit/core";
 
 import {
   buildSidebarOwnerFilterOptions,
@@ -18,6 +19,7 @@ import {
   isContextMenuPointerDown,
   normalizeSidebarSearchQuery,
   orderItemsByPreferredIds,
+  prioritizeProjectDropCollisions,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
@@ -49,6 +51,10 @@ function makeLatestTurn(overrides?: {
     startedAt: overrides?.startedAt ?? "2026-03-09T10:00:00.000Z",
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
+}
+
+function makeCollision(id: string): Collision {
+  return { id };
 }
 
 describe("hasUnseenCompletion", () => {
@@ -126,6 +132,38 @@ describe("createThreadJumpHintVisibilityController", () => {
     vi.advanceTimersByTime(THREAD_JUMP_HINT_SHOW_DELAY_MS);
 
     expect(visibilityChanges).toEqual([]);
+  });
+});
+
+describe("prioritizeProjectDropCollisions", () => {
+  it("prefers category targets over the dragged project itself", () => {
+    expect(
+      prioritizeProjectDropCollisions({
+        collisions: [makeCollision("project-a"), makeCollision("project-category:apps")],
+        activeId: "project-a",
+        isCategoryCollision: (id) => String(id).startsWith("project-category:"),
+      }),
+    ).toEqual([makeCollision("project-category:apps")]);
+  });
+
+  it("drops the active project collision when another project target exists", () => {
+    expect(
+      prioritizeProjectDropCollisions({
+        collisions: [makeCollision("project-a"), makeCollision("project-b")],
+        activeId: "project-a",
+        isCategoryCollision: (id) => String(id).startsWith("project-category:"),
+      }),
+    ).toEqual([makeCollision("project-b")]);
+  });
+
+  it("keeps the active collision when it is the only available target", () => {
+    expect(
+      prioritizeProjectDropCollisions({
+        collisions: [makeCollision("project-a")],
+        activeId: "project-a",
+        isCategoryCollision: (id) => String(id).startsWith("project-category:"),
+      }),
+    ).toEqual([makeCollision("project-a")]);
   });
 });
 
