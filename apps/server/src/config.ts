@@ -67,6 +67,11 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly basicAuthUsername: string | undefined;
   readonly basicAuthPassword: string | undefined;
   readonly basicAuthRealm: string;
+  readonly supabaseProjectUrl: URL | undefined;
+  readonly supabaseAnonKey: string | undefined;
+  readonly supabaseJwtAudience: string | undefined;
+  readonly supabaseServiceRoleSecretName: string | undefined;
+  readonly localPasswordAuth: boolean;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
 }
@@ -169,6 +174,11 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           basicAuthUsername: undefined,
           basicAuthPassword: undefined,
           basicAuthRealm: "T3 Code",
+          supabaseProjectUrl: undefined,
+          supabaseAnonKey: undefined,
+          supabaseJwtAudience: undefined,
+          supabaseServiceRoleSecretName: undefined,
+          localPasswordAuth: false,
           staticDir: undefined,
           devUrl,
           noBrowser: false,

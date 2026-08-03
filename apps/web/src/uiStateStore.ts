@@ -1,9 +1,5 @@
 import { Debouncer } from "@tanstack/react-pacer";
 import { create } from "zustand";
-import {
-  canAssignSidebarProjectCategoryParent,
-  type SidebarProjectCategory,
-} from "./sidebarProjectCategories";
 
 const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -22,24 +18,18 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 interface PersistedUiState {
   expandedProjectCwds?: string[];
   projectOrderCwds?: string[];
-  projectCategories?: SidebarProjectCategory[];
-  projectCategoryAssignmentsByPhysicalKey?: Record<string, string>;
-  projectCategoryExpandedById?: Record<string, boolean>;
-  projectCategoryOrder?: string[];
+  favoriteThreadKeys?: string[];
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
 }
 
 export interface UiProjectState {
   projectExpandedById: Record<string, boolean>;
   projectOrder: string[];
-  projectCategories: SidebarProjectCategory[];
-  projectCategoryAssignmentsByPhysicalKey: Record<string, string>;
-  projectCategoryExpandedById: Record<string, boolean>;
-  projectCategoryOrder: string[];
 }
 
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
+  favoriteThreadKeys: Record<string, boolean>;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
 }
 
@@ -58,11 +48,8 @@ export interface SyncThreadInput {
 const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
-  projectCategories: [],
-  projectCategoryAssignmentsByPhysicalKey: {},
-  projectCategoryExpandedById: {},
-  projectCategoryOrder: [],
   threadLastVisitedAtById: {},
+  favoriteThreadKeys: {},
   threadChangedFilesExpandedById: {},
 };
 
@@ -90,22 +77,9 @@ function readPersistedState(): UiState {
     }
     const parsed = JSON.parse(raw) as PersistedUiState;
     hydratePersistedProjectState(parsed);
-    const projectCategories = sanitizePersistedProjectCategories(parsed.projectCategories);
     return {
       ...initialState,
-      projectCategories,
-      projectCategoryAssignmentsByPhysicalKey: normalizeProjectCategoryAssignments(
-        projectCategories,
-        sanitizePersistedProjectCategoryAssignments(parsed.projectCategoryAssignmentsByPhysicalKey),
-      ),
-      projectCategoryExpandedById: normalizeProjectCategoryExpanded(
-        projectCategories,
-        sanitizePersistedProjectCategoryExpanded(parsed.projectCategoryExpandedById),
-      ),
-      projectCategoryOrder: normalizeProjectCategoryOrder(
-        projectCategories,
-        sanitizePersistedProjectCategoryOrder(parsed.projectCategoryOrder),
-      ),
+      favoriteThreadKeys: sanitizePersistedStringSet(parsed.favoriteThreadKeys),
       threadChangedFilesExpandedById: sanitizePersistedThreadChangedFilesExpanded(
         parsed.threadChangedFilesExpandedById,
       ),
@@ -113,6 +87,16 @@ function readPersistedState(): UiState {
   } catch {
     return initialState;
   }
+}
+
+function sanitizePersistedStringSet(value: unknown): Record<string, boolean> {
+  if (!Array.isArray(value)) {
+    return {};
+  }
+  const entries = value.flatMap((key) =>
+    typeof key === "string" && key.length > 0 ? [[key, true] as const] : [],
+  );
+  return Object.fromEntries(entries);
 }
 
 function sanitizePersistedThreadChangedFilesExpanded(
@@ -141,99 +125,6 @@ function sanitizePersistedThreadChangedFilesExpanded(
   }
 
   return nextState;
-}
-
-function sanitizePersistedProjectCategories(
-  value: PersistedUiState["projectCategories"],
-): SidebarProjectCategory[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const categories: SidebarProjectCategory[] = [];
-  const seenIds = new Set<string>();
-
-  for (const entry of value) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-
-    const id = typeof entry.id === "string" ? entry.id.trim() : "";
-    const name = typeof entry.name === "string" ? entry.name.trim() : "";
-    const parentId =
-      typeof entry.parentId === "string" && entry.parentId.trim().length > 0
-        ? entry.parentId.trim()
-        : null;
-
-    if (!id || !name || seenIds.has(id)) {
-      continue;
-    }
-
-    seenIds.add(id);
-    categories.push({
-      id,
-      name,
-      parentId: parentId === id ? null : parentId,
-    });
-  }
-
-  return categories;
-}
-
-function sanitizePersistedProjectCategoryAssignments(
-  value: PersistedUiState["projectCategoryAssignmentsByPhysicalKey"],
-): Record<string, string> {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-
-  const assignments: Record<string, string> = {};
-  for (const [physicalProjectKey, categoryId] of Object.entries(value)) {
-    const nextPhysicalProjectKey = physicalProjectKey.trim();
-    const nextCategoryId = typeof categoryId === "string" ? categoryId.trim() : "";
-    if (!nextPhysicalProjectKey || !nextCategoryId) {
-      continue;
-    }
-    assignments[nextPhysicalProjectKey] = nextCategoryId;
-  }
-
-  return assignments;
-}
-
-function sanitizePersistedProjectCategoryExpanded(
-  value: PersistedUiState["projectCategoryExpandedById"],
-): Record<string, boolean> {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-
-  const expandedById: Record<string, boolean> = {};
-  for (const [categoryId, expanded] of Object.entries(value)) {
-    if (categoryId && expanded === false) {
-      expandedById[categoryId] = false;
-    }
-  }
-
-  return expandedById;
-}
-
-function sanitizePersistedProjectCategoryOrder(
-  value: PersistedUiState["projectCategoryOrder"],
-): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const categoryOrder: string[] = [];
-  for (const entry of value) {
-    const categoryId = typeof entry === "string" ? entry.trim() : "";
-    if (!categoryId || categoryOrder.includes(categoryId)) {
-      continue;
-    }
-    categoryOrder.push(categoryId);
-  }
-
-  return categoryOrder;
 }
 
 function hydratePersistedProjectState(parsed: PersistedUiState): void {
@@ -279,14 +170,9 @@ function persistState(state: UiState): void {
       JSON.stringify({
         expandedProjectCwds,
         projectOrderCwds,
-        projectCategories: state.projectCategories,
-        projectCategoryAssignmentsByPhysicalKey: state.projectCategoryAssignmentsByPhysicalKey,
-        projectCategoryExpandedById: Object.fromEntries(
-          Object.entries(state.projectCategoryExpandedById).filter(
-            ([, expanded]) => expanded === false,
-          ),
+        favoriteThreadKeys: Object.keys(state.favoriteThreadKeys).filter(
+          (threadKey) => state.favoriteThreadKeys[threadKey] === true,
         ),
-        projectCategoryOrder: state.projectCategoryOrder,
         threadChangedFilesExpandedById,
       } satisfies PersistedUiState),
     );
@@ -338,44 +224,6 @@ function nestedBooleanRecordsEqual(
     }
   }
   return true;
-}
-
-function normalizeProjectCategoryOrder(
-  categories: ReadonlyArray<SidebarProjectCategory>,
-  categoryOrder: ReadonlyArray<string>,
-): string[] {
-  const categoryIds = new Set(categories.map((category) => category.id));
-  const nextOrder = categoryOrder.filter((categoryId) => categoryIds.has(categoryId));
-
-  for (const category of categories) {
-    if (!nextOrder.includes(category.id)) {
-      nextOrder.push(category.id);
-    }
-  }
-
-  return nextOrder;
-}
-
-function normalizeProjectCategoryAssignments(
-  categories: ReadonlyArray<SidebarProjectCategory>,
-  assignments: Readonly<Record<string, string>>,
-): Record<string, string> {
-  const categoryIds = new Set(categories.map((category) => category.id));
-  return Object.fromEntries(
-    Object.entries(assignments).filter(([, categoryId]) => categoryIds.has(categoryId)),
-  );
-}
-
-function normalizeProjectCategoryExpanded(
-  categories: ReadonlyArray<SidebarProjectCategory>,
-  expandedById: Readonly<Record<string, boolean>>,
-): Record<string, boolean> {
-  const categoryIds = new Set(categories.map((category) => category.id));
-  return Object.fromEntries(
-    Object.entries(expandedById).filter(
-      ([categoryId, expanded]) => categoryIds.has(categoryId) && expanded === false,
-    ),
-  );
 }
 
 export function syncProjects(state: UiState, projects: readonly SyncProjectInput[]): UiState {
@@ -497,8 +345,14 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
       retainedThreadIds.has(threadId),
     ),
   );
+  const nextFavoriteThreadKeys = Object.fromEntries(
+    Object.entries(state.favoriteThreadKeys).filter(
+      ([threadId, favorite]) => favorite === true && retainedThreadIds.has(threadId),
+    ),
+  );
   if (
     recordsEqual(state.threadLastVisitedAtById, nextThreadLastVisitedAtById) &&
+    recordsEqual(state.favoriteThreadKeys, nextFavoriteThreadKeys) &&
     nestedBooleanRecordsEqual(
       state.threadChangedFilesExpandedById,
       nextThreadChangedFilesExpandedById,
@@ -509,6 +363,7 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
   return {
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
+    favoriteThreadKeys: nextFavoriteThreadKeys,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
   };
 }
@@ -561,19 +416,51 @@ export function markThreadUnread(
 
 export function clearThreadUi(state: UiState, threadId: string): UiState {
   const hasVisitedState = threadId in state.threadLastVisitedAtById;
+  const hasFavoriteState = threadId in state.favoriteThreadKeys;
   const hasChangedFilesState = threadId in state.threadChangedFilesExpandedById;
-  if (!hasVisitedState && !hasChangedFilesState) {
+  if (!hasVisitedState && !hasFavoriteState && !hasChangedFilesState) {
     return state;
   }
   const nextThreadLastVisitedAtById = { ...state.threadLastVisitedAtById };
+  const nextFavoriteThreadKeys = { ...state.favoriteThreadKeys };
   const nextThreadChangedFilesExpandedById = { ...state.threadChangedFilesExpandedById };
   delete nextThreadLastVisitedAtById[threadId];
+  delete nextFavoriteThreadKeys[threadId];
   delete nextThreadChangedFilesExpandedById[threadId];
   return {
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
+    favoriteThreadKeys: nextFavoriteThreadKeys,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
   };
+}
+
+export function setThreadFavorite(state: UiState, threadId: string, favorite: boolean): UiState {
+  const isFavorite = state.favoriteThreadKeys[threadId] === true;
+  if (isFavorite === favorite) {
+    return state;
+  }
+
+  if (!favorite) {
+    const nextFavoriteThreadKeys = { ...state.favoriteThreadKeys };
+    delete nextFavoriteThreadKeys[threadId];
+    return {
+      ...state,
+      favoriteThreadKeys: nextFavoriteThreadKeys,
+    };
+  }
+
+  return {
+    ...state,
+    favoriteThreadKeys: {
+      ...state.favoriteThreadKeys,
+      [threadId]: true,
+    },
+  };
+}
+
+export function toggleThreadFavorite(state: UiState, threadId: string): UiState {
+  return setThreadFavorite(state, threadId, state.favoriteThreadKeys[threadId] !== true);
 }
 
 export function setThreadChangedFilesExpanded(
@@ -692,248 +579,17 @@ export function reorderProjects(
   };
 }
 
-export function addProjectCategory(
-  state: UiState,
-  input: { id: string; name: string; parentId: string | null },
-): UiState {
-  const id = input.id.trim();
-  const name = input.name.trim();
-  if (!id || !name || state.projectCategories.some((category) => category.id === id)) {
-    return state;
-  }
-
-  const projectCategories = [
-    ...state.projectCategories,
-    {
-      id,
-      name,
-      parentId:
-        input.parentId &&
-        canAssignSidebarProjectCategoryParent({
-          categories: state.projectCategories,
-          categoryId: id,
-          parentId: input.parentId,
-        })
-          ? input.parentId
-          : null,
-    },
-  ];
-
-  return {
-    ...state,
-    projectCategories,
-    projectCategoryOrder: normalizeProjectCategoryOrder(projectCategories, [
-      ...state.projectCategoryOrder,
-      id,
-    ]),
-  };
-}
-
-export function updateProjectCategory(
-  state: UiState,
-  input: { id: string; name: string; parentId: string | null },
-): UiState {
-  const existingCategory = state.projectCategories.find((category) => category.id === input.id);
-  const name = input.name.trim();
-  if (!existingCategory || !name) {
-    return state;
-  }
-
-  const parentId =
-    input.parentId &&
-    canAssignSidebarProjectCategoryParent({
-      categories: state.projectCategories,
-      categoryId: input.id,
-      parentId: input.parentId,
-    })
-      ? input.parentId
-      : null;
-
-  if (existingCategory.name === name && existingCategory.parentId === parentId) {
-    return state;
-  }
-
-  const projectCategories = state.projectCategories.map((category) =>
-    category.id === input.id
-      ? {
-          ...category,
-          name,
-          parentId,
-        }
-      : category,
-  );
-
-  return {
-    ...state,
-    projectCategories,
-    projectCategoryOrder: normalizeProjectCategoryOrder(
-      projectCategories,
-      state.projectCategoryOrder,
-    ),
-    projectCategoryAssignmentsByPhysicalKey: normalizeProjectCategoryAssignments(
-      projectCategories,
-      state.projectCategoryAssignmentsByPhysicalKey,
-    ),
-    projectCategoryExpandedById: normalizeProjectCategoryExpanded(
-      projectCategories,
-      state.projectCategoryExpandedById,
-    ),
-  };
-}
-
-export function deleteProjectCategory(state: UiState, categoryId: string): UiState {
-  const deletedCategory = state.projectCategories.find((category) => category.id === categoryId);
-  if (!deletedCategory) {
-    return state;
-  }
-
-  const projectCategories: SidebarProjectCategory[] = [];
-  for (const category of state.projectCategories) {
-    if (category.id === categoryId) {
-      continue;
-    }
-
-    if (category.parentId === categoryId) {
-      projectCategories.push({
-        id: category.id,
-        name: category.name,
-        parentId: deletedCategory.parentId,
-      });
-      continue;
-    }
-
-    projectCategories.push(category);
-  }
-  const projectCategoryAssignmentsByPhysicalKey = Object.fromEntries(
-    Object.entries(state.projectCategoryAssignmentsByPhysicalKey).flatMap(
-      ([physicalProjectKey, assignedCategoryId]) => {
-        if (assignedCategoryId !== categoryId) {
-          return [[physicalProjectKey, assignedCategoryId] as const];
-        }
-        return deletedCategory.parentId
-          ? [[physicalProjectKey, deletedCategory.parentId] as const]
-          : [];
-      },
-    ),
-  );
-  const { [categoryId]: _removedCategoryExpanded, ...projectCategoryExpandedById } =
-    state.projectCategoryExpandedById;
-
-  return {
-    ...state,
-    projectCategories,
-    projectCategoryOrder: normalizeProjectCategoryOrder(
-      projectCategories,
-      state.projectCategoryOrder,
-    ),
-    projectCategoryAssignmentsByPhysicalKey: normalizeProjectCategoryAssignments(
-      projectCategories,
-      projectCategoryAssignmentsByPhysicalKey,
-    ),
-    projectCategoryExpandedById: normalizeProjectCategoryExpanded(
-      projectCategories,
-      projectCategoryExpandedById,
-    ),
-  };
-}
-
-export function assignProjectsToCategory(
-  state: UiState,
-  physicalProjectKeys: readonly string[],
-  categoryId: string | null,
-): UiState {
-  if (physicalProjectKeys.length === 0) {
-    return state;
-  }
-
-  if (categoryId && !state.projectCategories.some((category) => category.id === categoryId)) {
-    return state;
-  }
-
-  const projectCategoryAssignmentsByPhysicalKey = {
-    ...state.projectCategoryAssignmentsByPhysicalKey,
-  };
-  let changed = false;
-
-  for (const physicalProjectKey of physicalProjectKeys) {
-    if (!physicalProjectKey) {
-      continue;
-    }
-
-    if (!categoryId) {
-      if (physicalProjectKey in projectCategoryAssignmentsByPhysicalKey) {
-        delete projectCategoryAssignmentsByPhysicalKey[physicalProjectKey];
-        changed = true;
-      }
-      continue;
-    }
-
-    if (projectCategoryAssignmentsByPhysicalKey[physicalProjectKey] === categoryId) {
-      continue;
-    }
-
-    projectCategoryAssignmentsByPhysicalKey[physicalProjectKey] = categoryId;
-    changed = true;
-  }
-
-  if (!changed) {
-    return state;
-  }
-
-  return {
-    ...state,
-    projectCategoryAssignmentsByPhysicalKey,
-  };
-}
-
-export function setProjectCategoryExpanded(
-  state: UiState,
-  categoryId: string,
-  expanded: boolean,
-): UiState {
-  const currentExpanded = state.projectCategoryExpandedById[categoryId] ?? true;
-  if (currentExpanded === expanded) {
-    return state;
-  }
-
-  if (expanded) {
-    if (!(categoryId in state.projectCategoryExpandedById)) {
-      return state;
-    }
-    const nextExpandedById = { ...state.projectCategoryExpandedById };
-    delete nextExpandedById[categoryId];
-    return {
-      ...state,
-      projectCategoryExpandedById: nextExpandedById,
-    };
-  }
-
-  return {
-    ...state,
-    projectCategoryExpandedById: {
-      ...state.projectCategoryExpandedById,
-      [categoryId]: false,
-    },
-  };
-}
-
 interface UiStateStore extends UiState {
   syncProjects: (projects: readonly SyncProjectInput[]) => void;
   syncThreads: (threads: readonly SyncThreadInput[]) => void;
   markThreadVisited: (threadId: string, visitedAt?: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   clearThreadUi: (threadId: string) => void;
+  setThreadFavorite: (threadId: string, favorite: boolean) => void;
+  toggleThreadFavorite: (threadId: string) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   toggleProject: (projectId: string) => void;
   setProjectExpanded: (projectId: string, expanded: boolean) => void;
-  addProjectCategory: (input: { name: string; parentId: string | null }) => string | null;
-  updateProjectCategory: (input: { id: string; name: string; parentId: string | null }) => void;
-  deleteProjectCategory: (categoryId: string) => void;
-  assignProjectsToCategory: (
-    physicalProjectKeys: readonly string[],
-    categoryId: string | null,
-  ) => void;
-  setProjectCategoryExpanded: (categoryId: string, expanded: boolean) => void;
   reorderProjects: (
     draggedProjectIds: readonly string[],
     targetProjectIds: readonly string[],
@@ -949,29 +605,14 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   markThreadUnread: (threadId, latestTurnCompletedAt) =>
     set((state) => markThreadUnread(state, threadId, latestTurnCompletedAt)),
   clearThreadUi: (threadId) => set((state) => clearThreadUi(state, threadId)),
+  setThreadFavorite: (threadId, favorite) =>
+    set((state) => setThreadFavorite(state, threadId, favorite)),
+  toggleThreadFavorite: (threadId) => set((state) => toggleThreadFavorite(state, threadId)),
   setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
   toggleProject: (projectId) => set((state) => toggleProject(state, projectId)),
   setProjectExpanded: (projectId, expanded) =>
     set((state) => setProjectExpanded(state, projectId, expanded)),
-  addProjectCategory: ({ name, parentId }) => {
-    const id =
-      globalThis.crypto?.randomUUID?.() ??
-      `category-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    let created = false;
-    set((state) => {
-      const nextState = addProjectCategory(state, { id, name, parentId });
-      created = nextState !== state;
-      return nextState;
-    });
-    return created ? id : null;
-  },
-  updateProjectCategory: (input) => set((state) => updateProjectCategory(state, input)),
-  deleteProjectCategory: (categoryId) => set((state) => deleteProjectCategory(state, categoryId)),
-  assignProjectsToCategory: (physicalProjectKeys, categoryId) =>
-    set((state) => assignProjectsToCategory(state, physicalProjectKeys, categoryId)),
-  setProjectCategoryExpanded: (categoryId, expanded) =>
-    set((state) => setProjectCategoryExpanded(state, categoryId, expanded)),
   reorderProjects: (draggedProjectIds, targetProjectIds) =>
     set((state) => reorderProjects(state, draggedProjectIds, targetProjectIds)),
 }));

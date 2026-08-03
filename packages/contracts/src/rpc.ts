@@ -38,6 +38,67 @@ import {
 } from "./git.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
+  CollaborationActivityListInput,
+  CollaborationActivityListResult,
+  CollaborationError,
+  CollaborationInviteAcceptInput,
+  CollaborationInviteAcceptResult,
+  CollaborationInviteCreateInput,
+  CollaborationInviteCreateResult,
+  CollaborationInviteListInput,
+  CollaborationInviteListResult,
+  CollaborationInviteRevokeInput,
+  CollaborationInviteRevokeResult,
+  CollaborationPresenceListInput,
+  CollaborationPresenceListResult,
+  CollaborationPresenceUpsertInput,
+  CollaborationPresenceUpsertResult,
+  CollaborationSharedPromptRecordInput,
+  CollaborationSharedPromptRecordResult,
+  CollaborationStreamEvent,
+  CollaborationStreamInput,
+  OrganizationAccessGrantInput,
+  OrganizationAccessGrantResult,
+  OrganizationAccessRevokeInput,
+  OrganizationAccessRevokeResult,
+  OrganizationAccessReviewCompleteInput,
+  OrganizationAccessReviewCompleteResult,
+  OrganizationAccessReviewCreateInput,
+  OrganizationAccessReviewCreateResult,
+  OrganizationAuditListInput,
+  OrganizationAuditListResult,
+  OrganizationCreateInput,
+  OrganizationCreateResult,
+  OrganizationDepartmentCreateInput,
+  OrganizationDepartmentCreateResult,
+  OrganizationEmployeeInviteAcceptInput,
+  OrganizationEmployeeInviteAcceptResult,
+  OrganizationEmployeeDisableInput,
+  OrganizationEmployeeInviteInput,
+  OrganizationEmployeeInviteResult,
+  OrganizationEmployeeListInput,
+  OrganizationEmployeeListResult,
+  OrganizationEmployeeUpdateInput,
+  OrganizationEmployeeUpdateResult,
+  OrganizationError,
+  OrganizationListResult,
+  OrganizationTeamCreateInput,
+  OrganizationTeamCreateResult,
+  ProviderAccountConfirmInput,
+  ProviderAccountConfirmResult,
+  ProviderAccountConnectInput,
+  ProviderAccountConnectResult,
+  ProviderAccountDisconnectInput,
+  ProviderAccountDisconnectResult,
+  ProviderAccountError,
+  ProviderAccountListInput,
+  ProviderAccountListResult,
+  ProviderAccountOpenAuthTerminalInput,
+  ProviderAccountOpenAuthTerminalResult,
+  WorkspaceCreateInput,
+  WorkspaceCreateResult,
+} from "./tenancy.ts";
+import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
   OrchestrationDispatchCommandError,
@@ -134,12 +195,49 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
 
+  // Provider account methods
+  providerAccountsList: "providerAccounts.list",
+  providerAccountsConnect: "providerAccounts.connect",
+  providerAccountsOpenAuthTerminal: "providerAccounts.openAuthTerminal",
+  providerAccountsConfirm: "providerAccounts.confirm",
+  providerAccountsDisconnect: "providerAccounts.disconnect",
+
   // Streaming subscriptions
   subscribeGitStatus: "subscribeGitStatus",
   subscribeTerminalEvents: "subscribeTerminalEvents",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
+
+  // Collaboration methods
+  collaborationPresenceUpsert: "collaboration.presence.upsert",
+  collaborationPresenceList: "collaboration.presence.list",
+  collaborationInvitesCreate: "collaboration.invites.create",
+  collaborationInvitesList: "collaboration.invites.list",
+  collaborationInvitesAccept: "collaboration.invites.accept",
+  collaborationInvitesRevoke: "collaboration.invites.revoke",
+  collaborationSharedPromptRecord: "collaboration.sharedPrompt.record",
+  collaborationActivityList: "collaboration.activity.list",
+  subscribeCollaboration: "collaboration.subscribe",
+
+  // Workspace / tenancy methods
+  workspacesCreate: "workspaces.create",
+
+  // Organization / RBAC methods
+  organizationsCreate: "organizations.create",
+  organizationsList: "organizations.list",
+  organizationEmployeesInvite: "organization.employees.invite",
+  organizationEmployeesAcceptInvite: "organization.employees.acceptInvite",
+  organizationEmployeesList: "organization.employees.list",
+  organizationEmployeesUpdate: "organization.employees.update",
+  organizationEmployeesDisable: "organization.employees.disable",
+  organizationTeamsCreate: "organization.teams.create",
+  organizationDepartmentsCreate: "organization.departments.create",
+  organizationAccessGrant: "organization.access.grant",
+  organizationAccessRevoke: "organization.access.revoke",
+  organizationAccessReviewCreate: "organization.accessReview.create",
+  organizationAccessReviewComplete: "organization.accessReview.complete",
+  organizationAuditList: "organization.audit.list",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -169,6 +267,39 @@ export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSetting
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: ServerSettingsError,
+});
+
+export const WsProviderAccountsListRpc = Rpc.make(WS_METHODS.providerAccountsList, {
+  payload: ProviderAccountListInput,
+  success: ProviderAccountListResult,
+  error: ProviderAccountError,
+});
+
+export const WsProviderAccountsConnectRpc = Rpc.make(WS_METHODS.providerAccountsConnect, {
+  payload: ProviderAccountConnectInput,
+  success: ProviderAccountConnectResult,
+  error: ProviderAccountError,
+});
+
+export const WsProviderAccountsOpenAuthTerminalRpc = Rpc.make(
+  WS_METHODS.providerAccountsOpenAuthTerminal,
+  {
+    payload: ProviderAccountOpenAuthTerminalInput,
+    success: ProviderAccountOpenAuthTerminalResult,
+    error: ProviderAccountError,
+  },
+);
+
+export const WsProviderAccountsConfirmRpc = Rpc.make(WS_METHODS.providerAccountsConfirm, {
+  payload: ProviderAccountConfirmInput,
+  success: ProviderAccountConfirmResult,
+  error: ProviderAccountError,
+});
+
+export const WsProviderAccountsDisconnectRpc = Rpc.make(WS_METHODS.providerAccountsDisconnect, {
+  payload: ProviderAccountDisconnectInput,
+  success: ProviderAccountDisconnectResult,
+  error: ProviderAccountError,
 });
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
@@ -394,12 +525,177 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
   stream: true,
 });
 
+export const WsCollaborationPresenceUpsertRpc = Rpc.make(WS_METHODS.collaborationPresenceUpsert, {
+  payload: CollaborationPresenceUpsertInput,
+  success: CollaborationPresenceUpsertResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationPresenceListRpc = Rpc.make(WS_METHODS.collaborationPresenceList, {
+  payload: CollaborationPresenceListInput,
+  success: CollaborationPresenceListResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationInvitesCreateRpc = Rpc.make(WS_METHODS.collaborationInvitesCreate, {
+  payload: CollaborationInviteCreateInput,
+  success: CollaborationInviteCreateResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationInvitesListRpc = Rpc.make(WS_METHODS.collaborationInvitesList, {
+  payload: CollaborationInviteListInput,
+  success: CollaborationInviteListResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationInvitesAcceptRpc = Rpc.make(WS_METHODS.collaborationInvitesAccept, {
+  payload: CollaborationInviteAcceptInput,
+  success: CollaborationInviteAcceptResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationInvitesRevokeRpc = Rpc.make(WS_METHODS.collaborationInvitesRevoke, {
+  payload: CollaborationInviteRevokeInput,
+  success: CollaborationInviteRevokeResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationSharedPromptRecordRpc = Rpc.make(
+  WS_METHODS.collaborationSharedPromptRecord,
+  {
+    payload: CollaborationSharedPromptRecordInput,
+    success: CollaborationSharedPromptRecordResult,
+    error: CollaborationError,
+  },
+);
+
+export const WsCollaborationActivityListRpc = Rpc.make(WS_METHODS.collaborationActivityList, {
+  payload: CollaborationActivityListInput,
+  success: CollaborationActivityListResult,
+  error: CollaborationError,
+});
+
+export const WsSubscribeCollaborationRpc = Rpc.make(WS_METHODS.subscribeCollaboration, {
+  payload: CollaborationStreamInput,
+  success: CollaborationStreamEvent,
+  error: CollaborationError,
+  stream: true,
+});
+
+export const WsWorkspacesCreateRpc = Rpc.make(WS_METHODS.workspacesCreate, {
+  payload: WorkspaceCreateInput,
+  success: WorkspaceCreateResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationsCreateRpc = Rpc.make(WS_METHODS.organizationsCreate, {
+  payload: OrganizationCreateInput,
+  success: OrganizationCreateResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationsListRpc = Rpc.make(WS_METHODS.organizationsList, {
+  payload: Schema.Struct({}),
+  success: OrganizationListResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationEmployeesInviteRpc = Rpc.make(WS_METHODS.organizationEmployeesInvite, {
+  payload: OrganizationEmployeeInviteInput,
+  success: OrganizationEmployeeInviteResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationEmployeesAcceptInviteRpc = Rpc.make(
+  WS_METHODS.organizationEmployeesAcceptInvite,
+  {
+    payload: OrganizationEmployeeInviteAcceptInput,
+    success: OrganizationEmployeeInviteAcceptResult,
+    error: OrganizationError,
+  },
+);
+
+export const WsOrganizationEmployeesListRpc = Rpc.make(WS_METHODS.organizationEmployeesList, {
+  payload: OrganizationEmployeeListInput,
+  success: OrganizationEmployeeListResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationEmployeesUpdateRpc = Rpc.make(WS_METHODS.organizationEmployeesUpdate, {
+  payload: OrganizationEmployeeUpdateInput,
+  success: OrganizationEmployeeUpdateResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationEmployeesDisableRpc = Rpc.make(WS_METHODS.organizationEmployeesDisable, {
+  payload: OrganizationEmployeeDisableInput,
+  success: OrganizationEmployeeUpdateResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationTeamsCreateRpc = Rpc.make(WS_METHODS.organizationTeamsCreate, {
+  payload: OrganizationTeamCreateInput,
+  success: OrganizationTeamCreateResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationDepartmentsCreateRpc = Rpc.make(
+  WS_METHODS.organizationDepartmentsCreate,
+  {
+    payload: OrganizationDepartmentCreateInput,
+    success: OrganizationDepartmentCreateResult,
+    error: OrganizationError,
+  },
+);
+
+export const WsOrganizationAccessGrantRpc = Rpc.make(WS_METHODS.organizationAccessGrant, {
+  payload: OrganizationAccessGrantInput,
+  success: OrganizationAccessGrantResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationAccessRevokeRpc = Rpc.make(WS_METHODS.organizationAccessRevoke, {
+  payload: OrganizationAccessRevokeInput,
+  success: OrganizationAccessRevokeResult,
+  error: OrganizationError,
+});
+
+export const WsOrganizationAccessReviewCreateRpc = Rpc.make(
+  WS_METHODS.organizationAccessReviewCreate,
+  {
+    payload: OrganizationAccessReviewCreateInput,
+    success: OrganizationAccessReviewCreateResult,
+    error: OrganizationError,
+  },
+);
+
+export const WsOrganizationAccessReviewCompleteRpc = Rpc.make(
+  WS_METHODS.organizationAccessReviewComplete,
+  {
+    payload: OrganizationAccessReviewCompleteInput,
+    success: OrganizationAccessReviewCompleteResult,
+    error: OrganizationError,
+  },
+);
+
+export const WsOrganizationAuditListRpc = Rpc.make(WS_METHODS.organizationAuditList, {
+  payload: OrganizationAuditListInput,
+  success: OrganizationAuditListResult,
+  error: OrganizationError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpsertKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsProviderAccountsListRpc,
+  WsProviderAccountsConnectRpc,
+  WsProviderAccountsOpenAuthTerminalRpc,
+  WsProviderAccountsConfirmRpc,
+  WsProviderAccountsDisconnectRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsListDirectoryRpc,
   WsProjectsReadFileRpc,
@@ -430,6 +726,30 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
+  WsCollaborationPresenceUpsertRpc,
+  WsCollaborationPresenceListRpc,
+  WsCollaborationInvitesCreateRpc,
+  WsCollaborationInvitesListRpc,
+  WsCollaborationInvitesAcceptRpc,
+  WsCollaborationInvitesRevokeRpc,
+  WsCollaborationSharedPromptRecordRpc,
+  WsCollaborationActivityListRpc,
+  WsSubscribeCollaborationRpc,
+  WsWorkspacesCreateRpc,
+  WsOrganizationsCreateRpc,
+  WsOrganizationsListRpc,
+  WsOrganizationEmployeesInviteRpc,
+  WsOrganizationEmployeesAcceptInviteRpc,
+  WsOrganizationEmployeesListRpc,
+  WsOrganizationEmployeesUpdateRpc,
+  WsOrganizationEmployeesDisableRpc,
+  WsOrganizationTeamsCreateRpc,
+  WsOrganizationDepartmentsCreateRpc,
+  WsOrganizationAccessGrantRpc,
+  WsOrganizationAccessRevokeRpc,
+  WsOrganizationAccessReviewCreateRpc,
+  WsOrganizationAccessReviewCompleteRpc,
+  WsOrganizationAuditListRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,

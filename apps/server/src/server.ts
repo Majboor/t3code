@@ -1,5 +1,7 @@
 import { Effect, Layer } from "effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
+import type { Server as NodeHttpServerType } from "node:http";
+import type { Socket as NodeNetSocket } from "node:net";
 
 import { ServerConfig } from "./config.ts";
 import {
@@ -55,10 +57,15 @@ import {
   authClientsRevokeOthersRouteLayer,
   authClientsRevokeRouteLayer,
   authClientsRouteLayer,
+  authOnboardingRouteLayer,
+  authPasswordRouteLayer,
   authPairingLinksRevokeRouteLayer,
   authPairingLinksRouteLayer,
   authPairingCredentialRouteLayer,
+  authProfileRouteLayer,
+  authProfileUpdateRouteLayer,
   authSessionRouteLayer,
+  authSessionSignOutRouteLayer,
   authWebSocketTokenRouteLayer,
 } from "./auth/http.ts";
 import { basicAuthMiddlewareLayer } from "./auth/basicAuth.ts";
@@ -74,6 +81,11 @@ import {
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
 } from "./orchestration/http.ts";
+import { CollaborationServiceLive } from "./collaboration/Layers/CollaborationService.ts";
+import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
+import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
+import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
+import { TenantRuntimeLifecycleOwnerLive } from "./tenancy/Layers/TenantRuntimeLifecycleOwner.ts";
 
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -86,6 +98,39 @@ const PtyAdapterLive = Layer.unwrap(
     }
   }),
 );
+
+function isBenignNodeSocketError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ECONNRESET" || code === "EPIPE" || code === "ETIMEDOUT";
+}
+
+function attachNodeHttpSocketErrorGuards(server: NodeHttpServerType): NodeHttpServerType {
+  server.on("connection", (socket: NodeNetSocket) => {
+    socket.on("error", (error) => {
+      if (isBenignNodeSocketError(error)) {
+        return;
+      }
+
+      console.warn("HTTP socket error", error);
+    });
+  });
+
+  server.on("clientError", (error, socket) => {
+    if (!isBenignNodeSocketError(error)) {
+      console.warn("HTTP client socket error", error);
+    }
+
+    if (!socket.destroyed) {
+      socket.destroy();
+    }
+  });
+
+  return server;
+}
 
 const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -103,7 +148,7 @@ const HttpServerLive = Layer.unwrap(
         Effect.promise(() => import("@effect/platform-node/NodeHttpServer")),
         Effect.promise(() => import("node:http")),
       ]);
-      return NodeHttpServer.layer(NodeHttp.createServer, {
+      return NodeHttpServer.layer(() => attachNodeHttpSocketErrorGuards(NodeHttp.createServer()), {
         host: config.host,
         port: config.port,
       });
@@ -212,6 +257,28 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
+const TenancyRepositoryLayerLive = TenancyRepositoryLive.pipe(Layer.provide(PersistenceLayerLive));
+const ThreadPreferenceLayerLive = ProjectionThreadPreferenceRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const PersistenceServicesLayerLive = Layer.mergeAll(
+  TenancyRepositoryLayerLive,
+  ThreadPreferenceLayerLive,
+);
+
+const TenantRuntimeLifecycleOwnerLayerLive = TenantRuntimeLifecycleOwnerLive.pipe(
+  Layer.provide(TenancyRepositoryLayerLive),
+  Layer.provide(ProviderSessionRuntimeRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+);
+
+const CollaborationLayerLive = CollaborationServiceLive.pipe(
+  Layer.provide(TenancyRepositoryLayerLive),
+);
+
+const OrganizationLayerLive = OrganizationServiceLive.pipe(
+  Layer.provide(TenancyRepositoryLayerLive),
+);
+
 const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
@@ -227,6 +294,10 @@ const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),
   Layer.provideMerge(AuthLayerLive),
+  Layer.provideMerge(PersistenceServicesLayerLive),
+  Layer.provideMerge(TenantRuntimeLifecycleOwnerLayerLive),
+  Layer.provideMerge(CollaborationLayerLive),
+  Layer.provideMerge(OrganizationLayerLive),
 
   // Misc.
   Layer.provideMerge(AnalyticsServiceLayerLive),
@@ -245,10 +316,15 @@ export const makeRoutesLayer = Layer.mergeAll(
   authClientsRevokeOthersRouteLayer,
   authClientsRevokeRouteLayer,
   authClientsRouteLayer,
+  authOnboardingRouteLayer,
+  authPasswordRouteLayer,
   authPairingLinksRevokeRouteLayer,
   authPairingLinksRouteLayer,
   authPairingCredentialRouteLayer,
+  authProfileRouteLayer,
+  authProfileUpdateRouteLayer,
   authSessionRouteLayer,
+  authSessionSignOutRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
   orchestrationDispatchRouteLayer,

@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { ModelSelection, ProviderRuntimeEvent, ProviderSession } from "@t3tools/contracts";
+import type {
+  ModelSelection,
+  ProviderRuntimeEvent,
+  ProviderSession,
+  ProviderAccount,
+  ProviderSessionIsolation,
+} from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -10,8 +16,12 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderAccountId,
+  ProviderSessionId,
+  TenantId,
   ThreadId,
   TurnId,
+  UserId,
 } from "@t3tools/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -41,6 +51,11 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  TenancyRepository,
+  type ProviderIsolationPersistenceSnapshot,
+  type TenancyRepositoryShape,
+} from "../../persistence/Services/Tenancy.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -99,6 +114,7 @@ describe("ProviderCommandReactor", () => {
 
   async function createHarness(input?: {
     readonly baseDir?: string;
+    readonly providerIsolation?: ProviderIsolationPersistenceSnapshot;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
   }) {
@@ -234,6 +250,48 @@ describe("ProviderCommandReactor", () => {
         return Stream.fromPubSub(runtimeEventPubSub);
       },
     };
+    const providerIsolation = input?.providerIsolation ?? {
+      providerAccounts: [],
+      providerSessions: [],
+    };
+    const tenancyRepository: TenancyRepositoryShape = {
+      loadOrganizations: () =>
+        Effect.succeed({
+          organizations: [],
+          tenants: [],
+          employees: [],
+          invites: [],
+          memberships: [],
+          teams: [],
+          departments: [],
+          grants: [],
+          reviews: [],
+          auditEvents: [],
+        }),
+      saveOrganizations: () => Effect.void,
+      loadCollaboration: () =>
+        Effect.succeed({
+          presence: [],
+          invites: [],
+          memberships: [],
+          activities: [],
+        }),
+      saveCollaboration: () => Effect.void,
+      loadWorkspaces: () =>
+        Effect.succeed({
+          workspaces: [],
+        }),
+      saveWorkspaces: () => Effect.void,
+      loadProviderIsolation: () => Effect.succeed(providerIsolation),
+      saveProviderIsolation: () => Effect.void,
+      loadTenantRuntimeLifecycleState: () =>
+        Effect.succeed({
+          runtimes: [],
+          systemdUnits: [],
+          completedSteps: [],
+        }),
+      saveTenantRuntimeLifecycleState: () => Effect.void,
+    };
 
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -246,6 +304,7 @@ describe("ProviderCommandReactor", () => {
     const layer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(Layer.succeed(TenancyRepository, tenancyRepository)),
       Layer.provideMerge(Layer.succeed(GitCore, { renameBranch } as unknown as GitCoreShape)),
       Layer.provideMerge(
         Layer.succeed(GitStatusBroadcaster, {
@@ -355,6 +414,75 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("attaches isolated provider launch environment from persisted provider session", async () => {
+    const now = new Date().toISOString();
+    const providerAccount: ProviderAccount = {
+      id: ProviderAccountId.make("provider-account-1"),
+      provider: "codex",
+      tenantId: TenantId.make("tenant-acme"),
+      owner: {
+        type: "user",
+        userId: UserId.make("user-1"),
+      },
+      sharing: "private",
+      authHomeDir: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+      configDir: "/srv/t3/tenants/acme/provider-homes/user-1/codex/config",
+      secretsDir: "/srv/t3/tenants/acme/data/userdata/secrets/provider-accounts/user-1/codex",
+      createdAt: now,
+      disabledAt: null,
+    };
+    const providerSession: ProviderSessionIsolation = {
+      id: ProviderSessionId.make("provider-session-1"),
+      tenantId: TenantId.make("tenant-acme"),
+      userId: UserId.make("user-1"),
+      providerAccountId: providerAccount.id,
+      provider: "codex",
+      providerHomeDir: providerAccount.authHomeDir,
+      cwd: "/tmp/provider-project",
+      createdAt: now,
+      endedAt: null,
+    };
+    const harness = await createHarness({
+      providerIsolation: {
+        providerAccounts: [providerAccount],
+        providerSessions: [providerSession],
+      },
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-provider-env"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-provider-env"),
+          role: "user",
+          text: "hello isolated provider",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerLaunchEnvironment: {
+        env: {
+          CODEX_HOME: providerSession.providerHomeDir,
+          HOME: providerAccount.authHomeDir,
+          T3_PROVIDER_ACCOUNT_ID: providerAccount.id,
+          T3_PROVIDER_HOME: providerSession.providerHomeDir,
+          T3_PROVIDER_SECRETS_DIR: providerAccount.secretsDir,
+          T3_TENANT_ID: providerSession.tenantId,
+          T3_USER_ID: providerSession.userId,
+          XDG_CONFIG_HOME: providerAccount.configDir,
+        },
+      },
+    });
   });
 
   it("generates a thread title on the first turn", async () => {

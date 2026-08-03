@@ -1,5 +1,6 @@
 import {
   type ChatAttachment,
+  AuthSessionId,
   CommandId,
   EventId,
   type ModelSelection,
@@ -7,11 +8,15 @@ import {
   ProviderKind,
   type OrchestrationSession,
   ThreadId,
+  type ProviderAccount,
   type ProviderSession,
+  type ProviderSessionIsolation,
+  type TenantSessionContext,
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { deriveProviderLaunchEnvironment } from "@t3tools/shared/tenancy";
 import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
@@ -23,6 +28,7 @@ import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { TenancyRepository } from "../../persistence/Services/Tenancy.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderCommandReactor,
@@ -143,9 +149,36 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
   return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
 }
 
+function isPathInsideRoot(candidate: string, root: string): boolean {
+  const normalizedCandidate = candidate.replaceAll("\\", "/").replace(/\/+$/, "");
+  const normalizedRoot = root.replaceAll("\\", "/").replace(/\/+$/, "");
+  return (
+    normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}/`)
+  );
+}
+
+function tenantSessionFromProviderSession(input: {
+  readonly account: ProviderAccount;
+  readonly providerSession: ProviderSessionIsolation;
+}): TenantSessionContext {
+  return {
+    authSessionId: AuthSessionId.make(`provider-session:${input.providerSession.id}`),
+    userId: input.providerSession.userId,
+    tenantId: input.providerSession.tenantId,
+    organizationId:
+      input.account.owner.type === "organization" ? input.account.owner.organizationId : null,
+    membershipIds: [],
+    roles: ["developer"],
+    activeWorkspaceId: null,
+    issuedAt: input.providerSession.createdAt,
+    expiresAt: "9999-12-31T23:59:59.999Z",
+  };
+}
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const tenancyRepository = yield* TenancyRepository;
   const git = yield* GitCore;
   const gitStatusBroadcaster = yield* GitStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
@@ -254,6 +287,87 @@ const make = Effect.gen(function* () {
       projects: readModel.projects,
     });
 
+    const resolveProviderLaunchEnvironment = (input: {
+      readonly provider: ProviderKind;
+      readonly cwd: string | undefined;
+    }) =>
+      Effect.gen(function* () {
+        if (!input.cwd) {
+          return undefined;
+        }
+
+        const snapshot = yield* tenancyRepository.loadProviderIsolation().pipe(
+          Effect.mapError(
+            (error) =>
+              new ProviderAdapterRequestError({
+                provider: input.provider,
+                method: "thread.turn.start",
+                detail: `Failed to load provider isolation records before starting provider session: ${error.message}`,
+                cause: error,
+              }),
+          ),
+        );
+        const providerSession = snapshot.providerSessions
+          .filter(
+            (session) =>
+              session.endedAt === null &&
+              session.provider === input.provider &&
+              isPathInsideRoot(input.cwd!, session.cwd),
+          )
+          .toSorted((left, right) => {
+            const leftAccount = snapshot.providerAccounts.find(
+              (account) => account.id === left.providerAccountId,
+            );
+            const rightAccount = snapshot.providerAccounts.find(
+              (account) => account.id === right.providerAccountId,
+            );
+            const leftShared =
+              leftAccount &&
+              leftAccount.owner.type !== "user" &&
+              leftAccount.sharing === "tenant-shared"
+                ? 0
+                : 1;
+            const rightShared =
+              rightAccount &&
+              rightAccount.owner.type !== "user" &&
+              rightAccount.sharing === "tenant-shared"
+                ? 0
+                : 1;
+            return leftShared - rightShared;
+          })[0];
+        if (!providerSession) {
+          return undefined;
+        }
+
+        const account = snapshot.providerAccounts.find(
+          (account) => account.id === providerSession.providerAccountId,
+        );
+        if (!account) {
+          return yield* new ProviderAdapterRequestError({
+            provider: input.provider,
+            method: "thread.turn.start",
+            detail: `Provider session '${providerSession.id}' references missing provider account '${providerSession.providerAccountId}'.`,
+          });
+        }
+
+        const plan = deriveProviderLaunchEnvironment({
+          account,
+          providerSession,
+          tenantSession: tenantSessionFromProviderSession({ account, providerSession }),
+          baseEnv: process.env,
+        });
+        if (!plan.allowed) {
+          return yield* new ProviderAdapterRequestError({
+            provider: input.provider,
+            method: "thread.turn.start",
+            detail: `Provider launch denied for account '${account.id}': ${plan.reason}`,
+          });
+        }
+        return {
+          env: plan.env,
+        };
+      });
+
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
         .listSessions()
@@ -263,13 +377,20 @@ const make = Effect.gen(function* () {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderKind;
     }) =>
-      providerService.startSession(threadId, {
-        threadId,
-        ...(preferredProvider ? { provider: preferredProvider } : {}),
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-        modelSelection: desiredModelSelection,
-        ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        runtimeMode: desiredRuntimeMode,
+      Effect.gen(function* () {
+        const providerLaunchEnvironment = yield* resolveProviderLaunchEnvironment({
+          provider: input?.provider ?? preferredProvider,
+          cwd: effectiveCwd,
+        });
+        return yield* providerService.startSession(threadId, {
+          threadId,
+          ...(preferredProvider ? { provider: preferredProvider } : {}),
+          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+          ...(providerLaunchEnvironment ? { providerLaunchEnvironment } : {}),
+          modelSelection: desiredModelSelection,
+          ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          runtimeMode: desiredRuntimeMode,
+        });
       });
 
     const bindSessionToThread = (session: ProviderSession) =>

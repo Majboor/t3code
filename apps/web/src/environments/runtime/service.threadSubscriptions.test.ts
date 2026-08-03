@@ -15,6 +15,10 @@ const mockCreateWsRpcClient = vi.fn();
 const mockWaitForSavedEnvironmentRegistryHydration = vi.fn();
 const mockListSavedEnvironmentRecords = vi.fn();
 const mockSavedEnvironmentRegistrySubscribe = vi.fn();
+const mockSubscribeSupabaseBrowserSessionChanges = vi.fn();
+const mockResolveSupabasePrimaryWebSocketConnectionUrl = vi.fn((wsBaseUrl: string) =>
+  Promise.resolve(wsBaseUrl),
+);
 
 function MockWsTransport() {
   return undefined;
@@ -31,6 +35,8 @@ vi.mock("../primary", () => ({
     },
     environmentId: EnvironmentId.make("env-1"),
   })),
+  resolveSupabasePrimaryWebSocketConnectionUrl: mockResolveSupabasePrimaryWebSocketConnectionUrl,
+  subscribeSupabaseBrowserSessionChanges: mockSubscribeSupabaseBrowserSessionChanges,
 }));
 
 vi.mock("./catalog", () => ({
@@ -162,6 +168,7 @@ describe("retainThreadDetailSubscription", () => {
       dispose: vi.fn(async () => undefined),
     }));
     mockSavedEnvironmentRegistrySubscribe.mockReturnValue(() => undefined);
+    mockSubscribeSupabaseBrowserSessionChanges.mockReturnValue(() => undefined);
     mockWaitForSavedEnvironmentRegistryHydration.mockResolvedValue(undefined);
     mockListSavedEnvironmentRecords.mockReturnValue([]);
   });
@@ -200,6 +207,61 @@ describe("retainThreadDetailSubscription", () => {
     expect(mockThreadUnsubscribe).toHaveBeenCalledTimes(1);
 
     stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("rebinds the primary environment connection when Supabase browser auth changes", async () => {
+    const { startEnvironmentConnectionService, resetEnvironmentServiceForTests } =
+      await import("./service");
+
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const authChange = { notify: null as (() => void) | null };
+    const unsubscribeAuthChanges = vi.fn();
+    mockSubscribeSupabaseBrowserSessionChanges.mockImplementation((listener) => {
+      authChange.notify = () => listener({ reason: "changed", tokenPresent: true });
+      return unsubscribeAuthChanges;
+    });
+
+    const firstConnectionDispose = vi.fn(async () => undefined);
+    const secondConnectionDispose = vi.fn(async () => undefined);
+    mockCreateEnvironmentConnection
+      .mockImplementationOnce((input) => ({
+        kind: input.kind,
+        environmentId: input.knownEnvironment.environmentId,
+        knownEnvironment: input.knownEnvironment,
+        client: input.client,
+        ensureBootstrapped: vi.fn(async () => undefined),
+        reconnect: vi.fn(async () => undefined),
+        dispose: firstConnectionDispose,
+      }))
+      .mockImplementationOnce((input) => ({
+        kind: input.kind,
+        environmentId: input.knownEnvironment.environmentId,
+        knownEnvironment: input.knownEnvironment,
+        client: input.client,
+        ensureBootstrapped: vi.fn(async () => undefined),
+        reconnect: vi.fn(async () => undefined),
+        dispose: secondConnectionDispose,
+      }));
+
+    const stop = startEnvironmentConnectionService(queryClient);
+    expect(mockCreateEnvironmentConnection).toHaveBeenCalledTimes(1);
+    const notifyAuthChange = authChange.notify;
+    if (!notifyAuthChange) {
+      throw new Error("Supabase auth change listener was not registered.");
+    }
+
+    notifyAuthChange();
+    await vi.runAllTimersAsync();
+
+    expect(firstConnectionDispose).toHaveBeenCalledTimes(1);
+    expect(mockCreateEnvironmentConnection).toHaveBeenCalledTimes(2);
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["providers"] });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["projects"] });
+
+    stop();
+    expect(unsubscribeAuthChanges).toHaveBeenCalledTimes(1);
     await resetEnvironmentServiceForTests();
   });
 

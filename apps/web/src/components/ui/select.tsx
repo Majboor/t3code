@@ -96,7 +96,7 @@ function SelectTrigger({
 function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
   return (
     <SelectPrimitive.Value
-      className={cn("flex-1 truncate data-placeholder:text-muted-foreground", className)}
+      className={cn("min-w-0 flex-1 truncate data-placeholder:text-muted-foreground", className)}
       data-slot="select-value"
       {...props}
     />

@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Collision } from "@dnd-kit/core";
 
 import {
+  buildSidebarOwnerFilterOptions,
   createThreadJumpHintVisibilityController,
+  doesSidebarProjectMatchQuery,
+  doesSidebarProjectOwnerMatch,
+  doesSidebarProjectSourceMatch,
+  doesSidebarThreadMatchQuery,
+  doesSidebarThreadStatusMatch,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
@@ -11,8 +16,8 @@ import {
   getProjectSortTimestamp,
   hasUnseenCompletion,
   isContextMenuPointerDown,
+  normalizeSidebarSearchQuery,
   orderItemsByPreferredIds,
-  prioritizeProjectDropCollisions,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
@@ -44,10 +49,6 @@ function makeLatestTurn(overrides?: {
     startedAt: overrides?.startedAt ?? "2026-03-09T10:00:00.000Z",
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
-}
-
-function makeCollision(id: string): Collision {
-  return { id };
 }
 
 describe("hasUnseenCompletion", () => {
@@ -125,38 +126,6 @@ describe("createThreadJumpHintVisibilityController", () => {
     vi.advanceTimersByTime(THREAD_JUMP_HINT_SHOW_DELAY_MS);
 
     expect(visibilityChanges).toEqual([]);
-  });
-});
-
-describe("prioritizeProjectDropCollisions", () => {
-  it("prefers category targets over the dragged project itself", () => {
-    expect(
-      prioritizeProjectDropCollisions({
-        collisions: [makeCollision("project-a"), makeCollision("project-category:apps")],
-        activeId: "project-a",
-        isCategoryCollision: (id) => String(id).startsWith("project-category:"),
-      }),
-    ).toEqual([makeCollision("project-category:apps")]);
-  });
-
-  it("drops the active project collision when another project target exists", () => {
-    expect(
-      prioritizeProjectDropCollisions({
-        collisions: [makeCollision("project-a"), makeCollision("project-b")],
-        activeId: "project-a",
-        isCategoryCollision: (id) => String(id).startsWith("project-category:"),
-      }),
-    ).toEqual([makeCollision("project-b")]);
-  });
-
-  it("keeps the active collision when it is the only available target", () => {
-    expect(
-      prioritizeProjectDropCollisions({
-        collisions: [makeCollision("project-a")],
-        activeId: "project-a",
-        isCategoryCollision: (id) => String(id).startsWith("project-category:"),
-      }),
-    ).toEqual([makeCollision("project-a")]);
   });
 });
 
@@ -346,6 +315,126 @@ describe("orderItemsByPreferredIds", () => {
       ProjectId.make("project-2"),
       ProjectId.make("project-1"),
     ]);
+  });
+});
+
+describe("sidebar search and status filters", () => {
+  it("normalizes search input and matches project names, paths, members, and environments", () => {
+    const query = normalizeSidebarSearchQuery("  MOBILE  ");
+
+    expect(query).toBe("mobile");
+    expect(
+      doesSidebarProjectMatchQuery(
+        {
+          name: "Client",
+          displayName: "Client App",
+          cwd: "/work/client",
+          memberProjects: [
+            {
+              name: "iOS",
+              cwd: "/work/client/mobile-ios",
+              environmentLabel: "Remote Mac",
+            },
+          ],
+        },
+        query,
+      ),
+    ).toBe(true);
+  });
+
+  it("matches thread titles, branches, and worktree paths", () => {
+    expect(
+      doesSidebarThreadMatchQuery(
+        {
+          title: "Fix invoice totals",
+          branch: "feature/payments-ledger",
+          worktreePath: "/work/t3code",
+        },
+        normalizeSidebarSearchQuery("payments"),
+      ),
+    ).toBe(true);
+  });
+
+  it("matches project source filters against local, remote, and mixed entries", () => {
+    expect(doesSidebarProjectSourceMatch({ environmentPresence: "local-only" }, "local")).toBe(
+      true,
+    );
+    expect(doesSidebarProjectSourceMatch({ environmentPresence: "remote-only" }, "remote")).toBe(
+      true,
+    );
+    expect(doesSidebarProjectSourceMatch({ environmentPresence: "mixed" }, "local")).toBe(true);
+    expect(doesSidebarProjectSourceMatch({ environmentPresence: "mixed" }, "remote")).toBe(true);
+    expect(doesSidebarProjectSourceMatch({ environmentPresence: "mixed" }, "mixed")).toBe(true);
+    expect(doesSidebarProjectSourceMatch({ environmentPresence: "local-only" }, "remote")).toBe(
+      false,
+    );
+  });
+
+  it("builds and matches owner filters from project and grouped member ownership", () => {
+    const adaProject = {
+      ownership: {
+        ownerUserId: "user-ada",
+        ownerDisplayName: "Ada Lovelace",
+        tenantDisplayName: "Acme",
+      },
+    };
+    const graceProject = {
+      memberProjects: [
+        {
+          ownership: {
+            ownerUserId: "user-grace",
+            ownerDisplayName: "Grace Hopper",
+            tenantDisplayName: "Navy",
+          },
+        },
+      ],
+    };
+
+    expect(buildSidebarOwnerFilterOptions([graceProject, adaProject])).toEqual([
+      { value: "user-ada", label: "Ada Lovelace" },
+      { value: "user-grace", label: "Grace Hopper" },
+    ]);
+    expect(doesSidebarProjectOwnerMatch(adaProject, "user-ada")).toBe(true);
+    expect(doesSidebarProjectOwnerMatch(adaProject, "user-grace")).toBe(false);
+    expect(doesSidebarProjectOwnerMatch(graceProject, "user-grace")).toBe(true);
+    expect(doesSidebarProjectOwnerMatch({}, "all")).toBe(true);
+  });
+
+  it("maps status pills into actionable filter buckets", () => {
+    expect(
+      doesSidebarThreadStatusMatch(
+        {
+          label: "Pending Approval",
+          colorClass: "",
+          dotClass: "",
+          pulse: false,
+        },
+        "needs_attention",
+      ),
+    ).toBe(true);
+    expect(
+      doesSidebarThreadStatusMatch(
+        {
+          label: "Working",
+          colorClass: "",
+          dotClass: "",
+          pulse: true,
+        },
+        "active",
+      ),
+    ).toBe(true);
+    expect(
+      doesSidebarThreadStatusMatch(
+        {
+          label: "Completed",
+          colorClass: "",
+          dotClass: "",
+          pulse: false,
+        },
+        "completed",
+      ),
+    ).toBe(true);
+    expect(doesSidebarThreadStatusMatch(null, "needs_attention")).toBe(false);
   });
 });
 

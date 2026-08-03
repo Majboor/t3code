@@ -38,11 +38,14 @@ import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../st
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
-import { useProjectSidebarOpen } from "../components/AppSidebarLayout.logic";
+import {
+  useDesktopLayoutPanelPreferences,
+  useProjectSidebarOpen,
+} from "../components/AppSidebarLayout.logic";
 import { WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY } from "../components/AppSidebarLayout.logic";
 import { canAcceptInlineWorkspaceSidebarWidth } from "../lib/inlineWorkspaceSidebarLayout";
 import { RightPanelSheet } from "../components/RightPanelSheet";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
@@ -200,6 +203,8 @@ function ChatThreadRouteView() {
   const desktopLayoutDefinition = useSettings((settings) =>
     resolveDesktopLayoutModeDefinition(settings),
   );
+  const { updateSettings } = useUpdateSettings();
+  const { setPanelPreferenceForMode } = useDesktopLayoutPanelPreferences();
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
@@ -304,6 +309,7 @@ function ChatThreadRouteView() {
     if (!threadRef) {
       return;
     }
+    setPanelPreferenceForMode(desktopLayoutMode, "none");
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
@@ -315,12 +321,40 @@ function ChatThreadRouteView() {
         workspace: undefined,
       }),
     });
-  }, [navigate, threadRef]);
+  }, [desktopLayoutMode, navigate, setPanelPreferenceForMode, threadRef]);
+  const closeWorkspace = useCallback(() => {
+    if (!threadRef) {
+      return;
+    }
+    setPanelPreferenceForMode(desktopLayoutMode, "none");
+    if (desktopLayoutDefinition.layout === "dev") {
+      updateSettings({ desktopLayoutMode: "vibe" });
+    }
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(threadRef),
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        diff: undefined,
+        diffFilePath: undefined,
+        diffTurnId: undefined,
+        workspace: undefined,
+      }),
+    });
+  }, [
+    desktopLayoutDefinition.layout,
+    desktopLayoutMode,
+    navigate,
+    setPanelPreferenceForMode,
+    threadRef,
+    updateSettings,
+  ]);
   const openDiff = useCallback(() => {
     if (!threadRef) {
       return;
     }
     markDiffOpened();
+    setPanelPreferenceForMode(desktopLayoutMode, "diff");
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
@@ -335,12 +369,13 @@ function ChatThreadRouteView() {
         };
       },
     });
-  }, [markDiffOpened, navigate, threadRef]);
+  }, [desktopLayoutMode, markDiffOpened, navigate, setPanelPreferenceForMode, threadRef]);
   const openWorkspace = useCallback(() => {
     if (!threadRef) {
       return;
     }
     markWorkspaceOpened();
+    setPanelPreferenceForMode(desktopLayoutMode, "workspace");
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
@@ -355,7 +390,7 @@ function ChatThreadRouteView() {
         };
       },
     });
-  }, [markWorkspaceOpened, navigate, threadRef]);
+  }, [desktopLayoutMode, markWorkspaceOpened, navigate, setPanelPreferenceForMode, threadRef]);
 
   useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
@@ -483,7 +518,7 @@ function ChatThreadRouteView() {
       open={rightPanelOpen}
       side={inlinePanelSide}
       preferredPanel={activePanel}
-      onClose={closeDiff}
+      onClose={activePanel === "workspace" ? closeWorkspace : closeDiff}
       onOpenPreferredPanel={activePanel === "workspace" ? openWorkspace : openDiff}
       renderDiffContent={shouldRenderDiffContent}
       renderWorkspaceContent={shouldRenderWorkspaceContent}
@@ -509,7 +544,7 @@ function ChatThreadRouteView() {
             <LazyDiffPanel mode="compact" onClose={closeDiff} />
           ) : null}
           {activePanel === "workspace" && shouldRenderWorkspaceContent ? (
-            <LazyWorkspacePanel mode="compact" onClose={closeDiff} onOpenDiff={openDiff} />
+            <LazyWorkspacePanel mode="compact" onClose={closeWorkspace} onOpenDiff={openDiff} />
           ) : null}
           <div
             role="separator"
@@ -567,12 +602,15 @@ function ChatThreadRouteView() {
           routeKind="server"
         />
       </SidebarInset>
-      <RightPanelSheet open={rightPanelOpen} onClose={closeDiff}>
+      <RightPanelSheet
+        open={rightPanelOpen}
+        onClose={activePanel === "workspace" ? closeWorkspace : closeDiff}
+      >
         {shouldRenderDiffContent && activePanel === "diff" ? (
           <LazyDiffPanel mode="sheet" onClose={closeDiff} />
         ) : null}
         {shouldRenderWorkspaceContent && activePanel === "workspace" ? (
-          <LazyWorkspacePanel mode="sheet" />
+          <LazyWorkspacePanel mode="sheet" onClose={closeWorkspace} />
         ) : null}
       </RightPanelSheet>
     </>

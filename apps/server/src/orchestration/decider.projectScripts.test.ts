@@ -3,8 +3,12 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
+  OrganizationId,
   ProjectId,
+  TenantId,
   ThreadId,
+  UserId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
@@ -38,6 +42,69 @@ describe("decider project scripts", () => {
     const event = Array.isArray(result) ? result[0] : result;
     expect(event.type).toBe("project.created");
     expect((event.payload as { scripts: unknown[] }).scripts).toEqual([]);
+  });
+
+  it("propagates project ownership metadata in project create and meta update events", async () => {
+    const now = new Date().toISOString();
+    const readModel = createEmptyReadModel(now);
+    const ownership = {
+      tenantId: TenantId.make("tenant-acme"),
+      tenantDisplayName: "Acme",
+      workspaceId: WorkspaceId.make("workspace-product"),
+      workspaceTitle: "Product Workspace",
+      organizationId: OrganizationId.make("org-acme"),
+      organizationDisplayName: "Acme Inc",
+      ownerUserId: UserId.make("user-ada"),
+      ownerDisplayName: "Ada Lovelace",
+    };
+
+    const createResult = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "project.create",
+          commandId: CommandId.make("cmd-project-create-ownership"),
+          projectId: asProjectId("project-ownership"),
+          title: "Ownership",
+          workspaceRoot: "/tmp/ownership",
+          ownership,
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    const createEvent = Array.isArray(createResult) ? createResult[0] : createResult;
+    expect(createEvent.type).toBe("project.created");
+    expect(createEvent.payload).toMatchObject({ ownership });
+
+    const withProject = await Effect.runPromise(
+      projectEvent(readModel, {
+        ...createEvent,
+        sequence: 1,
+        eventId: asEventId("evt-project-create-ownership"),
+      }),
+    );
+    const updatedOwnership = {
+      ...ownership,
+      workspaceTitle: "Updated Workspace",
+      organizationDisplayName: null,
+    };
+
+    const updateResult = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-project-update-ownership"),
+          projectId: asProjectId("project-ownership"),
+          ownership: updatedOwnership,
+        },
+        readModel: withProject,
+      }),
+    );
+
+    const updateEvent = Array.isArray(updateResult) ? updateResult[0] : updateResult;
+    expect(updateEvent.type).toBe("project.meta-updated");
+    expect(updateEvent.payload).toMatchObject({ ownership: updatedOwnership });
   });
 
   it("propagates scripts in project.meta.update payload", async () => {

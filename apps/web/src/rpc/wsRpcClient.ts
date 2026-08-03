@@ -116,6 +116,47 @@ export interface WsRpcClient {
     readonly subscribeLifecycle: RpcStreamMethod<typeof WS_METHODS.subscribeServerLifecycle>;
     readonly subscribeAuthAccess: RpcStreamMethod<typeof WS_METHODS.subscribeAuthAccess>;
   };
+  readonly collaboration: {
+    readonly upsertPresence: RpcUnaryMethod<typeof WS_METHODS.collaborationPresenceUpsert>;
+    readonly listPresence: RpcUnaryMethod<typeof WS_METHODS.collaborationPresenceList>;
+    readonly createInvite: RpcUnaryMethod<typeof WS_METHODS.collaborationInvitesCreate>;
+    readonly listInvites: RpcUnaryMethod<typeof WS_METHODS.collaborationInvitesList>;
+    readonly acceptInvite: RpcUnaryMethod<typeof WS_METHODS.collaborationInvitesAccept>;
+    readonly revokeInvite: RpcUnaryMethod<typeof WS_METHODS.collaborationInvitesRevoke>;
+    readonly recordSharedPrompt: RpcUnaryMethod<typeof WS_METHODS.collaborationSharedPromptRecord>;
+    readonly listActivity: RpcUnaryMethod<typeof WS_METHODS.collaborationActivityList>;
+    readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribeCollaboration>;
+  };
+  readonly workspaces: {
+    readonly create: RpcUnaryMethod<typeof WS_METHODS.workspacesCreate>;
+  };
+  readonly organizations: {
+    readonly create: RpcUnaryMethod<typeof WS_METHODS.organizationsCreate>;
+    readonly list: RpcUnaryNoArgMethod<typeof WS_METHODS.organizationsList>;
+    readonly inviteEmployee: RpcUnaryMethod<typeof WS_METHODS.organizationEmployeesInvite>;
+    readonly acceptEmployeeInvite: RpcUnaryMethod<
+      typeof WS_METHODS.organizationEmployeesAcceptInvite
+    >;
+    readonly listEmployees: RpcUnaryMethod<typeof WS_METHODS.organizationEmployeesList>;
+    readonly updateEmployee: RpcUnaryMethod<typeof WS_METHODS.organizationEmployeesUpdate>;
+    readonly disableEmployee: RpcUnaryMethod<typeof WS_METHODS.organizationEmployeesDisable>;
+    readonly createTeam: RpcUnaryMethod<typeof WS_METHODS.organizationTeamsCreate>;
+    readonly createDepartment: RpcUnaryMethod<typeof WS_METHODS.organizationDepartmentsCreate>;
+    readonly grantAccess: RpcUnaryMethod<typeof WS_METHODS.organizationAccessGrant>;
+    readonly revokeAccess: RpcUnaryMethod<typeof WS_METHODS.organizationAccessRevoke>;
+    readonly createAccessReview: RpcUnaryMethod<typeof WS_METHODS.organizationAccessReviewCreate>;
+    readonly completeAccessReview: RpcUnaryMethod<
+      typeof WS_METHODS.organizationAccessReviewComplete
+    >;
+    readonly listAuditEvents: RpcUnaryMethod<typeof WS_METHODS.organizationAuditList>;
+  };
+  readonly providerAccounts: {
+    readonly list: RpcUnaryNoArgMethod<typeof WS_METHODS.providerAccountsList>;
+    readonly connect: RpcUnaryMethod<typeof WS_METHODS.providerAccountsConnect>;
+    readonly openAuthTerminal: RpcUnaryMethod<typeof WS_METHODS.providerAccountsOpenAuthTerminal>;
+    readonly confirm: RpcUnaryMethod<typeof WS_METHODS.providerAccountsConfirm>;
+    readonly disconnect: RpcUnaryMethod<typeof WS_METHODS.providerAccountsDisconnect>;
+  };
   readonly orchestration: {
     readonly dispatchCommand: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.dispatchCommand>;
     readonly getTurnDiff: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.getTurnDiff>;
@@ -243,6 +284,73 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           listener,
           options,
         ),
+    },
+    collaboration: {
+      upsertPresence: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationPresenceUpsert](input)),
+      listPresence: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationPresenceList](input)),
+      createInvite: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationInvitesCreate](input)),
+      listInvites: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationInvitesList](input)),
+      acceptInvite: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationInvitesAccept](input)),
+      revokeInvite: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationInvitesRevoke](input)),
+      recordSharedPrompt: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationSharedPromptRecord](input)),
+      listActivity: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationActivityList](input)),
+      subscribe: (input, listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeCollaboration](input),
+          listener,
+          options,
+        ),
+    },
+    workspaces: {
+      create: (input) => transport.request((client) => client[WS_METHODS.workspacesCreate](input)),
+    },
+    organizations: {
+      create: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationsCreate](input)),
+      list: () => transport.request((client) => client[WS_METHODS.organizationsList]({})),
+      inviteEmployee: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationEmployeesInvite](input)),
+      acceptEmployeeInvite: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationEmployeesAcceptInvite](input)),
+      listEmployees: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationEmployeesList](input)),
+      updateEmployee: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationEmployeesUpdate](input)),
+      disableEmployee: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationEmployeesDisable](input)),
+      createTeam: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationTeamsCreate](input)),
+      createDepartment: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationDepartmentsCreate](input)),
+      grantAccess: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationAccessGrant](input)),
+      revokeAccess: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationAccessRevoke](input)),
+      createAccessReview: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationAccessReviewCreate](input)),
+      completeAccessReview: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationAccessReviewComplete](input)),
+      listAuditEvents: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationAuditList](input)),
+    },
+    providerAccounts: {
+      list: () => transport.request((client) => client[WS_METHODS.providerAccountsList]({})),
+      connect: (input) =>
+        transport.request((client) => client[WS_METHODS.providerAccountsConnect](input)),
+      openAuthTerminal: (input) =>
+        transport.request((client) => client[WS_METHODS.providerAccountsOpenAuthTerminal](input)),
+      confirm: (input) =>
+        transport.request((client) => client[WS_METHODS.providerAccountsConfirm](input)),
+      disconnect: (input) =>
+        transport.request((client) => client[WS_METHODS.providerAccountsDisconnect](input)),
     },
     orchestration: {
       dispatchCommand: (input) =>

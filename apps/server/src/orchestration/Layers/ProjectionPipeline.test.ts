@@ -4,9 +4,13 @@ import {
   CorrelationId,
   EventId,
   MessageId,
+  OrganizationId,
   ProjectId,
+  TenantId,
   ThreadId,
   TurnId,
+  UserId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -70,6 +74,16 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           projectId: ProjectId.make("project-1"),
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
+          ownership: {
+            tenantId: TenantId.make("tenant-acme"),
+            tenantDisplayName: "Acme",
+            workspaceId: WorkspaceId.make("workspace-product"),
+            workspaceTitle: "Product Workspace",
+            organizationId: OrganizationId.make("org-acme"),
+            organizationDisplayName: "Acme Inc",
+            ownerUserId: UserId.make("user-ada"),
+            ownerDisplayName: "Ada Lovelace",
+          },
           defaultModelSelection: null,
           scripts: [],
           createdAt: now,
@@ -130,16 +144,24 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const projectRows = yield* sql<{
         readonly projectId: string;
         readonly title: string;
+        readonly ownershipJson: string | null;
         readonly scriptsJson: string;
       }>`
         SELECT
           project_id AS "projectId",
           title,
+          ownership_json AS "ownershipJson",
           scripts_json AS "scriptsJson"
         FROM projection_projects
       `;
       assert.deepEqual(projectRows, [
-        { projectId: "project-1", title: "Project 1", scriptsJson: "[]" },
+        {
+          projectId: "project-1",
+          title: "Project 1",
+          ownershipJson:
+            '{"tenantId":"tenant-acme","tenantDisplayName":"Acme","workspaceId":"workspace-product","workspaceTitle":"Product Workspace","organizationId":"org-acme","organizationDisplayName":"Acme Inc","ownerUserId":"user-ada","ownerDisplayName":"Ada Lovelace"}',
+          scriptsJson: "[]",
+        },
       ]);
 
       const messageRows = yield* sql<{

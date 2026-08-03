@@ -21,15 +21,7 @@ export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
 );
 
 const MODE_ARGS = {
-  dev: [
-    "run",
-    "dev",
-    "--ui=tui",
-    "--filter=@t3tools/contracts",
-    "--filter=@t3tools/web",
-    "--filter=t3",
-    "--parallel",
-  ],
+  dev: ["run", "dev", "--ui=tui", "--filter=@t3tools/web", "--filter=t3", "--parallel"],
   "dev:server": ["run", "dev", "--filter=t3"],
   "dev:web": ["run", "dev", "--filter=@t3tools/web"],
   "dev:desktop": ["run", "dev", "--filter=@t3tools/desktop", "--filter=@t3tools/web", "--parallel"],

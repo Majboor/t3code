@@ -1,9 +1,13 @@
 import {
+  type AuthOnboardingStep,
   type AuthBearerBootstrapResult,
+  type AuthOnboardingState,
   AuthBootstrapInput,
   AuthCreatePairingCredentialInput,
+  AuthPasswordInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  AuthUpdateUserProfileInput,
   type AuthWebSocketTokenResult,
 } from "@t3tools/contracts";
 import { DateTime, Effect, Schema } from "effect";
@@ -12,6 +16,20 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { AuthError, ServerAuth } from "./Services/ServerAuth.ts";
 import { SessionCredentialService } from "./Services/SessionCredentialService.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
+
+export function resolveAuthOnboardingStep(
+  tenantStatus: AuthOnboardingState["profile"]["tenantStatus"],
+): AuthOnboardingStep {
+  if (tenantStatus === "pending-membership") {
+    return "accept-invite";
+  }
+
+  if (tenantStatus === "none") {
+    return "create-workspace";
+  }
+
+  return "paired";
+}
 
 export const respondToAuthError = (error: AuthError) =>
   Effect.gen(function* () {
@@ -39,8 +57,14 @@ export const authSessionRouteLayer = HttpRouter.add(
     const session = yield* serverAuth.getSessionState(request);
     if (
       session.authenticated ||
+      session.auth.localPassword ||
+      session.auth.supabase ||
       (session.auth.policy !== "loopback-browser" && session.auth.policy !== "unsafe-no-auth")
     ) {
+      return HttpServerResponse.jsonUnsafe(session, { status: 200 });
+    }
+    const authEntryPath = request.headers["x-t3-auth-entry-path"];
+    if (authEntryPath === "/invite" || authEntryPath === "/pair") {
       return HttpServerResponse.jsonUnsafe(session, { status: 200 });
     }
 
@@ -57,6 +81,7 @@ export const authSessionRouteLayer = HttpRouter.add(
         role: localSession.response.role,
         sessionMethod: localSession.response.sessionMethod,
         expiresAt: localSession.response.expiresAt,
+        tenantStatus: "none",
       },
       { status: 200 },
     ).pipe(
@@ -68,6 +93,81 @@ export const authSessionRouteLayer = HttpRouter.add(
       }),
     );
   }),
+);
+
+export const authSessionSignOutRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/auth/session/sign-out",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const sessions = yield* SessionCredentialService;
+    const token = request.cookies[sessions.cookieName];
+    if (token) {
+      yield* sessions.verify(token).pipe(
+        Effect.flatMap((session) => sessions.revoke(session.sessionId)),
+        Effect.catch(() => Effect.void),
+      );
+    }
+
+    return yield* HttpServerResponse.jsonUnsafe({ signedOut: true }, { status: 200 }).pipe(
+      HttpServerResponse.setCookie(sessions.cookieName, "", {
+        expires: new Date(0),
+        httpOnly: true,
+        path: "/",
+        sameSite: "lax",
+      }),
+    );
+  }),
+);
+
+export const authProfileRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/auth/profile",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const profile = yield* serverAuth.getUserProfile(request);
+    return HttpServerResponse.jsonUnsafe(profile, { status: 200 });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+export const authProfileUpdateRouteLayer = HttpRouter.add(
+  "PATCH",
+  "/api/auth/profile",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const payload = yield* HttpServerRequest.schemaBodyJson(AuthUpdateUserProfileInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AuthError({
+            message: "Invalid account profile update.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const profile = yield* serverAuth.updateUserProfile(request, payload);
+    return HttpServerResponse.jsonUnsafe(profile, { status: 200 });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+export const authOnboardingRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/auth/onboarding",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const profile = yield* serverAuth.getUserProfile(request);
+    return HttpServerResponse.jsonUnsafe(
+      {
+        authenticated: true,
+        profile,
+        nextStep: resolveAuthOnboardingStep(profile.tenantStatus),
+      } satisfies AuthOnboardingState,
+      { status: 200 },
+    );
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
 const PairingCredentialRequestHeaders = Schema.Struct({
@@ -107,6 +207,39 @@ export const authBootstrapRouteLayer = HttpRouter.add(
     const result = yield* serverAuth.exchangeBootstrapCredential(
       payload.credential,
       deriveAuthClientMetadata({ request }),
+    );
+
+    return yield* HttpServerResponse.jsonUnsafe(result.response, { status: 200 }).pipe(
+      HttpServerResponse.setCookie(sessions.cookieName, result.sessionToken, {
+        expires: DateTime.toDate(result.response.expiresAt),
+        httpOnly: true,
+        path: "/",
+        sameSite: "lax",
+      }),
+    );
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+export const authPasswordRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/auth/password",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const sessions = yield* SessionCredentialService;
+    const payload = yield* HttpServerRequest.schemaBodyJson(AuthPasswordInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AuthError({
+            message: "Invalid password auth payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const result = yield* serverAuth.authenticatePassword(
+      payload,
+      deriveAuthClientMetadata({ request, label: payload.email }),
     );
 
     return yield* HttpServerResponse.jsonUnsafe(result.response, { status: 200 }).pipe(

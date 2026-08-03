@@ -12,6 +12,7 @@ import { resolveShortcutCommand } from "../keybindings";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
+import { resolvePrivateRouteRedirect } from "~/authRouting";
 import { useSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "~/rpc/serverState";
 
@@ -108,8 +109,9 @@ function ChatRouteLayout() {
 
 export const Route = createFileRoute("/_chat")({
   beforeLoad: async ({ context }) => {
-    if (context.authGateState.status !== "authenticated") {
-      throw redirect({ to: "/pair", replace: true });
+    const redirectTo = resolvePrivateRouteRedirect({ authGateState: context.authGateState });
+    if (redirectTo) {
+      throw redirect({ to: redirectTo, replace: true });
     }
   },
   component: ChatRouteLayout,

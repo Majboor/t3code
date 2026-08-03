@@ -77,6 +77,10 @@ const BootstrapEnvelopeSchema = Schema.Struct({
   noBrowser: Schema.optional(Schema.Boolean),
   unsafeNoAuth: Schema.optional(Schema.Boolean),
   desktopBootstrapToken: Schema.optional(Schema.String),
+  supabaseProjectUrl: Schema.optional(Schema.URLFromString),
+  supabaseAnonKey: Schema.optional(Schema.String),
+  supabaseJwtAudience: Schema.optional(Schema.String),
+  supabaseServiceRoleSecretName: Schema.optional(Schema.String),
   autoBootstrapProjectFromCwd: Schema.optional(Schema.Boolean),
   logWebSocketEvents: Schema.optional(Schema.Boolean),
   otlpTracesUrl: Schema.optional(Schema.String),
@@ -182,6 +186,23 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   basicAuthRealm: Config.string("T3CODE_BASIC_AUTH_REALM").pipe(Config.withDefault("T3 Code")),
+  supabaseProjectUrl: Config.url("T3CODE_SUPABASE_PROJECT_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  supabaseAnonKey: Config.string("T3CODE_SUPABASE_ANON_KEY").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  supabaseJwtAudience: Config.string("T3CODE_SUPABASE_JWT_AUDIENCE").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  supabaseServiceRoleSecretName: Config.string("T3CODE_SUPABASE_SERVICE_ROLE_SECRET_NAME").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  localPasswordAuth: Config.boolean("T3CODE_LOCAL_PASSWORD_AUTH").pipe(Config.withDefault(false)),
   bootstrapFd: Config.int("T3CODE_BOOTSTRAP_FD").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -393,6 +414,16 @@ export const resolveServerConfig = (
       basicAuthUsername: env.basicAuthUsername?.trim() || undefined,
       basicAuthPassword: env.basicAuthPassword?.trim() || undefined,
       basicAuthRealm: env.basicAuthRealm.trim() || "T3 Code",
+      supabaseProjectUrl: env.supabaseProjectUrl ?? bootstrap?.supabaseProjectUrl,
+      supabaseAnonKey:
+        env.supabaseAnonKey?.trim() || bootstrap?.supabaseAnonKey?.trim() || undefined,
+      supabaseJwtAudience:
+        env.supabaseJwtAudience?.trim() || bootstrap?.supabaseJwtAudience?.trim() || undefined,
+      supabaseServiceRoleSecretName:
+        env.supabaseServiceRoleSecretName?.trim() ||
+        bootstrap?.supabaseServiceRoleSecretName?.trim() ||
+        undefined,
+      localPasswordAuth: env.localPasswordAuth,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
     };

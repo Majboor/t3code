@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
-import { AuthSessionId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AuthSessionId, TrimmedNonEmptyString, UserId } from "./baseSchemas.ts";
+import { TenantSessionContext } from "./tenancy.ts";
 
 /**
  * Declares the server's overall authentication posture.
@@ -72,6 +73,18 @@ export type ServerAuthSessionMethod = typeof ServerAuthSessionMethod.Type;
 export const AuthSessionRole = Schema.Literals(["owner", "client"]);
 export type AuthSessionRole = typeof AuthSessionRole.Type;
 
+export const SupabasePublicAuthConfig = Schema.Struct({
+  projectUrl: TrimmedNonEmptyString,
+  anonKey: TrimmedNonEmptyString,
+  audience: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type SupabasePublicAuthConfig = typeof SupabasePublicAuthConfig.Type;
+
+export const LocalPasswordAuthConfig = Schema.Struct({
+  enabled: Schema.Literal(true),
+});
+export type LocalPasswordAuthConfig = typeof LocalPasswordAuthConfig.Type;
+
 /**
  * Server-advertised auth capabilities for a specific execution environment.
  *
@@ -97,6 +110,8 @@ export const ServerAuthDescriptor = Schema.Struct({
   bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
   sessionMethods: Schema.Array(ServerAuthSessionMethod),
   sessionCookieName: TrimmedNonEmptyString,
+  supabase: Schema.optionalKey(SupabasePublicAuthConfig),
+  localPassword: Schema.optionalKey(LocalPasswordAuthConfig),
 });
 export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;
 
@@ -112,6 +127,17 @@ export const AuthBootstrapResult = Schema.Struct({
   expiresAt: Schema.DateTimeUtc,
 });
 export type AuthBootstrapResult = typeof AuthBootstrapResult.Type;
+
+export const AuthPasswordMode = Schema.Literals(["login", "signup"]);
+export type AuthPasswordMode = typeof AuthPasswordMode.Type;
+
+export const AuthPasswordInput = Schema.Struct({
+  email: TrimmedNonEmptyString,
+  password: TrimmedNonEmptyString,
+  mode: AuthPasswordMode,
+  displayName: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type AuthPasswordInput = typeof AuthPasswordInput.Type;
 
 export const AuthBearerBootstrapResult = Schema.Struct({
   authenticated: Schema.Literal(true),
@@ -262,5 +288,43 @@ export const AuthSessionState = Schema.Struct({
   role: Schema.optionalKey(AuthSessionRole),
   sessionMethod: Schema.optionalKey(ServerAuthSessionMethod),
   expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+  tenantStatus: Schema.optionalKey(Schema.Literals(["none", "pending-membership", "active"])),
+  tenantSession: Schema.optionalKey(TenantSessionContext),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
+
+export const AuthUserProfile = Schema.Struct({
+  userId: UserId,
+  subject: TrimmedNonEmptyString,
+  displayName: TrimmedNonEmptyString,
+  avatarInitials: TrimmedNonEmptyString,
+  role: AuthSessionRole,
+  sessionId: AuthSessionId,
+  sessionMethod: ServerAuthSessionMethod,
+  client: AuthClientMetadata,
+  expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+  tenantStatus: Schema.Literals(["none", "pending-membership", "active"]),
+  tenantSession: Schema.optionalKey(TenantSessionContext),
+});
+export type AuthUserProfile = typeof AuthUserProfile.Type;
+
+export const AuthUpdateUserProfileInput = Schema.Struct({
+  displayName: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
+  avatarInitials: TrimmedNonEmptyString.check(Schema.isMaxLength(4)),
+});
+export type AuthUpdateUserProfileInput = typeof AuthUpdateUserProfileInput.Type;
+
+export const AuthOnboardingStep = Schema.Literals([
+  "paired",
+  "accept-invite",
+  "connect-provider",
+  "create-workspace",
+]);
+export type AuthOnboardingStep = typeof AuthOnboardingStep.Type;
+
+export const AuthOnboardingState = Schema.Struct({
+  authenticated: Schema.Literal(true),
+  profile: AuthUserProfile,
+  nextStep: AuthOnboardingStep,
+});
+export type AuthOnboardingState = typeof AuthOnboardingState.Type;

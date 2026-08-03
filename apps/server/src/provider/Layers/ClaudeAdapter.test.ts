@@ -307,6 +307,37 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("uses isolated launch environment for Claude SDK sessions", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        providerLaunchEnvironment: {
+          env: {
+            CLAUDE_CONFIG_DIR: "/srv/t3/tenants/acme/provider-homes/user-1/claude/config",
+            HOME: "/srv/t3/tenants/acme/provider-homes/user-1/claude",
+            PATH: "/usr/bin",
+            T3_PROVIDER_ACCOUNT_ID: "provider-account-1",
+          },
+        },
+        runtimeMode: "approval-required",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.deepEqual(createInput?.options.env, {
+        CLAUDE_CONFIG_DIR: "/srv/t3/tenants/acme/provider-homes/user-1/claude/config",
+        HOME: "/srv/t3/tenants/acme/provider-homes/user-1/claude",
+        PATH: "/usr/bin",
+        T3_PROVIDER_ACCOUNT_ID: "provider-account-1",
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("uses bypass permissions for full-access claude sessions", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

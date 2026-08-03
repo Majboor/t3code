@@ -124,6 +124,7 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly binaryPath: string;
   readonly homePath?: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly runtimeMode: RuntimeMode;
 }
 
@@ -484,15 +485,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const codexBinaryPath = input.binaryPath;
       const codexHomePath = input.homePath;
+      const launchEnvironment = input.environment;
+      const baseEnvironment = launchEnvironment ?? process.env;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
+        ...(launchEnvironment ? { environment: launchEnvironment } : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: resolvedCwd,
         env: {
-          ...process.env,
+          ...baseEnvironment,
           ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
         },
         stdio: ["pipe", "pipe", "pipe"],
@@ -1333,6 +1337,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
+    readonly environment?: Readonly<Record<string, string>>;
     readonly homePath?: string;
   }): void {
     assertSupportedCodexCliVersion(input);
@@ -1565,12 +1570,13 @@ function normalizeProviderThreadId(value: string | undefined): string | undefine
 function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly homePath?: string;
 }): void {
   const result = spawnSync(input.binaryPath, ["--version"], {
     cwd: input.cwd,
     env: {
-      ...process.env,
+      ...(input.environment ?? process.env),
       ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
     },
     encoding: "utf8",

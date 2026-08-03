@@ -1,4 +1,10 @@
-import { AuthSessionId, type AuthClientMetadata, type AuthClientSession } from "@t3tools/contracts";
+import {
+  AuthClientMetadata,
+  AuthSessionId,
+  TenantSessionContext,
+  UserId,
+  type AuthClientSession,
+} from "@t3tools/contracts";
 import { Clock, DateTime, Duration, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect";
 import { Option } from "effect";
 
@@ -44,6 +50,13 @@ const WebSocketClaims = Schema.Struct({
   sid: AuthSessionId,
   iat: Schema.Number,
   exp: Schema.Number,
+  sub: Schema.optionalKey(Schema.String),
+  role: Schema.optionalKey(Schema.Literals(["owner", "client"])),
+  method: Schema.optionalKey(Schema.Literals(["browser-session-cookie", "bearer-session-token"])),
+  client: Schema.optionalKey(AuthClientMetadata),
+  sessionExp: Schema.optionalKey(Schema.Number),
+  userId: Schema.optionalKey(UserId),
+  tenantSessionContext: Schema.optionalKey(TenantSessionContext),
 });
 type WebSocketClaims = typeof WebSocketClaims.Type;
 
@@ -332,6 +345,21 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         sid: sessionId,
         iat: issuedAt.epochMilliseconds,
         exp: expiresAt.epochMilliseconds,
+        ...(input?.sessionSnapshot
+          ? {
+              sub: input.sessionSnapshot.subject,
+              role: input.sessionSnapshot.role,
+              method: input.sessionSnapshot.method,
+              client: input.sessionSnapshot.client,
+              ...(input.sessionSnapshot.expiresAt
+                ? { sessionExp: input.sessionSnapshot.expiresAt.epochMilliseconds }
+                : {}),
+              ...(input.sessionSnapshot.userId ? { userId: input.sessionSnapshot.userId } : {}),
+              ...(input.sessionSnapshot.tenantSessionContext
+                ? { tenantSessionContext: input.sessionSnapshot.tenantSessionContext }
+                : {}),
+            }
+          : {}),
       };
       const encodedPayload = base64UrlEncode(JSON.stringify(claims));
       const signature = signPayload(encodedPayload, signingSecret);
@@ -376,6 +404,28 @@ export const makeSessionCredentialService = Effect.gen(function* () {
 
       const row = yield* authSessions.getById({ sessionId: claims.sid });
       if (Option.isNone(row)) {
+        if (claims.sub && claims.role && claims.method && claims.client) {
+          if (typeof claims.sessionExp === "number" && claims.sessionExp <= now) {
+            return yield* new SessionCredentialError({
+              message: "Websocket session expired.",
+            });
+          }
+          return {
+            sessionId: claims.sid,
+            token,
+            method: claims.method,
+            client: claims.client,
+            ...(typeof claims.sessionExp === "number"
+              ? { expiresAt: DateTime.makeUnsafe(claims.sessionExp) }
+              : {}),
+            subject: claims.sub,
+            role: claims.role,
+            ...(claims.userId ? { userId: claims.userId } : {}),
+            ...(claims.tenantSessionContext
+              ? { tenantSessionContext: claims.tenantSessionContext }
+              : {}),
+          } satisfies VerifiedSession;
+        }
         return yield* new SessionCredentialError({
           message: "Unknown websocket session.",
         });

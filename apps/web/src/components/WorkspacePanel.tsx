@@ -39,6 +39,7 @@ import {
 } from "react";
 
 import { ensureEnvironmentApi } from "~/environmentApi";
+import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
@@ -419,6 +420,13 @@ export default function WorkspacePanel({
     strict: false,
     select: (params) => resolveProjectRouteRef(params),
   });
+  const routeDraftId = useParams({
+    strict: false,
+    select: (params) => (typeof params.draftId === "string" ? DraftId.make(params.draftId) : null),
+  });
+  const draftSession = useComposerDraftStore((store) =>
+    routeDraftId ? store.getDraftSession(routeDraftId) : null,
+  );
   const activeThread = useStore(
     useMemo(() => createThreadSelectorByRef(routeThreadRef), [routeThreadRef]),
   );
@@ -429,10 +437,21 @@ export default function WorkspacePanel({
         projectId: activeThread.projectId,
       });
     }
+    if (draftSession) {
+      return selectProjectByRef(store, {
+        environmentId: draftSession.environmentId,
+        projectId: draftSession.projectId,
+      });
+    }
     return selectProjectByRef(store, routeProjectRef);
   });
-  const activeEnvironmentId = activeThread?.environmentId ?? activeProject?.environmentId ?? null;
-  const activeWorkspaceRoot = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
+  const activeEnvironmentId =
+    activeThread?.environmentId ??
+    draftSession?.environmentId ??
+    activeProject?.environmentId ??
+    null;
+  const activeWorkspaceRoot =
+    activeThread?.worktreePath ?? draftSession?.worktreePath ?? activeProject?.cwd ?? null;
   const workspaceReviewStorageScopeKey = useMemo(
     () =>
       buildWorkspaceReviewStorageScopeKey({
@@ -563,6 +582,7 @@ export default function WorkspacePanel({
   const hasObservedWorkspaceDiffBaselineRef = useRef(false);
   const observedLiveWorkspaceDiffSignatureRef = useRef("");
   const hasObservedLiveWorkspaceDiffBaselineRef = useRef(false);
+  const workspaceFilesErrorToastRef = useRef<{ message: string; shownAt: number } | null>(null);
   const [liveDiffBaselineTurnKey, setLiveDiffBaselineTurnKey] = useState<string | null>(null);
   const liveDiffBaselinePendingTurnKeyRef = useRef<string | null>(null);
   const [liveDiffBaselineFiles, setLiveDiffBaselineFiles] = useState<
@@ -602,11 +622,22 @@ export default function WorkspacePanel({
           [key]: result.entries,
         }));
       } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not load workspace files",
-          description: error instanceof Error ? error.message : "An unexpected error occurred.",
-        });
+        const description =
+          error instanceof Error ? error.message : "An unexpected error occurred.";
+        const previousToast = workspaceFilesErrorToastRef.current;
+        const now = Date.now();
+        if (
+          !previousToast ||
+          previousToast.message !== description ||
+          now - previousToast.shownAt > 15_000
+        ) {
+          workspaceFilesErrorToastRef.current = { message: description, shownAt: now };
+          toastManager.add({
+            type: "error",
+            title: "Could not load workspace files",
+            description,
+          });
+        }
       } finally {
         setLoadingDirectoriesByPath((current) => {
           const next = { ...current };
@@ -1927,7 +1958,6 @@ export default function WorkspacePanel({
   }, [
     activeEnvironmentId,
     activeWorkspaceRoot,
-    activeThread?.updatedAt,
     activeThread?.session?.activeTurnId,
     activeThread?.session?.orchestrationStatus,
     queryClient,
@@ -1952,8 +1982,6 @@ export default function WorkspacePanel({
       void queryClient.invalidateQueries({
         queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
       });
-      refreshExpandedDirectories();
-      refreshCleanOpenFiles({ suppressErrorToast: true });
     }, 2_000);
 
     return () => {
@@ -1964,8 +1992,6 @@ export default function WorkspacePanel({
     activeWorkspaceRoot,
     activeThread?.session?.orchestrationStatus,
     queryClient,
-    refreshCleanOpenFiles,
-    refreshExpandedDirectories,
   ]);
 
   useEffect(() => {

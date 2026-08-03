@@ -39,6 +39,10 @@ import { ProjectionPendingApprovalRepository } from "../src/persistence/Services
 import { ProviderUnsupportedError } from "../src/provider/Errors.ts";
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
+import {
+  TenancyRepository,
+  type TenancyRepositoryShape,
+} from "../src/persistence/Services/Tenancy.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
@@ -314,8 +318,51 @@ export const makeOrchestrationIntegrationHarness = (
       generateBranchName: () => Effect.succeed({ branch: "update" }),
       generateThreadTitle: () => Effect.succeed({ title: "New thread" }),
     } as unknown as TextGenerationShape);
+    const tenancyRepositoryLayer = Layer.succeed(TenancyRepository, {
+      loadOrganizations: () =>
+        Effect.succeed({
+          organizations: [],
+          tenants: [],
+          employees: [],
+          invites: [],
+          memberships: [],
+          teams: [],
+          departments: [],
+          grants: [],
+          reviews: [],
+          auditEvents: [],
+        }),
+      saveOrganizations: () => Effect.void,
+      loadCollaboration: () =>
+        Effect.succeed({
+          presence: [],
+          invites: [],
+          memberships: [],
+          activities: [],
+        }),
+      saveCollaboration: () => Effect.void,
+      loadWorkspaces: () =>
+        Effect.succeed({
+          workspaces: [],
+        }),
+      saveWorkspaces: () => Effect.void,
+      loadProviderIsolation: () =>
+        Effect.succeed({
+          providerAccounts: [],
+          providerSessions: [],
+        }),
+      saveProviderIsolation: () => Effect.void,
+      loadTenantRuntimeLifecycleState: () =>
+        Effect.succeed({
+          runtimes: [],
+          systemdUnits: [],
+          completedSteps: [],
+        }),
+      saveTenantRuntimeLifecycleState: () => Effect.void,
+    } satisfies TenancyRepositoryShape);
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
+      Layer.provideMerge(tenancyRepositoryLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(serverSettingsLayer),

@@ -1,6 +1,8 @@
 import {
   type EnvironmentId,
   type EditorId,
+  type OrchestrationProjectOwnership,
+  type ProjectId,
   type ProjectScript,
   type ResolvedKeybindingsConfig,
   type ThreadId,
@@ -42,6 +44,7 @@ import { useSidebar } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { shortcutLabelForCommand } from "~/keybindings";
 import type { DesktopLayoutModeDefinition } from "~/desktopLayoutModes";
+import { CollaborationPresenceBar } from "../collaboration/CollaborationPresenceBar";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -49,6 +52,8 @@ interface ChatHeaderProps {
   draftId?: DraftId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  activeProjectId: ProjectId | null;
+  activeProjectOwnership: OrchestrationProjectOwnership | null | undefined;
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -80,6 +85,8 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   draftId,
   activeThreadTitle,
+  activeProjectId,
+  activeProjectOwnership,
   activeProjectName,
   isGitRepo,
   openInCwd,
@@ -139,6 +146,16 @@ export const ChatHeader = memo(function ChatHeader({
               ) : null}
             </div>
           )}
+          {activeProjectId ? (
+            <div className="mt-1 @xl/header-actions:mt-0">
+              <CollaborationPresenceBar
+                environmentId={activeThreadEnvironmentId}
+                ownership={activeProjectOwnership}
+                projectId={activeProjectId}
+                threadId={activeThreadId}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3">

@@ -59,6 +59,59 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
+import type {
+  CollaborationActivityListInput,
+  CollaborationActivityListResult,
+  CollaborationInviteAcceptInput,
+  CollaborationInviteAcceptResult,
+  CollaborationInviteCreateInput,
+  CollaborationInviteCreateResult,
+  CollaborationInviteListInput,
+  CollaborationInviteListResult,
+  CollaborationInviteRevokeInput,
+  CollaborationInviteRevokeResult,
+  CollaborationPresenceListInput,
+  CollaborationPresenceListResult,
+  CollaborationPresenceUpsertInput,
+  CollaborationPresenceUpsertResult,
+  CollaborationSharedPromptRecordInput,
+  CollaborationSharedPromptRecordResult,
+  CollaborationStreamEvent,
+  CollaborationStreamInput,
+  OrganizationAccessGrantInput,
+  OrganizationAccessGrantResult,
+  OrganizationAccessReviewCompleteInput,
+  OrganizationAccessReviewCompleteResult,
+  OrganizationAccessReviewCreateInput,
+  OrganizationAccessReviewCreateResult,
+  OrganizationAuditListInput,
+  OrganizationAuditListResult,
+  OrganizationCreateInput,
+  OrganizationCreateResult,
+  OrganizationDepartmentCreateInput,
+  OrganizationDepartmentCreateResult,
+  OrganizationEmployeeDisableInput,
+  OrganizationEmployeeInviteAcceptInput,
+  OrganizationEmployeeInviteAcceptResult,
+  OrganizationEmployeeInviteInput,
+  OrganizationEmployeeInviteResult,
+  OrganizationEmployeeListInput,
+  OrganizationEmployeeListResult,
+  OrganizationEmployeeUpdateInput,
+  OrganizationEmployeeUpdateResult,
+  OrganizationListResult,
+  OrganizationTeamCreateInput,
+  OrganizationTeamCreateResult,
+  ProviderAccountConfirmInput,
+  ProviderAccountConfirmResult,
+  ProviderAccountConnectInput,
+  ProviderAccountConnectResult,
+  ProviderAccountDisconnectInput,
+  ProviderAccountDisconnectResult,
+  ProviderAccountListResult,
+  ProviderAccountOpenAuthTerminalInput,
+  ProviderAccountOpenAuthTerminalResult,
+} from "./tenancy.ts";
 import type { EnvironmentId } from "./baseSchemas.ts";
 import { EditorId } from "./editor.ts";
 import { ServerSettings, type ClientSettings, type ServerSettingsPatch } from "./settings.ts";
@@ -300,5 +353,76 @@ export interface EnvironmentApi {
         onResubscribe?: () => void;
       },
     ) => () => void;
+  };
+  collaboration: {
+    upsertPresence: (
+      input: CollaborationPresenceUpsertInput,
+    ) => Promise<CollaborationPresenceUpsertResult>;
+    listPresence: (
+      input: CollaborationPresenceListInput,
+    ) => Promise<CollaborationPresenceListResult>;
+    createInvite: (
+      input: CollaborationInviteCreateInput,
+    ) => Promise<CollaborationInviteCreateResult>;
+    listInvites: (input: CollaborationInviteListInput) => Promise<CollaborationInviteListResult>;
+    acceptInvite: (
+      input: CollaborationInviteAcceptInput,
+    ) => Promise<CollaborationInviteAcceptResult>;
+    revokeInvite: (
+      input: CollaborationInviteRevokeInput,
+    ) => Promise<CollaborationInviteRevokeResult>;
+    recordSharedPrompt: (
+      input: CollaborationSharedPromptRecordInput,
+    ) => Promise<CollaborationSharedPromptRecordResult>;
+    listActivity: (
+      input: CollaborationActivityListInput,
+    ) => Promise<CollaborationActivityListResult>;
+    subscribe: (
+      input: CollaborationStreamInput,
+      callback: (event: CollaborationStreamEvent) => void,
+      options?: {
+        onResubscribe?: () => void;
+      },
+    ) => () => void;
+  };
+  organizations: {
+    create: (input: OrganizationCreateInput) => Promise<OrganizationCreateResult>;
+    list: () => Promise<OrganizationListResult>;
+    inviteEmployee: (
+      input: OrganizationEmployeeInviteInput,
+    ) => Promise<OrganizationEmployeeInviteResult>;
+    acceptEmployeeInvite: (
+      input: OrganizationEmployeeInviteAcceptInput,
+    ) => Promise<OrganizationEmployeeInviteAcceptResult>;
+    listEmployees: (
+      input: OrganizationEmployeeListInput,
+    ) => Promise<OrganizationEmployeeListResult>;
+    updateEmployee: (
+      input: OrganizationEmployeeUpdateInput,
+    ) => Promise<OrganizationEmployeeUpdateResult>;
+    disableEmployee: (
+      input: OrganizationEmployeeDisableInput,
+    ) => Promise<OrganizationEmployeeUpdateResult>;
+    createTeam: (input: OrganizationTeamCreateInput) => Promise<OrganizationTeamCreateResult>;
+    createDepartment: (
+      input: OrganizationDepartmentCreateInput,
+    ) => Promise<OrganizationDepartmentCreateResult>;
+    grantAccess: (input: OrganizationAccessGrantInput) => Promise<OrganizationAccessGrantResult>;
+    createAccessReview: (
+      input: OrganizationAccessReviewCreateInput,
+    ) => Promise<OrganizationAccessReviewCreateResult>;
+    completeAccessReview: (
+      input: OrganizationAccessReviewCompleteInput,
+    ) => Promise<OrganizationAccessReviewCompleteResult>;
+    listAuditEvents: (input: OrganizationAuditListInput) => Promise<OrganizationAuditListResult>;
+  };
+  providerAccounts: {
+    list: () => Promise<ProviderAccountListResult>;
+    connect: (input: ProviderAccountConnectInput) => Promise<ProviderAccountConnectResult>;
+    openAuthTerminal: (
+      input: ProviderAccountOpenAuthTerminalInput,
+    ) => Promise<ProviderAccountOpenAuthTerminalResult>;
+    confirm: (input: ProviderAccountConfirmInput) => Promise<ProviderAccountConfirmResult>;
+    disconnect: (input: ProviderAccountDisconnectInput) => Promise<ProviderAccountDisconnectResult>;
   };
 }

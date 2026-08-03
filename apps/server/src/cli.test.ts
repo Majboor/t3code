@@ -78,6 +78,11 @@ const makeCliTestServerConfig = (baseDir: string) =>
       basicAuthUsername: undefined,
       basicAuthPassword: undefined,
       basicAuthRealm: "T3 Code",
+      supabaseProjectUrl: undefined,
+      supabaseAnonKey: undefined,
+      supabaseJwtAudience: undefined,
+      supabaseServiceRoleSecretName: undefined,
+      localPasswordAuth: false,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
     } satisfies ServerConfigShape;

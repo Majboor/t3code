@@ -211,6 +211,41 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
+
+  it.effect("forwards isolated launch environment to Codex app-server startup", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-isolated-env"),
+        providerLaunchEnvironment: {
+          env: {
+            CODEX_HOME: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+            HOME: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+            PATH: "/usr/bin",
+            T3_PROVIDER_ACCOUNT_ID: "provider-account-1",
+          },
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.deepStrictEqual(validationManager.startSessionImpl.mock.calls[0]?.[0], {
+        provider: "codex",
+        threadId: asThreadId("thread-isolated-env"),
+        binaryPath: "codex",
+        homePath: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+        environment: {
+          CODEX_HOME: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+          HOME: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+          PATH: "/usr/bin",
+          T3_PROVIDER_ACCOUNT_ID: "provider-account-1",
+        },
+        runtimeMode: "full-access",
+      });
+    }),
+  );
 });
 
 const sessionErrorManager = new FakeCodexManager();

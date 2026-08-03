@@ -3,8 +3,6 @@ import {
   ArrowUpDownIcon,
   ChevronRightIcon,
   CloudIcon,
-  FolderIcon,
-  FolderPlusIcon,
   GitPullRequestIcon,
   PlusIcon,
   SearchIcon,
@@ -31,7 +29,6 @@ import {
   type DragStartEvent,
   closestCorners,
   pointerWithin,
-  useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -64,7 +61,7 @@ import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { cn, isMacPlatform, newCommandId } from "../lib/utils";
+import { isMacPlatform, newCommandId } from "../lib/utils";
 import {
   selectProjectByRef,
   selectProjectsAcrossEnvironments,
@@ -136,7 +133,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarHeader,
-  SidebarMenuAction,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -149,10 +145,16 @@ import {
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import {
+  buildSidebarOwnerFilterOptions,
   getSidebarThreadIdsToPrewarm,
+  doesSidebarProjectMatchQuery,
+  doesSidebarProjectOwnerMatch,
+  doesSidebarProjectSourceMatch,
+  doesSidebarThreadMatchQuery,
+  doesSidebarThreadStatusMatch,
+  normalizeSidebarSearchQuery,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
-  prioritizeProjectDropCollisions,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
@@ -163,6 +165,10 @@ import {
   sortProjectsForSidebar,
   useThreadJumpHintVisibility,
   ThreadStatusPill,
+  type SidebarOwnerFilter,
+  type SidebarOwnerFilterOption,
+  type SidebarProjectSourceFilter,
+  type SidebarThreadStatusFilter,
 } from "./Sidebar.logic";
 import { sortThreads } from "../lib/threadSort";
 import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
@@ -183,14 +189,6 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import {
-  buildSidebarProjectCategoryTree,
-  canAssignSidebarProjectCategoryParent,
-  orderSidebarProjectCategories,
-  resolveSidebarProjectCategoryId,
-  type SidebarProjectCategory,
-  type SidebarProjectCategoryNode,
-} from "../sidebarProjectCategories";
 const THREAD_PREVIEW_LIMIT = 6;
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
@@ -211,21 +209,19 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   repository_path: "Group by repository path",
   separate: "Keep separate",
 };
-const CATEGORY_DROP_ID_PREFIX = "project-category:";
-
-function projectCategoryDropId(categoryId: string): string {
-  return `${CATEGORY_DROP_ID_PREFIX}${categoryId}`;
-}
-
-function parseProjectCategoryDropId(value: string | number): string | null {
-  const normalized = String(value);
-  if (!normalized.startsWith(CATEGORY_DROP_ID_PREFIX)) {
-    return null;
-  }
-
-  const categoryId = normalized.slice(CATEGORY_DROP_ID_PREFIX.length).trim();
-  return categoryId.length > 0 ? categoryId : null;
-}
+const SIDEBAR_THREAD_STATUS_FILTER_LABELS: Record<SidebarThreadStatusFilter, string> = {
+  all: "All",
+  needs_attention: "Needs attention",
+  active: "Active",
+  completed: "Completed",
+};
+const SIDEBAR_PROJECT_SOURCE_FILTER_LABELS: Record<SidebarProjectSourceFilter, string> = {
+  all: "All sources",
+  local: "This device",
+  remote: "Remote",
+  mixed: "Mixed",
+};
+const SIDEBAR_ALL_OWNER_FILTER_LABEL = "All owners";
 
 function threadJumpLabelMapsEqual(
   left: ReadonlyMap<string, string>,
@@ -932,6 +928,8 @@ interface SidebarProjectItemProps {
   suppressProjectClickForContextMenuRef: React.RefObject<boolean>;
   isManualProjectSorting: boolean;
   dragHandleProps: SortableProjectHandleProps | null;
+  sidebarSearchQuery: string;
+  sidebarThreadStatusFilter: SidebarThreadStatusFilter;
 }
 
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
@@ -952,6 +950,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     suppressProjectClickForContextMenuRef,
     isManualProjectSorting,
     dragHandleProps,
+    sidebarSearchQuery,
+    sidebarThreadStatusFilter,
   } = props;
   const threadSortOrder = useSettings<SidebarThreadSortOrder>(
     (settings) => settings.sidebarThreadSortOrder,
@@ -970,12 +970,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     sidebarProjectGroupingOverrides: settings.sidebarProjectGroupingOverrides,
   }));
   const { updateSettings } = useUpdateSettings();
-  const projectCategories = useUiStateStore((state) => state.projectCategories);
-  const projectCategoryAssignmentsByPhysicalKey = useUiStateStore(
-    (state) => state.projectCategoryAssignmentsByPhysicalKey,
-  );
-  const projectCategoryOrder = useUiStateStore((state) => state.projectCategoryOrder);
-  const assignProjectsToCategory = useUiStateStore((state) => state.assignProjectsToCategory);
   const router = useRouter();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const toggleProject = useUiStateStore((state) => state.toggleProject);
@@ -1058,22 +1052,68 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       ),
     ),
   );
+  const allProjectThreads = sidebarThreads;
   const sidebarThreadByKey = useMemo(
     () =>
       new Map(
-        sidebarThreads.map(
+        allProjectThreads.map(
           (thread) =>
             [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
         ),
       ),
-    [sidebarThreads],
+    [allProjectThreads],
   );
   // Keep a ref so callbacks can read the latest map without appearing in
   // dependency arrays (avoids invalidating every thread-row memo on each
   // thread-list change).
   const sidebarThreadByKeyRef = useRef(sidebarThreadByKey);
   sidebarThreadByKeyRef.current = sidebarThreadByKey;
-  const projectThreads = sidebarThreads;
+  const allThreadLastVisitedAtByKey = useUiStateStore(
+    useShallow((state) =>
+      Object.fromEntries(
+        allProjectThreads.map((thread) => {
+          const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+          return [threadKey, state.threadLastVisitedAtById[threadKey] ?? null] as const;
+        }),
+      ),
+    ),
+  );
+  const normalizedSidebarSearchQuery = normalizeSidebarSearchQuery(sidebarSearchQuery);
+  const projectMatchesSearchQuery = doesSidebarProjectMatchQuery(
+    project,
+    normalizedSidebarSearchQuery,
+  );
+  const projectThreads = useMemo(
+    () =>
+      allProjectThreads.filter((thread) => {
+        if (thread.archivedAt !== null) {
+          return false;
+        }
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        const status = resolveThreadStatusPill({
+          thread: {
+            ...thread,
+            ...(allThreadLastVisitedAtByKey[threadKey]
+              ? { lastVisitedAt: allThreadLastVisitedAtByKey[threadKey] }
+              : {}),
+          },
+        });
+        if (!doesSidebarThreadStatusMatch(status, sidebarThreadStatusFilter)) {
+          return false;
+        }
+        return (
+          projectMatchesSearchQuery ||
+          doesSidebarThreadMatchQuery(thread, normalizedSidebarSearchQuery)
+        );
+      }),
+    [
+      allProjectThreads,
+      allThreadLastVisitedAtByKey,
+      normalizedSidebarSearchQuery,
+      projectMatchesSearchQuery,
+      sidebarThreadStatusFilter,
+    ],
+  );
   const projectExpanded = useUiStateStore(
     (state) => state.projectExpandedById[project.projectKey] ?? true,
   );
@@ -1116,7 +1156,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const counts = new Map<string, number>(
       project.memberProjects.map((member) => [member.physicalProjectKey, 0] as const),
     );
-    for (const thread of projectThreads) {
+    for (const thread of allProjectThreads) {
       const member = memberProjectByScopedKey.get(
         scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
       );
@@ -1126,44 +1166,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       counts.set(member.physicalProjectKey, (counts.get(member.physicalProjectKey) ?? 0) + 1);
     }
     return counts;
-  }, [memberProjectByScopedKey, project.memberProjects, projectThreads]);
-  const orderedProjectCategories = useMemo(
-    () => orderSidebarProjectCategories(projectCategories, projectCategoryOrder),
-    [projectCategories, projectCategoryOrder],
-  );
-  const categoryPathLabelById = useMemo(() => {
-    const categoryById = new Map(
-      orderedProjectCategories.map((category) => [category.id, category] as const),
-    );
-
-    const readLabel = (categoryId: string): string => {
-      const category = categoryById.get(categoryId);
-      if (!category) {
-        return categoryId;
-      }
-
-      const segments = [category.name];
-      let parentId = category.parentId;
-      while (parentId) {
-        const parent = categoryById.get(parentId);
-        if (!parent) {
-          break;
-        }
-        segments.unshift(parent.name);
-        parentId = parent.parentId;
-      }
-
-      return segments.join(" / ");
-    };
-
-    return new Map(
-      orderedProjectCategories.map((category) => [category.id, readLabel(category.id)] as const),
-    );
-  }, [orderedProjectCategories]);
-  const resolvedProjectCategoryId = useMemo(
-    () => resolveSidebarProjectCategoryId(project, projectCategoryAssignmentsByPhysicalKey),
-    [project, projectCategoryAssignmentsByPhysicalKey],
-  );
+  }, [allProjectThreads, memberProjectByScopedKey, project.memberProjects]);
 
   const { projectStatus, visibleProjectThreads, orderedProjectThreadKeys } = useMemo(() => {
     const lastVisitedAtByThreadKey = new Map(
@@ -1499,33 +1502,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           };
         };
 
-        const projectCategoryMenuItems: ContextMenuItem<string>[] =
-          orderedProjectCategories.length > 0 || resolvedProjectCategoryId !== null
-            ? [
-                {
-                  id: "project-category:submenu",
-                  label: "Project category",
-                  children: [
-                    {
-                      id: "project-category:none",
-                      label: "No category",
-                      ...(resolvedProjectCategoryId === null ? { disabled: true } : {}),
-                    },
-                    ...orderedProjectCategories.map((category) => ({
-                      id: `project-category:${category.id}`,
-                      label: categoryPathLabelById.get(category.id) ?? category.name,
-                      ...(resolvedProjectCategoryId === category.id ? { disabled: true } : {}),
-                    })),
-                  ],
-                },
-              ]
-            : [];
-
         const clicked = await api.contextMenu.show(
           [
             buildTargetedItem("rename", "Rename project"),
             buildTargetedItem("grouping", "Project grouping…"),
-            ...projectCategoryMenuItems,
             buildTargetedItem("open-workspace", "Open workspace"),
             buildTargetedItem("copy-path", "Copy Project Path"),
             buildTargetedItem("delete", "Remove project", {
@@ -1544,40 +1524,17 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
 
-        if (clicked === "project-category:none") {
-          assignProjectsToCategory(
-            project.memberProjects.map((member) => member.physicalProjectKey),
-            null,
-          );
-          return;
-        }
-
-        const clickedProjectCategoryId = clicked.startsWith("project-category:")
-          ? clicked.slice("project-category:".length)
-          : null;
-        if (clickedProjectCategoryId && clickedProjectCategoryId !== "submenu") {
-          assignProjectsToCategory(
-            project.memberProjects.map((member) => member.physicalProjectKey),
-            clickedProjectCategoryId,
-          );
-          return;
-        }
-
         await actionHandlers.get(clicked)?.();
       })();
     },
     [
-      assignProjectsToCategory,
-      categoryPathLabelById,
       copyPathToClipboard,
       handleRemoveProject,
       memberThreadCountByPhysicalKey,
       openProjectGroupingDialog,
       openProjectRenameDialog,
-      orderedProjectCategories,
       project.groupedProjectCount,
       project.memberProjects,
-      resolvedProjectCategoryId,
       router,
       suppressProjectClickForContextMenuRef,
     ],
@@ -2264,114 +2221,6 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
   );
 });
 
-const SidebarProjectCategoryRow = memo(function SidebarProjectCategoryRow(props: {
-  node: SidebarProjectCategoryNode;
-  isManualProjectSorting: boolean;
-  onCreateSubcategory: (parentId: string) => void;
-  onEditCategory: (category: SidebarProjectCategory) => void;
-  onDeleteCategory: (category: SidebarProjectCategory) => void;
-  children?: React.ReactNode;
-}) {
-  const {
-    children,
-    isManualProjectSorting,
-    node,
-    onCreateSubcategory,
-    onDeleteCategory,
-    onEditCategory,
-  } = props;
-  const setProjectCategoryExpanded = useUiStateStore((state) => state.setProjectCategoryExpanded);
-  const categoryExpanded = useUiStateStore(
-    (state) => state.projectCategoryExpandedById[node.category.id] ?? true,
-  );
-  const { setNodeRef, isOver } = useDroppable({
-    id: projectCategoryDropId(node.category.id),
-    disabled: !isManualProjectSorting,
-  });
-
-  const handleCategoryContextMenu = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      void (async () => {
-        const api = readLocalApi();
-        if (!api) {
-          return;
-        }
-
-        const clicked = await api.contextMenu.show(
-          [
-            { id: "new-subcategory", label: "New subcategory" },
-            { id: "edit", label: "Edit category" },
-            { id: "delete", label: "Delete category", destructive: true },
-          ],
-          {
-            x: event.clientX,
-            y: event.clientY,
-          },
-        );
-
-        if (clicked === "new-subcategory") {
-          onCreateSubcategory(node.category.id);
-          return;
-        }
-
-        if (clicked === "edit") {
-          onEditCategory(node.category);
-          return;
-        }
-
-        if (clicked === "delete") {
-          onDeleteCategory(node.category);
-        }
-      })();
-    },
-    [node.category, onCreateSubcategory, onDeleteCategory, onEditCategory],
-  );
-
-  return (
-    <SidebarMenuItem className="rounded-md">
-      <div
-        ref={setNodeRef}
-        className={cn(
-          "relative rounded-md",
-          isManualProjectSorting && isOver && "ring-1 ring-primary/40",
-        )}
-      >
-        <SidebarMenuButton
-          size="sm"
-          className="gap-2 px-2 py-1.5 text-left hover:bg-accent hover:text-sidebar-accent-foreground"
-          onClick={() => setProjectCategoryExpanded(node.category.id, !categoryExpanded)}
-          onContextMenu={handleCategoryContextMenu}
-        >
-          <ChevronRightIcon
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150",
-              categoryExpanded && "rotate-90",
-            )}
-          />
-          <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/75" />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90">
-            {node.category.name}
-          </span>
-          <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.projectCount}</span>
-        </SidebarMenuButton>
-        <SidebarMenuAction
-          showOnHover
-          className="top-1 right-1"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onCreateSubcategory(node.category.id);
-          }}
-        >
-          <FolderPlusIcon className="size-3.5" />
-        </SidebarMenuAction>
-      </div>
-      {categoryExpanded && children ? <SidebarMenuSub>{children}</SidebarMenuSub> : null}
-    </SidebarMenuItem>
-  );
-});
-
 function T3Wordmark() {
   return (
     <svg
@@ -2601,13 +2450,18 @@ interface SidebarProjectsContentProps {
   projectSortOrder: SidebarProjectSortOrder;
   threadSortOrder: SidebarThreadSortOrder;
   projectGroupingMode: SidebarProjectGroupingMode;
+  sidebarSearchQuery: string;
+  sidebarThreadStatusFilter: SidebarThreadStatusFilter;
+  sidebarProjectSourceFilter: SidebarProjectSourceFilter;
+  sidebarOwnerFilter: SidebarOwnerFilter;
+  sidebarOwnerFilterOptions: readonly SidebarOwnerFilterOption[];
+  onSidebarSearchQueryChange: (query: string) => void;
+  onSidebarThreadStatusFilterChange: (filter: SidebarThreadStatusFilter) => void;
+  onSidebarProjectSourceFilterChange: (filter: SidebarProjectSourceFilter) => void;
+  onSidebarOwnerFilterChange: (filter: SidebarOwnerFilter) => void;
   updateSettings: ReturnType<typeof useUpdateSettings>["updateSettings"];
   openAddProject: () => void;
   isManualProjectSorting: boolean;
-  projectCategories: readonly SidebarProjectCategory[];
-  projectCategoryOrder: readonly string[];
-  rootProjectCategories: readonly SidebarProjectCategoryNode[];
-  uncategorizedProjects: readonly SidebarProjectSnapshot[];
   projectDnDSensors: ReturnType<typeof useSensors>;
   projectCollisionDetection: CollisionDetection;
   handleProjectDragStart: (event: DragStartEvent) => void;
@@ -2645,13 +2499,18 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     projectSortOrder,
     threadSortOrder,
     projectGroupingMode,
+    sidebarSearchQuery,
+    sidebarThreadStatusFilter,
+    sidebarProjectSourceFilter,
+    sidebarOwnerFilter,
+    sidebarOwnerFilterOptions,
+    onSidebarSearchQueryChange,
+    onSidebarThreadStatusFilterChange,
+    onSidebarProjectSourceFilterChange,
+    onSidebarOwnerFilterChange,
     updateSettings,
     openAddProject,
     isManualProjectSorting,
-    projectCategories,
-    projectCategoryOrder,
-    rootProjectCategories,
-    uncategorizedProjects,
     projectDnDSensors,
     projectCollisionDetection,
     handleProjectDragStart,
@@ -2676,19 +2535,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     attachProjectListAutoAnimateRef,
     projectsLength,
   } = props;
-  const addProjectCategory = useUiStateStore((state) => state.addProjectCategory);
-  const updateProjectCategoryState = useUiStateStore((state) => state.updateProjectCategory);
-  const deleteProjectCategoryState = useUiStateStore((state) => state.deleteProjectCategory);
-  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
-  const [categoryDialogTarget, setCategoryDialogTarget] = useState<SidebarProjectCategory | null>(
-    null,
-  );
-  const [categoryDialogName, setCategoryDialogName] = useState("");
-  const [categoryDialogParentId, setCategoryDialogParentId] = useState<string | "root">("root");
-  const orderedProjectCategories = useMemo(
-    () => orderSidebarProjectCategories(projectCategories, projectCategoryOrder),
-    [projectCategories, projectCategoryOrder],
-  );
 
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
@@ -2708,146 +2554,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     },
     [updateSettings],
   );
-  const openCreateCategoryDialog = useCallback((parentId: string | null = null) => {
-    setCategoryDialogOpen(true);
-    setCategoryDialogTarget(null);
-    setCategoryDialogName("");
-    setCategoryDialogParentId(parentId ?? "root");
-  }, []);
-  const openEditCategoryDialog = useCallback((category: SidebarProjectCategory) => {
-    setCategoryDialogOpen(true);
-    setCategoryDialogTarget(category);
-    setCategoryDialogName(category.name);
-    setCategoryDialogParentId(category.parentId ?? "root");
-  }, []);
-  const closeCategoryDialog = useCallback(() => {
-    setCategoryDialogOpen(false);
-    setCategoryDialogTarget(null);
-    setCategoryDialogName("");
-    setCategoryDialogParentId("root");
-  }, []);
-  const submitCategoryDialog = useCallback(() => {
-    const name = categoryDialogName.trim();
-    if (!name) {
-      toastManager.add({
-        type: "warning",
-        title: "Category name cannot be empty",
-      });
-      return;
-    }
-
-    const parentId = categoryDialogParentId === "root" ? null : categoryDialogParentId;
-    if (categoryDialogTarget) {
-      updateProjectCategoryState({
-        id: categoryDialogTarget.id,
-        name,
-        parentId,
-      });
-    } else {
-      addProjectCategory({
-        name,
-        parentId,
-      });
-    }
-
-    closeCategoryDialog();
-  }, [
-    addProjectCategory,
-    categoryDialogName,
-    categoryDialogParentId,
-    categoryDialogTarget,
-    closeCategoryDialog,
-    updateProjectCategoryState,
-  ]);
-  const deleteCategory = useCallback(
-    async (category: SidebarProjectCategory) => {
-      const api = readLocalApi();
-      if (!api) {
-        return;
-      }
-
-      const confirmed = await api.dialogs.confirm(
-        [
-          `Delete category "${category.name}"?`,
-          "Child categories move up one level and assigned projects move to the parent category.",
-        ].join("\n"),
-      );
-      if (!confirmed) {
-        return;
-      }
-
-      deleteProjectCategoryState(category.id);
-    },
-    [deleteProjectCategoryState],
-  );
-  const availableCategoryParents = useMemo(
-    () =>
-      orderedProjectCategories.filter((category) =>
-        categoryDialogTarget
-          ? canAssignSidebarProjectCategoryParent({
-              categories: projectCategories,
-              categoryId: categoryDialogTarget.id,
-              parentId: category.id,
-            })
-          : true,
-      ),
-    [categoryDialogTarget, orderedProjectCategories, projectCategories],
-  );
-
-  const renderProjectRow = (project: SidebarProjectSnapshot) => {
-    const sharedProps: SidebarProjectItemProps = {
-      project,
-      isThreadListExpanded: expandedThreadListsByProject.has(project.projectKey),
-      activeRouteThreadKey: activeRouteProjectKey === project.projectKey ? routeThreadKey : null,
-      newThreadShortcutLabel,
-      handleNewThread,
-      archiveThread,
-      deleteThread,
-      threadJumpLabelByKey,
-      attachThreadListAutoAnimateRef,
-      expandThreadListForProject,
-      collapseThreadListForProject,
-      dragInProgressRef,
-      suppressProjectClickAfterDragRef,
-      suppressProjectClickForContextMenuRef,
-      isManualProjectSorting,
-      dragHandleProps: null,
-    };
-
-    if (!isManualProjectSorting) {
-      return <SidebarProjectListRow key={project.projectKey} {...sharedProps} />;
-    }
-
-    return (
-      <SortableProjectItem key={project.projectKey} projectId={project.projectKey}>
-        {(dragHandleProps) => (
-          <SidebarProjectItem {...sharedProps} dragHandleProps={dragHandleProps} />
-        )}
-      </SortableProjectItem>
-    );
-  };
-
-  const renderCategoryNode = (node: SidebarProjectCategoryNode): React.ReactNode => {
-    const categoryChildren = [
-      ...node.children.map(renderCategoryNode),
-      ...node.projects.map(renderProjectRow),
-    ];
-
-    return (
-      <SidebarProjectCategoryRow
-        key={node.category.id}
-        node={node}
-        isManualProjectSorting={isManualProjectSorting}
-        onCreateSubcategory={(parentId) => openCreateCategoryDialog(parentId)}
-        onEditCategory={openEditCategoryDialog}
-        onDeleteCategory={(category) => {
-          void deleteCategory(category);
-        }}
-      >
-        {categoryChildren}
-      </SidebarProjectCategoryRow>
-    );
-  };
 
   return (
     <SidebarContent className="gap-0">
@@ -2916,21 +2622,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 render={
                   <button
                     type="button"
-                    aria-label="Add category"
-                    className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
-                    onClick={() => openCreateCategoryDialog(null)}
-                  />
-                }
-              >
-                <FolderPlusIcon className="size-3.5" />
-              </TooltipTrigger>
-              <TooltipPopup side="right">Add category</TooltipPopup>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
                     aria-label="Add project"
                     data-testid="sidebar-add-project-trigger"
                     className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
@@ -2942,6 +2633,126 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               </TooltipTrigger>
               <TooltipPopup side="right">Add project</TooltipPopup>
             </Tooltip>
+          </div>
+        </div>
+        <div className="mb-2 grid gap-1.5 px-1">
+          <div className="relative">
+            <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/55" />
+            <Input
+              type="search"
+              value={sidebarSearchQuery}
+              aria-label="Search projects and threads"
+              data-testid="sidebar-project-search"
+              placeholder="Find project, thread, branch..."
+              className="h-7 pl-7 text-xs"
+              onChange={(event) => onSidebarSearchQueryChange(event.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-[minmax(4.5rem,0.7fr)_minmax(7.5rem,1.3fr)] gap-1.5">
+            <Select
+              value={sidebarThreadStatusFilter}
+              onValueChange={(value) => {
+                if (
+                  value === "all" ||
+                  value === "needs_attention" ||
+                  value === "active" ||
+                  value === "completed"
+                ) {
+                  onSidebarThreadStatusFilterChange(value);
+                }
+              }}
+            >
+              <SelectTrigger
+                aria-label="Filter threads by status"
+                data-testid="sidebar-thread-status-filter"
+                className="h-7 w-full min-w-0 text-xs"
+              >
+                <SelectValue>
+                  {SIDEBAR_THREAD_STATUS_FILTER_LABELS[sidebarThreadStatusFilter]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="start" alignItemWithTrigger={false}>
+                {(
+                  Object.entries(SIDEBAR_THREAD_STATUS_FILTER_LABELS) as Array<
+                    [SidebarThreadStatusFilter, string]
+                  >
+                ).map(([value, label]) => (
+                  <SelectItem key={value} hideIndicator value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+            <Select
+              value={sidebarProjectSourceFilter}
+              onValueChange={(value) => {
+                if (
+                  value === "all" ||
+                  value === "local" ||
+                  value === "remote" ||
+                  value === "mixed"
+                ) {
+                  onSidebarProjectSourceFilterChange(value);
+                }
+              }}
+            >
+              <SelectTrigger
+                aria-label="Filter projects by source"
+                data-testid="sidebar-project-source-filter"
+                className="h-7 w-full min-w-0 text-xs"
+              >
+                <SelectValue>
+                  {SIDEBAR_PROJECT_SOURCE_FILTER_LABELS[sidebarProjectSourceFilter]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="start" alignItemWithTrigger={false}>
+                {(
+                  Object.entries(SIDEBAR_PROJECT_SOURCE_FILTER_LABELS) as Array<
+                    [SidebarProjectSourceFilter, string]
+                  >
+                ).map(([value, label]) => (
+                  <SelectItem key={value} hideIndicator value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+            <Select
+              value={sidebarOwnerFilter}
+              onValueChange={(value) => {
+                if (
+                  value === "all" ||
+                  sidebarOwnerFilterOptions.some((option) => option.value === value)
+                ) {
+                  onSidebarOwnerFilterChange(value as SidebarOwnerFilter);
+                }
+              }}
+            >
+              <SelectTrigger
+                aria-label="Filter projects by owner"
+                data-testid="sidebar-owner-filter"
+                className="col-span-2 h-7 w-full min-w-0 text-xs"
+                disabled={sidebarOwnerFilterOptions.length === 0}
+              >
+                <SelectValue>
+                  {sidebarOwnerFilter === "all"
+                    ? SIDEBAR_ALL_OWNER_FILTER_LABEL
+                    : (sidebarOwnerFilterOptions.find(
+                        (option) => option.value === sidebarOwnerFilter,
+                      )?.label ?? SIDEBAR_ALL_OWNER_FILTER_LABEL)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="start" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="all">
+                  {SIDEBAR_ALL_OWNER_FILTER_LABEL}
+                </SelectItem>
+                {sidebarOwnerFilterOptions.map((option) => (
+                  <SelectItem key={option.value} hideIndicator value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
           </div>
         </div>
 
@@ -2959,15 +2770,66 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 items={sortedProjects.map((project) => project.projectKey)}
                 strategy={verticalListSortingStrategy}
               >
-                {rootProjectCategories.map(renderCategoryNode)}
-                {uncategorizedProjects.map(renderProjectRow)}
+                {sortedProjects.map((project) => (
+                  <SortableProjectItem key={project.projectKey} projectId={project.projectKey}>
+                    {(dragHandleProps) => (
+                      <SidebarProjectItem
+                        project={project}
+                        isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
+                        activeRouteThreadKey={
+                          activeRouteProjectKey === project.projectKey ? routeThreadKey : null
+                        }
+                        newThreadShortcutLabel={newThreadShortcutLabel}
+                        handleNewThread={handleNewThread}
+                        archiveThread={archiveThread}
+                        deleteThread={deleteThread}
+                        threadJumpLabelByKey={threadJumpLabelByKey}
+                        attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+                        expandThreadListForProject={expandThreadListForProject}
+                        collapseThreadListForProject={collapseThreadListForProject}
+                        dragInProgressRef={dragInProgressRef}
+                        suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                        suppressProjectClickForContextMenuRef={
+                          suppressProjectClickForContextMenuRef
+                        }
+                        isManualProjectSorting={isManualProjectSorting}
+                        dragHandleProps={dragHandleProps}
+                        sidebarSearchQuery={sidebarSearchQuery}
+                        sidebarThreadStatusFilter={sidebarThreadStatusFilter}
+                      />
+                    )}
+                  </SortableProjectItem>
+                ))}
               </SortableContext>
             </SidebarMenu>
           </DndContext>
         ) : (
           <SidebarMenu ref={attachProjectListAutoAnimateRef}>
-            {rootProjectCategories.map(renderCategoryNode)}
-            {uncategorizedProjects.map(renderProjectRow)}
+            {sortedProjects.map((project) => (
+              <SidebarProjectListRow
+                key={project.projectKey}
+                project={project}
+                isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
+                activeRouteThreadKey={
+                  activeRouteProjectKey === project.projectKey ? routeThreadKey : null
+                }
+                newThreadShortcutLabel={newThreadShortcutLabel}
+                handleNewThread={handleNewThread}
+                archiveThread={archiveThread}
+                deleteThread={deleteThread}
+                threadJumpLabelByKey={threadJumpLabelByKey}
+                attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+                expandThreadListForProject={expandThreadListForProject}
+                collapseThreadListForProject={collapseThreadListForProject}
+                dragInProgressRef={dragInProgressRef}
+                suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
+                isManualProjectSorting={isManualProjectSorting}
+                dragHandleProps={null}
+                sidebarSearchQuery={sidebarSearchQuery}
+                sidebarThreadStatusFilter={sidebarThreadStatusFilter}
+              />
+            ))}
           </SidebarMenu>
         )}
 
@@ -2976,76 +2838,11 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             No projects yet
           </div>
         )}
-        <Dialog
-          open={categoryDialogOpen}
-          onOpenChange={(open) => {
-            if (!open) {
-              closeCategoryDialog();
-            }
-          }}
-        >
-          <DialogPopup className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>{categoryDialogTarget ? "Edit category" : "New category"}</DialogTitle>
-              <DialogDescription>
-                {categoryDialogTarget
-                  ? "Update the category label or move it under a different parent."
-                  : "Create a sidebar category for organizing projects."}
-              </DialogDescription>
-            </DialogHeader>
-            <DialogPanel className="space-y-4">
-              <div className="grid gap-1.5">
-                <span className="text-xs font-medium text-foreground">Category name</span>
-                <Input
-                  aria-label="Category name"
-                  value={categoryDialogName}
-                  onChange={(event) => setCategoryDialogName(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      submitCategoryDialog();
-                    }
-                  }}
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <span className="text-xs font-medium text-foreground">Parent category</span>
-                <Select
-                  value={categoryDialogParentId}
-                  onValueChange={(value) => {
-                    setCategoryDialogParentId(value ?? "root");
-                  }}
-                >
-                  <SelectTrigger className="w-full" aria-label="Category parent">
-                    <SelectValue>
-                      {categoryDialogParentId === "root"
-                        ? "Top level"
-                        : (orderedProjectCategories.find(
-                            (category) => category.id === categoryDialogParentId,
-                          )?.name ?? "Top level")}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup align="end" alignItemWithTrigger={false}>
-                    <SelectItem hideIndicator value="root">
-                      Top level
-                    </SelectItem>
-                    {availableCategoryParents.map((category) => (
-                      <SelectItem key={category.id} hideIndicator value={category.id}>
-                        {category.name}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-              </div>
-            </DialogPanel>
-            <DialogFooter>
-              <Button variant="outline" onClick={closeCategoryDialog}>
-                Cancel
-              </Button>
-              <Button onClick={submitCategoryDialog}>Save</Button>
-            </DialogFooter>
-          </DialogPopup>
-        </Dialog>
+        {projectsLength > 0 && sortedProjects.length === 0 ? (
+          <div className="px-2 pt-4 text-center text-xs text-muted-foreground/60">
+            No matching projects or threads
+          </div>
+        ) : null}
       </SidebarGroup>
     </SidebarContent>
   );
@@ -3055,13 +2852,7 @@ export default function Sidebar() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
-  const projectCategories = useUiStateStore((store) => store.projectCategories);
-  const projectCategoryAssignmentsByPhysicalKey = useUiStateStore(
-    (store) => store.projectCategoryAssignmentsByPhysicalKey,
-  );
-  const projectCategoryOrder = useUiStateStore((store) => store.projectCategoryOrder);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const assignProjectsToCategory = useUiStateStore((store) => store.assignProjectsToCategory);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
@@ -3091,6 +2882,12 @@ export default function Sidebar() {
   const suppressProjectClickAfterDragRef = useRef(false);
   const suppressProjectClickForContextMenuRef = useRef(false);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
+  const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
+  const [sidebarThreadStatusFilter, setSidebarThreadStatusFilter] =
+    useState<SidebarThreadStatusFilter>("all");
+  const [sidebarProjectSourceFilter, setSidebarProjectSourceFilter] =
+    useState<SidebarProjectSourceFilter>("all");
+  const [sidebarOwnerFilter, setSidebarOwnerFilter] = useState<SidebarOwnerFilter>("all");
   const selectedThreadCount = useThreadSelectionStore((s) => s.selectedThreadKeys.size);
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -3239,20 +3036,12 @@ export default function Sidebar() {
     }),
   );
   const projectCollisionDetection = useCallback<CollisionDetection>((args) => {
-    const pointerCollisions = prioritizeProjectDropCollisions({
-      collisions: pointerWithin(args),
-      activeId: args.active.id,
-      isCategoryCollision: (id) => parseProjectCategoryDropId(id) !== null,
-    });
+    const pointerCollisions = pointerWithin(args);
     if (pointerCollisions.length > 0) {
       return pointerCollisions;
     }
 
-    return prioritizeProjectDropCollisions({
-      collisions: closestCorners(args),
-      activeId: args.active.id,
-      isCategoryCollision: (id) => parseProjectCategoryDropId(id) !== null,
-    });
+    return closestCorners(args);
   }, []);
 
   const handleProjectDragEnd = useCallback(
@@ -3265,34 +3054,15 @@ export default function Sidebar() {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
       const activeProject = sidebarProjects.find((project) => project.projectKey === active.id);
-      if (!activeProject) return;
+      const overProject = sidebarProjects.find((project) => project.projectKey === over.id);
+      if (!activeProject || !overProject) return;
       const activeMemberKeys = activeProject.memberProjects.map(
         (member) => member.physicalProjectKey,
       );
-
-      const overCategoryId = parseProjectCategoryDropId(over.id);
-      if (overCategoryId) {
-        assignProjectsToCategory(activeMemberKeys, overCategoryId);
-        return;
-      }
-
-      const overProject = sidebarProjects.find((project) => project.projectKey === over.id);
-      if (!overProject) return;
-
       const overMemberKeys = overProject.memberProjects.map((member) => member.physicalProjectKey);
-      const overProjectCategoryId =
-        resolveSidebarProjectCategoryId(overProject, projectCategoryAssignmentsByPhysicalKey) ??
-        null;
-      assignProjectsToCategory(activeMemberKeys, overProjectCategoryId);
       reorderProjects(activeMemberKeys, overMemberKeys);
     },
-    [
-      assignProjectsToCategory,
-      projectCategoryAssignmentsByPhysicalKey,
-      reorderProjects,
-      sidebarProjectSortOrder,
-      sidebarProjects,
-    ],
+    [sidebarProjectSortOrder, reorderProjects, sidebarProjects],
   );
 
   const handleProjectDragStart = useCallback(
@@ -3363,28 +3133,86 @@ export default function Sidebar() {
     sidebarProjects,
     visibleThreads,
   ]);
-  const { rootCategories, uncategorizedProjects } = useMemo(
-    () =>
-      buildSidebarProjectCategoryTree({
-        categories: projectCategories,
-        categoryOrder: projectCategoryOrder,
-        projects: sortedProjects,
-        categoryByPhysicalProjectKey: projectCategoryAssignmentsByPhysicalKey,
-      }),
-    [
-      projectCategories,
-      projectCategoryAssignmentsByPhysicalKey,
-      projectCategoryOrder,
-      sortedProjects,
-    ],
+  const sidebarOwnerFilterOptions = useMemo(
+    () => buildSidebarOwnerFilterOptions(sortedProjects),
+    [sortedProjects],
   );
+  useEffect(() => {
+    if (
+      sidebarOwnerFilter !== "all" &&
+      !sidebarOwnerFilterOptions.some((option) => option.value === sidebarOwnerFilter)
+    ) {
+      setSidebarOwnerFilter("all");
+    }
+  }, [sidebarOwnerFilter, sidebarOwnerFilterOptions]);
+  const normalizedSidebarSearchQuery = normalizeSidebarSearchQuery(sidebarSearchQuery);
+  const filteredSortedProjects = useMemo(() => {
+    if (
+      normalizedSidebarSearchQuery.length === 0 &&
+      sidebarThreadStatusFilter === "all" &&
+      sidebarProjectSourceFilter === "all" &&
+      sidebarOwnerFilter === "all"
+    ) {
+      return sortedProjects;
+    }
+
+    return sortedProjects.filter((project) => {
+      if (!doesSidebarProjectSourceMatch(project, sidebarProjectSourceFilter)) {
+        return false;
+      }
+      if (!doesSidebarProjectOwnerMatch(project, sidebarOwnerFilter)) {
+        return false;
+      }
+      const projectMatchesSearchQuery = doesSidebarProjectMatchQuery(
+        project,
+        normalizedSidebarSearchQuery,
+      );
+      const projectThreads = (threadsByProjectKey.get(project.projectKey) ?? []).filter(
+        (thread) => thread.archivedAt === null,
+      );
+      const hasMatchingThread = projectThreads.some((thread) => {
+        const status = resolveThreadStatusPill({ thread });
+        if (!doesSidebarThreadStatusMatch(status, sidebarThreadStatusFilter)) {
+          return false;
+        }
+        return (
+          projectMatchesSearchQuery ||
+          doesSidebarThreadMatchQuery(thread, normalizedSidebarSearchQuery)
+        );
+      });
+
+      if (sidebarThreadStatusFilter !== "all") {
+        return hasMatchingThread;
+      }
+
+      return projectMatchesSearchQuery || hasMatchingThread;
+    });
+  }, [
+    normalizedSidebarSearchQuery,
+    sidebarOwnerFilter,
+    sidebarProjectSourceFilter,
+    sidebarThreadStatusFilter,
+    sortedProjects,
+    threadsByProjectKey,
+  ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
   const visibleSidebarThreadKeys = useMemo(
     () =>
-      sortedProjects.flatMap((project) => {
+      filteredSortedProjects.flatMap((project) => {
+        const projectMatchesSearchQuery = doesSidebarProjectMatchQuery(
+          project,
+          normalizedSidebarSearchQuery,
+        );
         const projectThreads = sortThreads(
           (threadsByProjectKey.get(project.projectKey) ?? []).filter(
-            (thread) => thread.archivedAt === null,
+            (thread) =>
+              thread.archivedAt === null &&
+              doesSidebarThreadStatusMatch(
+                resolveThreadStatusPill({ thread }),
+                sidebarThreadStatusFilter,
+              ) &&
+              (projectMatchesSearchQuery ||
+                doesSidebarThreadMatchQuery(thread, normalizedSidebarSearchQuery)),
           ),
           sidebarThreadSortOrder,
         );
@@ -3416,9 +3244,11 @@ export default function Sidebar() {
     [
       sidebarThreadSortOrder,
       expandedThreadListsByProject,
+      filteredSortedProjects,
+      normalizedSidebarSearchQuery,
       projectExpandedById,
       routeThreadKey,
-      sortedProjects,
+      sidebarThreadStatusFilter,
       threadsByProjectKey,
     ],
   );
@@ -3779,13 +3609,18 @@ export default function Sidebar() {
             projectSortOrder={sidebarProjectSortOrder}
             threadSortOrder={sidebarThreadSortOrder}
             projectGroupingMode={sidebarProjectGroupingMode}
+            sidebarSearchQuery={sidebarSearchQuery}
+            sidebarThreadStatusFilter={sidebarThreadStatusFilter}
+            sidebarProjectSourceFilter={sidebarProjectSourceFilter}
+            sidebarOwnerFilter={sidebarOwnerFilter}
+            sidebarOwnerFilterOptions={sidebarOwnerFilterOptions}
+            onSidebarSearchQueryChange={setSidebarSearchQuery}
+            onSidebarThreadStatusFilterChange={setSidebarThreadStatusFilter}
+            onSidebarProjectSourceFilterChange={setSidebarProjectSourceFilter}
+            onSidebarOwnerFilterChange={setSidebarOwnerFilter}
             updateSettings={updateSettings}
             openAddProject={openAddProjectCommandPalette}
             isManualProjectSorting={isManualProjectSorting}
-            projectCategories={projectCategories}
-            projectCategoryOrder={projectCategoryOrder}
-            rootProjectCategories={rootCategories}
-            uncategorizedProjects={uncategorizedProjects}
             projectDnDSensors={projectDnDSensors}
             projectCollisionDetection={projectCollisionDetection}
             handleProjectDragStart={handleProjectDragStart}
@@ -3794,7 +3629,7 @@ export default function Sidebar() {
             handleNewThread={handleNewThread}
             archiveThread={archiveThread}
             deleteThread={deleteThread}
-            sortedProjects={sortedProjects}
+            sortedProjects={filteredSortedProjects}
             expandedThreadListsByProject={expandedThreadListsByProject}
             activeRouteProjectKey={activeRouteProjectKey}
             routeThreadKey={routeThreadKey}

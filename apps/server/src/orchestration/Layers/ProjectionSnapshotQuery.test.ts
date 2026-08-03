@@ -1,4 +1,15 @@
-import { CheckpointRef, EventId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  MessageId,
+  OrganizationId,
+  ProjectId,
+  TenantId,
+  ThreadId,
+  TurnId,
+  UserId,
+  WorkspaceId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -38,6 +49,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           project_id,
           title,
           workspace_root,
+          ownership_json,
           default_model_selection_json,
           scripts_json,
           created_at,
@@ -48,6 +60,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'project-1',
           'Project 1',
           '/tmp/project-1',
+          '{"tenantId":"tenant-acme","tenantDisplayName":"Acme","workspaceId":"workspace-product","workspaceTitle":"Product Workspace","organizationId":"org-acme","organizationDisplayName":"Acme Inc","ownerUserId":"user-ada","ownerDisplayName":"Ada Lovelace"}',
           '{"provider":"codex","model":"gpt-5-codex"}',
           '[{"id":"script-1","name":"Build","command":"bun run build","icon":"build","runOnWorktreeCreate":false}]',
           '2026-02-24T00:00:00.000Z',
@@ -250,6 +263,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           id: asProjectId("project-1"),
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
+          ownership: {
+            tenantId: TenantId.make("tenant-acme"),
+            tenantDisplayName: "Acme",
+            workspaceId: WorkspaceId.make("workspace-product"),
+            workspaceTitle: "Product Workspace",
+            organizationId: OrganizationId.make("org-acme"),
+            organizationDisplayName: "Acme Inc",
+            ownerUserId: UserId.make("user-ada"),
+            ownerDisplayName: "Ada Lovelace",
+          },
           repositoryIdentity: null,
           defaultModelSelection: {
             provider: "codex",
@@ -361,6 +384,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           id: asProjectId("project-1"),
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
+          ownership: {
+            tenantId: TenantId.make("tenant-acme"),
+            tenantDisplayName: "Acme",
+            workspaceId: WorkspaceId.make("workspace-product"),
+            workspaceTitle: "Product Workspace",
+            organizationId: OrganizationId.make("org-acme"),
+            organizationDisplayName: "Acme Inc",
+            ownerUserId: UserId.make("user-ada"),
+            ownerDisplayName: "Ada Lovelace",
+          },
           repositoryIdentity: null,
           defaultModelSelection: {
             provider: "codex",

@@ -87,6 +87,7 @@ describe("orchestration projector", () => {
         latestTurn: null,
         createdAt: now,
         updatedAt: now,
+        favorite: false,
         archivedAt: null,
         deletedAt: null,
         messages: [],
@@ -96,6 +97,60 @@ describe("orchestration projector", () => {
         session: null,
       },
     ]);
+  });
+
+  it("applies thread favorite metadata updates", async () => {
+    const now = new Date().toISOString();
+    const created = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(now),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: now,
+          commandId: "cmd-thread-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      ),
+    );
+    const updatedAt = new Date(Date.now() + 1_000).toISOString();
+
+    const next = await Effect.runPromise(
+      projectEvent(
+        created,
+        makeEvent({
+          sequence: 2,
+          type: "thread.meta-updated",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: updatedAt,
+          commandId: "cmd-thread-favorite",
+          payload: {
+            threadId: "thread-1",
+            favorite: true,
+            updatedAt,
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.favorite).toBe(true);
+    expect(next.threads[0]?.updatedAt).toBe(updatedAt);
   });
 
   it("fails when event payload cannot be decoded by runtime schema", async () => {

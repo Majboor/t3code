@@ -1,7 +1,9 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Crypto from "node:crypto";
 
+import { DEFAULT_PUBLIC_ACCESS_LIMITS } from "@t3tools/shared/tenancy";
 import {
   CommandId,
   DEFAULT_SERVER_SETTINGS,
@@ -9,6 +11,7 @@ import {
   EventId,
   GitCommandError,
   KeybindingRule,
+  MembershipId,
   MessageId,
   OpenError,
   type OrchestrationThreadShell,
@@ -16,9 +19,20 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   ORCHESTRATION_WS_METHODS,
+  OrganizationId,
+  ProviderAccountId,
+  ProviderSessionId,
   ProjectId,
   ResolvedKeybindingRule,
+  TenantId,
+  TenantRuntimeId,
+  type TerminalOpenInput,
+  type TerminalWriteInput,
+  type TenantMembership,
   ThreadId,
+  TurnId,
+  UserId,
+  WorkspaceId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -79,6 +93,7 @@ import {
   ProviderRegistry,
   type ProviderRegistryShape,
 } from "./provider/Services/ProviderRegistry.ts";
+import { TenancyRepository, type TenancyRepositoryShape } from "./persistence/Services/Tenancy.ts";
 import { ServerLifecycleEvents, type ServerLifecycleEventsShape } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup, type ServerRuntimeStartupShape } from "./serverRuntimeStartup.ts";
 import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings.ts";
@@ -88,6 +103,10 @@ import {
   type BrowserTraceCollectorShape,
 } from "./observability/Services/BrowserTraceCollector.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
+import { CollaborationServiceLive } from "./collaboration/Layers/CollaborationService.ts";
+import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
+import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
+import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
 import {
   ProjectSetupScriptRunner,
   type ProjectSetupScriptRunnerShape,
@@ -105,10 +124,18 @@ import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
+import type { AuthenticatedSession } from "./auth/Services/ServerAuth.ts";
+import type { SupabaseJwtClaims, SupabaseJwks } from "./auth/supabaseJwt.ts";
+import { __testWebSocketConnectionLimits } from "./ws.ts";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
 const defaultDesktopBootstrapToken = "test-desktop-bootstrap-token";
+const supabaseProjectUrl = "https://project-ref.supabase.co";
+const supabaseIssuer = `${supabaseProjectUrl}/auth/v1`;
+const supabaseSubject = "4d7ecde3-b641-4be2-8d62-0bf345fbfd1d";
+const supabaseUserId = UserId.make(`supabase:${supabaseSubject}`);
+const supabaseJwtExpiresInSeconds = 300;
 const defaultModelSelection = {
   provider: "codex",
   model: "gpt-5-codex",
@@ -141,12 +168,52 @@ const makeDefaultOrchestrationReadModel = () => {
         updatedAt: now,
         deletedAt: null,
       },
+      {
+        id: ProjectId.make("project-test-repo"),
+        title: "Test Repo",
+        workspaceRoot: "/tmp/repo",
+        defaultModelSelection,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      },
+      {
+        id: ProjectId.make("project-test-terminal"),
+        title: "Test Terminal Project",
+        workspaceRoot: "/tmp/project",
+        defaultModelSelection,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      },
     ],
     threads: [
       {
         id: defaultThreadId,
         projectId: defaultProjectId,
         title: "Default Thread",
+        modelSelection: defaultModelSelection,
+        interactionMode: "default" as const,
+        runtimeMode: "full-access" as const,
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        latestTurn: null,
+        messages: [],
+        session: null,
+        activities: [],
+        proposedPlans: [],
+        checkpoints: [],
+        deletedAt: null,
+      },
+      {
+        id: ThreadId.make("thread-1"),
+        projectId: ProjectId.make("project-test-terminal"),
+        title: "Terminal Thread",
         modelSelection: defaultModelSelection,
         interactionMode: "default" as const,
         runtimeMode: "full-access" as const,
@@ -193,15 +260,25 @@ const makeDefaultOrchestrationThreadShell = (
   };
 };
 
-const workspaceAndProjectServicesLayer = Layer.mergeAll(
-  WorkspacePathsLive,
-  WorkspaceEntriesLive.pipe(Layer.provide(WorkspacePathsLive)),
-  WorkspaceFileSystemLive.pipe(
-    Layer.provide(WorkspacePathsLive),
-    Layer.provide(WorkspaceEntriesLive.pipe(Layer.provide(WorkspacePathsLive))),
-  ),
-  ProjectFaviconResolverLive,
-);
+const makeReadModelWithWorkspaceRoot = (workspaceRoot: string) => {
+  const readModel = makeDefaultOrchestrationReadModel();
+  return {
+    ...readModel,
+    projects: [
+      ...readModel.projects,
+      {
+        id: ProjectId.make(`project-${crypto.randomUUID()}`),
+        title: "Registered Test Workspace",
+        workspaceRoot,
+        defaultModelSelection,
+        scripts: [],
+        createdAt: readModel.updatedAt,
+        updatedAt: readModel.updatedAt,
+        deletedAt: null,
+      },
+    ],
+  };
+};
 
 const browserOtlpTracingLayer = Layer.mergeAll(
   FetchHttpClient.layer,
@@ -212,6 +289,22 @@ const browserOtlpTracingLayer = Layer.mergeAll(
 const authTestLayer = ServerAuthLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
   Layer.provide(ServerSecretStoreLive),
+);
+
+const tenancyRepositoryTestLayer = TenancyRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
+);
+
+const collaborationTestLayer = CollaborationServiceLive.pipe(
+  Layer.provide(tenancyRepositoryTestLayer),
+);
+
+const organizationTestLayer = OrganizationServiceLive.pipe(
+  Layer.provide(tenancyRepositoryTestLayer),
+);
+
+const threadPreferenceTestLayer = ProjectionThreadPreferenceRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
 );
 
 const makeBrowserOtlpPayload = (spanName: string) =>
@@ -336,6 +429,7 @@ const buildAppUnderTest = (options?: {
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
   };
+  seedTenancy?: (repository: TenancyRepositoryShape) => Effect.Effect<void>;
 }) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -369,6 +463,11 @@ const buildAppUnderTest = (options?: {
       basicAuthUsername: undefined,
       basicAuthPassword: undefined,
       basicAuthRealm: "T3 Code",
+      supabaseProjectUrl: undefined,
+      supabaseAnonKey: undefined,
+      supabaseJwtAudience: undefined,
+      supabaseServiceRoleSecretName: undefined,
+      localPasswordAuth: false,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       ...options?.config,
@@ -405,6 +504,11 @@ const buildAppUnderTest = (options?: {
           ...options.layers.gitStatusBroadcaster,
         })
       : GitStatusBroadcasterLive.pipe(Layer.provide(gitManagerLayer));
+    const seedTenancyLayer = Layer.effectDiscard(
+      options?.seedTenancy
+        ? Effect.service(TenancyRepository).pipe(Effect.flatMap(options.seedTenancy))
+        : Effect.void,
+    );
 
     const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -544,6 +648,11 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provideMerge(authTestLayer),
+      Layer.provideMerge(seedTenancyLayer),
+      Layer.provideMerge(tenancyRepositoryTestLayer),
+      Layer.provideMerge(threadPreferenceTestLayer),
+      Layer.provideMerge(collaborationTestLayer),
+      Layer.provideMerge(organizationTestLayer),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(layerConfig),
@@ -567,15 +676,24 @@ const parseSessionCookieFromWsUrl = (
   };
 };
 
-const wsRpcProtocolLayer = (wsUrl: string) => {
+const wsRpcProtocolLayer = (
+  wsUrl: string,
+  options?: {
+    readonly headers?: Record<string, string>;
+  },
+) => {
   const { cookie, url } = parseSessionCookieFromWsUrl(wsUrl);
+  const headers = {
+    ...(cookie ? { cookie } : {}),
+    ...options?.headers,
+  };
   const webSocketConstructorLayer = Layer.succeed(
     Socket.WebSocketConstructor,
     (socketUrl, protocols) =>
       new NodeSocket.NodeWS.WebSocket(
         socketUrl,
         protocols,
-        cookie ? { headers: { cookie } } : undefined,
+        Object.keys(headers).length > 0 ? { headers } : undefined,
       ) as unknown as globalThis.WebSocket,
   );
 
@@ -592,7 +710,10 @@ type WsRpcClient =
 const withWsRpcClient = <A, E, R>(
   wsUrl: string,
   f: (client: WsRpcClient) => Effect.Effect<A, E, R>,
-) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayer(wsUrl)));
+  options?: {
+    readonly headers?: Record<string, string>;
+  },
+) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayer(wsUrl, options)));
 
 const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) => {
   const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
@@ -600,6 +721,99 @@ const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) =>
   next.hash = `cookie=${encodeURIComponent(sessionCookieHeader)}`;
   return isAbsoluteUrl ? next.toString() : `${next.pathname}${next.search}${next.hash}`;
 };
+
+function base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function signSupabaseJwt(input: {
+  readonly keyPair: Crypto.KeyPairKeyObjectResult;
+  readonly kid: string;
+  readonly claims?: Partial<SupabaseJwtClaims>;
+}): string {
+  const signingInput = `${base64UrlJson({
+    alg: "RS256",
+    typ: "JWT",
+    kid: input.kid,
+  })}.${base64UrlJson({
+    sub: supabaseSubject,
+    iss: supabaseIssuer,
+    aud: "authenticated",
+    exp: Math.floor(Date.now() / 1000) + supabaseJwtExpiresInSeconds,
+    email: "member@example.test",
+    role: "authenticated",
+    app_metadata: {
+      provider: "email",
+    },
+    user_metadata: {
+      full_name: "Supabase Member",
+    },
+    ...input.claims,
+  })}`;
+  const signature = Crypto.createSign("RSA-SHA256")
+    .update(signingInput)
+    .end()
+    .sign(input.keyPair.privateKey)
+    .toString("base64url");
+  return `${signingInput}.${signature}`;
+}
+
+function makeSignedSupabaseFixture(claims?: Partial<SupabaseJwtClaims>): {
+  readonly jwt: string;
+  readonly jwks: SupabaseJwks;
+} {
+  const keyPair = Crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const kid = "server-e2e-supabase-key";
+  return {
+    jwt: signSupabaseJwt({ keyPair, kid, ...(claims ? { claims } : {}) }),
+    jwks: {
+      keys: [
+        {
+          ...keyPair.publicKey.export({ format: "jwk" }),
+          kid,
+          alg: "RS256",
+          use: "sig",
+        },
+      ],
+    },
+  };
+}
+
+function makeSupabaseMembership(input: {
+  readonly tenantId: TenantId;
+  readonly userId?: UserId;
+  readonly organizationId?: OrganizationId | null;
+  readonly roles?: TenantMembership["roles"];
+}): TenantMembership {
+  return {
+    id: MembershipId.make(`membership-supabase-${crypto.randomUUID()}`),
+    tenantId: input.tenantId,
+    userId: input.userId ?? supabaseUserId,
+    organizationId: input.organizationId ?? null,
+    roles: input.roles ?? ["developer"],
+    createdAt: new Date().toISOString(),
+    disabledAt: null,
+  };
+}
+
+function mockSupabaseJwksFetch(jwks: SupabaseJwks) {
+  const originalFetch = globalThis.fetch;
+  return vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === `${supabaseProjectUrl}/auth/v1/.well-known/jwks.json`) {
+      return Promise.resolve(
+        new Response(JSON.stringify(jwks), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }),
+      );
+    }
+    return originalFetch(input, init);
+  });
+}
 
 const getHttpServerUrl = (pathname = "") =>
   Effect.gen(function* () {
@@ -734,6 +948,74 @@ const getWsServerUrl = (
     );
   });
 
+const withCleanBrowserContext = async <A>(
+  browser: Awaited<ReturnType<typeof import("playwright").chromium.launch>>,
+  appUrl: string,
+  sessionCookieHeader: string | null,
+  run: (page: import("playwright").Page) => Promise<A>,
+): Promise<A> => {
+  const context = await browser.newContext();
+  try {
+    await context.clearCookies();
+    const page = await context.newPage();
+    if (sessionCookieHeader) {
+      const [cookieName, cookieValue] = sessionCookieHeader.split("=", 2);
+      if (!cookieName || !cookieValue) {
+        throw new Error("Expected session cookie header to contain a name and value.");
+      }
+      const origin = new URL(appUrl);
+      await context.addCookies([
+        {
+          name: cookieName,
+          value: cookieValue,
+          domain: origin.hostname,
+          path: "/",
+          httpOnly: true,
+          sameSite: "Lax",
+          secure: origin.protocol === "https:",
+        },
+      ]);
+    }
+    return await run(page);
+  } finally {
+    await Promise.race([
+      context.close(),
+      new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+  }
+};
+
+const reserveTcpPort = async (): Promise<number> => {
+  const net = await import("node:net");
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Expected reserved TCP port address.")));
+        return;
+      }
+      const { port } = address;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+};
+
+const restoreProcessEnvValue = (name: string, value: string | undefined) => {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+};
+
 it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("serves static index content for GET / when staticDir is configured", () =>
     Effect.gen(function* () {
@@ -863,6 +1145,167 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "bearer-session-token",
       ]);
       assert.isTrue(body.auth.sessionCookieName.startsWith("t3_session_"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("advertises public Supabase auth config without service-role secrets", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseAnonKey: "anon-public-key",
+          supabaseJwtAudience: "authenticated",
+          supabaseServiceRoleSecretName: "supabase/service-role",
+        },
+      });
+
+      const url = yield* getHttpServerUrl("/api/auth/session");
+      const response = yield* Effect.promise(() => fetch(url));
+      const body = (yield* Effect.promise(() => response.json())) as {
+        readonly authenticated: boolean;
+        readonly auth: {
+          readonly supabase?: {
+            readonly projectUrl: string;
+            readonly anonKey: string;
+            readonly audience?: string;
+          };
+        };
+      };
+
+      assert.equal(response.status, 200);
+      assert.equal(body.authenticated, false);
+      assert.deepEqual(body.auth.supabase, {
+        projectUrl: `${supabaseProjectUrl}/`,
+        anonKey: "anon-public-key",
+        audience: "authenticated",
+      });
+      assert.notInclude(JSON.stringify(body), "service-role");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves authenticated profile and onboarding endpoints to a browser user", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const profileUrl = yield* getHttpServerUrl("/api/auth/profile");
+      const profileResponse = yield* Effect.promise(() =>
+        fetch(profileUrl, {
+          headers: { cookie },
+        }),
+      );
+      const profile = (yield* Effect.promise(() => profileResponse.json())) as {
+        readonly userId: string;
+        readonly displayName: string;
+        readonly role: string;
+        readonly sessionMethod: string;
+        readonly sessionId: string;
+        readonly tenantStatus: string;
+      };
+
+      assert.equal(profileResponse.status, 200);
+      assert.isTrue(profile.userId.startsWith("auth:"));
+      assert.equal(profile.role, "owner");
+      assert.equal(profile.sessionMethod, "browser-session-cookie");
+      assert.equal(profile.tenantStatus, "none");
+      assert.isTrue(profile.sessionId.length > 0);
+      assert.isTrue(profile.displayName.length > 0);
+
+      const onboardingUrl = yield* getHttpServerUrl("/api/auth/onboarding");
+      const onboardingResponse = yield* Effect.promise(() =>
+        fetch(onboardingUrl, {
+          headers: { cookie },
+        }),
+      );
+      const onboarding = (yield* Effect.promise(() => onboardingResponse.json())) as {
+        readonly authenticated: boolean;
+        readonly nextStep: string;
+        readonly profile: typeof profile;
+      };
+
+      assert.equal(onboardingResponse.status, 200);
+      assert.equal(onboarding.authenticated, true);
+      assert.equal(onboarding.nextStep, "create-workspace");
+      assert.equal(onboarding.profile.sessionId, profile.sessionId);
+      assert.equal(onboarding.profile.tenantStatus, "none");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("surfaces pending Supabase membership in auth session and onboarding state", () =>
+    Effect.gen(function* () {
+      const fixture = makeSignedSupabaseFixture();
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const headers = {
+          authorization: `Bearer ${fixture.jwt}`,
+        };
+        const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+        const sessionResponse = yield* Effect.promise(() =>
+          fetch(sessionUrl, {
+            headers,
+          }),
+        );
+        const session = (yield* Effect.promise(() => sessionResponse.json())) as {
+          readonly authenticated: boolean;
+          readonly role: string;
+          readonly sessionMethod: string;
+          readonly tenantStatus?: string;
+          readonly tenantSession?: unknown;
+        };
+
+        assert.equal(sessionResponse.status, 200);
+        assert.equal(session.authenticated, true);
+        assert.equal(session.role, "client");
+        assert.equal(session.sessionMethod, "bearer-session-token");
+        assert.equal(session.tenantStatus, "pending-membership");
+        assert.isUndefined(session.tenantSession);
+
+        const profileUrl = yield* getHttpServerUrl("/api/auth/profile");
+        const profileResponse = yield* Effect.promise(() =>
+          fetch(profileUrl, {
+            headers,
+          }),
+        );
+        const profile = (yield* Effect.promise(() => profileResponse.json())) as {
+          readonly userId: string;
+          readonly displayName: string;
+          readonly tenantStatus: string;
+          readonly tenantSession?: unknown;
+        };
+
+        assert.equal(profileResponse.status, 200);
+        assert.equal(profile.userId, supabaseUserId);
+        assert.equal(profile.displayName, "Supabase Member");
+        assert.equal(profile.tenantStatus, "pending-membership");
+        assert.isUndefined(profile.tenantSession);
+
+        const onboardingUrl = yield* getHttpServerUrl("/api/auth/onboarding");
+        const onboardingResponse = yield* Effect.promise(() =>
+          fetch(onboardingUrl, {
+            headers,
+          }),
+        );
+        const onboarding = (yield* Effect.promise(() => onboardingResponse.json())) as {
+          readonly authenticated: boolean;
+          readonly nextStep: string;
+          readonly profile: typeof profile;
+        };
+
+        assert.equal(onboardingResponse.status, 200);
+        assert.equal(onboarding.authenticated, true);
+        assert.equal(onboarding.nextStep, "accept-invite");
+        assert.equal(onboarding.profile.tenantStatus, "pending-membership");
+        assert.equal(onboarding.profile.userId, supabaseUserId);
+      } finally {
+        fetchSpy.mockRestore();
+      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1497,6 +1940,37 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("limits active websocket connection slots by the public per-user policy", () =>
+    Effect.gen(function* () {
+      __testWebSocketConnectionLimits.reset();
+      const request = {
+        remoteAddress: Option.some("127.0.0.1"),
+      } as never;
+      const session = {
+        sessionId: "auth-session-ws-limit",
+        subject: "same-user",
+        method: "browser-session-cookie",
+        role: "owner",
+        client: {},
+      } as AuthenticatedSession;
+
+      const slots = yield* Effect.all(
+        Array.from({ length: DEFAULT_PUBLIC_ACCESS_LIMITS.maxWebSocketConnectionsPerUser }, () =>
+          __testWebSocketConnectionLimits.acquireActiveWebSocketConnectionSlot(request, session),
+        ),
+      );
+      const error = yield* Effect.flip(
+        __testWebSocketConnectionLimits.acquireActiveWebSocketConnectionSlot(request, session),
+      );
+
+      assert.equal(error.status, 429);
+      assertInclude(error.message, "WebSocket connection limit exceeded");
+      yield* Effect.forEach(slots, (slot) =>
+        __testWebSocketConnectionLimits.releaseActiveWebSocketConnectionSlot(slot),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect(
     "rejects websocket rpc handshake when a session token is only provided via query string",
     () =>
@@ -1545,6 +2019,56 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
         assert.equal(response.auth.policy, "desktop-managed-local");
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("accepts Supabase bearer websocket tokens with tenant session context", () =>
+    Effect.gen(function* () {
+      const fixture = makeSignedSupabaseFixture();
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        yield* buildAppUnderTest({
+          config: {
+            supabaseProjectUrl: new URL(supabaseProjectUrl),
+            supabaseAnonKey: "public-anon-key",
+            supabaseJwtAudience: "authenticated",
+          },
+          seedTenancy: (repository) =>
+            repository
+              .saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [makeSupabaseMembership({ tenantId: TenantId.make("tenant-ws") })],
+                activities: [],
+              })
+              .pipe(Effect.orDie),
+        });
+
+        const wsTokenUrl = yield* getHttpServerUrl("/api/auth/ws-token");
+        const wsTokenResponse = yield* Effect.promise(() =>
+          fetch(wsTokenUrl, {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${fixture.jwt}`,
+            },
+          }),
+        );
+        const wsTokenBody = (yield* Effect.promise(() => wsTokenResponse.json())) as {
+          readonly token: string;
+        };
+        const wsUrl = `${yield* getWsServerUrl("/ws", {
+          authenticated: false,
+        })}?wsToken=${encodeURIComponent(wsTokenBody.token)}`;
+
+        const response = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) => client[WS_METHODS.providerAccountsList]({})),
+        );
+
+        assert.equal(wsTokenResponse.status, 200);
+        assert.deepEqual(response.accounts, []);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("serves attachment files from state dir", () =>
@@ -2041,6 +2565,3374 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect(
+    "exposes collaboration presence, invites, shared prompts, and activity over websocket rpc",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const workspaceId = WorkspaceId.make("workspace-accessible-collab");
+        const threadId = ThreadId.make("thread-accessible-collab");
+        const expiresAt = new Date(Date.now() + 60_000).toISOString();
+        const wsUrl = yield* getWsServerUrl("/ws");
+
+        const result = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            Effect.gen(function* () {
+              const organization = yield* client[WS_METHODS.organizationsCreate]({
+                slug: "collab-acme",
+                displayName: "Collab Acme",
+              });
+              const tenantId = organization.tenant.id;
+              const presence = yield* client[WS_METHODS.collaborationPresenceUpsert]({
+                tenantId,
+                workspaceId,
+                threadId,
+                status: "active",
+              });
+              const users = yield* client[WS_METHODS.collaborationPresenceList]({
+                tenantId,
+                workspaceId,
+                threadId,
+              });
+              const createdInvite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+                tenantId,
+                workspaceId,
+                email: "teammate@example.com",
+                scope: "workspace",
+                roles: ["developer"],
+                expiresAt,
+              });
+              const listedInvites = yield* client[WS_METHODS.collaborationInvitesList]({
+                tenantId,
+                workspaceId,
+              });
+              const acceptedInvite = yield* client[WS_METHODS.collaborationInvitesAccept]({
+                inviteId: createdInvite.invite.id,
+              });
+              const promptActivity = yield* client[WS_METHODS.collaborationSharedPromptRecord]({
+                tenantId,
+                workspaceId,
+                threadId,
+                prompt: "Review the tenant-safe auth bridge implementation.",
+              });
+              const activity = yield* client[WS_METHODS.collaborationActivityList]({
+                tenantId,
+                workspaceId,
+                threadId,
+                limit: 10,
+              });
+
+              return {
+                tenantId,
+                presence,
+                users,
+                createdInvite,
+                listedInvites,
+                acceptedInvite,
+                promptActivity,
+                activity,
+              };
+            }),
+          ),
+        );
+
+        assert.equal(result.presence.presence.tenantId, result.tenantId);
+        assert.equal(result.presence.presence.workspaceId, workspaceId);
+        assert.equal(result.users.users.length, 1);
+        assert.equal(result.users.users[0]?.status, "active");
+        assert.equal(result.createdInvite.invite.email, "teammate@example.com");
+        assert.include(
+          result.createdInvite.acceptUrlPath,
+          encodeURIComponent(result.createdInvite.invite.id),
+        );
+        assert.equal(result.listedInvites.invites.length, 1);
+        assert.equal(result.acceptedInvite.membership.roles[0], "developer");
+        assert.equal(result.acceptedInvite.invite.acceptedAt !== null, true);
+        assert.equal(result.promptActivity.activity.kind, "prompted");
+        assert.equal(result.activity.activities[0]?.kind, "prompted");
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects collaboration rpc calls for tenants without membership", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.collaborationPresenceUpsert]({
+            tenantId: TenantId.make("tenant-forbidden-collab"),
+            workspaceId: WorkspaceId.make("workspace-forbidden-collab"),
+            threadId: ThreadId.make("thread-forbidden-collab"),
+            status: "active",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "CollaborationError");
+      assertInclude(
+        result.failure.message,
+        "Forbidden: authenticated session does not have workspace.view.",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "allows first-time Supabase websocket users to accept an invite before membership",
+    () =>
+      Effect.gen(function* () {
+        const workspaceId = WorkspaceId.make("workspace-supabase-first-invite");
+        const threadId = ThreadId.make("thread-supabase-first-invite");
+        const expiresAt = new Date(Date.now() + 60_000).toISOString();
+        const fixture = makeSignedSupabaseFixture();
+
+        yield* buildAppUnderTest({
+          config: {
+            supabaseProjectUrl: new URL(supabaseProjectUrl),
+            supabaseAnonKey: "public-anon-key",
+            supabaseJwtAudience: "authenticated",
+          },
+        });
+
+        const ownerWsUrl = yield* getWsServerUrl("/ws");
+        const setup = yield* Effect.scoped(
+          withWsRpcClient(ownerWsUrl, (client) =>
+            Effect.gen(function* () {
+              const organization = yield* client[WS_METHODS.organizationsCreate]({
+                slug: "supabase-first-invite",
+                displayName: "Supabase First Invite",
+              });
+              const invite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+                tenantId: organization.tenant.id,
+                workspaceId,
+                email: "member@example.test",
+                scope: "workspace",
+                roles: ["developer"],
+                expiresAt,
+              });
+              return {
+                organization,
+                invite,
+              };
+            }),
+          ),
+        );
+
+        const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+        try {
+          assert.equal(
+            setup.invite.accountSetupUrlPath,
+            `/invite?inviteId=${encodeURIComponent(setup.invite.invite.id)}`,
+          );
+          assert.notInclude(setup.invite.accountSetupUrlPath ?? "", "token=");
+          const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+          const result = yield* Effect.scoped(
+            withWsRpcClient(
+              wsUrl,
+              (client) =>
+                Effect.gen(function* () {
+                  const beforeAccept = yield* client[WS_METHODS.collaborationPresenceUpsert]({
+                    tenantId: setup.organization.tenant.id,
+                    workspaceId,
+                    threadId,
+                    status: "active",
+                  }).pipe(Effect.result);
+                  const acceptedInvite = yield* client[WS_METHODS.collaborationInvitesAccept]({
+                    inviteId: setup.invite.invite.id,
+                  });
+                  const afterAccept = yield* client[WS_METHODS.collaborationPresenceUpsert]({
+                    tenantId: setup.organization.tenant.id,
+                    workspaceId,
+                    threadId,
+                    status: "active",
+                  });
+                  return {
+                    beforeAccept,
+                    acceptedInvite,
+                    afterAccept,
+                  };
+                }),
+              {
+                headers: {
+                  authorization: `Bearer ${fixture.jwt}`,
+                },
+              },
+            ),
+          );
+
+          assertTrue(result.beforeAccept._tag === "Failure");
+          assertTrue(result.beforeAccept.failure._tag === "CollaborationError");
+          assertInclude(
+            result.beforeAccept.failure.message,
+            "Forbidden: authenticated session does not have workspace.view.",
+          );
+          assert.equal(result.acceptedInvite.membership.userId, supabaseUserId);
+          assert.equal(result.acceptedInvite.membership.tenantId, setup.organization.tenant.id);
+          assert.equal(result.acceptedInvite.membership.roles[0], "developer");
+          assert.equal(result.afterAccept.presence.userId, supabaseUserId);
+          assert.equal(result.afterAccept.presence.displayName, "Supabase Member");
+        } finally {
+          fetchSpy.mockRestore();
+        }
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects Supabase websocket rpc payloads that swap tenant ids", () =>
+    Effect.gen(function* () {
+      const allowedTenantId = TenantId.make("tenant-supabase-allowed-collab");
+      const forbiddenTenantId = TenantId.make("tenant-supabase-forbidden-collab");
+      const workspaceId = WorkspaceId.make("workspace-supabase-collab");
+      const threadId = ThreadId.make("thread-supabase-collab");
+      const fixture = makeSignedSupabaseFixture();
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) =>
+          repository
+            .saveCollaboration({
+              presence: [],
+              invites: [],
+              memberships: [makeSupabaseMembership({ tenantId: allowedTenantId })],
+              activities: [],
+            })
+            .pipe(Effect.orDie),
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              Effect.gen(function* () {
+                const allowedPresence = yield* client[WS_METHODS.collaborationPresenceUpsert]({
+                  tenantId: allowedTenantId,
+                  workspaceId,
+                  threadId,
+                  status: "active",
+                });
+                const forbiddenPresence = yield* client[WS_METHODS.collaborationPresenceUpsert]({
+                  tenantId: forbiddenTenantId,
+                  workspaceId,
+                  threadId,
+                  status: "active",
+                }).pipe(Effect.result);
+                const forbiddenPrompt = yield* client[WS_METHODS.collaborationSharedPromptRecord]({
+                  tenantId: forbiddenTenantId,
+                  workspaceId,
+                  threadId,
+                  prompt: "This should not cross tenant boundaries.",
+                }).pipe(Effect.result);
+                return {
+                  allowedPresence,
+                  forbiddenPresence,
+                  forbiddenPrompt,
+                };
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assert.equal(result.allowedPresence.presence.tenantId, allowedTenantId);
+        assert.equal(result.allowedPresence.presence.userId, supabaseUserId);
+        assert.equal(result.allowedPresence.presence.displayName, "Supabase Member");
+        assertTrue(result.forbiddenPresence._tag === "Failure");
+        assertTrue(result.forbiddenPresence.failure._tag === "CollaborationError");
+        assertInclude(
+          result.forbiddenPresence.failure.message,
+          "Forbidden: authenticated session does not have workspace.view.",
+        );
+        assertTrue(result.forbiddenPrompt._tag === "Failure");
+        assertTrue(result.forbiddenPrompt.failure._tag === "CollaborationError");
+        assertInclude(
+          result.forbiddenPrompt.failure.message,
+          "Forbidden: authenticated session does not have session.prompt.",
+        );
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects Supabase file RPC access to unauthorized provider workspaces", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const allowedTenantId = TenantId.make("tenant-supabase-file-allowed");
+      const forbiddenTenantId = TenantId.make("tenant-supabase-file-forbidden");
+      const otherUserId = UserId.make("supabase:other-private-provider-user");
+      const allowedProjectId = ProjectId.make("project-supabase-file-allowed");
+      const allowedThreadId = ThreadId.make("thread-supabase-file-allowed");
+      const allowedWorkspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-file-allowed-",
+      });
+      const privateWorkspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-file-private-",
+      });
+      const forbiddenWorkspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-file-forbidden-",
+      });
+      yield* fs.writeFileString(path.join(allowedWorkspaceDir, "allowed.txt"), "allowed");
+      yield* fs.writeFileString(
+        path.join(allowedWorkspaceDir, "oversized-read.txt"),
+        "x".repeat(DEFAULT_PUBLIC_ACCESS_LIMITS.maxFileReadBytes + 1),
+      );
+      yield* Effect.forEach(
+        Array.from(
+          { length: DEFAULT_PUBLIC_ACCESS_LIMITS.maxDirectoryEntries + 1 },
+          (_, index) => `entry-${String(index).padStart(4, "0")}.txt`,
+        ),
+        (fileName) => fs.writeFileString(path.join(allowedWorkspaceDir, fileName), "entry"),
+        { concurrency: 32, discard: true },
+      );
+      yield* fs.writeFileString(path.join(privateWorkspaceDir, "private.txt"), "private");
+      yield* fs.writeFileString(path.join(forbiddenWorkspaceDir, "secret.txt"), "forbidden");
+      const fixture = makeSignedSupabaseFixture();
+      const oversizedDiff = "x".repeat(DEFAULT_PUBLIC_ACCESS_LIMITS.maxDiffBytes + 1);
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        layers: {
+          orchestrationEngine: {
+            getReadModel: () => {
+              const readModel = makeDefaultOrchestrationReadModel();
+              return Effect.succeed({
+                ...readModel,
+                projects: [
+                  ...readModel.projects,
+                  {
+                    id: allowedProjectId,
+                    title: "Allowed Supabase Workspace",
+                    workspaceRoot: allowedWorkspaceDir,
+                    defaultModelSelection,
+                    scripts: [],
+                    createdAt: readModel.updatedAt,
+                    updatedAt: readModel.updatedAt,
+                    deletedAt: null,
+                  },
+                  {
+                    id: ProjectId.make("project-supabase-file-forbidden"),
+                    title: "Forbidden Supabase Workspace",
+                    workspaceRoot: forbiddenWorkspaceDir,
+                    defaultModelSelection,
+                    scripts: [],
+                    createdAt: readModel.updatedAt,
+                    updatedAt: readModel.updatedAt,
+                    deletedAt: null,
+                  },
+                  {
+                    id: ProjectId.make("project-supabase-file-private"),
+                    title: "Private Same-Tenant Supabase Workspace",
+                    workspaceRoot: privateWorkspaceDir,
+                    defaultModelSelection,
+                    scripts: [],
+                    createdAt: readModel.updatedAt,
+                    updatedAt: readModel.updatedAt,
+                    deletedAt: null,
+                  },
+                ],
+                threads: [
+                  ...readModel.threads,
+                  {
+                    id: allowedThreadId,
+                    projectId: allowedProjectId,
+                    title: "Allowed Supabase Thread",
+                    modelSelection: defaultModelSelection,
+                    interactionMode: "default",
+                    runtimeMode: "full-access",
+                    branch: null,
+                    worktreePath: null,
+                    createdAt: readModel.updatedAt,
+                    updatedAt: readModel.updatedAt,
+                    archivedAt: null,
+                    latestTurn: null,
+                    messages: [],
+                    session: null,
+                    activities: [],
+                    proposedPlans: [],
+                    checkpoints: [],
+                    deletedAt: null,
+                  },
+                ],
+              });
+            },
+          },
+          checkpointDiffQuery: {
+            getTurnDiff: () =>
+              Effect.succeed({
+                threadId: allowedThreadId,
+                fromTurnCount: 0,
+                toTurnCount: 1,
+                diff: oversizedDiff,
+              }),
+            getFullThreadDiff: () =>
+              Effect.succeed({
+                threadId: allowedThreadId,
+                fromTurnCount: 0,
+                toTurnCount: 1,
+                diff: oversizedDiff,
+              }),
+          },
+        },
+        seedTenancy: (repository) =>
+          Effect.all(
+            [
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [makeSupabaseMembership({ tenantId: allowedTenantId })],
+                activities: [],
+              }),
+              repository.saveProviderIsolation({
+                providerAccounts: [
+                  {
+                    id: ProviderAccountId.make("provider-account-supabase-file-allowed"),
+                    provider: "codex",
+                    tenantId: allowedTenantId,
+                    owner: { type: "user", userId: supabaseUserId },
+                    sharing: "private",
+                    authHomeDir: path.join(allowedWorkspaceDir, ".provider-home"),
+                    configDir: path.join(allowedWorkspaceDir, ".provider-home", "config"),
+                    secretsDir: path.join(allowedWorkspaceDir, ".secrets"),
+                    createdAt: new Date().toISOString(),
+                    disabledAt: null,
+                  },
+                  {
+                    id: ProviderAccountId.make("provider-account-supabase-file-private"),
+                    provider: "codex",
+                    tenantId: allowedTenantId,
+                    owner: { type: "user", userId: otherUserId },
+                    sharing: "private",
+                    authHomeDir: path.join(privateWorkspaceDir, ".provider-home"),
+                    configDir: path.join(privateWorkspaceDir, ".provider-home", "config"),
+                    secretsDir: path.join(privateWorkspaceDir, ".secrets"),
+                    createdAt: new Date().toISOString(),
+                    disabledAt: null,
+                  },
+                  {
+                    id: ProviderAccountId.make("provider-account-supabase-file-forbidden"),
+                    provider: "codex",
+                    tenantId: forbiddenTenantId,
+                    owner: { type: "tenant", tenantId: forbiddenTenantId },
+                    sharing: "tenant-shared",
+                    authHomeDir: path.join(forbiddenWorkspaceDir, ".provider-home"),
+                    configDir: path.join(forbiddenWorkspaceDir, ".provider-home", "config"),
+                    secretsDir: path.join(forbiddenWorkspaceDir, ".secrets"),
+                    createdAt: new Date().toISOString(),
+                    disabledAt: null,
+                  },
+                ],
+                providerSessions: [
+                  {
+                    id: ProviderSessionId.make("provider-session-supabase-file-allowed"),
+                    tenantId: allowedTenantId,
+                    userId: supabaseUserId,
+                    providerAccountId: ProviderAccountId.make(
+                      "provider-account-supabase-file-allowed",
+                    ),
+                    provider: "codex",
+                    providerHomeDir: path.join(allowedWorkspaceDir, ".provider-home"),
+                    cwd: allowedWorkspaceDir,
+                    createdAt: new Date().toISOString(),
+                    endedAt: null,
+                  },
+                  {
+                    id: ProviderSessionId.make("provider-session-supabase-file-private"),
+                    tenantId: allowedTenantId,
+                    userId: otherUserId,
+                    providerAccountId: ProviderAccountId.make(
+                      "provider-account-supabase-file-private",
+                    ),
+                    provider: "codex",
+                    providerHomeDir: path.join(privateWorkspaceDir, ".provider-home"),
+                    cwd: privateWorkspaceDir,
+                    createdAt: new Date().toISOString(),
+                    endedAt: null,
+                  },
+                  {
+                    id: ProviderSessionId.make("provider-session-supabase-file-forbidden"),
+                    tenantId: forbiddenTenantId,
+                    userId: UserId.make("supabase:forbidden-user"),
+                    providerAccountId: ProviderAccountId.make(
+                      "provider-account-supabase-file-forbidden",
+                    ),
+                    provider: "codex",
+                    providerHomeDir: path.join(forbiddenWorkspaceDir, ".provider-home"),
+                    cwd: forbiddenWorkspaceDir,
+                    createdAt: new Date().toISOString(),
+                    endedAt: null,
+                  },
+                ],
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie),
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              Effect.gen(function* () {
+                const allowedRead = yield* client[WS_METHODS.projectsReadFile]({
+                  cwd: allowedWorkspaceDir,
+                  relativePath: "allowed.txt",
+                });
+                const forbiddenRead = yield* client[WS_METHODS.projectsReadFile]({
+                  cwd: forbiddenWorkspaceDir,
+                  relativePath: "secret.txt",
+                }).pipe(Effect.result);
+                const privateRead = yield* client[WS_METHODS.projectsReadFile]({
+                  cwd: privateWorkspaceDir,
+                  relativePath: "private.txt",
+                }).pipe(Effect.result);
+                const oversizedRead = yield* client[WS_METHODS.projectsReadFile]({
+                  cwd: allowedWorkspaceDir,
+                  relativePath: "oversized-read.txt",
+                }).pipe(Effect.result);
+                const oversizedWrite = yield* client[WS_METHODS.projectsWriteFile]({
+                  cwd: allowedWorkspaceDir,
+                  relativePath: "oversized-write.txt",
+                  contents: "x".repeat(DEFAULT_PUBLIC_ACCESS_LIMITS.maxFileUploadBytes + 1),
+                }).pipe(Effect.result);
+                const oversizedDirectory = yield* client[WS_METHODS.projectsListDirectory]({
+                  cwd: allowedWorkspaceDir,
+                }).pipe(Effect.result);
+                const oversizedTurnDiff = yield* client[ORCHESTRATION_WS_METHODS.getTurnDiff]({
+                  threadId: allowedThreadId,
+                  fromTurnCount: 0,
+                  toTurnCount: 1,
+                }).pipe(Effect.result);
+                const oversizedFullThreadDiff = yield* client[
+                  ORCHESTRATION_WS_METHODS.getFullThreadDiff
+                ]({
+                  threadId: allowedThreadId,
+                  toTurnCount: 1,
+                }).pipe(Effect.result);
+                return {
+                  allowedRead,
+                  forbiddenRead,
+                  privateRead,
+                  oversizedRead,
+                  oversizedWrite,
+                  oversizedDirectory,
+                  oversizedTurnDiff,
+                  oversizedFullThreadDiff,
+                };
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assert.equal(result.allowedRead.contents, "allowed");
+        assertTrue(result.forbiddenRead._tag === "Failure");
+        assertTrue(result.forbiddenRead.failure._tag === "ProjectReadFileError");
+        assertInclude(
+          result.forbiddenRead.failure.message,
+          "Forbidden: authenticated session does not have file.read.",
+        );
+        assertTrue(result.privateRead._tag === "Failure");
+        assertTrue(result.privateRead.failure._tag === "ProjectReadFileError");
+        assertInclude(
+          result.privateRead.failure.message,
+          "Forbidden: authenticated session does not have file.read.",
+        );
+        assertTrue(result.oversizedRead._tag === "Failure");
+        assertTrue(result.oversizedRead.failure._tag === "ProjectReadFileError");
+        assertInclude(result.oversizedRead.failure.message, "File read exceeds public read limit:");
+        assertTrue(result.oversizedWrite._tag === "Failure");
+        assertTrue(result.oversizedWrite.failure._tag === "ProjectWriteFileError");
+        assertInclude(
+          result.oversizedWrite.failure.message,
+          "File write exceeds public upload limit:",
+        );
+        assertTrue(result.oversizedDirectory._tag === "Failure");
+        assertTrue(result.oversizedDirectory.failure._tag === "ProjectListDirectoryError");
+        assertInclude(
+          result.oversizedDirectory.failure.message,
+          "Directory listing exceeds public entry limit:",
+        );
+        assertTrue(result.oversizedTurnDiff._tag === "Failure");
+        assertTrue(result.oversizedTurnDiff.failure._tag === "OrchestrationGetTurnDiffError");
+        assertInclude(
+          result.oversizedTurnDiff.failure.message,
+          "Diff response exceeds public size limit:",
+        );
+        assertTrue(result.oversizedFullThreadDiff._tag === "Failure");
+        assertTrue(
+          result.oversizedFullThreadDiff.failure._tag === "OrchestrationGetFullThreadDiffError",
+        );
+        assertInclude(
+          result.oversizedFullThreadDiff.failure.message,
+          "Diff response exceeds public size limit:",
+        );
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("authorizes Supabase runtime mode changes with runtime.manage", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tenantId = TenantId.make("tenant-supabase-runtime-mode");
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-runtime-mode-",
+      });
+      const projectId = ProjectId.make("project-supabase-runtime-mode");
+      const threadId = ThreadId.make("thread-supabase-runtime-mode");
+      const ownerSubject = "11111111-2222-4333-8444-555555555555";
+      const ownerUserId = UserId.make(`supabase:${ownerSubject}`);
+      const keyPair = Crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+      const kid = "server-e2e-supabase-runtime-key";
+      const developerJwt = signSupabaseJwt({ keyPair, kid });
+      const ownerJwt = signSupabaseJwt({
+        keyPair,
+        kid,
+        claims: {
+          sub: ownerSubject,
+          email: "runtime-owner@example.test",
+          user_metadata: { full_name: "Runtime Owner" },
+        },
+      });
+      const jwks: SupabaseJwks = {
+        keys: [
+          {
+            ...keyPair.publicKey.export({ format: "jwk" }),
+            kid,
+            alg: "RS256",
+            use: "sig",
+          },
+        ],
+      };
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        layers: {
+          orchestrationEngine: {
+            getReadModel: () => {
+              const readModel = makeDefaultOrchestrationReadModel();
+              return Effect.succeed({
+                ...readModel,
+                projects: [
+                  ...readModel.projects,
+                  {
+                    id: projectId,
+                    title: "Runtime Mode Supabase Workspace",
+                    workspaceRoot: workspaceDir,
+                    defaultModelSelection,
+                    scripts: [],
+                    createdAt: readModel.updatedAt,
+                    updatedAt: readModel.updatedAt,
+                    deletedAt: null,
+                  },
+                ],
+                threads: [
+                  ...readModel.threads,
+                  {
+                    id: threadId,
+                    projectId,
+                    title: "Runtime Mode Supabase Thread",
+                    modelSelection: defaultModelSelection,
+                    interactionMode: "default" as const,
+                    runtimeMode: "full-access" as const,
+                    branch: null,
+                    worktreePath: null,
+                    createdAt: readModel.updatedAt,
+                    updatedAt: readModel.updatedAt,
+                    archivedAt: null,
+                    latestTurn: null,
+                    messages: [],
+                    session: null,
+                    activities: [],
+                    proposedPlans: [],
+                    checkpoints: [],
+                    deletedAt: null,
+                  },
+                ],
+              });
+            },
+          },
+        },
+        seedTenancy: (repository) =>
+          Effect.all(
+            [
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [
+                  makeSupabaseMembership({ tenantId, roles: ["developer"] }),
+                  makeSupabaseMembership({ tenantId, userId: ownerUserId, roles: ["owner"] }),
+                ],
+                activities: [],
+              }),
+              repository.saveProviderIsolation({
+                providerAccounts: [
+                  {
+                    id: ProviderAccountId.make("provider-account-supabase-runtime-mode"),
+                    provider: "codex",
+                    tenantId,
+                    owner: { type: "tenant", tenantId },
+                    sharing: "tenant-shared",
+                    authHomeDir: path.join(workspaceDir, ".provider-home"),
+                    configDir: path.join(workspaceDir, ".provider-home", "config"),
+                    secretsDir: path.join(workspaceDir, ".secrets"),
+                    createdAt: new Date().toISOString(),
+                    disabledAt: null,
+                  },
+                ],
+                providerSessions: [
+                  {
+                    id: ProviderSessionId.make("provider-session-supabase-runtime-mode"),
+                    tenantId,
+                    userId: ownerUserId,
+                    providerAccountId: ProviderAccountId.make(
+                      "provider-account-supabase-runtime-mode",
+                    ),
+                    provider: "codex",
+                    providerHomeDir: path.join(workspaceDir, ".provider-home"),
+                    cwd: workspaceDir,
+                    createdAt: new Date().toISOString(),
+                    endedAt: null,
+                  },
+                ],
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie),
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const developer = yield* withWsRpcClient(
+              wsUrl,
+              (client) =>
+                client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                  type: "thread.runtime-mode.set",
+                  commandId: CommandId.make("cmd-supabase-runtime-mode-developer-denied"),
+                  threadId,
+                  runtimeMode: "approval-required",
+                  createdAt: new Date().toISOString(),
+                }).pipe(Effect.result),
+              {
+                headers: {
+                  authorization: `Bearer ${developerJwt}`,
+                },
+              },
+            );
+            const owner = yield* withWsRpcClient(
+              wsUrl,
+              (client) =>
+                client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                  type: "thread.runtime-mode.set",
+                  commandId: CommandId.make("cmd-supabase-runtime-mode-owner-allowed"),
+                  threadId,
+                  runtimeMode: "approval-required",
+                  createdAt: new Date().toISOString(),
+                }),
+              {
+                headers: {
+                  authorization: `Bearer ${ownerJwt}`,
+                },
+              },
+            );
+            return { developer, owner };
+          }),
+        );
+
+        assertTrue(result.developer._tag === "Failure");
+        assertTrue(result.developer.failure._tag === "OrchestrationDispatchCommandError");
+        assertInclude(
+          result.developer.failure.message,
+          "Forbidden: authenticated session does not have runtime.manage.",
+        );
+        assert.isAtLeast(result.owner.sequence, 0);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rate limits hosted Supabase RPC calls with the public access policy", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tenantId = TenantId.make("tenant-supabase-rpc-rate-limit");
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-rpc-rate-limit-",
+      });
+      const subject = "22222222-3333-4444-8555-666666666666";
+      const userId = UserId.make(`supabase:${subject}`);
+      const fixture = makeSignedSupabaseFixture({
+        sub: subject,
+        email: "rpc-rate-limit@example.test",
+        user_metadata: { full_name: "RPC Rate Limit" },
+      });
+      const allowedCount = DEFAULT_PUBLIC_ACCESS_LIMITS.maxRpcRequestsPerMinutePerUser;
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) =>
+          repository
+            .saveCollaboration({
+              presence: [],
+              invites: [],
+              memberships: [makeSupabaseMembership({ tenantId, userId })],
+              activities: [],
+            })
+            .pipe(Effect.orDie),
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const attempts = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              Effect.forEach(
+                Array.from({ length: allowedCount + 1 }, (_, index) => index),
+                (index) =>
+                  client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                    type: "project.create",
+                    commandId: CommandId.make(`cmd-supabase-rpc-rate-limit-${index}`),
+                    projectId: ProjectId.make(`project-supabase-rpc-rate-limit-${index}`),
+                    title: `RPC Rate Limit ${index}`,
+                    workspaceRoot: path.join(workspaceDir, `project-${index}`),
+                    createWorkspaceRootIfMissing: true,
+                    defaultModelSelection,
+                    createdAt: new Date().toISOString(),
+                  }).pipe(Effect.result),
+                { concurrency: 1 },
+              ),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+        const lastAttempt = attempts[attempts.length - 1];
+
+        assert.isTrue(
+          attempts.slice(0, allowedCount).every((attempt) => attempt._tag === "Success"),
+        );
+        assertTrue(lastAttempt?._tag === "Failure");
+        assertTrue(lastAttempt.failure._tag === "OrchestrationDispatchCommandError");
+        assertInclude(
+          lastAttempt.failure.message,
+          `Rate limit exceeded: ${allowedCount} RPC requests per minute are allowed for this user.`,
+        );
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects hosted Supabase oversized RPC request bodies", () =>
+    Effect.gen(function* () {
+      const tenantId = TenantId.make("tenant-supabase-rpc-payload-limit");
+      const subject = "33333333-4444-4555-8666-777777777777";
+      const userId = UserId.make(`supabase:${subject}`);
+      const fixture = makeSignedSupabaseFixture({
+        sub: subject,
+        email: "rpc-payload-limit@example.test",
+        user_metadata: { full_name: "RPC Payload Limit" },
+      });
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) =>
+          repository
+            .saveCollaboration({
+              presence: [],
+              invites: [],
+              memberships: [makeSupabaseMembership({ tenantId, userId })],
+              activities: [],
+            })
+            .pipe(Effect.orDie),
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "thread.turn.start",
+                commandId: CommandId.make("cmd-supabase-rpc-payload-limit"),
+                threadId: ThreadId.make("thread-supabase-rpc-payload-limit"),
+                message: {
+                  messageId: MessageId.make("msg-supabase-rpc-payload-limit"),
+                  role: "user",
+                  text: "x".repeat(DEFAULT_PUBLIC_ACCESS_LIMITS.maxRpcRequestBytes + 1),
+                  attachments: [],
+                },
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                createdAt: new Date().toISOString(),
+              }).pipe(Effect.result),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assertTrue(result._tag === "Failure");
+        assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+        assertInclude(
+          result.failure.message,
+          "orchestration.dispatchCommand request exceeds public payload limit:",
+        );
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("persists provider isolation records before hosted Supabase turn dispatch", () =>
+    Effect.gen(function* () {
+      const tenantId = TenantId.make("tenant-supabase-provider-start-persist");
+      const organizationId = OrganizationId.make("org-supabase-provider-start-persist");
+      const membership = makeSupabaseMembership({
+        tenantId,
+        organizationId,
+      });
+      const fixture = makeSignedSupabaseFixture();
+      let capturedRepository: TenancyRepositoryShape | undefined;
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) => {
+          capturedRepository = repository;
+          return Effect.all(
+            [
+              repository.saveOrganizations({
+                organizations: [
+                  {
+                    id: organizationId,
+                    slug: "provider-start-persist",
+                    displayName: "Provider Start Persist",
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                tenants: [
+                  {
+                    id: tenantId,
+                    slug: "provider-start-persist",
+                    displayName: "Provider Start Persist",
+                    kind: "corporate",
+                    organizationId,
+                    runtimeId: TenantRuntimeId.make("runtime-supabase-provider-start-persist"),
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                employees: [
+                  {
+                    membership,
+                    email: "provider-start@example.com",
+                    displayName: "Provider Start",
+                    status: "active",
+                  },
+                ],
+                invites: [],
+                memberships: [membership],
+                teams: [],
+                departments: [],
+                grants: [],
+                reviews: [],
+                auditEvents: [],
+              }),
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [membership],
+                activities: [],
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie);
+        },
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "thread.turn.start",
+                commandId: CommandId.make("cmd-supabase-provider-start-persist"),
+                threadId: defaultThreadId,
+                message: {
+                  messageId: MessageId.make("msg-supabase-provider-start-persist"),
+                  role: "user",
+                  text: "start hosted turn",
+                  attachments: [],
+                },
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                createdAt: new Date().toISOString(),
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assert.equal(result.sequence, 0);
+        if (!capturedRepository) {
+          throw new Error("Tenancy repository was not captured.");
+        }
+        const providerIsolation = yield* capturedRepository.loadProviderIsolation();
+        assert.equal(providerIsolation.providerAccounts.length, 1);
+        assert.equal(providerIsolation.providerSessions.length, 1);
+        const account = providerIsolation.providerAccounts[0];
+        const providerSession = providerIsolation.providerSessions[0];
+        assert.equal(account?.id, `provider-account:${tenantId}:${supabaseUserId}:codex`);
+        assert.equal(account?.tenantId, tenantId);
+        assert.equal(account?.provider, "codex");
+        assert.equal(account?.sharing, "private");
+        assertTrue(account?.owner.type === "user");
+        assert.equal(account.owner.userId, supabaseUserId);
+        assert.equal(providerSession?.providerAccountId, account.id);
+        assert.equal(providerSession?.tenantId, tenantId);
+        assert.equal(providerSession?.userId, supabaseUserId);
+        assert.equal(providerSession?.cwd, "/tmp/default-project");
+        assert.equal(providerSession?.endedAt, null);
+        const organizations = yield* capturedRepository.loadOrganizations();
+        const providerAuditKinds = organizations.auditEvents.map((event) => event.kind);
+        assert.include(providerAuditKinds, "provider-account-created");
+        assert.include(providerAuditKinds, "provider-account-launch-used");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("lists and disconnects hosted provider accounts without exposing local secrets", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tenantId = TenantId.make("tenant-supabase-provider-account-status");
+      const organizationId = OrganizationId.make("org-supabase-provider-account-status");
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-provider-account-status-",
+      });
+      const accountId = ProviderAccountId.make("provider-account-supabase-status");
+      const providerSessionId = ProviderSessionId.make("provider-session-supabase-status");
+      const membership = makeSupabaseMembership({
+        tenantId,
+        organizationId,
+        roles: ["admin"],
+      });
+      const fixture = makeSignedSupabaseFixture();
+      let capturedRepository: TenancyRepositoryShape | undefined;
+      const terminalOpenInputs: TerminalOpenInput[] = [];
+      const terminalWriteInputs: TerminalWriteInput[] = [];
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        layers: {
+          terminalManager: {
+            open: (input) => {
+              terminalOpenInputs.push(input);
+              return Effect.succeed({
+                threadId: input.threadId,
+                terminalId: input.terminalId ?? "terminal-default",
+                cwd: input.cwd,
+                worktreePath: input.worktreePath ?? null,
+                status: "running" as const,
+                pid: 12345,
+                history: "",
+                exitCode: null,
+                exitSignal: null,
+                updatedAt: "2026-05-09T01:02:00.000Z",
+              });
+            },
+            write: (input) => {
+              terminalWriteInputs.push(input);
+              return Effect.void;
+            },
+          },
+        },
+        seedTenancy: (repository) => {
+          capturedRepository = repository;
+          return Effect.all(
+            [
+              repository.saveOrganizations({
+                organizations: [
+                  {
+                    id: organizationId,
+                    slug: "provider-account-status",
+                    displayName: "Provider Account Status",
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                tenants: [
+                  {
+                    id: tenantId,
+                    slug: "provider-account-status",
+                    displayName: "Provider Account Status",
+                    kind: "corporate",
+                    organizationId,
+                    runtimeId: TenantRuntimeId.make("runtime-supabase-provider-account-status"),
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                employees: [
+                  {
+                    membership,
+                    email: "provider-status@example.com",
+                    displayName: "Provider Status",
+                    status: "active",
+                  },
+                ],
+                invites: [],
+                memberships: [membership],
+                teams: [],
+                departments: [],
+                grants: [],
+                reviews: [],
+                auditEvents: [],
+              }),
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [membership],
+                activities: [],
+              }),
+              repository.saveProviderIsolation({
+                providerAccounts: [
+                  {
+                    id: accountId,
+                    provider: "codex",
+                    tenantId,
+                    owner: { type: "user", userId: supabaseUserId },
+                    sharing: "private",
+                    authHomeDir: path.join(workspaceDir, ".provider-home"),
+                    configDir: path.join(workspaceDir, ".provider-home", "config"),
+                    secretsDir: path.join(workspaceDir, ".secrets"),
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    disabledAt: null,
+                  },
+                ],
+                providerSessions: [
+                  {
+                    id: providerSessionId,
+                    tenantId,
+                    userId: supabaseUserId,
+                    providerAccountId: accountId,
+                    provider: "codex",
+                    providerHomeDir: path.join(workspaceDir, ".provider-session-home"),
+                    cwd: workspaceDir,
+                    createdAt: "2026-05-09T01:01:00.000Z",
+                    endedAt: null,
+                  },
+                ],
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie);
+        },
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              Effect.gen(function* () {
+                const connect = yield* client[WS_METHODS.providerAccountsConnect]({
+                  provider: "codex",
+                });
+                const authTerminal = yield* client[WS_METHODS.providerAccountsOpenAuthTerminal]({
+                  provider: "codex",
+                  threadId: defaultThreadId,
+                });
+                const listedBefore = yield* client[WS_METHODS.providerAccountsList]({});
+                const disconnected = yield* client[WS_METHODS.providerAccountsDisconnect]({
+                  providerAccountId: accountId,
+                });
+                const listedAfter = yield* client[WS_METHODS.providerAccountsList]({});
+                return { connect, authTerminal, listedBefore, disconnected, listedAfter };
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assert.equal(result.connect.instructions.provider, "codex");
+        assert.equal(result.connect.instructions.authCommand, "codex login --device-auth");
+        assert.equal(result.connect.instructions.statusCommand, "codex login status");
+        assert.isFalse("authHomeDir" in result.connect.instructions);
+        assert.isFalse("secretsDir" in result.connect.instructions);
+        assert.equal(result.authTerminal.instructions.provider, "codex");
+        assert.equal(result.authTerminal.instructions.authCommand, "codex login --device-auth");
+        assert.equal(result.authTerminal.terminal.terminalId, "provider-auth-codex");
+        assert.include(result.authTerminal.terminal.cwd, "/provider-homes/");
+        assert.include(result.authTerminal.terminal.cwd, `${tenantId}`);
+        assert.include(result.authTerminal.terminal.cwd, `supabase-${supabaseSubject}`);
+        assert.equal(terminalOpenInputs.length, 1);
+        assert.equal(terminalOpenInputs[0]?.threadId, defaultThreadId);
+        assert.equal(terminalOpenInputs[0]?.terminalId, "provider-auth-codex");
+        assert.equal(terminalOpenInputs[0]?.cwd, result.authTerminal.terminal.cwd);
+        assert.equal(terminalOpenInputs[0]?.env?.CODEX_HOME, result.authTerminal.terminal.cwd);
+        assert.equal(
+          terminalOpenInputs[0]?.env?.T3_PROVIDER_HOME,
+          result.authTerminal.terminal.cwd,
+        );
+        assert.equal(
+          terminalOpenInputs[0]?.env?.T3_PROVIDER_ACCOUNT_ID,
+          `provider-account:${tenantId}:${supabaseUserId}:codex`,
+        );
+        assert.isUndefined(terminalOpenInputs[0]?.env?.OPENAI_API_KEY);
+        assert.equal(terminalWriteInputs.length, 1);
+        assert.equal(terminalWriteInputs[0]?.threadId, defaultThreadId);
+        assert.equal(terminalWriteInputs[0]?.terminalId, "provider-auth-codex");
+        assert.equal(terminalWriteInputs[0]?.data, "codex login --device-auth\n");
+        assert.equal(result.listedBefore.accounts.length, 1);
+        const beforeAccount = result.listedBefore.accounts[0];
+        if (!beforeAccount) {
+          throw new Error("Expected provider account status before disconnect.");
+        }
+        assert.equal(beforeAccount.id, accountId);
+        assert.equal(beforeAccount.status, "connected");
+        assert.equal(beforeAccount.activeSessionCount, 1);
+        assert.isFalse("authHomeDir" in beforeAccount);
+        assert.isFalse("configDir" in beforeAccount);
+        assert.isFalse("secretsDir" in beforeAccount);
+        assert.equal(result.disconnected.account.status, "disabled");
+        assert.equal(result.disconnected.account.activeSessionCount, 0);
+        assert.equal(result.listedAfter.accounts[0]?.status, "disabled");
+        assert.equal(result.listedAfter.accounts[0]?.activeSessionCount, 0);
+
+        if (!capturedRepository) {
+          throw new Error("Tenancy repository was not captured.");
+        }
+        const persisted = yield* capturedRepository.loadProviderIsolation();
+        const persistedAccount = persisted.providerAccounts.find(
+          (account) => account.id === accountId,
+        );
+        const persistedSession = persisted.providerSessions.find(
+          (providerSession) => providerSession.id === providerSessionId,
+        );
+        assert.notEqual(persistedAccount?.disabledAt, null);
+        assert.notEqual(persistedSession?.endedAt, null);
+        const organizations = yield* capturedRepository.loadOrganizations();
+        const providerAuditKinds = organizations.auditEvents.map((event) => event.kind);
+        assert.equal(
+          providerAuditKinds.filter((kind) => kind === "provider-account-status-checked").length,
+          2,
+        );
+        assert.include(providerAuditKinds, "provider-account-disconnected");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("confirms hosted provider auth before persisting provider account access", () =>
+    Effect.gen(function* () {
+      const tenantId = TenantId.make("tenant-supabase-provider-account-confirm");
+      const organizationId = OrganizationId.make("org-supabase-provider-account-confirm");
+      const membership = makeSupabaseMembership({
+        tenantId,
+        organizationId,
+        roles: ["admin"],
+      });
+      const fixture = makeSignedSupabaseFixture();
+      let capturedRepository: TenancyRepositoryShape | undefined;
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) => {
+          capturedRepository = repository;
+          return Effect.all(
+            [
+              repository.saveOrganizations({
+                organizations: [
+                  {
+                    id: organizationId,
+                    slug: "provider-account-confirm",
+                    displayName: "Provider Account Confirm",
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                tenants: [
+                  {
+                    id: tenantId,
+                    slug: "provider-account-confirm",
+                    displayName: "Provider Account Confirm",
+                    kind: "corporate",
+                    organizationId,
+                    runtimeId: TenantRuntimeId.make("runtime-supabase-provider-account-confirm"),
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                employees: [
+                  {
+                    membership,
+                    email: "provider-confirm@example.com",
+                    displayName: "Provider Confirm",
+                    status: "active",
+                  },
+                ],
+                invites: [],
+                memberships: [membership],
+                teams: [],
+                departments: [],
+                grants: [],
+                reviews: [],
+                auditEvents: [],
+              }),
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [membership],
+                activities: [],
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie);
+        },
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              Effect.gen(function* () {
+                const failed = yield* client[WS_METHODS.providerAccountsConfirm]({
+                  provider: "codex",
+                  threadId: defaultThreadId,
+                  statusOutput: "Not logged in",
+                }).pipe(Effect.result);
+                const listedAfterFailure = yield* client[WS_METHODS.providerAccountsList]({});
+                const confirmed = yield* client[WS_METHODS.providerAccountsConfirm]({
+                  provider: "codex",
+                  threadId: defaultThreadId,
+                  statusOutput: "Logged in as hosted-user@example.test",
+                });
+                const listedAfterConfirm = yield* client[WS_METHODS.providerAccountsList]({});
+                return { failed, listedAfterFailure, confirmed, listedAfterConfirm };
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assertTrue(result.failed._tag === "Failure");
+        assertTrue(result.failed.failure._tag === "ProviderAccountError");
+        assert.equal(result.failed.failure.code, "not-authenticated");
+        assertInclude(result.failed.failure.message, "not logged in");
+        assert.equal(result.listedAfterFailure.accounts.length, 0);
+        assert.equal(
+          result.confirmed.account.id,
+          `provider-account:${tenantId}:${supabaseUserId}:codex`,
+        );
+        assert.equal(result.confirmed.account.status, "connected");
+        assert.equal(result.confirmed.account.activeSessionCount, 1);
+        assert.isFalse("authHomeDir" in result.confirmed.account);
+        assert.equal(result.listedAfterConfirm.accounts.length, 1);
+        assert.equal(result.listedAfterConfirm.accounts[0]?.status, "connected");
+
+        if (!capturedRepository) {
+          throw new Error("Tenancy repository was not captured.");
+        }
+        const persisted = yield* capturedRepository.loadProviderIsolation();
+        assert.equal(persisted.providerAccounts.length, 1);
+        assert.equal(persisted.providerSessions.length, 1);
+        assert.include(persisted.providerAccounts[0]?.authHomeDir ?? "", "/provider-homes/");
+        assert.equal(persisted.providerSessions[0]?.cwd, "/tmp/default-project");
+
+        const organizations = yield* capturedRepository.loadOrganizations();
+        const providerAuditKinds = organizations.auditEvents.map((event) => event.kind);
+        assert.include(providerAuditKinds, "provider-account-connect-failed");
+        assert.include(providerAuditKinds, "provider-account-created");
+        assert.include(providerAuditKinds, "provider-account-connect-confirmed");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("locks hosted provider confirmation after repeated failed status checks", () =>
+    Effect.gen(function* () {
+      const tenantId = TenantId.make("tenant-supabase-provider-confirm-lockout");
+      const subject = `provider-confirm-lockout-${crypto.randomUUID()}`;
+      const userId = UserId.make(`supabase:${subject}`);
+      const fixture = makeSignedSupabaseFixture({
+        sub: subject,
+        email: `${subject}@example.test`,
+        user_metadata: { full_name: "Provider Confirm Lockout" },
+      });
+      let capturedRepository: TenancyRepositoryShape | undefined;
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) => {
+          capturedRepository = repository;
+          return repository
+            .saveCollaboration({
+              presence: [],
+              invites: [],
+              memberships: [
+                makeSupabaseMembership({
+                  tenantId,
+                  userId,
+                  roles: ["admin"],
+                }),
+              ],
+              activities: [],
+            })
+            .pipe(Effect.orDie);
+        },
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              Effect.gen(function* () {
+                const failedAttempts = yield* Effect.forEach(
+                  Array.from({
+                    length: DEFAULT_PUBLIC_ACCESS_LIMITS.maxProviderConnectFailuresPerUser,
+                  }),
+                  () =>
+                    client[WS_METHODS.providerAccountsConfirm]({
+                      provider: "codex",
+                      threadId: defaultThreadId,
+                      statusOutput: "Not logged in",
+                    }).pipe(Effect.result),
+                  { concurrency: 1 },
+                );
+                const blockedSuccess = yield* client[WS_METHODS.providerAccountsConfirm]({
+                  provider: "codex",
+                  threadId: defaultThreadId,
+                  statusOutput: "Logged in as locked@example.test",
+                }).pipe(Effect.result);
+                const listedAfterLockout = yield* client[WS_METHODS.providerAccountsList]({});
+                return { failedAttempts, blockedSuccess, listedAfterLockout };
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assert.isTrue(
+          result.failedAttempts.every(
+            (attempt) =>
+              attempt._tag === "Failure" &&
+              attempt.failure._tag === "ProviderAccountError" &&
+              attempt.failure.code === "not-authenticated",
+          ),
+        );
+        assertTrue(result.blockedSuccess._tag === "Failure");
+        assertTrue(result.blockedSuccess.failure._tag === "ProviderAccountError");
+        assert.equal(result.blockedSuccess.failure.code, "rate-limited");
+        assertInclude(
+          result.blockedSuccess.failure.message,
+          "Provider connect confirmation is temporarily locked",
+        );
+        assert.equal(result.listedAfterLockout.accounts.length, 0);
+
+        if (!capturedRepository) {
+          throw new Error("Tenancy repository was not captured.");
+        }
+        const persisted = yield* capturedRepository.loadProviderIsolation();
+        assert.equal(persisted.providerAccounts.length, 0);
+        assert.equal(persisted.providerSessions.length, 0);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "browser verifies manual hosted provider connect, returning status, failed confirmation, and disconnect",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const runId = crypto.randomUUID();
+        const uniqueSubject = `provider-browser-${runId}`;
+        const uniqueEmail = `provider-browser-${runId}@example.test`;
+        const uniqueName = `Provider Browser ${runId.slice(0, 8)}`;
+        const userId = UserId.make(`supabase:${uniqueSubject}`);
+        const tenantId = TenantId.make(`tenant-provider-browser-${runId}`);
+        const organizationId = OrganizationId.make(`org-provider-browser-${runId}`);
+        const membership = makeSupabaseMembership({
+          tenantId,
+          userId,
+          organizationId,
+          roles: ["admin"],
+        });
+        const fixture = makeSignedSupabaseFixture({
+          sub: uniqueSubject,
+          email: uniqueEmail,
+          user_metadata: {
+            full_name: uniqueName,
+          },
+        });
+        let capturedRepository: TenancyRepositoryShape | undefined;
+        const readModel = makeDefaultOrchestrationReadModel();
+        const terminalOpenInputs: TerminalOpenInput[] = [];
+        const terminalWriteInputs: TerminalWriteInput[] = [];
+
+        yield* buildAppUnderTest({
+          config: {
+            supabaseProjectUrl: new URL(supabaseProjectUrl),
+            supabaseAnonKey: "public-anon-key",
+            supabaseJwtAudience: "authenticated",
+          },
+          layers: {
+            projectionSnapshotQuery: {
+              getSnapshot: () => Effect.succeed(readModel),
+              getShellSnapshot: () =>
+                Effect.succeed({
+                  snapshotSequence: readModel.snapshotSequence,
+                  projects: readModel.projects,
+                  threads: [makeDefaultOrchestrationThreadShell()],
+                  updatedAt: readModel.updatedAt,
+                }),
+              getProjectShellById: (projectId) =>
+                Effect.succeed(
+                  (() => {
+                    const project = readModel.projects.find(
+                      (candidate) => candidate.id === projectId,
+                    );
+                    return project ? Option.some(project) : Option.none();
+                  })(),
+                ),
+              getThreadShellById: (threadId) =>
+                Effect.succeed(
+                  threadId === defaultThreadId
+                    ? Option.some(makeDefaultOrchestrationThreadShell())
+                    : Option.none(),
+                ),
+            },
+            terminalManager: {
+              open: (input) => {
+                terminalOpenInputs.push(input);
+                return Effect.succeed({
+                  threadId: input.threadId,
+                  terminalId: input.terminalId ?? "terminal-default",
+                  cwd: input.cwd,
+                  worktreePath: input.worktreePath ?? null,
+                  status: "running" as const,
+                  pid: 12345,
+                  history: "",
+                  exitCode: null,
+                  exitSignal: null,
+                  updatedAt: "2026-05-09T01:02:00.000Z",
+                });
+              },
+              write: (input) => {
+                terminalWriteInputs.push(input);
+                return Effect.void;
+              },
+            },
+          },
+          seedTenancy: (repository) => {
+            capturedRepository = repository;
+            return Effect.all(
+              [
+                repository.saveOrganizations({
+                  organizations: [
+                    {
+                      id: organizationId,
+                      slug: `provider-browser-${runId}`,
+                      displayName: `Provider Browser ${runId}`,
+                      createdAt: "2026-05-09T01:00:00.000Z",
+                      archivedAt: null,
+                    },
+                  ],
+                  tenants: [
+                    {
+                      id: tenantId,
+                      slug: `provider-browser-${runId}`,
+                      displayName: `Provider Browser ${runId}`,
+                      kind: "corporate",
+                      organizationId,
+                      runtimeId: TenantRuntimeId.make(`runtime-provider-browser-${runId}`),
+                      createdAt: "2026-05-09T01:00:00.000Z",
+                      archivedAt: null,
+                    },
+                  ],
+                  employees: [
+                    {
+                      membership,
+                      email: uniqueEmail,
+                      displayName: uniqueName,
+                      status: "active",
+                    },
+                  ],
+                  invites: [],
+                  memberships: [membership],
+                  teams: [],
+                  departments: [],
+                  grants: [],
+                  reviews: [],
+                  auditEvents: [],
+                }),
+                repository.saveCollaboration({
+                  presence: [],
+                  invites: [],
+                  memberships: [membership],
+                  activities: [],
+                }),
+              ],
+              { discard: true },
+            ).pipe(Effect.orDie);
+          },
+        });
+
+        const serverHttpBaseUrl = yield* getHttpServerUrl("/");
+        const serverWsBaseUrl = yield* getWsServerUrl("/", { authenticated: false });
+        const webRoot = path.resolve(import.meta.dirname, "../../web");
+        const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+
+        const withAccountSettingsBrowser = <A>(
+          run: (page: import("playwright").Page, appUrl: string) => Promise<A>,
+        ) =>
+          Effect.promise(async () => {
+            const originalViteHttpUrl = process.env.VITE_HTTP_URL;
+            const originalViteWsUrl = process.env.VITE_WS_URL;
+            const originalViteDevServerUrl = process.env.VITE_DEV_SERVER_URL;
+            const originalPort = process.env.PORT;
+            const originalHost = process.env.HOST;
+            const originalCwd = process.cwd();
+            const vitePort = await reserveTcpPort();
+            const appUrl = `http://127.0.0.1:${vitePort}/`;
+            process.env.VITE_HTTP_URL = serverHttpBaseUrl;
+            process.env.VITE_WS_URL = serverWsBaseUrl;
+            process.env.VITE_DEV_SERVER_URL = appUrl;
+            process.env.PORT = String(vitePort);
+            process.env.HOST = "127.0.0.1";
+
+            const [{ createServer }, { chromium }] = await Promise.all([
+              import("vite"),
+              import("playwright"),
+            ]);
+            process.chdir(webRoot);
+            const viteServer = await createServer({
+              root: webRoot,
+              configFile: path.join(webRoot, "vite.config.ts"),
+              server: {
+                host: "127.0.0.1",
+                port: vitePort,
+                strictPort: true,
+              },
+              clearScreen: false,
+              logLevel: "error",
+            });
+            const browser = await chromium.launch({ headless: true });
+            try {
+              await viteServer.listen();
+              return await withCleanBrowserContext(browser, appUrl, null, async (page) => {
+                await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+                await page.evaluate(async (token) => {
+                  localStorage.clear();
+                  sessionStorage.clear();
+                  const browserGlobal = globalThis as typeof globalThis & {
+                    caches?: {
+                      keys: () => Promise<string[]>;
+                      delete: (cacheName: string) => Promise<boolean>;
+                    };
+                    indexedDB?: {
+                      databases?: () => Promise<Array<{ name?: string | undefined }>>;
+                      deleteDatabase: (name: string) => {
+                        addEventListener: (type: string, listener: () => void) => void;
+                      };
+                    };
+                  };
+                  if (browserGlobal.caches) {
+                    const cacheNames = await browserGlobal.caches.keys();
+                    await Promise.all(
+                      cacheNames.map((cacheName) => browserGlobal.caches?.delete(cacheName)),
+                    );
+                  }
+                  if (typeof browserGlobal.indexedDB?.databases === "function") {
+                    const databases = await browserGlobal.indexedDB.databases();
+                    await Promise.all(
+                      databases
+                        .map((database) => database.name)
+                        .filter(
+                          (name): name is string => typeof name === "string" && name.length > 0,
+                        )
+                        .map(
+                          (name) =>
+                            new Promise<void>((resolve) => {
+                              const request = browserGlobal.indexedDB?.deleteDatabase(name);
+                              if (!request) {
+                                resolve();
+                                return;
+                              }
+                              request.addEventListener("success", () => resolve());
+                              request.addEventListener("error", () => resolve());
+                              request.addEventListener("blocked", () => resolve());
+                            }),
+                        ),
+                    );
+                  }
+                  localStorage.setItem("t3code.supabase.accessToken", token);
+                }, fixture.jwt);
+                return await run(page, appUrl);
+              });
+            } finally {
+              await Promise.race([
+                browser.close().catch(() => undefined),
+                new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+              ]);
+              await Promise.race([
+                viteServer.close().catch(() => undefined),
+                new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+              ]);
+              restoreProcessEnvValue("VITE_HTTP_URL", originalViteHttpUrl);
+              restoreProcessEnvValue("VITE_WS_URL", originalViteWsUrl);
+              restoreProcessEnvValue("VITE_DEV_SERVER_URL", originalViteDevServerUrl);
+              restoreProcessEnvValue("PORT", originalPort);
+              restoreProcessEnvValue("HOST", originalHost);
+              process.chdir(originalCwd);
+            }
+          });
+
+        try {
+          yield* withAccountSettingsBrowser(async (page, appUrl) => {
+            const pageMessages: string[] = [];
+            page.on("console", (message) => {
+              pageMessages.push(`${message.type()}: ${message.text()}`);
+            });
+            page.on("pageerror", (error) => {
+              pageMessages.push(`pageerror: ${error.message}`);
+            });
+            await page.goto(`${appUrl}settings/account`, { waitUntil: "domcontentloaded" });
+            await page
+              .getByText(uniqueSubject)
+              .waitFor({ timeout: 20_000 })
+              .catch(async (error) => {
+                const bodyText = await page
+                  .locator("body")
+                  .innerText()
+                  .catch(() => "");
+                throw new Error(
+                  [
+                    error instanceof Error ? error.message : String(error),
+                    `url=${page.url()}`,
+                    `body=${bodyText}`,
+                    `console=${pageMessages.join(" | ")}`,
+                  ].join("\n"),
+                );
+              });
+            await page.evaluate(
+              async ({ environmentId, projectId, threadId }) => {
+                const { useStore } = (await new Function('return import("/src/store.ts")')()) as {
+                  useStore: {
+                    setState: (state: unknown) => void;
+                  };
+                };
+                useStore.setState({
+                  activeEnvironmentId: environmentId,
+                  environmentStateById: {
+                    [environmentId]: {
+                      projectIds: [projectId],
+                      projectById: {
+                        [projectId]: {
+                          id: projectId,
+                          environmentId,
+                          name: "Default Project",
+                          cwd: "/tmp/default-project",
+                          defaultModelSelection: null,
+                          scripts: [],
+                        },
+                      },
+                      threadIds: [threadId],
+                      threadIdsByProjectId: { [projectId]: [threadId] },
+                      threadShellById: {
+                        [threadId]: {
+                          id: threadId,
+                          environmentId,
+                          codexThreadId: null,
+                          projectId,
+                          title: "Default Thread",
+                          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+                          runtimeMode: "full-access",
+                          interactionMode: "default",
+                          error: null,
+                          createdAt: "2026-05-09T00:00:00.000Z",
+                          updatedAt: "2026-05-09T00:05:00.000Z",
+                          archivedAt: null,
+                          branch: null,
+                          worktreePath: null,
+                        },
+                      },
+                      threadSessionById: {},
+                      threadTurnStateById: {},
+                      messageIdsByThreadId: {},
+                      messageByThreadId: {},
+                      activityIdsByThreadId: {},
+                      activityByThreadId: {},
+                      proposedPlanIdsByThreadId: {},
+                      proposedPlanByThreadId: {},
+                      turnDiffIdsByThreadId: {},
+                      turnDiffSummaryByThreadId: {},
+                      sidebarThreadSummaryById: {},
+                      bootstrapComplete: true,
+                    },
+                  },
+                });
+              },
+              {
+                environmentId: testEnvironmentDescriptor.environmentId,
+                projectId: defaultProjectId,
+                threadId: defaultThreadId,
+              },
+            );
+            await page.getByText("No provider accounts connected.").waitFor({ timeout: 20_000 });
+            await page.getByRole("button", { name: "Connect Codex" }).click();
+            await page
+              .getByText("provider-auth-codex")
+              .waitFor({ timeout: 20_000 })
+              .catch(async (error) => {
+                const bodyText = await page
+                  .locator("body")
+                  .innerText()
+                  .catch(() => "");
+                throw new Error(
+                  [
+                    error instanceof Error ? error.message : String(error),
+                    `url=${page.url()}`,
+                    `body=${bodyText}`,
+                    `console=${pageMessages.join(" | ")}`,
+                  ].join("\n"),
+                );
+              });
+            await page.getByText("codex login --device-auth", { exact: true }).waitFor();
+            await page.getByText("codex login status", { exact: true }).waitFor();
+            await page.getByLabel("Status output").fill("Device code expired");
+            await page.getByRole("button", { name: "Confirm status" }).click();
+            await page
+              .getByText("Codex status output did not report an authenticated account.")
+              .waitFor({ timeout: 20_000 });
+            await page.getByLabel("Status output").fill(`Logged in as ${uniqueEmail}`);
+            await page.getByRole("button", { name: "Confirm status" }).click();
+            await page
+              .getByText("Connected, 1 active session")
+              .waitFor({ timeout: 20_000 })
+              .catch(async (error) => {
+                const bodyText = await page
+                  .locator("body")
+                  .innerText()
+                  .catch(() => "");
+                throw new Error(
+                  [
+                    error instanceof Error ? error.message : String(error),
+                    `url=${page.url()}`,
+                    `body=${bodyText}`,
+                    `console=${pageMessages.join(" | ")}`,
+                  ].join("\n"),
+                );
+              });
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await page.getByText("Connected, 1 active session").waitFor({ timeout: 20_000 });
+            await page.getByRole("button", { name: "Disconnect" }).click();
+            await page.getByText("Disconnected", { exact: true }).waitFor({ timeout: 20_000 });
+          });
+
+          assert.equal(terminalOpenInputs.length, 1);
+          assert.equal(terminalOpenInputs[0]?.threadId, defaultThreadId);
+          assert.equal(terminalOpenInputs[0]?.terminalId, "provider-auth-codex");
+          assert.include(terminalOpenInputs[0]?.cwd ?? "", "/provider-homes/");
+          assert.equal(terminalWriteInputs.length, 1);
+          assert.equal(terminalWriteInputs[0]?.threadId, defaultThreadId);
+          assert.equal(terminalWriteInputs[0]?.terminalId, "provider-auth-codex");
+          assert.equal(terminalWriteInputs[0]?.data, "codex login --device-auth\n");
+
+          if (!capturedRepository) {
+            throw new Error("Tenancy repository was not captured.");
+          }
+          const providerIsolation = yield* capturedRepository.loadProviderIsolation();
+          const account = providerIsolation.providerAccounts.find(
+            (candidate) => candidate.id === `provider-account:${tenantId}:${userId}:codex`,
+          );
+          const providerSession = providerIsolation.providerSessions.find(
+            (candidate) => candidate.providerAccountId === account?.id,
+          );
+          assert.notEqual(account?.disabledAt, null);
+          assert.notEqual(providerSession?.endedAt, null);
+        } finally {
+          fetchSpy.mockRestore();
+        }
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects provider account disconnects without connect permission", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tenantId = TenantId.make("tenant-supabase-provider-account-forbidden");
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-provider-account-forbidden-",
+      });
+      const accountId = ProviderAccountId.make("provider-account-supabase-forbidden");
+      const fixture = makeSignedSupabaseFixture();
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) =>
+          Effect.all(
+            [
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [makeSupabaseMembership({ tenantId, roles: ["developer"] })],
+                activities: [],
+              }),
+              repository.saveProviderIsolation({
+                providerAccounts: [
+                  {
+                    id: accountId,
+                    provider: "codex",
+                    tenantId,
+                    owner: { type: "user", userId: supabaseUserId },
+                    sharing: "private",
+                    authHomeDir: path.join(workspaceDir, ".provider-home"),
+                    configDir: path.join(workspaceDir, ".provider-home", "config"),
+                    secretsDir: path.join(workspaceDir, ".secrets"),
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    disabledAt: null,
+                  },
+                ],
+                providerSessions: [],
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie),
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              Effect.all({
+                connect: client[WS_METHODS.providerAccountsConnect]({ provider: "codex" }).pipe(
+                  Effect.result,
+                ),
+                openAuthTerminal: client[WS_METHODS.providerAccountsOpenAuthTerminal]({
+                  provider: "codex",
+                  threadId: defaultThreadId,
+                }).pipe(Effect.result),
+                confirm: client[WS_METHODS.providerAccountsConfirm]({
+                  provider: "codex",
+                  threadId: defaultThreadId,
+                  statusOutput: "Logged in",
+                }).pipe(Effect.result),
+                disconnect: client[WS_METHODS.providerAccountsDisconnect]({
+                  providerAccountId: accountId,
+                }).pipe(Effect.result),
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assertTrue(result.connect._tag === "Failure");
+        assertTrue(result.connect.failure._tag === "ProviderAccountError");
+        assert.equal(result.connect.failure.code, "forbidden");
+        assertInclude(result.connect.failure.message, "provider.connect");
+        assertTrue(result.openAuthTerminal._tag === "Failure");
+        assertTrue(result.openAuthTerminal.failure._tag === "ProviderAccountError");
+        assert.equal(result.openAuthTerminal.failure.code, "forbidden");
+        assertInclude(result.openAuthTerminal.failure.message, "provider.connect");
+        assertTrue(result.confirm._tag === "Failure");
+        assertTrue(result.confirm.failure._tag === "ProviderAccountError");
+        assert.equal(result.confirm.failure.code, "forbidden");
+        assertInclude(result.confirm.failure.message, "provider.connect");
+        assertTrue(result.disconnect._tag === "Failure");
+        assertTrue(result.disconnect.failure._tag === "ProviderAccountError");
+        assert.equal(result.disconnect.failure.code, "forbidden");
+        assertInclude(result.disconnect.failure.message, "provider.connect");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects hosted Supabase turns over the active turn limit", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tenantId = TenantId.make("tenant-supabase-active-turn-limit");
+      const subject = "44444444-5555-4666-8777-888888888888";
+      const userId = UserId.make(`supabase:${subject}`);
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-active-turn-limit-",
+      });
+      const fixture = makeSignedSupabaseFixture({
+        sub: subject,
+        email: "active-turn-limit@example.test",
+        user_metadata: { full_name: "Active Turn Limit" },
+      });
+      const now = new Date().toISOString();
+      const activeTurnCount = DEFAULT_PUBLIC_ACCESS_LIMITS.maxActiveTurnsPerUser;
+      const activeProjects = Array.from({ length: activeTurnCount }, (_, index) => ({
+        id: ProjectId.make(`project-supabase-active-turn-limit-${index}`),
+        title: `Active Turn Project ${index}`,
+        workspaceRoot: path.join(workspaceDir, `active-${index}`),
+        defaultModelSelection,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      }));
+      const targetProject = {
+        id: ProjectId.make("project-supabase-active-turn-limit-target"),
+        title: "Active Turn Target",
+        workspaceRoot: path.join(workspaceDir, "target"),
+        defaultModelSelection,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      };
+      const targetThreadId = ThreadId.make("thread-supabase-active-turn-limit-target");
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        layers: {
+          orchestrationEngine: {
+            getReadModel: () => {
+              const readModel = makeDefaultOrchestrationReadModel();
+              return Effect.succeed({
+                ...readModel,
+                projects: [...readModel.projects, ...activeProjects, targetProject],
+                threads: [
+                  ...readModel.threads,
+                  ...activeProjects.map((project, index) => ({
+                    id: ThreadId.make(`thread-supabase-active-turn-limit-${index}`),
+                    projectId: project.id,
+                    title: `Active Turn Thread ${index}`,
+                    modelSelection: defaultModelSelection,
+                    interactionMode: "default" as const,
+                    runtimeMode: "full-access" as const,
+                    branch: null,
+                    worktreePath: null,
+                    createdAt: now,
+                    updatedAt: now,
+                    archivedAt: null,
+                    latestTurn: {
+                      turnId: TurnId.make(`turn-supabase-active-turn-limit-${index}`),
+                      state: "running" as const,
+                      requestedAt: now,
+                      startedAt: now,
+                      completedAt: null,
+                      assistantMessageId: null,
+                    },
+                    messages: [],
+                    session: null,
+                    activities: [],
+                    proposedPlans: [],
+                    checkpoints: [],
+                    deletedAt: null,
+                  })),
+                  {
+                    id: targetThreadId,
+                    projectId: targetProject.id,
+                    title: "Active Turn Target Thread",
+                    modelSelection: defaultModelSelection,
+                    interactionMode: "default",
+                    runtimeMode: "full-access",
+                    branch: null,
+                    worktreePath: null,
+                    createdAt: now,
+                    updatedAt: now,
+                    archivedAt: null,
+                    latestTurn: null,
+                    messages: [],
+                    session: null,
+                    activities: [],
+                    proposedPlans: [],
+                    checkpoints: [],
+                    deletedAt: null,
+                  },
+                ],
+              });
+            },
+            dispatch: () => Effect.succeed({ sequence: 1 }),
+          },
+        },
+        seedTenancy: (repository) =>
+          Effect.all(
+            [
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [makeSupabaseMembership({ tenantId, userId })],
+                activities: [],
+              }),
+              repository.saveProviderIsolation({
+                providerAccounts: [
+                  {
+                    id: ProviderAccountId.make("provider-account-supabase-active-turn-limit"),
+                    provider: "codex",
+                    tenantId,
+                    owner: { type: "tenant", tenantId },
+                    sharing: "tenant-shared",
+                    authHomeDir: path.join(workspaceDir, ".provider-home"),
+                    configDir: path.join(workspaceDir, ".provider-home", "config"),
+                    secretsDir: path.join(workspaceDir, ".secrets"),
+                    createdAt: now,
+                    disabledAt: null,
+                  },
+                ],
+                providerSessions: activeProjects.map((project, index) => ({
+                  id: ProviderSessionId.make(
+                    `provider-session-supabase-active-turn-limit-${index}`,
+                  ),
+                  tenantId,
+                  userId,
+                  providerAccountId: ProviderAccountId.make(
+                    "provider-account-supabase-active-turn-limit",
+                  ),
+                  provider: "codex" as const,
+                  providerHomeDir: path.join(workspaceDir, ".provider-home"),
+                  cwd: project.workspaceRoot,
+                  createdAt: now,
+                  endedAt: null,
+                })),
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie),
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "thread.turn.start",
+                commandId: CommandId.make("cmd-supabase-active-turn-limit"),
+                threadId: targetThreadId,
+                message: {
+                  messageId: MessageId.make("msg-supabase-active-turn-limit"),
+                  role: "user",
+                  text: "start another turn",
+                  attachments: [],
+                },
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                createdAt: now,
+              }).pipe(Effect.result),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assertTrue(result._tag === "Failure");
+        assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+        assertInclude(result.failure.message, "Active turn limit exceeded:");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects hosted Supabase turns over the active provider session limit", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tenantId = TenantId.make("tenant-supabase-provider-session-limit");
+      const subject = "55555555-6666-4777-8888-999999999999";
+      const userId = UserId.make(`supabase:${subject}`);
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-provider-session-limit-",
+      });
+      const fixture = makeSignedSupabaseFixture({
+        sub: subject,
+        email: "provider-session-limit@example.test",
+        user_metadata: { full_name: "Provider Session Limit" },
+      });
+      const now = new Date().toISOString();
+      const targetProject = {
+        id: ProjectId.make("project-supabase-provider-session-limit-target"),
+        title: "Provider Session Limit Target",
+        workspaceRoot: path.join(workspaceDir, "target"),
+        defaultModelSelection,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      };
+      const targetThreadId = ThreadId.make("thread-supabase-provider-session-limit-target");
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        layers: {
+          orchestrationEngine: {
+            getReadModel: () => {
+              const readModel = makeDefaultOrchestrationReadModel();
+              return Effect.succeed({
+                ...readModel,
+                projects: [...readModel.projects, targetProject],
+                threads: [
+                  ...readModel.threads,
+                  {
+                    id: targetThreadId,
+                    projectId: targetProject.id,
+                    title: "Provider Session Limit Target Thread",
+                    modelSelection: defaultModelSelection,
+                    interactionMode: "default",
+                    runtimeMode: "full-access",
+                    branch: null,
+                    worktreePath: null,
+                    createdAt: now,
+                    updatedAt: now,
+                    archivedAt: null,
+                    latestTurn: null,
+                    messages: [],
+                    session: null,
+                    activities: [],
+                    proposedPlans: [],
+                    checkpoints: [],
+                    deletedAt: null,
+                  },
+                ],
+              });
+            },
+            dispatch: () => Effect.succeed({ sequence: 1 }),
+          },
+        },
+        seedTenancy: (repository) =>
+          Effect.all(
+            [
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [makeSupabaseMembership({ tenantId, userId })],
+                activities: [],
+              }),
+              repository.saveProviderIsolation({
+                providerAccounts: [
+                  {
+                    id: ProviderAccountId.make("provider-account-supabase-provider-session-limit"),
+                    provider: "codex",
+                    tenantId,
+                    owner: { type: "tenant", tenantId },
+                    sharing: "tenant-shared",
+                    authHomeDir: path.join(workspaceDir, ".provider-home"),
+                    configDir: path.join(workspaceDir, ".provider-home", "config"),
+                    secretsDir: path.join(workspaceDir, ".secrets"),
+                    createdAt: now,
+                    disabledAt: null,
+                  },
+                ],
+                providerSessions: Array.from(
+                  { length: DEFAULT_PUBLIC_ACCESS_LIMITS.maxActiveProviderSessionsPerUser },
+                  (_, index) => ({
+                    id: ProviderSessionId.make(
+                      `provider-session-supabase-provider-session-limit-${index}`,
+                    ),
+                    tenantId,
+                    userId,
+                    providerAccountId: ProviderAccountId.make(
+                      "provider-account-supabase-provider-session-limit",
+                    ),
+                    provider: "codex" as const,
+                    providerHomeDir: path.join(workspaceDir, ".provider-home"),
+                    cwd:
+                      index === 0
+                        ? targetProject.workspaceRoot
+                        : path.join(workspaceDir, `session-${index}`),
+                    createdAt: now,
+                    endedAt: null,
+                  }),
+                ),
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie),
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const result = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "thread.turn.start",
+                commandId: CommandId.make("cmd-supabase-provider-session-limit"),
+                threadId: targetThreadId,
+                message: {
+                  messageId: MessageId.make("msg-supabase-provider-session-limit"),
+                  role: "user",
+                  text: "start with too many sessions",
+                  attachments: [],
+                },
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                createdAt: now,
+              }).pipe(Effect.result),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assertTrue(result._tag === "Failure");
+        assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+        assertInclude(result.failure.message, "Active provider session limit exceeded:");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects invite rpc calls without membership and malformed scoped invites", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const expiresAt = new Date(Date.now() + 60_000).toISOString();
+      const forbiddenTenantId = TenantId.make("tenant-forbidden-invite-collab");
+      const forbiddenWorkspaceId = WorkspaceId.make("workspace-forbidden-invite-collab");
+
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const createWithoutMembership = yield* client[WS_METHODS.collaborationInvitesCreate]({
+              tenantId: forbiddenTenantId,
+              workspaceId: forbiddenWorkspaceId,
+              email: "forbidden@example.com",
+              scope: "workspace",
+              roles: ["developer"],
+              expiresAt,
+            }).pipe(Effect.result);
+            const listWithoutMembership = yield* client[WS_METHODS.collaborationInvitesList]({
+              tenantId: forbiddenTenantId,
+              workspaceId: forbiddenWorkspaceId,
+            }).pipe(Effect.result);
+
+            const organization = yield* client[WS_METHODS.organizationsCreate]({
+              slug: "scoped-invite-rules",
+              displayName: "Scoped Invite Rules",
+            });
+            const workspaceInviteWithoutWorkspace = yield* client[
+              WS_METHODS.collaborationInvitesCreate
+            ]({
+              tenantId: organization.tenant.id,
+              workspaceId: null,
+              email: "workspace-missing@example.com",
+              scope: "workspace",
+              roles: ["developer"],
+              expiresAt,
+            }).pipe(Effect.result);
+            const projectInviteWithoutWorkspace = yield* client[
+              WS_METHODS.collaborationInvitesCreate
+            ]({
+              tenantId: organization.tenant.id,
+              workspaceId: null,
+              email: "project-missing@example.com",
+              scope: "project",
+              roles: ["developer"],
+              expiresAt,
+            }).pipe(Effect.result);
+
+            return {
+              createWithoutMembership,
+              listWithoutMembership,
+              workspaceInviteWithoutWorkspace,
+              projectInviteWithoutWorkspace,
+            };
+          }),
+        ),
+      );
+
+      assertTrue(result.createWithoutMembership._tag === "Failure");
+      assertTrue(result.createWithoutMembership.failure._tag === "CollaborationError");
+      assertInclude(
+        result.createWithoutMembership.failure.message,
+        "Forbidden: authenticated session does not have workspace.invite.",
+      );
+      assertTrue(result.listWithoutMembership._tag === "Failure");
+      assertTrue(result.listWithoutMembership.failure._tag === "CollaborationError");
+      assertInclude(
+        result.listWithoutMembership.failure.message,
+        "Forbidden: authenticated session does not have workspace.invite.",
+      );
+      assertTrue(result.workspaceInviteWithoutWorkspace._tag === "Failure");
+      assertTrue(result.workspaceInviteWithoutWorkspace.failure._tag === "CollaborationError");
+      assertInclude(
+        result.workspaceInviteWithoutWorkspace.failure.message,
+        "Workspace-scoped collaboration invites must include a workspace.",
+      );
+      assertTrue(result.projectInviteWithoutWorkspace._tag === "Failure");
+      assertTrue(result.projectInviteWithoutWorkspace.failure._tag === "CollaborationError");
+      assertInclude(
+        result.projectInviteWithoutWorkspace.failure.message,
+        "Workspace-scoped collaboration invites must include a workspace.",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("revokes collaboration invites and blocks revoked invite acceptance", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const workspaceId = WorkspaceId.make("workspace-revoke-invite-collab");
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const expiresAt = new Date(Date.now() + 60_000).toISOString();
+
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const organization = yield* client[WS_METHODS.organizationsCreate]({
+              slug: "revoke-invite-collab",
+              displayName: "Revoke Invite Collab",
+            });
+            const createdInvite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+              tenantId: organization.tenant.id,
+              workspaceId,
+              email: "revoked-member@example.com",
+              scope: "workspace",
+              roles: ["developer"],
+              expiresAt,
+            });
+            const revokedInvite = yield* client[WS_METHODS.collaborationInvitesRevoke]({
+              tenantId: organization.tenant.id,
+              inviteId: createdInvite.invite.id,
+            });
+            const acceptRevokedInvite = yield* client[WS_METHODS.collaborationInvitesAccept]({
+              inviteId: createdInvite.invite.id,
+            }).pipe(Effect.result);
+            const listedInvites = yield* client[WS_METHODS.collaborationInvitesList]({
+              tenantId: organization.tenant.id,
+              workspaceId,
+            });
+            const activity = yield* client[WS_METHODS.collaborationActivityList]({
+              tenantId: organization.tenant.id,
+              workspaceId,
+              limit: 10,
+            });
+
+            return {
+              createdInvite,
+              revokedInvite,
+              acceptRevokedInvite,
+              listedInvites,
+              activity,
+            };
+          }),
+        ),
+      );
+
+      assert.equal(result.revokedInvite.invite.id, result.createdInvite.invite.id);
+      assertTrue(result.revokedInvite.invite.revokedAt !== null);
+      assert.equal(
+        result.listedInvites.invites[0]?.revokedAt,
+        result.revokedInvite.invite.revokedAt,
+      );
+      assertTrue(result.acceptRevokedInvite._tag === "Failure");
+      assertTrue(result.acceptRevokedInvite.failure._tag === "CollaborationError");
+      assertInclude(
+        result.acceptRevokedInvite.failure.message,
+        "Collaboration invite has been revoked.",
+      );
+      assert.isTrue(
+        result.activity.activities.some((activity) => activity.kind === "revoked-invite"),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "lets a paired member accept a workspace invite and share presence and prompts with the owner",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+        const ownerProfileUrl = yield* getHttpServerUrl("/api/auth/profile");
+        const ownerProfileResponse = yield* Effect.promise(() =>
+          fetch(ownerProfileUrl, {
+            method: "PATCH",
+            headers: {
+              cookie: ownerCookie,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              displayName: "Updated Collab Owner",
+              avatarInitials: "UO",
+            }),
+          }),
+        );
+        assert.equal(ownerProfileResponse.status, 200);
+
+        const ownerWsUrl = appendSessionCookieToWsUrl(
+          yield* getWsServerUrl("/ws", { authenticated: false }),
+          ownerCookie,
+        );
+        const workspaceId = WorkspaceId.make("workspace-two-user-collab");
+        const threadId = ThreadId.make("thread-two-user-collab");
+        const expiresAt = new Date(Date.now() + 60_000).toISOString();
+
+        const setup = yield* Effect.scoped(
+          withWsRpcClient(ownerWsUrl, (client) =>
+            Effect.gen(function* () {
+              const organization = yield* client[WS_METHODS.organizationsCreate]({
+                slug: "two-user-collab",
+                displayName: "Two User Collab",
+              });
+              const team = yield* client[WS_METHODS.organizationTeamsCreate]({
+                organizationId: organization.organization.id,
+                slug: "platform",
+                displayName: "Platform",
+              });
+              const invite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+                tenantId: organization.tenant.id,
+                workspaceId,
+                email: "member@example.com",
+                scope: "workspace",
+                roles: ["developer"],
+                expiresAt,
+              });
+              return {
+                organization,
+                team,
+                invite,
+              };
+            }),
+          ),
+        );
+
+        const pairingTokenUrl = yield* getHttpServerUrl("/api/auth/pairing-token");
+        const pairingResponse = yield* Effect.promise(() =>
+          fetch(pairingTokenUrl, {
+            method: "POST",
+            headers: {
+              cookie: ownerCookie,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              label: "Teammate Browser",
+            }),
+          }),
+        );
+        const pairingBody = (yield* Effect.promise(() => pairingResponse.json())) as {
+          readonly credential: string;
+        };
+        assert.equal(pairingResponse.status, 200);
+
+        const memberWsUrl = yield* getWsServerUrl("/ws", {
+          credential: pairingBody.credential,
+        });
+
+        const memberResult = yield* Effect.scoped(
+          withWsRpcClient(memberWsUrl, (client) =>
+            Effect.gen(function* () {
+              const accepted = yield* client[WS_METHODS.collaborationInvitesAccept]({
+                inviteId: setup.invite.invite.id,
+              });
+              const presence = yield* client[WS_METHODS.collaborationPresenceUpsert]({
+                tenantId: setup.organization.tenant.id,
+                workspaceId,
+                threadId,
+                status: "active",
+              });
+              const promptActivity = yield* client[WS_METHODS.collaborationSharedPromptRecord]({
+                tenantId: setup.organization.tenant.id,
+                workspaceId,
+                threadId,
+                prompt: "Member prompt from the shared workspace.",
+              });
+              return {
+                accepted,
+                presence,
+                promptActivity,
+              };
+            }),
+          ),
+        );
+
+        const ownerResult = yield* Effect.scoped(
+          withWsRpcClient(ownerWsUrl, (client) =>
+            Effect.gen(function* () {
+              yield* client[WS_METHODS.collaborationPresenceUpsert]({
+                tenantId: setup.organization.tenant.id,
+                workspaceId,
+                threadId,
+                status: "active",
+              });
+              const ownerPrompt = yield* client[WS_METHODS.collaborationSharedPromptRecord]({
+                tenantId: setup.organization.tenant.id,
+                workspaceId,
+                threadId,
+                prompt: "Owner prompt from the shared workspace.",
+              });
+              const presence = yield* client[WS_METHODS.collaborationPresenceList]({
+                tenantId: setup.organization.tenant.id,
+                workspaceId,
+                threadId,
+              });
+              const activity = yield* client[WS_METHODS.collaborationActivityList]({
+                tenantId: setup.organization.tenant.id,
+                workspaceId,
+                threadId,
+                limit: 20,
+              });
+              return {
+                ownerPrompt,
+                presence,
+                activity,
+              };
+            }),
+          ),
+        );
+
+        assert.equal(setup.team.team.slug, "platform");
+        assert.include(setup.invite.acceptUrlPath, encodeURIComponent(setup.invite.invite.id));
+        assert.equal(memberResult.accepted.membership.roles[0], "developer");
+        assert.equal(memberResult.presence.presence.displayName, "Teammate Browser");
+        assert.equal(memberResult.promptActivity.activity.kind, "prompted");
+        assert.equal(ownerResult.ownerPrompt.activity.kind, "prompted");
+        assert.isTrue(
+          ownerResult.presence.users.some((user) => user.displayName === "Teammate Browser"),
+        );
+        assert.isTrue(
+          ownerResult.presence.users.some(
+            (user) => user.userId === ownerResult.ownerPrompt.activity.userId,
+          ),
+        );
+        assert.isTrue(
+          ownerResult.presence.users.some(
+            (user) => user.displayName === "Updated Collab Owner" && user.avatarInitials === "UO",
+          ),
+        );
+        assert.isTrue(
+          ownerResult.activity.activities.some((activity) =>
+            activity.summary.includes("Teammate Browser shared a prompt"),
+          ),
+        );
+        assert.isTrue(
+          ownerResult.activity.activities.some(
+            (activity) =>
+              activity.userId === ownerResult.ownerPrompt.activity.userId &&
+              activity.kind === "prompted",
+          ),
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "stores websocket thread favorites as user preferences without dispatching shared metadata",
+    () =>
+      Effect.gen(function* () {
+        const dispatchedCommands: OrchestrationCommand[] = [];
+        const threadShell = makeDefaultOrchestrationThreadShell({
+          id: defaultThreadId,
+          favorite: false,
+        });
+        const readModel = {
+          ...makeDefaultOrchestrationReadModel(),
+          snapshotSequence: 42,
+        };
+
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: {
+              getReadModel: () => Effect.succeed(readModel),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  dispatchedCommands.push(command);
+                  return { sequence: readModel.snapshotSequence + dispatchedCommands.length };
+                }),
+            },
+            projectionSnapshotQuery: {
+              getThreadShellById: (threadId) =>
+                Effect.succeed(
+                  threadId === defaultThreadId ? Option.some(threadShell) : Option.none(),
+                ),
+              getShellSnapshot: () =>
+                Effect.succeed({
+                  snapshotSequence: readModel.snapshotSequence,
+                  projects: [],
+                  threads: [threadShell],
+                  updatedAt: new Date(0).toISOString(),
+                }),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const result = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            Effect.gen(function* () {
+              const favoriteResult = yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "thread.meta.update",
+                commandId: CommandId.make("cmd-user-favorite"),
+                threadId: defaultThreadId,
+                favorite: true,
+              });
+              const shellEvents = yield* client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+                Stream.take(1),
+                Stream.runCollect,
+                Effect.map((events) => Array.from(events)),
+              );
+              return { favoriteResult, shellEvents };
+            }),
+          ),
+        );
+
+        assert.equal(result.favoriteResult.sequence, readModel.snapshotSequence);
+        assert.deepEqual(dispatchedCommands, []);
+        const snapshotEvent = result.shellEvents[0];
+        assert.equal(snapshotEvent?.kind, "snapshot");
+        assert.equal(
+          snapshotEvent?.kind === "snapshot" ? snapshotEvent.snapshot.threads[0]?.favorite : false,
+          true,
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "exercises invite e2e server fixture with fresh browser members and revoked links",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const runId = crypto.randomUUID();
+        const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+        const ownerWsUrl = appendSessionCookieToWsUrl(
+          yield* getWsServerUrl("/ws", { authenticated: false }),
+          ownerCookie,
+        );
+        const workspaceId = WorkspaceId.make(`workspace-invite-e2e-${runId}`);
+        const expiresAt = new Date(Date.now() + 60_000).toISOString();
+
+        const setup = yield* Effect.scoped(
+          withWsRpcClient(ownerWsUrl, (client) =>
+            Effect.gen(function* () {
+              const organization = yield* client[WS_METHODS.organizationsCreate]({
+                slug: `invite-e2e-${runId}`,
+                displayName: "Invite E2E Fixture",
+              });
+              const acceptedInvite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+                tenantId: organization.tenant.id,
+                workspaceId,
+                email: `fresh-${runId}@example.test`,
+                scope: "workspace",
+                roles: ["developer"],
+                expiresAt,
+              });
+              const revokedInvite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+                tenantId: organization.tenant.id,
+                workspaceId,
+                email: `revoked-${runId}@example.test`,
+                scope: "workspace",
+                roles: ["viewer"],
+                expiresAt,
+              });
+              const adminRevoked = yield* client[WS_METHODS.collaborationInvitesRevoke]({
+                tenantId: organization.tenant.id,
+                inviteId: revokedInvite.invite.id,
+              });
+              return {
+                organization,
+                acceptedInvite,
+                adminRevoked,
+              };
+            }),
+          ),
+        );
+
+        const pairingTokenUrl = yield* getHttpServerUrl("/api/auth/pairing-token");
+        const freshPairingResponse = yield* Effect.promise(() =>
+          fetch(pairingTokenUrl, {
+            method: "POST",
+            headers: {
+              cookie: ownerCookie,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              label: `Fresh Invite Browser ${runId}`,
+            }),
+          }),
+        );
+        const freshPairingBody = (yield* Effect.promise(() => freshPairingResponse.json())) as {
+          readonly credential: string;
+        };
+        assert.equal(freshPairingResponse.status, 200);
+
+        const freshMemberWsUrl = yield* getWsServerUrl("/ws", {
+          credential: freshPairingBody.credential,
+        });
+        const freshMemberResult = yield* Effect.scoped(
+          withWsRpcClient(freshMemberWsUrl, (client) =>
+            Effect.gen(function* () {
+              const firstAccept = yield* client[WS_METHODS.collaborationInvitesAccept]({
+                inviteId: setup.acceptedInvite.invite.id,
+              });
+              const returningAccept = yield* client[WS_METHODS.collaborationInvitesAccept]({
+                inviteId: setup.acceptedInvite.invite.id,
+              }).pipe(Effect.result);
+              const revokedAccept = yield* client[WS_METHODS.collaborationInvitesAccept]({
+                inviteId: setup.adminRevoked.invite.id,
+              }).pipe(Effect.result);
+              return {
+                firstAccept,
+                returningAccept,
+                revokedAccept,
+              };
+            }),
+          ),
+        );
+
+        const ownerResult = yield* Effect.scoped(
+          withWsRpcClient(ownerWsUrl, (client) =>
+            Effect.gen(function* () {
+              const listedInvites = yield* client[WS_METHODS.collaborationInvitesList]({
+                tenantId: setup.organization.tenant.id,
+                workspaceId,
+              });
+              const activity = yield* client[WS_METHODS.collaborationActivityList]({
+                tenantId: setup.organization.tenant.id,
+                workspaceId,
+                limit: 20,
+              });
+              return {
+                listedInvites,
+                activity,
+              };
+            }),
+          ),
+        );
+
+        assert.equal(freshMemberResult.firstAccept.membership.roles[0], "developer");
+        assert.equal(freshMemberResult.firstAccept.invite.acceptedAt !== null, true);
+        assertTrue(freshMemberResult.returningAccept._tag === "Failure");
+        assertTrue(freshMemberResult.returningAccept.failure._tag === "CollaborationError");
+        assertInclude(
+          freshMemberResult.returningAccept.failure.message,
+          "Collaboration invite has already been accepted.",
+        );
+        assertTrue(freshMemberResult.revokedAccept._tag === "Failure");
+        assertTrue(freshMemberResult.revokedAccept.failure._tag === "CollaborationError");
+        assertInclude(
+          freshMemberResult.revokedAccept.failure.message,
+          "Collaboration invite has been revoked.",
+        );
+        assert.equal(ownerResult.listedInvites.invites.length, 2);
+        assert.isTrue(
+          ownerResult.listedInvites.invites.some(
+            (invite) => invite.id === setup.acceptedInvite.invite.id && invite.acceptedAt !== null,
+          ),
+        );
+        assert.isTrue(
+          ownerResult.listedInvites.invites.some(
+            (invite) => invite.id === setup.adminRevoked.invite.id && invite.revokedAt !== null,
+          ),
+        );
+        assert.isTrue(
+          ownerResult.activity.activities.some((activity) => activity.kind === "accepted-invite"),
+        );
+        assert.isTrue(
+          ownerResult.activity.activities.some((activity) => activity.kind === "revoked-invite"),
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("accepts invite links through the real browser route against the server fixture", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const path = yield* Path.Path;
+      const runId = crypto.randomUUID();
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const ownerWsUrl = appendSessionCookieToWsUrl(
+        yield* getWsServerUrl("/ws", { authenticated: false }),
+        ownerCookie,
+      );
+      const serverHttpBaseUrl = yield* getHttpServerUrl("/");
+      const serverWsBaseUrl = yield* getWsServerUrl("/", { authenticated: false });
+      const workspaceId = WorkspaceId.make(`workspace-invite-route-e2e-${runId}`);
+      const expiresAt = new Date(Date.now() + 60_000).toISOString();
+
+      const setup = yield* Effect.scoped(
+        withWsRpcClient(ownerWsUrl, (client) =>
+          Effect.gen(function* () {
+            const organization = yield* client[WS_METHODS.organizationsCreate]({
+              slug: `invite-route-e2e-${runId}`,
+              displayName: "Invite Route E2E Fixture",
+            });
+            const invite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+              tenantId: organization.tenant.id,
+              workspaceId,
+              email: `browser-route-${runId}@example.test`,
+              scope: "workspace",
+              roles: ["developer"],
+              expiresAt,
+            });
+            const revokedInvite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+              tenantId: organization.tenant.id,
+              workspaceId,
+              email: `browser-route-revoked-${runId}@example.test`,
+              scope: "workspace",
+              roles: ["viewer"],
+              expiresAt,
+            });
+            const adminUiInvite = yield* client[WS_METHODS.collaborationInvitesCreate]({
+              tenantId: organization.tenant.id,
+              workspaceId,
+              email: `browser-route-admin-revoke-${runId}@example.test`,
+              scope: "workspace",
+              roles: ["developer"],
+              expiresAt,
+            });
+            const adminRevoked = yield* client[WS_METHODS.collaborationInvitesRevoke]({
+              tenantId: organization.tenant.id,
+              inviteId: revokedInvite.invite.id,
+            });
+            return {
+              organization,
+              invite,
+              adminUiInvite,
+              adminRevoked,
+            };
+          }),
+        ),
+      );
+
+      const pairingTokenUrl = yield* getHttpServerUrl("/api/auth/pairing-token");
+      const issuePairingCredential = (label: string) =>
+        Effect.gen(function* () {
+          const response = yield* Effect.promise(() =>
+            fetch(pairingTokenUrl, {
+              method: "POST",
+              headers: {
+                cookie: ownerCookie,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ label }),
+            }),
+          );
+          const body = (yield* Effect.promise(() => response.json())) as {
+            readonly credential: string;
+          };
+          assert.equal(response.status, 200);
+          return body.credential;
+        });
+
+      const freshCredential = yield* issuePairingCredential(`Fresh Invite Browser ${runId}`);
+      const returningCredential = yield* issuePairingCredential(
+        `Returning Invite Browser ${runId}`,
+      );
+      const revokedCredential = yield* issuePairingCredential(`Revoked Invite Browser ${runId}`);
+      const freshSessionCookie = yield* getAuthenticatedSessionCookieHeader(freshCredential);
+      const returningSessionCookie =
+        yield* getAuthenticatedSessionCookieHeader(returningCredential);
+      const revokedSessionCookie = yield* getAuthenticatedSessionCookieHeader(revokedCredential);
+      const webRoot = path.resolve(import.meta.dirname, "../../web");
+
+      yield* Effect.promise(async () => {
+        const originalViteHttpUrl = process.env.VITE_HTTP_URL;
+        const originalViteWsUrl = process.env.VITE_WS_URL;
+        const originalViteDevServerUrl = process.env.VITE_DEV_SERVER_URL;
+        const originalPort = process.env.PORT;
+        const originalHost = process.env.HOST;
+        const originalCwd = process.cwd();
+        const vitePort = await reserveTcpPort();
+        const appUrl = `http://127.0.0.1:${vitePort}/`;
+        process.env.VITE_HTTP_URL = serverHttpBaseUrl;
+        process.env.VITE_WS_URL = serverWsBaseUrl;
+        process.env.VITE_DEV_SERVER_URL = appUrl;
+        process.env.PORT = String(vitePort);
+        process.env.HOST = "127.0.0.1";
+
+        const [{ createServer }, { chromium }] = await Promise.all([
+          import("vite"),
+          import("playwright"),
+        ]);
+        process.chdir(webRoot);
+        const viteServer = await createServer({
+          root: webRoot,
+          configFile: path.join(webRoot, "vite.config.ts"),
+          server: {
+            host: "127.0.0.1",
+            port: vitePort,
+            strictPort: true,
+          },
+          clearScreen: false,
+          logLevel: "error",
+        });
+        const browser = await chromium.launch({ headless: true });
+        try {
+          await viteServer.listen();
+
+          await withCleanBrowserContext(browser, appUrl, freshSessionCookie, async (page) => {
+            const pageMessages: string[] = [];
+            page.on("console", (message) => {
+              pageMessages.push(`${message.type()}: ${message.text()}`);
+            });
+            page.on("pageerror", (error) => {
+              pageMessages.push(`pageerror: ${error.message}`);
+            });
+            await page.goto(
+              `${appUrl}invite?invite=${encodeURIComponent(setup.invite.invite.id)}`,
+              { waitUntil: "domcontentloaded" },
+            );
+            await page
+              .getByText("Invite accepted")
+              .waitFor({ timeout: 20_000 })
+              .catch(async (error) => {
+                const bodyText = await page
+                  .locator("body")
+                  .innerText()
+                  .catch(() => "");
+                throw new Error(
+                  [
+                    error instanceof Error ? error.message : String(error),
+                    `url=${page.url()}`,
+                    `body=${bodyText}`,
+                    `console=${pageMessages.join(" | ")}`,
+                  ].join("\n"),
+                );
+              });
+            await page
+              .getByText(
+                `${setup.invite.invite.email} now has access. You can return to the workspace.`,
+              )
+              .waitFor({ timeout: 5_000 });
+          });
+
+          await withCleanBrowserContext(browser, appUrl, returningSessionCookie, async (page) => {
+            await page.goto(
+              `${appUrl}invite?invite=${encodeURIComponent(setup.invite.invite.id)}`,
+              { waitUntil: "domcontentloaded" },
+            );
+            await page.getByText("Invite could not be accepted").waitFor({ timeout: 20_000 });
+            await page
+              .getByText("Collaboration invite has already been accepted.")
+              .waitFor({ timeout: 5_000 });
+          });
+
+          await withCleanBrowserContext(browser, appUrl, revokedSessionCookie, async (page) => {
+            await page.goto(
+              `${appUrl}invite?invite=${encodeURIComponent(setup.adminRevoked.invite.id)}`,
+              { waitUntil: "domcontentloaded" },
+            );
+            await page.getByText("Invite could not be accepted").waitFor({ timeout: 20_000 });
+            await page
+              .getByText("Collaboration invite has been revoked.")
+              .waitFor({ timeout: 5_000 });
+          });
+
+          await withCleanBrowserContext(browser, appUrl, ownerCookie, async (page) => {
+            const pageMessages: string[] = [];
+            page.on("console", (message) => {
+              pageMessages.push(`${message.type()}: ${message.text()}`);
+            });
+            page.on("pageerror", (error) => {
+              pageMessages.push(`pageerror: ${error.message}`);
+            });
+            const revokeButton = page.getByRole("button", {
+              name: `Revoke invite for ${setup.adminUiInvite.invite.email}`,
+            });
+            await page.goto(`${appUrl}settings/organization`, { waitUntil: "domcontentloaded" });
+            await page
+              .getByText(setup.adminUiInvite.invite.email)
+              .waitFor({ timeout: 20_000 })
+              .catch(async (error) => {
+                const bodyText = await page
+                  .locator("body")
+                  .innerText()
+                  .catch(() => "");
+                throw new Error(
+                  [
+                    error instanceof Error ? error.message : String(error),
+                    `url=${page.url()}`,
+                    `body=${bodyText}`,
+                    `console=${pageMessages.join(" | ")}`,
+                  ].join("\n"),
+                );
+              });
+            await revokeButton.click();
+            await page
+              .locator(
+                `button[aria-label="Revoke invite for ${setup.adminUiInvite.invite.email}"]:disabled`,
+              )
+              .waitFor({ timeout: 20_000 });
+          });
+        } finally {
+          await browser.close().catch(() => undefined);
+          await viteServer.close().catch(() => undefined);
+          restoreProcessEnvValue("VITE_HTTP_URL", originalViteHttpUrl);
+          restoreProcessEnvValue("VITE_WS_URL", originalViteWsUrl);
+          restoreProcessEnvValue("VITE_DEV_SERVER_URL", originalViteDevServerUrl);
+          restoreProcessEnvValue("PORT", originalPort);
+          restoreProcessEnvValue("HOST", originalHost);
+          process.chdir(originalCwd);
+        }
+      });
+
+      const ownerResult = yield* Effect.scoped(
+        withWsRpcClient(ownerWsUrl, (client) =>
+          Effect.gen(function* () {
+            const listedInvites = yield* client[WS_METHODS.collaborationInvitesList]({
+              tenantId: setup.organization.tenant.id,
+              workspaceId,
+            });
+            const activity = yield* client[WS_METHODS.collaborationActivityList]({
+              tenantId: setup.organization.tenant.id,
+              workspaceId,
+              limit: 20,
+            });
+            return {
+              listedInvites,
+              activity,
+            };
+          }),
+        ),
+      );
+
+      assert.isTrue(
+        ownerResult.listedInvites.invites.some(
+          (invite) => invite.id === setup.invite.invite.id && invite.acceptedAt !== null,
+        ),
+      );
+      assert.isTrue(
+        ownerResult.listedInvites.invites.some(
+          (invite) => invite.id === setup.adminRevoked.invite.id && invite.revokedAt !== null,
+        ),
+      );
+      assert.isTrue(
+        ownerResult.listedInvites.invites.some(
+          (invite) => invite.id === setup.adminUiInvite.invite.id && invite.revokedAt !== null,
+        ),
+      );
+      assert.isTrue(
+        ownerResult.activity.activities.some((activity) => activity.kind === "accepted-invite"),
+      );
+      assert.isTrue(
+        ownerResult.activity.activities.some((activity) => activity.kind === "revoked-invite"),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "exposes organization creation, employee lifecycle, scoped access, and audit over websocket rpc",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const expiresAt = new Date(Date.now() + 60_000).toISOString();
+
+        const result = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            Effect.gen(function* () {
+              const created = yield* client[WS_METHODS.organizationsCreate]({
+                slug: "accessible-acme",
+                displayName: "Accessible Acme",
+              });
+              const listedOrganizations = yield* client[WS_METHODS.organizationsList]({});
+              const team = yield* client[WS_METHODS.organizationTeamsCreate]({
+                organizationId: created.organization.id,
+                slug: "platform",
+                displayName: "Platform",
+              });
+              const department = yield* client[WS_METHODS.organizationDepartmentsCreate]({
+                organizationId: created.organization.id,
+                slug: "engineering",
+                displayName: "Engineering",
+              });
+              const invited = yield* client[WS_METHODS.organizationEmployeesInvite]({
+                organizationId: created.organization.id,
+                tenantId: created.tenant.id,
+                email: "engineer@example.com",
+                displayName: "Engineer Example",
+                roles: ["developer"],
+                organizationRoles: ["manager"],
+                teamIds: [team.team.id],
+                departmentId: department.department.id,
+                expiresAt,
+              });
+              const employeesAfterInvite = yield* client[WS_METHODS.organizationEmployeesList]({
+                organizationId: created.organization.id,
+              });
+              const updated = yield* client[WS_METHODS.organizationEmployeesUpdate]({
+                organizationId: created.organization.id,
+                membershipId: invited.employee.membership.id,
+                roles: ["pm"],
+                organizationRoles: ["auditor"],
+                teamIds: [team.team.id],
+                departmentId: department.department.id,
+              });
+              const grant = yield* client[WS_METHODS.organizationAccessGrant]({
+                organizationId: created.organization.id,
+                membershipId: invited.employee.membership.id,
+                scope: { type: "team", teamId: team.team.id },
+                roles: ["pm"],
+              });
+              const revoked = yield* client[WS_METHODS.organizationAccessRevoke]({
+                organizationId: created.organization.id,
+                grantId: grant.grant.id,
+              });
+              const review = yield* client[WS_METHODS.organizationAccessReviewCreate]({
+                organizationId: created.organization.id,
+                membershipIds: [invited.employee.membership.id],
+              });
+              const disabled = yield* client[WS_METHODS.organizationEmployeesDisable]({
+                organizationId: created.organization.id,
+                membershipId: invited.employee.membership.id,
+              });
+              const audit = yield* client[WS_METHODS.organizationAuditList]({
+                organizationId: created.organization.id,
+                limit: 20,
+              });
+
+              return {
+                created,
+                listedOrganizations,
+                team,
+                department,
+                invited,
+                employeesAfterInvite,
+                updated,
+                grant,
+                revoked,
+                review,
+                disabled,
+                audit,
+              };
+            }),
+          ),
+        );
+
+        assert.equal(result.created.organization.slug, "accessible-acme");
+        assert.equal(result.created.tenant.kind, "corporate");
+        assert.equal(result.created.ownerMembership.organizationRoles?.[0], "owner");
+        assert.equal(result.listedOrganizations.organizations.length, 1);
+        assert.equal(result.team.team.slug, "platform");
+        assert.equal(result.department.department.slug, "engineering");
+        assert.equal(result.invited.employee.status, "invited");
+        assert.equal(result.employeesAfterInvite.employees.length, 2);
+        assert.equal(result.updated.employee.membership.organizationRoles?.[0], "auditor");
+        assert.equal(result.grant.grant.scope.type, "team");
+        assert.equal(result.grant.grant.revokedAt, null);
+        assert.equal(result.revoked.grant.id, result.grant.grant.id);
+        assert.isNotNull(result.revoked.grant.revokedAt);
+        assert.equal(result.review.review.status, "open");
+        assert.equal(result.disabled.employee.status, "disabled");
+        assert.isTrue(result.audit.events.some((event) => event.kind === "access-review-created"));
+        assert.isTrue(result.audit.events.some((event) => event.kind === "access-revoked"));
+        assert.isTrue(result.audit.events.some((event) => event.kind === "employee-disabled"));
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc subscribeServerConfig emits provider status updates", () =>
     Effect.gen(function* () {
       const nextProviders = [
@@ -2154,7 +6046,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "export const needle = 1;",
       );
 
-      yield* buildAppUnderTest();
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            getReadModel: () => Effect.succeed(makeReadModelWithWorkspaceRoot(workspaceDir)),
+          },
+        },
+      });
 
       const wsUrl = yield* getWsServerUrl("/ws");
       const response = yield* Effect.scoped(
@@ -2194,6 +6092,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          orchestrationEngine: {
+            getReadModel: () => Effect.succeed(makeReadModelWithWorkspaceRoot(workspaceDir)),
+          },
           gitCore: {
             isInsideWorkTree: () => Effect.succeed(true),
             listWorkspaceFiles: () =>
@@ -2244,7 +6145,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "ProjectSearchEntriesError");
       assertInclude(
         result.failure.message,
-        "Workspace root does not exist: /definitely/not/a/real/workspace/path",
+        "Forbidden: authenticated session does not have project.view.",
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -2255,7 +6156,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const path = yield* Path.Path;
       const workspaceDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-project-write-" });
 
-      yield* buildAppUnderTest();
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            getReadModel: () => Effect.succeed(makeReadModelWithWorkspaceRoot(workspaceDir)),
+          },
+        },
+      });
 
       const wsUrl = yield* getWsServerUrl("/ws");
       const response = yield* Effect.scoped(
@@ -2308,12 +6215,442 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("populates project ownership metadata from Supabase tenant workspace context", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-project-create-owned-",
+      });
+      const organizationId = OrganizationId.make("org-supabase-owned-project");
+      const tenantId = TenantId.make("tenant-supabase-owned-project");
+      const workspaceId = WorkspaceId.make("workspace-supabase-owned-project");
+      const membershipId = MembershipId.make("membership-supabase-owned-project");
+      const capturedCommands: OrchestrationCommand[] = [];
+      let capturedRepository: TenancyRepositoryShape | undefined;
+      const fixture = makeSignedSupabaseFixture({
+        app_metadata: {
+          provider: "email",
+          tenant_id: tenantId,
+          active_workspace_id: workspaceId,
+        },
+        user_metadata: { full_name: "Owned Project User" },
+      });
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) =>
+          Effect.gen(function* () {
+            capturedRepository = repository;
+            yield* repository.saveOrganizations({
+              organizations: [
+                {
+                  id: organizationId,
+                  slug: "owned-project",
+                  displayName: "Owned Project Org",
+                  createdAt: "2026-05-09T00:00:00.000Z",
+                  archivedAt: null,
+                },
+              ],
+              tenants: [
+                {
+                  id: tenantId,
+                  slug: "owned-project",
+                  displayName: "Owned Project Tenant",
+                  kind: "corporate",
+                  organizationId,
+                  runtimeId: TenantRuntimeId.make("runtime-supabase-owned-project"),
+                  createdAt: "2026-05-09T00:00:00.000Z",
+                  archivedAt: null,
+                },
+              ],
+              memberships: [
+                {
+                  id: membershipId,
+                  tenantId,
+                  userId: supabaseUserId,
+                  organizationId,
+                  roles: ["developer"],
+                  organizationRoles: ["developer"],
+                  createdAt: "2026-05-09T00:00:00.000Z",
+                  disabledAt: null,
+                },
+              ],
+              employees: [
+                {
+                  membership: {
+                    id: membershipId,
+                    tenantId,
+                    userId: supabaseUserId,
+                    organizationId,
+                    roles: ["developer"],
+                    organizationRoles: ["developer"],
+                    createdAt: "2026-05-09T00:00:00.000Z",
+                    disabledAt: null,
+                  },
+                  email: "owned-project@example.com",
+                  displayName: "Owned Project Employee",
+                  status: "active",
+                },
+              ],
+              invites: [],
+              teams: [],
+              departments: [],
+              grants: [],
+              reviews: [],
+              auditEvents: [],
+            });
+            yield* repository.saveCollaboration({
+              presence: [],
+              invites: [],
+              memberships: [],
+              activities: [],
+            });
+            yield* repository.saveWorkspaces({
+              workspaces: [
+                {
+                  id: workspaceId,
+                  tenantId,
+                  organizationId,
+                  ownerUserId: supabaseUserId,
+                  kind: "corporate",
+                  accessMode: "organization",
+                  title: "Renamed Hosted Workspace",
+                  createdAt: "2026-05-08T00:00:00.000Z",
+                  archivedAt: null,
+                },
+              ],
+            });
+          }).pipe(Effect.orDie),
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                capturedCommands.push(command);
+                return { sequence: capturedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const response = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "project.create",
+                commandId: CommandId.make("cmd-supabase-project-create-owned"),
+                projectId: ProjectId.make("project-supabase-owned"),
+                title: "Owned Workspace",
+                workspaceRoot: path.join(workspaceRoot, "owned"),
+                createWorkspaceRootIfMissing: true,
+                defaultModelSelection,
+                createdAt: "2026-05-09T00:01:00.000Z",
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assert.equal(response.sequence, 1);
+        const command = capturedCommands[0];
+        assert.equal(command?.type, "project.create");
+        assert.deepEqual(command && command.type === "project.create" ? command.ownership : null, {
+          tenantId,
+          tenantDisplayName: "Owned Project Tenant",
+          workspaceId,
+          workspaceTitle: "Renamed Hosted Workspace",
+          organizationId,
+          organizationDisplayName: "Owned Project Org",
+          ownerUserId: supabaseUserId,
+          ownerDisplayName: "Owned Project Employee",
+        });
+        if (!capturedRepository) {
+          throw new Error("Tenancy repository was not captured.");
+        }
+        const workspaces = yield* capturedRepository.loadWorkspaces();
+        assert.equal(workspaces.workspaces[0]?.title, "Renamed Hosted Workspace");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("persists missing hosted workspace metadata after project creation", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-project-create-workspace-persist-",
+      });
+      const tenantId = TenantId.make("tenant-supabase-workspace-persist");
+      const workspaceId = WorkspaceId.make("workspace-supabase-workspace-persist");
+      const membership = makeSupabaseMembership({ tenantId });
+      const capturedCommands: OrchestrationCommand[] = [];
+      let capturedRepository: TenancyRepositoryShape | undefined;
+      const fixture = makeSignedSupabaseFixture({
+        app_metadata: {
+          provider: "email",
+          tenant_id: tenantId,
+          active_workspace_id: workspaceId,
+        },
+      });
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) => {
+          capturedRepository = repository;
+          return Effect.all(
+            [
+              repository.saveOrganizations({
+                organizations: [],
+                tenants: [
+                  {
+                    id: tenantId,
+                    slug: "workspace-persist",
+                    displayName: "Workspace Persist Tenant",
+                    kind: "personal",
+                    organizationId: null,
+                    runtimeId: TenantRuntimeId.make("runtime-supabase-workspace-persist"),
+                    createdAt: "2026-05-09T00:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                memberships: [],
+                employees: [],
+                invites: [],
+                teams: [],
+                departments: [],
+                grants: [],
+                reviews: [],
+                auditEvents: [],
+              }),
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [membership],
+                activities: [],
+              }),
+              repository.saveWorkspaces({ workspaces: [] }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie);
+        },
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                capturedCommands.push(command);
+                return { sequence: capturedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        const response = yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "project.create",
+                commandId: CommandId.make("cmd-supabase-workspace-persist"),
+                projectId: ProjectId.make("project-supabase-workspace-persist"),
+                title: "Fresh Hosted Workspace",
+                workspaceRoot: path.join(workspaceRoot, "fresh"),
+                createWorkspaceRootIfMissing: true,
+                defaultModelSelection,
+                createdAt: "2026-05-09T00:02:00.000Z",
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        assert.equal(response.sequence, 1);
+        const command = capturedCommands[0];
+        assert.equal(command?.type, "project.create");
+        assert.equal(
+          command && command.type === "project.create" ? command.ownership?.workspaceTitle : null,
+          "Fresh Hosted Workspace",
+        );
+        if (!capturedRepository) {
+          throw new Error("Tenancy repository was not captured.");
+        }
+        const workspaces = yield* capturedRepository.loadWorkspaces();
+        assert.equal(workspaces.workspaces[0]?.id, workspaceId);
+        assert.equal(workspaces.workspaces[0]?.tenantId, tenantId);
+        assert.equal(workspaces.workspaces[0]?.title, "Fresh Hosted Workspace");
+        assert.equal(workspaces.workspaces[0]?.accessMode, "private");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("falls back to project title for archived hosted workspace metadata", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-supabase-project-create-archived-workspace-",
+      });
+      const tenantId = TenantId.make("tenant-supabase-archived-workspace");
+      const workspaceId = WorkspaceId.make("workspace-supabase-archived-workspace");
+      const membership = makeSupabaseMembership({ tenantId });
+      const capturedCommands: OrchestrationCommand[] = [];
+      let capturedRepository: TenancyRepositoryShape | undefined;
+      const fixture = makeSignedSupabaseFixture({
+        app_metadata: {
+          provider: "email",
+          tenant_id: tenantId,
+          active_workspace_id: workspaceId,
+        },
+      });
+
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseJwtAudience: "authenticated",
+        },
+        seedTenancy: (repository) => {
+          capturedRepository = repository;
+          return Effect.all(
+            [
+              repository.saveOrganizations({
+                organizations: [],
+                tenants: [
+                  {
+                    id: tenantId,
+                    slug: "archived-workspace",
+                    displayName: "Archived Workspace Tenant",
+                    kind: "personal",
+                    organizationId: null,
+                    runtimeId: TenantRuntimeId.make("runtime-supabase-archived-workspace"),
+                    createdAt: "2026-05-09T00:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                memberships: [],
+                employees: [],
+                invites: [],
+                teams: [],
+                departments: [],
+                grants: [],
+                reviews: [],
+                auditEvents: [],
+              }),
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [membership],
+                activities: [],
+              }),
+              repository.saveWorkspaces({
+                workspaces: [
+                  {
+                    id: workspaceId,
+                    tenantId,
+                    organizationId: null,
+                    ownerUserId: supabaseUserId,
+                    kind: "personal",
+                    accessMode: "private",
+                    title: "Archived Workspace Name",
+                    createdAt: "2026-05-08T00:00:00.000Z",
+                    archivedAt: "2026-05-08T12:00:00.000Z",
+                  },
+                ],
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie);
+        },
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                capturedCommands.push(command);
+                return { sequence: capturedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+        yield* Effect.scoped(
+          withWsRpcClient(
+            wsUrl,
+            (client) =>
+              client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "project.create",
+                commandId: CommandId.make("cmd-supabase-archived-workspace"),
+                projectId: ProjectId.make("project-supabase-archived-workspace"),
+                title: "Replacement Workspace Title",
+                workspaceRoot: path.join(workspaceRoot, "archived"),
+                createWorkspaceRootIfMissing: true,
+                defaultModelSelection,
+                createdAt: "2026-05-09T00:03:00.000Z",
+              }),
+            {
+              headers: {
+                authorization: `Bearer ${fixture.jwt}`,
+              },
+            },
+          ),
+        );
+
+        const command = capturedCommands[0];
+        assert.equal(command?.type, "project.create");
+        assert.equal(
+          command && command.type === "project.create" ? command.ownership?.workspaceTitle : null,
+          "Replacement Workspace Title",
+        );
+        if (!capturedRepository) {
+          throw new Error("Tenancy repository was not captured.");
+        }
+        const workspaces = yield* capturedRepository.loadWorkspaces();
+        assert.equal(workspaces.workspaces[0]?.title, "Archived Workspace Name");
+        assert.equal(workspaces.workspaces[0]?.archivedAt, "2026-05-08T12:00:00.000Z");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc projects.writeFile errors", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const workspaceDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-project-write-" });
 
-      yield* buildAppUnderTest();
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            getReadModel: () => Effect.succeed(makeReadModelWithWorkspaceRoot(workspaceDir)),
+          },
+        },
+      });
 
       const wsUrl = yield* getWsServerUrl("/ws");
       const result = yield* Effect.scoped(
@@ -3317,6 +7654,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(dispatchResult.sequence, 1);
       assert.deepEqual(effects, [
+        "query:thread-shell:active",
         "query:thread-shell:active",
         "dispatch:thread.archive",
         "dispatch:thread.session.stop",

@@ -70,6 +70,20 @@ export const terminalRestartsTotal = Metric.counter("t3_terminal_restarts_total"
   description: "Total terminal restart requests handled.",
 });
 
+export const publicAccessLimitRejectionsTotal = Metric.counter(
+  "t3_public_access_limit_rejections_total",
+  {
+    description: "Total public-hosting abuse-control decisions rejected by limit policy.",
+  },
+);
+
+export const tenantRuntimeLifecycleActionsTotal = Metric.counter(
+  "t3_tenant_runtime_lifecycle_actions_total",
+  {
+    description: "Total tenant runtime lifecycle actions executed or skipped by the supervisor.",
+  },
+);
+
 export const metricAttributes = (
   attributes: Readonly<Record<string, unknown>>,
 ): ReadonlyArray<[string, string]> => Object.entries(compactMetricAttributes(attributes));
@@ -79,6 +93,43 @@ export const increment = (
   attributes: Readonly<Record<string, unknown>>,
   amount = 1,
 ) => Metric.update(Metric.withAttributes(metric, metricAttributes(attributes)), amount);
+
+export interface PublicAccessLimitRejectionInput {
+  readonly limit: string;
+  readonly operation: string;
+  readonly current: number;
+  readonly maximum: number;
+  readonly tenantId?: string | undefined;
+  readonly userId?: string | undefined;
+}
+
+export const recordPublicAccessLimitRejection = (
+  input: PublicAccessLimitRejectionInput,
+): Effect.Effect<void> => {
+  const attributes = compactMetricAttributes({ ...input });
+  return Effect.gen(function* () {
+    yield* increment(publicAccessLimitRejectionsTotal, attributes);
+    yield* Effect.logWarning("public access limit rejected").pipe(Effect.annotateLogs(attributes));
+  });
+};
+
+export interface TenantRuntimeLifecycleActionMetricInput {
+  readonly operation: string;
+  readonly sourceAction: string;
+  readonly outcome: "success" | "failure" | "skipped";
+  readonly targetStatus: string;
+  readonly processAction: boolean;
+  readonly tenantId: string;
+  readonly runtimeId: string;
+}
+
+export const recordTenantRuntimeLifecycleAction = (
+  input: TenantRuntimeLifecycleActionMetricInput,
+): Effect.Effect<void> =>
+  increment(tenantRuntimeLifecycleActionsTotal, {
+    ...input,
+    processAction: input.processAction ? "true" : "false",
+  });
 
 export interface WithMetricsOptions {
   readonly counter?: Metric.Metric<number, unknown>;

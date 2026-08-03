@@ -1,13 +1,25 @@
 # TODO
 
-## Small things
+This file is the short operational backlog. For the broader milestone plan, see
+`docs/product-roadmap.md`.
+
+## Core LLM and providers
+
+- [ ] Make the OpenAI-compatible core LLM the default model/runtime path
+- [ ] Keep Codex login exposed as a stubbed provider flow for now
+- [ ] Keep Claude login exposed as a stubbed provider flow for now
+- [ ] Add real core-LLM smoke test coverage against `/chat/completions`
+
+## Chat and thread polish
 
 - [ ] Submitting new messages should scroll to bottom
 - [ ] Only show last 10 threads for a given project
-- [ ] Thread archiving
+- [x] Thread archiving
 - [ ] New projects should go on top
 - [ ] Projects should be sorted by latest thread update
-
-## Bigger things
-
 - [ ] Queueing messages
+
+## Planning hygiene
+
+- [ ] Mirror the roadmap in GitHub milestones
+- [ ] Add checklist-style issues for each milestone

@@ -1,5 +1,4 @@
 import * as React from "react";
-import type { Collision, UniqueIdentifier } from "@dnd-kit/core";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -24,7 +23,41 @@ type SidebarProject = {
   updatedAt?: string | undefined;
 };
 
+type SidebarSearchProject = {
+  name?: string | null;
+  displayName?: string | null;
+  cwd?: string | null;
+  ownership?: SidebarOwnerMetadata | null;
+  environmentPresence?: "local-only" | "remote-only" | "mixed";
+  memberProjects?: ReadonlyArray<{
+    name?: string | null;
+    cwd?: string | null;
+    environmentLabel?: string | null;
+    ownership?: SidebarOwnerMetadata | null;
+  }>;
+};
+
+type SidebarSearchThread = {
+  title?: string | null;
+  branch?: string | null;
+  worktreePath?: string | null;
+};
+
 export type ThreadTraversalDirection = "previous" | "next";
+export type SidebarThreadStatusFilter = "all" | "needs_attention" | "active" | "completed";
+export type SidebarProjectSourceFilter = "all" | "local" | "remote" | "mixed";
+export type SidebarOwnerFilter = "all" | (string & {});
+
+type SidebarOwnerMetadata = {
+  ownerUserId: string | null;
+  ownerDisplayName?: string | null;
+  tenantDisplayName?: string | null;
+};
+
+export interface SidebarOwnerFilterOption {
+  readonly value: SidebarOwnerFilter;
+  readonly label: string;
+}
 
 export interface ThreadStatusPill {
   label:
@@ -242,24 +275,142 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   return [...ordered, ...remaining];
 }
 
-export function prioritizeProjectDropCollisions(input: {
-  collisions: readonly Collision[];
-  activeId: UniqueIdentifier;
-  isCategoryCollision: (id: UniqueIdentifier) => boolean;
-}): Collision[] {
-  if (input.collisions.length === 0) {
-    return [];
+function includesNormalizedSearchTerm(value: string | null | undefined, query: string): boolean {
+  return value?.toLocaleLowerCase().includes(query) ?? false;
+}
+
+export function normalizeSidebarSearchQuery(query: string): string {
+  return query.trim().toLocaleLowerCase();
+}
+
+export function doesSidebarProjectMatchQuery(
+  project: SidebarSearchProject,
+  normalizedQuery: string,
+): boolean {
+  if (normalizedQuery.length === 0) {
+    return true;
   }
 
-  const nonActiveCollisions = input.collisions.filter(
-    (collision) => collision.id !== input.activeId,
+  if (
+    includesNormalizedSearchTerm(project.displayName, normalizedQuery) ||
+    includesNormalizedSearchTerm(project.name, normalizedQuery) ||
+    includesNormalizedSearchTerm(project.cwd, normalizedQuery)
+  ) {
+    return true;
+  }
+
+  return (
+    project.memberProjects?.some(
+      (member) =>
+        includesNormalizedSearchTerm(member.name, normalizedQuery) ||
+        includesNormalizedSearchTerm(member.cwd, normalizedQuery) ||
+        includesNormalizedSearchTerm(member.environmentLabel, normalizedQuery),
+    ) ?? false
   );
-  const candidateCollisions =
-    nonActiveCollisions.length > 0 ? nonActiveCollisions : [...input.collisions];
-  const categoryCollisions = candidateCollisions.filter((collision) =>
-    input.isCategoryCollision(collision.id),
+}
+
+export function doesSidebarProjectSourceMatch(
+  project: SidebarSearchProject,
+  filter: SidebarProjectSourceFilter,
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+
+  switch (filter) {
+    case "local":
+      return (
+        project.environmentPresence === "local-only" || project.environmentPresence === "mixed"
+      );
+    case "remote":
+      return (
+        project.environmentPresence === "remote-only" || project.environmentPresence === "mixed"
+      );
+    case "mixed":
+      return project.environmentPresence === "mixed";
+  }
+}
+
+export function buildSidebarOwnerFilterOptions(
+  projects: readonly SidebarSearchProject[],
+): SidebarOwnerFilterOption[] {
+  const ownersById = new Map<string, string>();
+  for (const project of projects) {
+    for (const ownership of getProjectOwnershipEntries(project)) {
+      if (!ownership.ownerUserId || ownersById.has(ownership.ownerUserId)) {
+        continue;
+      }
+      ownersById.set(
+        ownership.ownerUserId,
+        ownership.ownerDisplayName ?? ownership.tenantDisplayName ?? ownership.ownerUserId,
+      );
+    }
+  }
+
+  return Array.from(ownersById, ([value, label]) => ({ value, label })).toSorted((left, right) =>
+    left.label.localeCompare(right.label),
   );
-  return categoryCollisions.length > 0 ? categoryCollisions : candidateCollisions;
+}
+
+export function doesSidebarProjectOwnerMatch(
+  project: SidebarSearchProject,
+  filter: SidebarOwnerFilter,
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  return getProjectOwnershipEntries(project).some((ownership) => ownership.ownerUserId === filter);
+}
+
+export function doesSidebarThreadMatchQuery(
+  thread: SidebarSearchThread,
+  normalizedQuery: string,
+): boolean {
+  if (normalizedQuery.length === 0) {
+    return true;
+  }
+
+  return (
+    includesNormalizedSearchTerm(thread.title, normalizedQuery) ||
+    includesNormalizedSearchTerm(thread.branch, normalizedQuery) ||
+    includesNormalizedSearchTerm(thread.worktreePath, normalizedQuery)
+  );
+}
+
+export function doesSidebarThreadStatusMatch(
+  status: ThreadStatusPill | null,
+  filter: SidebarThreadStatusFilter,
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (!status) {
+    return false;
+  }
+
+  switch (filter) {
+    case "needs_attention":
+      return (
+        status.label === "Pending Approval" ||
+        status.label === "Awaiting Input" ||
+        status.label === "Plan Ready"
+      );
+    case "active":
+      return status.label === "Working" || status.label === "Connecting";
+    case "completed":
+      return status.label === "Completed";
+  }
+}
+
+function getProjectOwnershipEntries(
+  project: SidebarSearchProject,
+): readonly SidebarOwnerMetadata[] {
+  return [
+    project.ownership,
+    ...(project.memberProjects?.map((member) => member.ownership) ?? []),
+  ].filter(
+    (ownership): ownership is SidebarOwnerMetadata => ownership !== null && ownership !== undefined,
+  );
 }
 
 export function getVisibleSidebarThreadIds<TThreadId>(

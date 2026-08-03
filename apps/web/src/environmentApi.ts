@@ -49,6 +49,40 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       subscribeThread: (input, callback, options) =>
         rpcClient.orchestration.subscribeThread(input, callback, options),
     },
+    collaboration: {
+      upsertPresence: rpcClient.collaboration.upsertPresence,
+      listPresence: rpcClient.collaboration.listPresence,
+      createInvite: rpcClient.collaboration.createInvite,
+      listInvites: rpcClient.collaboration.listInvites,
+      acceptInvite: rpcClient.collaboration.acceptInvite,
+      revokeInvite: rpcClient.collaboration.revokeInvite,
+      recordSharedPrompt: rpcClient.collaboration.recordSharedPrompt,
+      listActivity: rpcClient.collaboration.listActivity,
+      subscribe: (input, callback, options) =>
+        rpcClient.collaboration.subscribe(input, callback, options),
+    },
+    organizations: {
+      create: rpcClient.organizations.create,
+      list: rpcClient.organizations.list,
+      inviteEmployee: rpcClient.organizations.inviteEmployee,
+      acceptEmployeeInvite: rpcClient.organizations.acceptEmployeeInvite,
+      listEmployees: rpcClient.organizations.listEmployees,
+      updateEmployee: rpcClient.organizations.updateEmployee,
+      disableEmployee: rpcClient.organizations.disableEmployee,
+      createTeam: rpcClient.organizations.createTeam,
+      createDepartment: rpcClient.organizations.createDepartment,
+      grantAccess: rpcClient.organizations.grantAccess,
+      createAccessReview: rpcClient.organizations.createAccessReview,
+      completeAccessReview: rpcClient.organizations.completeAccessReview,
+      listAuditEvents: rpcClient.organizations.listAuditEvents,
+    },
+    providerAccounts: {
+      list: rpcClient.providerAccounts.list,
+      connect: rpcClient.providerAccounts.connect,
+      openAuthTerminal: rpcClient.providerAccounts.openAuthTerminal,
+      confirm: rpcClient.providerAccounts.confirm,
+      disconnect: rpcClient.providerAccounts.disconnect,
+    },
   };
 }
 

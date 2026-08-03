@@ -16,8 +16,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { Option, Schema, Context } from "effect";
-import type { Effect } from "effect";
+import { Effect, Option, Schema, Context } from "effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
@@ -33,6 +32,7 @@ export const ProjectionThread = Schema.Struct({
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  favorite: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   archivedAt: Schema.NullOr(IsoDateTime),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   pendingApprovalCount: NonNegativeInt,

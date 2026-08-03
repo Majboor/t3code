@@ -68,6 +68,30 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.modelSelection.options?.fastMode).toBe(true);
     expect(parsed.runtimeMode).toBe("full-access");
   });
+
+  it("accepts trusted provider launch environment overrides", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      provider: "claudeAgent",
+      cwd: "/tmp/workspace",
+      providerLaunchEnvironment: {
+        env: {
+          CLAUDE_CONFIG_DIR: "/srv/t3/tenants/acme/provider-homes/user-1/claude/config",
+          HOME: "/srv/t3/tenants/acme/provider-homes/user-1/claude",
+          PATH: "/usr/bin",
+          T3_PROVIDER_ACCOUNT_ID: "provider-account-1",
+        },
+      },
+      runtimeMode: "full-access",
+    });
+
+    expect(parsed.providerLaunchEnvironment?.env.CLAUDE_CONFIG_DIR).toBe(
+      "/srv/t3/tenants/acme/provider-homes/user-1/claude/config",
+    );
+    expect(parsed.providerLaunchEnvironment?.env.HOME).toBe(
+      "/srv/t3/tenants/acme/provider-homes/user-1/claude",
+    );
+  });
 });
 
 describe("ProviderSendTurnInput", () => {

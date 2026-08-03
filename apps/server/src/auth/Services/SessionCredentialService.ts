@@ -3,6 +3,8 @@ import type {
   AuthClientSession,
   AuthSessionId,
   ServerAuthSessionMethod,
+  TenantSessionContext,
+  UserId,
 } from "@t3tools/contracts";
 import { Data, DateTime, Duration, Context } from "effect";
 import type { Effect, Stream } from "effect";
@@ -26,6 +28,8 @@ export interface VerifiedSession {
   readonly expiresAt?: DateTime.DateTime;
   readonly subject: string;
   readonly role: SessionRole;
+  readonly userId?: UserId;
+  readonly tenantSessionContext?: TenantSessionContext;
 }
 
 export type SessionCredentialChange =
@@ -57,6 +61,15 @@ export interface SessionCredentialServiceShape {
     sessionId: AuthSessionId,
     input?: {
       readonly ttl?: Duration.Duration;
+      readonly sessionSnapshot?: {
+        readonly subject: string;
+        readonly method: ServerAuthSessionMethod;
+        readonly role: SessionRole;
+        readonly client: AuthClientMetadata;
+        readonly expiresAt?: DateTime.DateTime;
+        readonly userId?: UserId;
+        readonly tenantSessionContext?: TenantSessionContext;
+      };
     },
   ) => Effect.Effect<
     {

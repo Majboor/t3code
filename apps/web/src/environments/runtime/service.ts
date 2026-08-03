@@ -27,7 +27,11 @@ import { collectActiveTerminalThreadIds } from "~/lib/terminalStateCleanup";
 import { deriveOrchestrationBatchEffects } from "~/orchestrationEventEffects";
 import { projectQueryKeys } from "~/lib/projectReactQuery";
 import { providerQueryKeys } from "~/lib/providerReactQuery";
-import { getPrimaryKnownEnvironment } from "../primary";
+import {
+  getPrimaryKnownEnvironment,
+  resolveSupabasePrimaryWebSocketConnectionUrl,
+  subscribeSupabaseBrowserSessionChanges,
+} from "../primary";
 import {
   bootstrapRemoteBearerSession,
   fetchRemoteEnvironmentDescriptor,
@@ -85,6 +89,7 @@ const threadDetailSubscriptions = new Map<string, ThreadDetailSubscriptionEntry>
 
 let activeService: EnvironmentServiceState | null = null;
 let needsProviderInvalidation = false;
+let primaryEnvironmentRebindPromise: Promise<void> | null = null;
 
 // Thread detail subscription cache policy:
 // - Active consumers keep a subscription retained via refCount.
@@ -665,7 +670,9 @@ function createPrimaryEnvironmentClient(
     );
   }
 
-  return createWsRpcClient(new WsTransport(wsBaseUrl));
+  return createWsRpcClient(
+    new WsTransport(() => resolveSupabasePrimaryWebSocketConnectionUrl(wsBaseUrl)),
+  );
 }
 
 function createSavedEnvironmentClient(
@@ -901,6 +908,31 @@ export function getPrimaryEnvironmentConnection(): EnvironmentConnection {
   return createPrimaryEnvironmentConnection();
 }
 
+export function rebindPrimaryEnvironmentConnection(): Promise<void> {
+  if (primaryEnvironmentRebindPromise) {
+    return primaryEnvironmentRebindPromise;
+  }
+
+  const rebindPromise = (async () => {
+    const knownEnvironment = getPrimaryKnownEnvironment();
+    if (!knownEnvironment?.environmentId) {
+      throw new Error("Unable to resolve the primary environment.");
+    }
+
+    await removeConnection(knownEnvironment.environmentId).catch(() => false);
+    createPrimaryEnvironmentConnection();
+  })();
+
+  const trackedPromise = rebindPromise.finally(() => {
+    if (primaryEnvironmentRebindPromise === trackedPromise) {
+      primaryEnvironmentRebindPromise = null;
+    }
+  });
+  primaryEnvironmentRebindPromise = trackedPromise;
+
+  return primaryEnvironmentRebindPromise;
+}
+
 export async function disconnectSavedEnvironment(environmentId: EnvironmentId): Promise<void> {
   const connection = environmentConnections.get(environmentId);
   if (connection?.kind !== "saved") {
@@ -1044,6 +1076,14 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
     }
     void syncSavedEnvironmentConnections(listSavedEnvironmentRecords());
   });
+  const unsubscribeSupabaseBrowserSessionChanges = subscribeSupabaseBrowserSessionChanges(() => {
+    void rebindPrimaryEnvironmentConnection()
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
+        void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+      })
+      .catch(() => undefined);
+  });
 
   void waitForSavedEnvironmentRegistryHydration()
     .then(() => syncSavedEnvironmentConnections(listSavedEnvironmentRecords()))
@@ -1055,6 +1095,7 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
     refCount: 1,
     stop: () => {
       unsubscribeSavedEnvironments();
+      unsubscribeSupabaseBrowserSessionChanges();
       queryInvalidationThrottler.cancel();
     },
   };
@@ -1078,4 +1119,5 @@ export async function resetEnvironmentServiceForTests(): Promise<void> {
   await Promise.all(
     [...environmentConnections.keys()].map((environmentId) => removeConnection(environmentId)),
   );
+  primaryEnvironmentRebindPromise = null;
 }

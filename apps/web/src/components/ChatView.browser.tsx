@@ -2,6 +2,9 @@
 import "../index.css";
 
 import {
+  AuthSessionId,
+  type AuthSessionState,
+  type AuthUserProfile,
   EventId,
   ORCHESTRATION_WS_METHODS,
   CheckpointRef,
@@ -10,18 +13,24 @@ import {
   type GitStatusResult,
   type GitWorkingTreeFileStatus,
   type MessageId,
+  MembershipId,
   type OrchestrationReadModel,
+  OrganizationId,
   type ProjectId,
   type ServerConfig,
   type ServerLifecycleWelcomePayload,
+  TenantId,
   type ThreadId,
   TurnId,
+  UserId,
+  WorkspaceId,
   WS_METHODS,
   OrchestrationSessionStatus,
   DEFAULT_SERVER_SETTINGS,
 } from "@t3tools/contracts";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
+import { DateTime } from "effect";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
 import { page } from "vitest/browser";
@@ -35,11 +44,19 @@ import {
   __setEnvironmentApiOverrideForTests,
 } from "../environmentApi";
 import {
+  resetEnvironmentServiceForTests,
   resetSavedEnvironmentRegistryStoreForTests,
   resetSavedEnvironmentRuntimeStoreForTests,
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
+import {
+  __resetPrimaryEnvironmentBootstrapForTests,
+  __resetServerAuthBootstrapForTests,
+  readSupabaseBrowserAccessToken,
+  readSupabaseBrowserRefreshToken,
+  writeSupabaseBrowserAccessToken,
+} from "../environments/primary";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   removeInlineTerminalContextPlaceholder,
@@ -49,7 +66,7 @@ import { resetWorkspaceLiveDiffBaselineStateForTests } from "../lib/workspaceLiv
 import { isMacPlatform } from "../lib/utils";
 import { __resetLocalApiForTests } from "../localApi";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
-import { getServerConfig } from "../rpc/serverState";
+import { getServerConfig, resetServerStateForTests } from "../rpc/serverState";
 import { getRouter } from "../router";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
 import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store";
@@ -174,6 +191,8 @@ interface TestFixture {
   snapshot: OrchestrationReadModel;
   serverConfig: ServerConfig;
   welcome: ServerLifecycleWelcomePayload;
+  authSessionOverrides: Partial<AuthSessionState>;
+  authSessionRequests: Request[];
 }
 
 let fixture: TestFixture;
@@ -326,6 +345,9 @@ function createMockEnvironmentApi(input: {
       subscribeThread: (() => () =>
         undefined) as EnvironmentApi["orchestration"]["subscribeThread"],
     },
+    collaboration: {} as EnvironmentApi["collaboration"],
+    organizations: {} as EnvironmentApi["organizations"],
+    providerAccounts: {} as EnvironmentApi["providerAccounts"],
   };
 }
 
@@ -458,6 +480,7 @@ function createSnapshotForTargetUser(options: {
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
+        favorite: false,
         archivedAt: null,
         deletedAt: null,
         messages,
@@ -483,6 +506,8 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
     serverConfig: createBaseServerConfig(),
+    authSessionOverrides: {},
+    authSessionRequests: [],
     welcome: {
       environment: {
         environmentId: EnvironmentId.make("environment-local"),
@@ -523,6 +548,7 @@ function addThreadToSnapshot(
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
+        favorite: false,
         archivedAt: null,
         deletedAt: null,
         messages: [],
@@ -556,6 +582,7 @@ function toShellThread(thread: OrchestrationReadModel["threads"][number]) {
     latestTurn: thread.latestTurn,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
+    favorite: thread.favorite,
     archivedAt: thread.archivedAt,
     session: thread.session,
     latestUserMessageAt:
@@ -573,6 +600,7 @@ function toShellSnapshot(snapshot: OrchestrationReadModel) {
       id: project.id,
       title: project.title,
       workspaceRoot: project.workspaceRoot,
+      ownership: project.ownership,
       repositoryIdentity: project.repositoryIdentity ?? null,
       defaultModelSelection: project.defaultModelSelection,
       scripts: project.scripts,
@@ -852,6 +880,7 @@ function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
 function createSnapshotWithSecondaryProject(options?: {
   includeSecondaryThread?: boolean;
   includeArchivedSecondaryThread?: boolean;
+  secondaryThreadFavorite?: boolean;
 }): OrchestrationReadModel {
   const snapshot = createSnapshotForTargetUser({
     targetMessageId: "msg-user-secondary-project-target" as MessageId,
@@ -873,6 +902,7 @@ function createSnapshotWithSecondaryProject(options?: {
           latestTurn: null,
           createdAt: isoAt(30),
           updatedAt: isoAt(31),
+          favorite: options?.secondaryThreadFavorite ?? false,
           deletedAt: null,
           messages: [],
           activities: [],
@@ -905,6 +935,7 @@ function createSnapshotWithSecondaryProject(options?: {
           latestTurn: null,
           createdAt: isoAt(24),
           updatedAt: isoAt(25),
+          favorite: false,
           deletedAt: null,
           messages: [],
           activities: [],
@@ -932,6 +963,16 @@ function createSnapshotWithSecondaryProject(options?: {
         id: SECOND_PROJECT_ID,
         title: "Docs Portal",
         workspaceRoot: "/repo/clients/docs-portal",
+        ownership: {
+          tenantId: TenantId.make("tenant-acme"),
+          tenantDisplayName: "Acme",
+          workspaceId: WorkspaceId.make("workspace-docs"),
+          workspaceTitle: "Docs Workspace",
+          organizationId: OrganizationId.make("org-acme"),
+          organizationDisplayName: "Acme Inc",
+          ownerUserId: UserId.make("user-ada"),
+          ownerDisplayName: "Ada Lovelace",
+        },
         defaultModelSelection: { provider: "codex", model: "gpt-5" },
         scripts: [],
         createdAt: NOW_ISO,
@@ -1122,14 +1163,19 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    void rpcHarness.connect(client);
+    const connection = rpcHarness.connect(client);
     client.addEventListener("message", (event) => {
       const rawData = event.data;
       if (typeof rawData !== "string") return;
-      void rpcHarness.onMessage(rawData);
+      void rpcHarness.onMessage(rawData, connection);
     });
   }),
-  ...createAuthenticatedSessionHandlers(() => fixture.serverConfig.auth),
+  ...createAuthenticatedSessionHandlers(() => fixture.serverConfig.auth, {
+    getSessionOverrides: () => fixture.authSessionOverrides,
+    onSessionRequest: (request) => {
+      fixture.authSessionRequests.push(request);
+    },
+  }),
   http.get("*/attachments/:attachmentId", () =>
     HttpResponse.text(ATTACHMENT_SVG, {
       headers: {
@@ -1139,6 +1185,41 @@ const worker = setupWorker(
   ),
   http.get("*/api/project-favicon", () => new HttpResponse(null, { status: 204 })),
 );
+
+async function clearFullBrowserStateForAuthFlow(): Promise<void> {
+  localStorage.clear();
+  sessionStorage.clear();
+
+  document.cookie.split(";").forEach((cookie) => {
+    const name = cookie.split("=")[0]?.trim();
+    if (name) {
+      document.cookie = `${name}=; Max-Age=0; path=/`;
+    }
+  });
+
+  if ("caches" in window) {
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+  }
+
+  if ("indexedDB" in window && typeof indexedDB.databases === "function") {
+    const databases = await indexedDB.databases();
+    await Promise.all(
+      databases
+        .map((database) => database.name)
+        .filter((name): name is string => typeof name === "string" && name.length > 0)
+        .map(
+          (name) =>
+            new Promise<void>((resolve) => {
+              const request = indexedDB.deleteDatabase(name);
+              request.addEventListener("success", () => resolve());
+              request.addEventListener("error", () => resolve());
+              request.addEventListener("blocked", () => resolve());
+            }),
+        ),
+    );
+  }
+}
 
 async function nextFrame(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -1155,6 +1236,44 @@ async function waitForLayout(): Promise<void> {
 async function setViewport(viewport: ViewportSpec): Promise<void> {
   await page.viewport(viewport.width, viewport.height);
   await waitForLayout();
+}
+
+async function clearBrowserState(): Promise<void> {
+  localStorage.clear();
+  sessionStorage.clear();
+  if ("caches" in window) {
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+  }
+  document.cookie.split(";").forEach((cookie) => {
+    const name = cookie.split("=")[0]?.trim();
+    if (name) {
+      document.cookie = `${name}=; Max-Age=0; path=/`;
+    }
+  });
+
+  if ("indexedDB" in window && typeof indexedDB.databases === "function") {
+    const databases = await indexedDB.databases();
+    await Promise.all(
+      databases
+        .map((database) => database.name)
+        .filter((name): name is string => typeof name === "string" && name.length > 0)
+        .map(
+          (name) =>
+            new Promise<void>((resolve) => {
+              const timeout = window.setTimeout(resolve, 500);
+              const finish = () => {
+                window.clearTimeout(timeout);
+                resolve();
+              };
+              const request = indexedDB.deleteDatabase(name);
+              request.addEventListener("success", finish, { once: true });
+              request.addEventListener("error", finish, { once: true });
+              request.addEventListener("blocked", finish, { once: true });
+            }),
+        ),
+    );
+  }
 }
 
 async function waitForProductionStyles(): Promise<void> {
@@ -1869,6 +1988,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterAll(async () => {
+    await resetEnvironmentServiceForTests();
     await rpcHarness.disconnect();
     await worker.stop();
   });
@@ -1924,12 +2044,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await __resetLocalApiForTests();
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
+    sessionStorage.clear();
+    __resetPrimaryEnvironmentBootstrapForTests();
+    __resetServerAuthBootstrapForTests();
+    resetServerStateForTests();
+    window.history.replaceState({}, "", "/");
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
     gitStatusHarness.clear();
     resetWorkspaceLiveDiffBaselineStateForTests();
     __resetEnvironmentApiOverridesForTests();
+    await resetEnvironmentServiceForTests();
     resetSavedEnvironmentRegistryStoreForTests();
     resetSavedEnvironmentRuntimeStoreForTests();
     Reflect.deleteProperty(window, "desktopBridge");
@@ -1952,6 +2078,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       projectExpandedById: {},
       projectOrder: [],
       threadLastVisitedAtById: {},
+      favoriteThreadKeys: {},
     });
     useTerminalStateStore.persist.clearStorage();
     useTerminalStateStore.setState({
@@ -1967,8 +2094,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
     ).__t3_workspace_live_diff_baseline_state__;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     customWsRpcResolver = null;
+    worker.resetHandlers();
+    await resetEnvironmentServiceForTests();
     document.body.innerHTML = "";
   });
   it("re-expands the bootstrap project using its logical key", async () => {
@@ -1978,6 +2107,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       },
       projectOrder: [PROJECT_LOGICAL_KEY],
       threadLastVisitedAtById: {},
+      favoriteThreadKeys: {},
     });
 
     const mounted = await mountChatView({
@@ -2008,6 +2138,563 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await expect.element(page.getByText("No threads yet")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the workspace dashboard and navigates to workspace and session detail views", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createSnapshotWithSecondaryProject({
+        includeArchivedSecondaryThread: true,
+      }),
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      await expect.element(page.getByText("Workspace Dashboard")).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-workspaces").getByText("Docs Portal"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-sessions").getByText("Release checklist"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-workspaces").getByText("Docs Workspace / Acme Inc"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-sessions").getByText("Archived Docs Notes"))
+        .not.toBeInTheDocument();
+
+      const releaseSessionLink = await waitForElement(
+        () =>
+          Array.from(
+            document.querySelectorAll<HTMLElement>('[data-testid="dashboard-session-link"]'),
+          ).find((element) => element.textContent?.includes("Release checklist")) ?? null,
+        "Unable to find Release checklist dashboard link.",
+      );
+      releaseSessionLink.click();
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === `/${LOCAL_ENVIRONMENT_ID}/thread-secondary-project`,
+        "Expected dashboard session link to open the session route.",
+      );
+
+      await mounted.router.navigate({ to: "/" });
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      const docsWorkspaceLink = await waitForElement(
+        () =>
+          Array.from(
+            document.querySelectorAll<HTMLElement>('[data-testid="dashboard-workspace-link"]'),
+          ).find((element) => element.textContent?.includes("Docs Portal")) ?? null,
+        "Unable to find Docs Portal dashboard link.",
+      );
+      docsWorkspaceLink.click();
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === `/project/${LOCAL_ENVIRONMENT_ID}/${SECOND_PROJECT_ID}`,
+        "Expected dashboard workspace link to open the project route.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("favorites a dashboard session without opening the session route", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createSnapshotWithSecondaryProject({
+        includeArchivedSecondaryThread: false,
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      const releaseThreadKey = scopedThreadKey(
+        scopeThreadRef(LOCAL_ENVIRONMENT_ID, "thread-secondary-project" as ThreadId),
+      );
+      const favoriteButton = page.getByTestId(
+        "dashboard-session-favorite-thread-secondary-project",
+      );
+      const hasFavoriteCommand = (favorite: boolean) =>
+        wsRequests.some((request) => {
+          if (request._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            return false;
+          }
+          const command = request as {
+            readonly type?: unknown;
+            readonly threadId?: unknown;
+            readonly favorite?: unknown;
+          };
+          return (
+            command.type === "thread.meta.update" &&
+            command.threadId === "thread-secondary-project" &&
+            command.favorite === favorite
+          );
+        });
+
+      await expect
+        .element(page.getByLabelText("Favorite session Release checklist"))
+        .toBeInTheDocument();
+      await favoriteButton.click();
+
+      expect(useUiStateStore.getState().favoriteThreadKeys[releaseThreadKey]).toBe(true);
+      expect(hasFavoriteCommand(true)).toBe(true);
+      await expect
+        .element(page.getByLabelText("Unfavorite session Release checklist"))
+        .toBeInTheDocument();
+      expect(mounted.router.state.location.pathname).toBe("/");
+
+      await favoriteButton.click();
+
+      expect(useUiStateStore.getState().favoriteThreadKeys[releaseThreadKey]).toBeUndefined();
+      expect(hasFavoriteCommand(false)).toBe(true);
+      await expect
+        .element(page.getByLabelText("Favorite session Release checklist"))
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders server-favorited dashboard sessions from a clean local state", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createSnapshotWithSecondaryProject({
+        includeArchivedSecondaryThread: false,
+        secondaryThreadFavorite: true,
+      }),
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      expect(useUiStateStore.getState().favoriteThreadKeys).toEqual({});
+      await expect
+        .element(page.getByLabelText("Unfavorite session Release checklist"))
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders a clean dashboard user without inheriting another user's favorite", async () => {
+    const userBFreshSnapshot = createSnapshotWithSecondaryProject({
+      includeArchivedSecondaryThread: false,
+      secondaryThreadFavorite: false,
+    });
+    const userB = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: userBFreshSnapshot,
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      expect(useUiStateStore.getState().favoriteThreadKeys).toEqual({});
+      await expect
+        .element(page.getByLabelText("Favorite session Release checklist"))
+        .toBeInTheDocument();
+    } finally {
+      await userB.cleanup();
+    }
+  });
+
+  it("restores an archived dashboard session", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createSnapshotWithSecondaryProject({
+        includeArchivedSecondaryThread: true,
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-archived-sessions").getByText("Archived Docs Notes"))
+        .toBeInTheDocument();
+
+      await page.getByTestId(`dashboard-session-restore-${ARCHIVED_SECONDARY_THREAD_ID}`).click();
+
+      await vi.waitFor(
+        () => {
+          const dispatchRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.unarchive",
+          ) as
+            | {
+                _tag: string;
+                type?: string;
+                threadId?: string;
+              }
+            | undefined;
+
+          expect(dispatchRequest).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "thread.unarchive",
+            threadId: ARCHIVED_SECONDARY_THREAD_ID,
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === ARCHIVED_SECONDARY_THREAD_ID
+            ? {
+                ...thread,
+                archivedAt: null,
+                updatedAt: isoAt(40),
+              }
+            : thread,
+        ),
+      };
+      sendShellThreadUpsert(ARCHIVED_SECONDARY_THREAD_ID);
+
+      await expect
+        .element(page.getByTestId("dashboard-sessions").getByText("Archived Docs Notes"))
+        .toBeInTheDocument();
+      await expect.element(page.getByTestId("dashboard-archived-sessions")).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens workspace creation from an empty dashboard", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createProjectlessSnapshot(),
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      await expect.element(page.getByTestId("dashboard-new-session")).toBeDisabled();
+
+      await page.getByTestId("dashboard-empty-add-workspace").click();
+
+      await expect.element(page.getByTestId("command-palette")).toBeInTheDocument();
+      await expect
+        .element(page.getByPlaceholder(ADD_PROJECT_SUBMENU_PLACEHOLDER))
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("starts a new dashboard session in the default workspace", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createSnapshotWithSecondaryProject({
+        includeArchivedSecondaryThread: false,
+      }),
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+
+      await page.getByTestId("dashboard-new-session").click();
+
+      await waitForURL(
+        mounted.router,
+        (pathname) => UUID_ROUTE_RE.test(pathname),
+        "Expected dashboard new session to open a draft route.",
+      );
+      const draftSession = useComposerDraftStore
+        .getState()
+        .getDraftSession(
+          DraftId.make(mounted.router.state.location.pathname.split("/").at(-1) ?? ""),
+        );
+      expect(draftSession?.projectId).toBe(PROJECT_ID);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("filters dashboard workspaces and sessions", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createSnapshotWithSecondaryProject({
+        includeArchivedSecondaryThread: true,
+      }),
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+
+      await page.getByTestId("dashboard-filter").fill("docs");
+
+      await expect
+        .element(page.getByTestId("dashboard-workspaces").getByText("Docs Portal"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-sessions").getByText("Release checklist"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-archived-sessions").getByText("Archived Docs Notes"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-workspaces").getByText("Project", { exact: true }))
+        .not.toBeInTheDocument();
+
+      await page.getByTestId("dashboard-filter").fill("no-dashboard-match");
+
+      await expect.element(page.getByText("No matching workspaces.")).toBeInTheDocument();
+      await expect.element(page.getByText("No matching active sessions.")).toBeInTheDocument();
+      await expect.element(page.getByText("No matching archived sessions.")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("routes an active Supabase tenant member from clean browser state to their workspace hub", async () => {
+    await clearBrowserState();
+    const uniqueUserId = UserId.make(`user-active-member-browser-${Date.now()}`);
+    const uniqueAccessToken = `active-member-supabase-browser-token-${Date.now()}`;
+    writeSupabaseBrowserAccessToken(uniqueAccessToken);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createSnapshotWithSecondaryProject({
+        includeArchivedSecondaryThread: true,
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          auth: {
+            policy: "remote-reachable",
+            bootstrapMethods: ["one-time-token"],
+            sessionMethods: ["browser-session-cookie", "bearer-session-token"],
+            sessionCookieName: "t3_session",
+            supabase: {
+              projectUrl: "https://project-ref.supabase.co",
+              anonKey: "public-anon-key",
+            },
+          },
+        };
+        nextFixture.authSessionOverrides = {
+          role: "client",
+          sessionMethod: "bearer-session-token",
+          tenantStatus: "active",
+          tenantSession: {
+            authSessionId: AuthSessionId.make("auth-active-member-browser"),
+            userId: uniqueUserId,
+            tenantId: TenantId.make("tenant-acme"),
+            organizationId: OrganizationId.make("org-acme"),
+            membershipIds: [MembershipId.make("membership-active-member-browser")],
+            roles: ["developer"],
+            activeWorkspaceId: WorkspaceId.make("workspace-docs"),
+            issuedAt: NOW_ISO,
+            expiresAt: "2026-05-09T12:00:00.000Z",
+          },
+        };
+      },
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-workspaces").getByText("Docs Portal"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-workspaces").getByText("Docs Workspace / Acme Inc"))
+        .toBeInTheDocument();
+      await expect.element(page.getByText("Invite link is missing")).not.toBeInTheDocument();
+      expect(
+        fixture.authSessionRequests.some((request) => request.headers.has("authorization")),
+      ).toBe(true);
+      expect(
+        fixture.authSessionRequests.some(
+          (request) => request.headers.get("authorization") === `Bearer ${uniqueAccessToken}`,
+        ),
+      ).toBe(true);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("restores a Supabase confirmation redirect from clean browser state to the workspace hub", async () => {
+    await clearBrowserState();
+    const uniqueUserId = UserId.make(`user-confirmed-active-browser-${Date.now()}`);
+    const uniqueAccessToken = `confirmed-redirect-access-token-${Date.now()}`;
+    const uniqueRefreshToken = `confirmed-redirect-refresh-token-${Date.now()}`;
+    window.history.replaceState(
+      {},
+      "",
+      `/auth/callback#access_token=${encodeURIComponent(
+        uniqueAccessToken,
+      )}&refresh_token=${encodeURIComponent(uniqueRefreshToken)}&type=signup&sb=`,
+    );
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/",
+      snapshot: createSnapshotWithSecondaryProject(),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          auth: {
+            policy: "remote-reachable",
+            bootstrapMethods: ["one-time-token"],
+            sessionMethods: ["browser-session-cookie", "bearer-session-token"],
+            sessionCookieName: "t3_session",
+            supabase: {
+              projectUrl: "https://project-ref.supabase.co",
+              anonKey: "public-anon-key",
+            },
+          },
+        };
+        nextFixture.authSessionOverrides = {
+          role: "client",
+          sessionMethod: "bearer-session-token",
+          tenantStatus: "active",
+          tenantSession: {
+            authSessionId: AuthSessionId.make("auth-confirmed-active-browser"),
+            userId: uniqueUserId,
+            tenantId: TenantId.make("tenant-acme"),
+            organizationId: OrganizationId.make("org-acme"),
+            membershipIds: [MembershipId.make("membership-confirmed-active-browser")],
+            roles: ["developer"],
+            activeWorkspaceId: WorkspaceId.make("workspace-docs"),
+            issuedAt: NOW_ISO,
+            expiresAt: "2026-05-09T12:00:00.000Z",
+          },
+        };
+      },
+    });
+
+    try {
+      await expect.element(page.getByTestId("workspace-dashboard")).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("dashboard-workspaces").getByText("Docs Portal"))
+        .toBeInTheDocument();
+      expect(readSupabaseBrowserAccessToken()).toBe(uniqueAccessToken);
+      expect(readSupabaseBrowserRefreshToken()).toBe(uniqueRefreshToken);
+      expect(window.location.hash).toBe("");
+      expect(
+        fixture.authSessionRequests.some(
+          (request) => request.headers.get("authorization") === `Bearer ${uniqueAccessToken}`,
+        ),
+      ).toBe(true);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("filters the sidebar hub by project, thread, branch, and thread status", async () => {
+    const snapshot = createSnapshotWithSecondaryProject({
+      includeArchivedSecondaryThread: true,
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? Object.assign({}, thread, {
+                title: "Billing worker incident",
+                branch: "feature/billing-worker",
+                session: thread.session
+                  ? Object.assign({}, thread.session, { status: "running" as const })
+                  : thread.session,
+              })
+            : thread,
+        ),
+      },
+    });
+
+    try {
+      await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("thread-title-thread-secondary-project"))
+        .toBeInTheDocument();
+
+      await page.getByTestId("sidebar-project-search").fill("release/docs-portal");
+      await expect
+        .element(page.getByTestId("thread-title-thread-secondary-project"))
+        .toBeInTheDocument();
+      await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).not.toBeInTheDocument();
+      await expect
+        .element(page.getByTestId(`thread-title-${ARCHIVED_SECONDARY_THREAD_ID}`))
+        .not.toBeInTheDocument();
+
+      await page.getByTestId("sidebar-project-search").fill("billing-worker");
+      await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("thread-title-thread-secondary-project"))
+        .not.toBeInTheDocument();
+
+      await page.getByTestId("sidebar-project-search").fill("");
+      await page.getByTestId("sidebar-owner-filter").click();
+      await page.getByText("Ada Lovelace", { exact: true }).click();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLElement>('[data-testid="sidebar-owner-filter"]')?.textContent,
+        ).toContain("Ada Lovelace");
+      });
+
+      await expect
+        .element(page.getByTestId("thread-title-thread-secondary-project"))
+        .toBeInTheDocument();
+      await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).not.toBeInTheDocument();
+
+      await page.getByTestId("sidebar-project-search").fill("billing-worker");
+      await expect.element(page.getByText("No matching projects or threads")).toBeInTheDocument();
+      await page.getByTestId("sidebar-project-search").fill("");
+      await page.getByTestId("sidebar-owner-filter").click();
+      await page.getByText("All owners", { exact: true }).click();
+      await page.getByTestId("sidebar-thread-status-filter").click();
+      await page.getByText("Active", { exact: true }).click();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLElement>('[data-testid="sidebar-thread-status-filter"]')
+            ?.textContent,
+        ).toContain("Active");
+      });
+
+      await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("thread-title-thread-secondary-project"))
+        .not.toBeInTheDocument();
+
+      await page.getByTestId("sidebar-thread-status-filter").click();
+      await page.getByText("All", { exact: true }).click();
+      await page.getByTestId("sidebar-project-source-filter").click();
+      await page.getByText("This device", { exact: true }).click();
+      await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("thread-title-thread-secondary-project"))
+        .toBeInTheDocument();
+
+      await page.getByTestId("sidebar-project-source-filter").click();
+      await page.getByText("Mixed", { exact: true }).click();
+      await expect.element(page.getByText("No matching projects or threads")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
@@ -4491,6 +5178,107 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
+    }
+  });
+
+  it("updates account profile through the authenticated settings route and restores it on reload", async () => {
+    await clearFullBrowserStateForAuthFlow();
+    const runId = Date.now();
+    const uniqueEmail = `route-settings-${runId}@example.test`;
+    const initialName = `Route Fresh User ${runId}`;
+    const updatedName = `Route Returning User ${runId}`;
+    let storedProfile: AuthUserProfile = {
+      userId: UserId.make(`supabase:route-settings-${runId}`),
+      subject: uniqueEmail,
+      displayName: initialName,
+      avatarInitials: "RF",
+      role: "client",
+      sessionId: AuthSessionId.make(`supabase:route-settings-${runId}`),
+      sessionMethod: "bearer-session-token",
+      client: {
+        deviceType: "desktop",
+        browser: "Chromium",
+      },
+      expiresAt: DateTime.makeUnsafe(Date.parse("2036-05-09T00:00:00.000Z")),
+      tenantStatus: "active",
+    };
+    const profileRequests: Array<{ readonly method: string; readonly body: unknown }> = [];
+    worker.use(
+      http.get("*/api/auth/profile", () => HttpResponse.json(storedProfile)),
+      http.patch("*/api/auth/profile", async ({ request }) => {
+        const body = (await request.json()) as {
+          readonly displayName: string;
+          readonly avatarInitials: string;
+        };
+        profileRequests.push({ method: request.method, body });
+        storedProfile = {
+          ...storedProfile,
+          displayName: body.displayName,
+          avatarInitials: body.avatarInitials,
+        };
+        return HttpResponse.json(storedProfile);
+      }),
+    );
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-route-account-settings" as MessageId,
+        targetText: "route account settings",
+      }),
+    });
+
+    try {
+      await openCommandPaletteFromTrigger();
+      await page.getByPlaceholder("Search commands, projects, and threads...").fill("settings");
+      await page.getByText("Open settings", { exact: true }).click();
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === "/settings/general",
+        "Expected command palette to open settings.",
+      );
+      await page.getByRole("button", { name: "Account" }).click();
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === "/settings/account",
+        "Expected settings nav to open account settings.",
+      );
+
+      await expect.element(page.getByText(initialName)).toBeInTheDocument();
+      await expect.element(page.getByText(uniqueEmail)).toBeInTheDocument();
+      await page.getByLabelText("Display name").fill(updatedName);
+      await page.getByLabelText("Avatar").fill("RT");
+      await page.getByRole("button", { name: "Save profile" }).click();
+      await expect.element(page.getByText("Account profile updated.")).toBeInTheDocument();
+      await expect.element(page.getByText(updatedName)).toBeInTheDocument();
+      expect(profileRequests).toEqual([
+        {
+          method: "PATCH",
+          body: {
+            displayName: updatedName,
+            avatarInitials: "RT",
+          },
+        },
+      ]);
+    } finally {
+      await mounted.cleanup();
+    }
+
+    const returningMounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialPath: "/settings/account",
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-returning-route-account-settings" as MessageId,
+        targetText: "returning route account settings",
+      }),
+    });
+
+    try {
+      await expect.element(page.getByText(updatedName)).toBeInTheDocument();
+      await expect.element(page.getByLabelText("Display name")).toHaveValue(updatedName);
+      await expect.element(page.getByLabelText("Avatar")).toHaveValue("RT");
+    } finally {
+      await returningMounted.cleanup();
     }
   });
 

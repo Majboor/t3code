@@ -6,10 +6,13 @@ import {
   type GitStatusResult,
   ProjectId,
   type OrchestrationShellStreamItem,
+  ProviderAccountId,
   type ServerConfig,
   type ServerProvider,
   type TerminalEvent,
   ThreadId,
+  TenantId,
+  UserId,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -91,6 +94,38 @@ const rpcClientMock = {
       registerListener(shellStreamListeners, listener),
     ),
     subscribeThread: vi.fn(() => () => undefined),
+  },
+  collaboration: {
+    upsertPresence: vi.fn(),
+    listPresence: vi.fn(),
+    createInvite: vi.fn(),
+    listInvites: vi.fn(),
+    acceptInvite: vi.fn(),
+    revokeInvite: vi.fn(),
+    recordSharedPrompt: vi.fn(),
+    listActivity: vi.fn(),
+    subscribe: vi.fn(() => () => undefined),
+  },
+  organizations: {
+    create: vi.fn(),
+    list: vi.fn(),
+    inviteEmployee: vi.fn(),
+    acceptEmployeeInvite: vi.fn(),
+    listEmployees: vi.fn(),
+    updateEmployee: vi.fn(),
+    disableEmployee: vi.fn(),
+    createTeam: vi.fn(),
+    createDepartment: vi.fn(),
+    grantAccess: vi.fn(),
+    createAccessReview: vi.fn(),
+    listAuditEvents: vi.fn(),
+  },
+  providerAccounts: {
+    list: vi.fn(),
+    connect: vi.fn(),
+    openAuthTerminal: vi.fn(),
+    confirm: vi.fn(),
+    disconnect: vi.fn(),
   },
 };
 
@@ -438,6 +473,98 @@ describe("wsApi", () => {
     expect(rpcClientMock.filesystem.browse).toHaveBeenCalledWith({
       partialPath: "/tmp/project/",
       cwd: "/tmp/project",
+    });
+  });
+
+  it("forwards provider account status and disconnect requests to the RPC client", async () => {
+    rpcClientMock.providerAccounts.list.mockResolvedValue({ accounts: [] });
+    rpcClientMock.providerAccounts.connect.mockResolvedValue({
+      instructions: {
+        provider: "codex",
+        authCommand: "codex login --device-auth",
+        statusCommand: "codex login status",
+        verificationHint: "Verify Codex after the device-auth flow completes.",
+        steps: ["Run the Codex device-auth flow."],
+      },
+    });
+    rpcClientMock.providerAccounts.openAuthTerminal.mockResolvedValue({
+      instructions: {
+        provider: "codex",
+        authCommand: "codex login --device-auth",
+        statusCommand: "codex login status",
+        verificationHint: "Verify Codex after the device-auth flow completes.",
+        steps: ["Run the Codex device-auth flow."],
+      },
+      terminal: {
+        threadId: "thread-1",
+        terminalId: "provider-auth-codex",
+        cwd: "/tenant/provider-homes/user/codex",
+        worktreePath: null,
+        status: "running",
+        pid: 12_345,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        updatedAt: "2026-05-09T01:00:00.000Z",
+      },
+    });
+    rpcClientMock.providerAccounts.confirm.mockResolvedValue({
+      account: {
+        id: ProviderAccountId.make("provider-account-1"),
+        provider: "codex",
+        tenantId: TenantId.make("tenant-1"),
+        owner: { type: "user", userId: UserId.make("user-1") },
+        sharing: "private",
+        status: "connected",
+        createdAt: "2026-05-09T01:00:00.000Z",
+        disabledAt: null,
+        activeSessionCount: 1,
+      },
+    });
+    rpcClientMock.providerAccounts.disconnect.mockResolvedValue({
+      account: {
+        id: ProviderAccountId.make("provider-account-1"),
+        provider: "codex",
+        tenantId: TenantId.make("tenant-1"),
+        owner: { type: "user", userId: UserId.make("user-1") },
+        sharing: "private",
+        status: "disabled",
+        createdAt: "2026-05-09T01:00:00.000Z",
+        disabledAt: "2026-05-09T01:10:00.000Z",
+        activeSessionCount: 0,
+      },
+    });
+    const { createEnvironmentApi } = await import("./environmentApi");
+
+    const api = createEnvironmentApi(rpcClientMock as never);
+    await api.providerAccounts.list();
+    await api.providerAccounts.connect({ provider: "codex" });
+    await api.providerAccounts.openAuthTerminal({
+      provider: "codex",
+      threadId: ThreadId.make("thread-1"),
+    });
+    await api.providerAccounts.confirm({
+      provider: "codex",
+      threadId: ThreadId.make("thread-1"),
+      statusOutput: "Logged in",
+    });
+    await api.providerAccounts.disconnect({
+      providerAccountId: ProviderAccountId.make("provider-account-1"),
+    });
+
+    expect(rpcClientMock.providerAccounts.list).toHaveBeenCalledWith();
+    expect(rpcClientMock.providerAccounts.connect).toHaveBeenCalledWith({ provider: "codex" });
+    expect(rpcClientMock.providerAccounts.openAuthTerminal).toHaveBeenCalledWith({
+      provider: "codex",
+      threadId: ThreadId.make("thread-1"),
+    });
+    expect(rpcClientMock.providerAccounts.confirm).toHaveBeenCalledWith({
+      provider: "codex",
+      threadId: ThreadId.make("thread-1"),
+      statusOutput: "Logged in",
+    });
+    expect(rpcClientMock.providerAccounts.disconnect).toHaveBeenCalledWith({
+      providerAccountId: ProviderAccountId.make("provider-account-1"),
     });
   });
 

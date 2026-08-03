@@ -31,6 +31,17 @@ export const makeServerAuthPolicy = Effect.gen(function* () {
         : config.mode === "desktop" && policy === "remote-reachable"
           ? ["desktop-bootstrap", "one-time-token"]
           : ["one-time-token"];
+  const supabasePublicConfig: ServerAuthDescriptor["supabase"] =
+    config.supabaseProjectUrl && config.supabaseAnonKey
+      ? {
+          projectUrl: config.supabaseProjectUrl.toString(),
+          anonKey: config.supabaseAnonKey,
+          ...(config.supabaseJwtAudience ? { audience: config.supabaseJwtAudience } : {}),
+        }
+      : undefined;
+  const localPasswordConfig: ServerAuthDescriptor["localPassword"] = config.localPasswordAuth
+    ? { enabled: true }
+    : undefined;
 
   const descriptor: ServerAuthDescriptor = {
     policy,
@@ -40,6 +51,8 @@ export const makeServerAuthPolicy = Effect.gen(function* () {
       mode: config.mode,
       port: config.port,
     }),
+    ...(supabasePublicConfig ? { supabase: supabasePublicConfig } : {}),
+    ...(localPasswordConfig ? { localPassword: localPasswordConfig } : {}),
   };
 
   return {

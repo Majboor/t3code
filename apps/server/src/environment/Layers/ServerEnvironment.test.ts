@@ -41,6 +41,11 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     basicAuthUsername: undefined,
     basicAuthPassword: undefined,
     basicAuthRealm: "T3 Code",
+    supabaseProjectUrl: undefined,
+    supabaseAnonKey: undefined,
+    supabaseJwtAudience: undefined,
+    supabaseServiceRoleSecretName: undefined,
+    localPasswordAuth: false,
   } satisfies ServerConfigShape;
 });
 

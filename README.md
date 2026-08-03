@@ -1,12 +1,24 @@
 # T3 Code
 
-T3 Code is a minimal web GUI for coding agents (currently Codex and Claude, more coming soon).
+T3 Code is a minimal web GUI for coding agents.
+
+The current product direction is:
+
+- use one OpenAI-compatible core LLM endpoint as the default app model/runtime backend
+- allow users to connect and log in with both Codex and Claude providers
+- keep Codex and Claude login/account flows stubbed in the UI until the full provider onboarding flow is finished
 
 ## Installation
 
 > [!WARNING]
-> T3 Code currently supports Codex and Claude.
-> Install and authenticate at least one provider before use:
+> T3 Code is in an early transition period.
+>
+> The planned default is a single OpenAI-compatible core LLM configuration
+> supplied by the operator. Codex and Claude should still be exposed as
+> user-connectable providers, but the in-product login flow may be stubbed while
+> onboarding and account management are being built out.
+>
+> For local/manual setup today:
 >
 > - Codex: install [Codex CLI](https://github.com/openai/codex) and run `codex login`
 > - Claude: install Claude Code and run `claude auth login`
@@ -46,6 +58,7 @@ We are very very early in this project. Expect bugs.
 We are not accepting contributions yet.
 
 Observability guide: [docs/observability.md](./docs/observability.md)
+Roadmap and milestones: [docs/product-roadmap.md](./docs/product-roadmap.md)
 
 ## If you REALLY want to contribute still.... read this first
 

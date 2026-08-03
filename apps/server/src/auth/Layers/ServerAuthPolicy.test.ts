@@ -129,4 +129,29 @@ it.layer(NodeServices.layer)("ServerAuthPolicyLive", (it) => {
       ),
     ),
   );
+
+  it.effect("advertises only public Supabase browser auth config", () =>
+    Effect.gen(function* () {
+      const policy = yield* ServerAuthPolicy;
+      const descriptor = yield* policy.getDescriptor();
+
+      expect(descriptor.supabase).toEqual({
+        projectUrl: "https://project-ref.supabase.co/",
+        anonKey: "anon-public-key",
+        audience: "authenticated",
+      });
+      expect(JSON.stringify(descriptor)).not.toContain("service-role");
+    }).pipe(
+      Effect.provide(
+        makeServerAuthPolicyLayer({
+          mode: "web",
+          host: "0.0.0.0",
+          supabaseProjectUrl: new URL("https://project-ref.supabase.co"),
+          supabaseAnonKey: "anon-public-key",
+          supabaseJwtAudience: "authenticated",
+          supabaseServiceRoleSecretName: "supabase/service-role",
+        }),
+      ),
+    ),
+  );
 });

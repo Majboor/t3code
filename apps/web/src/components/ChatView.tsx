@@ -38,7 +38,11 @@ import { usePrimaryEnvironmentId } from "../environments/primary";
 import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
-import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import {
+  type DiffRouteSearch,
+  parseDiffRouteSearch,
+  stripDiffSearchParams,
+} from "../diffRouteSearch";
 import {
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
@@ -1682,12 +1686,46 @@ export default function ChatView(props: ChatViewProps) {
   ]);
 
   const onToggleWorkspace = useCallback(() => {
-    if (!isServerThread) {
+    if (!isServerThread && !draftId) {
       return;
     }
-    setPanelPreferenceForMode(desktopLayoutMode, workspaceOpen ? "none" : "workspace");
+    if (workspaceOpen && desktopLayoutDefinition.layout === "dev") {
+      updateSettings({ desktopLayoutMode: "vibe" });
+      setPanelPreferenceForMode("vibe", "none");
+    } else {
+      setPanelPreferenceForMode(desktopLayoutMode, workspaceOpen ? "none" : "workspace");
+    }
     if (!workspaceOpen) {
       onWorkspacePanelOpen?.();
+    }
+
+    const updateWorkspaceSearch = (previous: unknown): DiffRouteSearch => {
+      const rest = stripDiffSearchParams((previous ?? {}) as Record<string, unknown>);
+      return workspaceOpen
+        ? {
+            ...rest,
+            diff: undefined,
+            diffFilePath: undefined,
+            diffTurnId: undefined,
+            workspace: undefined,
+          }
+        : {
+            ...rest,
+            diff: undefined,
+            diffFilePath: undefined,
+            diffTurnId: undefined,
+            workspace: "1" as const,
+          };
+    };
+
+    if (draftId) {
+      void navigate({
+        to: "/draft/$draftId",
+        params: buildDraftThreadRouteParams(draftId),
+        replace: true,
+        search: updateWorkspaceSearch,
+      });
+      return;
     }
 
     void navigate({
@@ -1697,33 +1735,19 @@ export default function ChatView(props: ChatViewProps) {
         threadId,
       },
       replace: true,
-      search: (previous) => {
-        const rest = stripDiffSearchParams(previous);
-        return workspaceOpen
-          ? {
-              ...rest,
-              diff: undefined,
-              diffFilePath: undefined,
-              diffTurnId: undefined,
-              workspace: undefined,
-            }
-          : {
-              ...rest,
-              diff: undefined,
-              diffFilePath: undefined,
-              diffTurnId: undefined,
-              workspace: "1",
-            };
-      },
+      search: updateWorkspaceSearch,
     });
   }, [
+    desktopLayoutDefinition.layout,
     desktopLayoutMode,
+    draftId,
     environmentId,
     isServerThread,
     navigate,
     onWorkspacePanelOpen,
     setPanelPreferenceForMode,
     threadId,
+    updateSettings,
     workspaceOpen,
   ]);
   const onToggleDiff = useCallback(() => {
@@ -2890,6 +2914,16 @@ export default function ChatView(props: ChatViewProps) {
         ...(bootstrap ? { bootstrap } : {}),
         createdAt: messageCreatedAt,
       });
+      if (activeProject.ownership) {
+        void api.collaboration
+          .recordSharedPrompt({
+            tenantId: activeProject.ownership.tenantId,
+            workspaceId: activeProject.ownership.workspaceId,
+            threadId: threadIdForSend,
+            prompt: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+          })
+          .catch(() => undefined);
+      }
       turnStartSucceeded = true;
     })().catch(async (err: unknown) => {
       clearPendingWorkspaceLiveDiffBaseline(threadIdForSend);
@@ -3697,6 +3731,8 @@ export default function ChatView(props: ChatViewProps) {
           {...(routeKind === "draft" && draftId ? { draftId } : {})}
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
+          activeProjectId={activeProject?.id ?? null}
+          activeProjectOwnership={activeProject?.ownership}
           isGitRepo={isGitRepo}
           openInCwd={gitCwd}
           activeProjectScripts={activeProject?.scripts}

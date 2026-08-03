@@ -9,11 +9,15 @@ import {
   IsoDateTime,
   MessageId,
   NonNegativeInt,
+  OrganizationId,
   ProjectId,
   ProviderItemId,
+  TenantId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
+  UserId,
+  WorkspaceId,
 } from "./baseSchemas.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
@@ -143,10 +147,23 @@ export const ProjectScript = Schema.Struct({
 });
 export type ProjectScript = typeof ProjectScript.Type;
 
+export const OrchestrationProjectOwnership = Schema.Struct({
+  tenantId: TenantId,
+  tenantDisplayName: TrimmedNonEmptyString,
+  workspaceId: WorkspaceId,
+  workspaceTitle: TrimmedNonEmptyString,
+  organizationId: Schema.NullOr(OrganizationId),
+  organizationDisplayName: Schema.NullOr(TrimmedNonEmptyString),
+  ownerUserId: Schema.NullOr(UserId),
+  ownerDisplayName: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type OrchestrationProjectOwnership = typeof OrchestrationProjectOwnership.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
@@ -289,6 +306,7 @@ export const OrchestrationThread = Schema.Struct({
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  favorite: Schema.optionalKey(Schema.Boolean),
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
@@ -313,6 +331,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
@@ -335,6 +354,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  favorite: Schema.optionalKey(Schema.Boolean),
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
@@ -402,6 +422,7 @@ export const ProjectCreateCommand = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   createdAt: IsoDateTime,
@@ -413,6 +434,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   projectId: ProjectId,
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
@@ -465,6 +487,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  favorite: Schema.optional(Schema.Boolean),
 });
 
 const ThreadRuntimeModeSetCommand = Schema.Struct({
@@ -746,6 +769,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
@@ -757,6 +781,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
@@ -805,6 +830,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  favorite: Schema.optional(Schema.Boolean),
   updatedAt: IsoDateTime,
 });
 

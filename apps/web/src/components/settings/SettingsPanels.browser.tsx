@@ -6,11 +6,14 @@ import {
   AuthSessionId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  ProviderAccountId,
   type DesktopBridge,
   type DesktopUpdateChannel,
   type DesktopUpdateState,
   type LocalApi,
+  ProjectId,
   type ServerConfig,
+  ThreadId,
 } from "@t3tools/contracts";
 import { DateTime } from "effect";
 import { page } from "vitest/browser";
@@ -18,10 +21,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { __resetLocalApiForTests } from "../../localApi";
+import {
+  __resetEnvironmentApiOverridesForTests,
+  __setEnvironmentApiOverrideForTests,
+} from "../../environmentApi";
+import {
+  readSupabaseBrowserAccessToken,
+  writePrimaryEnvironmentDescriptor,
+  writeSupabaseBrowserAccessToken,
+} from "../../environments/primary";
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
+import { useStore } from "../../store";
 import { ConnectionsSettings } from "./ConnectionsSettings";
-import { GeneralSettingsPanel } from "./SettingsPanels";
+import { AccountSettingsPanel, GeneralSettingsPanel } from "./SettingsPanels";
 
 const authAccessHarness = vi.hoisted(() => {
   type Snapshot = AuthAccessSnapshot;
@@ -205,6 +218,39 @@ function makeUtc(value: string) {
   return DateTime.makeUnsafe(Date.parse(value));
 }
 
+async function clearBrowserState() {
+  localStorage.clear();
+  sessionStorage.clear();
+  if ("caches" in window) {
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+  }
+  document.cookie.split(";").forEach((cookie) => {
+    const name = cookie.split("=")[0]?.trim();
+    if (name) {
+      document.cookie = `${name}=; Max-Age=0; path=/`;
+    }
+  });
+
+  if ("indexedDB" in window && typeof indexedDB.databases === "function") {
+    const databases = await indexedDB.databases();
+    await Promise.all(
+      databases
+        .map((database) => database.name)
+        .filter((name): name is string => typeof name === "string" && name.length > 0)
+        .map(
+          (name) =>
+            new Promise<void>((resolve) => {
+              const request = indexedDB.deleteDatabase(name);
+              request.addEventListener("success", () => resolve());
+              request.addEventListener("error", () => resolve());
+              request.addEventListener("blocked", () => resolve());
+            }),
+        ),
+    );
+  }
+}
+
 function makePairingLink(input: {
   readonly id: string;
   readonly credential: string;
@@ -342,7 +388,9 @@ describe("GeneralSettingsPanel observability", () => {
   beforeEach(async () => {
     resetServerStateForTests();
     await __resetLocalApiForTests();
-    localStorage.clear();
+    __resetEnvironmentApiOverridesForTests();
+    await clearBrowserState();
+    writePrimaryEnvironmentDescriptor(createBaseServerConfig().environment);
     authAccessHarness.reset();
   });
 
@@ -358,6 +406,12 @@ describe("GeneralSettingsPanel observability", () => {
     document.body.innerHTML = "";
     resetServerStateForTests();
     await __resetLocalApiForTests();
+    __resetEnvironmentApiOverridesForTests();
+    writePrimaryEnvironmentDescriptor(null);
+    useStore.setState({
+      activeEnvironmentId: null,
+      environmentStateById: {},
+    });
     authAccessHarness.reset();
   });
 
@@ -650,6 +704,294 @@ describe("GeneralSettingsPanel observability", () => {
     await expect.element(page.getByText("This Mac")).toBeInTheDocument();
     await expect.element(page.getByText("Julius iPhone")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("loads and clears a stored Supabase browser session from account settings", async () => {
+    await clearBrowserState();
+    writeSupabaseBrowserAccessToken("stored-supabase-settings-token");
+    const uniqueEmail = `settings-supabase-${Date.now()}@example.test`;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      if (url.endsWith("/api/auth/profile")) {
+        expect(headers.get("authorization")).toBe("Bearer stored-supabase-settings-token");
+        if (init?.method === "PATCH") {
+          expect(JSON.parse(String(init.body))).toEqual({
+            displayName: "Updated Settings User",
+            avatarInitials: "US",
+          });
+          return new Response(
+            JSON.stringify({
+              userId: "supabase:settings-browser-user",
+              subject: uniqueEmail,
+              displayName: "Updated Settings User",
+              avatarInitials: "US",
+              role: "client",
+              sessionId: "supabase:settings-browser-user",
+              sessionMethod: "bearer-session-token",
+              client: {
+                deviceType: "browser",
+                browser: "Chromium",
+              },
+              expiresAt: "2036-05-07T00:00:00.000Z",
+              tenantStatus: "active",
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            userId: "supabase:settings-browser-user",
+            subject: uniqueEmail,
+            displayName: "Settings Supabase User",
+            avatarInitials: "SU",
+            role: "client",
+            sessionId: "supabase:settings-browser-user",
+            sessionMethod: "bearer-session-token",
+            client: {
+              deviceType: "browser",
+              browser: "Chromium",
+            },
+            expiresAt: "2036-05-07T00:00:00.000Z",
+            tenantStatus: "active",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unhandled fetch ${init?.method ?? "GET"} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mounted = await render(<AccountSettingsPanel />);
+
+    await expect.element(page.getByText("Settings Supabase User")).toBeInTheDocument();
+    await expect.element(page.getByText(uniqueEmail)).toBeInTheDocument();
+    await page.getByLabelText("Display name").fill("Updated Settings User");
+    await page.getByLabelText("Avatar").fill("US");
+    await page.getByRole("button", { name: "Save profile" }).click();
+    await expect.element(page.getByText("Account profile updated.")).toBeInTheDocument();
+    await expect.element(page.getByText("Updated Settings User")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Sign out of Supabase" }).click();
+    expect(readSupabaseBrowserAccessToken()).toBeNull();
+    await expect
+      .element(page.getByText("Supabase browser session removed. Sign in again to reconnect."))
+      .toBeInTheDocument();
+    await expect.element(page.getByText("Settings Supabase User")).not.toBeInTheDocument();
+  });
+
+  it("opens provider auth terminal, confirms status, and disconnects through the environment API", async () => {
+    await clearBrowserState();
+    const uniqueEmail = `provider-settings-${Date.now()}@example.test`;
+    const accountId = ProviderAccountId.make("provider-account-settings-browser");
+    const environmentId = EnvironmentId.make("environment-local");
+    const projectId = ProjectId.make("provider-settings-project");
+    const threadId = ThreadId.make("provider-settings-thread");
+    useStore.setState({
+      activeEnvironmentId: environmentId,
+      environmentStateById: {
+        [environmentId]: {
+          projectIds: [projectId],
+          projectById: {
+            [projectId]: {
+              id: projectId,
+              environmentId,
+              name: "Provider settings project",
+              cwd: "/repo/project",
+              defaultModelSelection: null,
+              scripts: [],
+            },
+          },
+          threadIds: [threadId],
+          threadIdsByProjectId: { [projectId]: [threadId] },
+          threadShellById: {
+            [threadId]: {
+              id: threadId,
+              environmentId,
+              codexThreadId: null,
+              projectId,
+              title: "Provider settings thread",
+              modelSelection: { provider: "codex", model: "gpt-5-codex" },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              error: null,
+              createdAt: "2026-05-09T00:00:00.000Z",
+              updatedAt: "2026-05-09T00:05:00.000Z",
+              archivedAt: null,
+              branch: null,
+              worktreePath: null,
+            },
+          },
+          threadSessionById: {},
+          threadTurnStateById: {},
+          messageIdsByThreadId: {},
+          messageByThreadId: {},
+          activityIdsByThreadId: {},
+          activityByThreadId: {},
+          proposedPlanIdsByThreadId: {},
+          proposedPlanByThreadId: {},
+          turnDiffIdsByThreadId: {},
+          turnDiffSummaryByThreadId: {},
+          sidebarThreadSummaryById: {},
+          bootstrapComplete: true,
+        },
+      },
+    });
+    const providerAccounts = {
+      list: vi.fn().mockResolvedValue({
+        accounts: [],
+      }),
+      connect: vi.fn().mockResolvedValue({
+        instructions: {
+          provider: "codex",
+          authCommand: "codex login --device-auth",
+          statusCommand: "codex login status",
+          verificationHint: "Start a hosted Codex turn after the device-auth flow completes.",
+          steps: [
+            "Open a hosted provider shell for this account.",
+            "Run `codex login --device-auth`.",
+          ],
+        },
+      }),
+      openAuthTerminal: vi.fn().mockResolvedValue({
+        instructions: {
+          provider: "codex",
+          authCommand: "codex login --device-auth",
+          statusCommand: "codex login status",
+          verificationHint: "Start a hosted Codex turn after the device-auth flow completes.",
+          steps: [
+            "Open a hosted provider shell for this account.",
+            "Run `codex login --device-auth`.",
+          ],
+        },
+        terminal: {
+          threadId,
+          terminalId: "provider-auth-codex",
+          cwd: "/tenant/provider-homes/user/codex",
+          worktreePath: null,
+          status: "running",
+          pid: 12_345,
+          history: "",
+          exitCode: null,
+          exitSignal: null,
+          updatedAt: "2026-05-09T01:00:00.000Z",
+        },
+      }),
+      confirm: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new Error("Codex status reported that the account is not logged in."),
+        )
+        .mockResolvedValueOnce({
+          account: {
+            id: accountId,
+            provider: "codex",
+            tenantId: "tenant-settings-browser",
+            owner: { type: "user", userId: "supabase:provider-settings-browser-user" },
+            sharing: "private",
+            status: "connected",
+            createdAt: "2026-05-09T01:00:00.000Z",
+            disabledAt: null,
+            activeSessionCount: 1,
+          },
+        }),
+      disconnect: vi.fn().mockResolvedValue({
+        account: {
+          id: accountId,
+          provider: "codex",
+          tenantId: "tenant-settings-browser",
+          owner: { type: "user", userId: "supabase:provider-settings-browser-user" },
+          sharing: "private",
+          status: "disabled",
+          createdAt: "2026-05-09T01:00:00.000Z",
+          disabledAt: "2026-05-09T01:10:00.000Z",
+          activeSessionCount: 0,
+        },
+      }),
+    };
+    __setEnvironmentApiOverrideForTests(environmentId, {
+      providerAccounts,
+    } as never);
+
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/profile")) {
+        return new Response(
+          JSON.stringify({
+            userId: "supabase:provider-settings-browser-user",
+            subject: uniqueEmail,
+            displayName: "Provider Settings User",
+            avatarInitials: "PS",
+            role: "client",
+            sessionId: "supabase:provider-settings-browser-user",
+            sessionMethod: "bearer-session-token",
+            client: {
+              deviceType: "browser",
+              browser: "Chromium",
+            },
+            expiresAt: "2036-05-07T00:00:00.000Z",
+            tenantStatus: "active",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unhandled fetch ${init?.method ?? "GET"} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mounted = await render(<AccountSettingsPanel />);
+
+    await expect.element(page.getByText("Provider Settings User")).toBeInTheDocument();
+    await expect.element(page.getByText(uniqueEmail)).toBeInTheDocument();
+    await expect.element(page.getByText("No provider accounts connected.")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Connect Codex" }).click();
+    await expect.element(page.getByText("provider-auth-codex")).toBeInTheDocument();
+    await expect
+      .element(page.getByText("codex login --device-auth", { exact: true }))
+      .toBeInTheDocument();
+    await expect.element(page.getByText("codex login status", { exact: true })).toBeInTheDocument();
+    const statusOutput = page.getByLabelText("Status output");
+    await statusOutput.fill("Not logged in");
+    await page.getByRole("button", { name: "Confirm status" }).click();
+    await expect
+      .element(page.getByText("Codex status reported that the account is not logged in."))
+      .toBeInTheDocument();
+    await statusOutput.fill("Logged in as provider-settings@example.test");
+    await page.getByRole("button", { name: "Confirm status" }).click();
+    await expect.element(page.getByText("Codex provider account connected.")).toBeInTheDocument();
+    await expect.element(page.getByText("Connected, 1 active session")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Disconnect" }).click();
+    await expect.element(page.getByText("Disconnected", { exact: true })).toBeInTheDocument();
+    expect(providerAccounts.list).toHaveBeenCalledWith();
+    expect(providerAccounts.openAuthTerminal).toHaveBeenCalledWith({
+      provider: "codex",
+      threadId,
+      accountScope: "personal",
+    });
+    expect(providerAccounts.connect).not.toHaveBeenCalled();
+    expect(providerAccounts.confirm).toHaveBeenNthCalledWith(1, {
+      provider: "codex",
+      threadId,
+      statusOutput: "Not logged in",
+      accountScope: "personal",
+    });
+    expect(providerAccounts.confirm).toHaveBeenNthCalledWith(2, {
+      provider: "codex",
+      threadId,
+      statusOutput: "Logged in as provider-settings@example.test",
+      accountScope: "personal",
+    });
+    expect(providerAccounts.disconnect).toHaveBeenCalledWith({ providerAccountId: accountId });
   });
 
   it("shows a disabled network access toggle with guidance in desktop builds", async () => {

@@ -1397,7 +1397,8 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         ),
       );
       const binaryPath = codexSettings.binaryPath;
-      const homePath = codexSettings.homePath;
+      const launchEnvironment = input.providerLaunchEnvironment?.env;
+      const homePath = launchEnvironment?.CODEX_HOME ?? codexSettings.homePath;
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",
@@ -1406,6 +1407,7 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         runtimeMode: input.runtimeMode,
         binaryPath,
         ...(homePath ? { homePath } : {}),
+        ...(launchEnvironment ? { environment: launchEnvironment } : {}),
         ...(input.modelSelection?.provider === "codex"
           ? { model: input.modelSelection.model }
           : {}),

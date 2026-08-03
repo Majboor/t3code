@@ -20,6 +20,13 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
   } as const;
+  const defaultSupabaseConfig = {
+    supabaseProjectUrl: undefined,
+    supabaseAnonKey: undefined,
+    supabaseJwtAudience: undefined,
+    supabaseServiceRoleSecretName: undefined,
+    localPasswordAuth: false,
+  } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: Record<string, unknown>) {
     const fs = yield* FileSystem.FileSystem;
@@ -90,6 +97,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         basicAuthUsername: undefined,
         basicAuthPassword: undefined,
         basicAuthRealm: "T3 Code",
+        ...defaultSupabaseConfig,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
       });
@@ -157,8 +165,75 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         basicAuthUsername: undefined,
         basicAuthPassword: undefined,
         basicAuthRealm: "T3 Code",
+        ...defaultSupabaseConfig,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
+      });
+    }),
+  );
+
+  it.effect("wires Supabase auth config from env without reading service-role secrets", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(os.tmpdir(), "t3-cli-config-supabase-env");
+      const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(8788),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          unsafeNoAuth: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_SUPABASE_PROJECT_URL: "https://project-ref.supabase.co",
+                  T3CODE_SUPABASE_ANON_KEY: "anon-public-key",
+                  T3CODE_SUPABASE_JWT_AUDIENCE: "authenticated",
+                  T3CODE_SUPABASE_SERVICE_ROLE_SECRET_NAME: "supabase/service-role",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved).toEqual({
+        logLevel: "Info",
+        ...defaultObservabilityConfig,
+        mode: "web",
+        port: 8788,
+        cwd: process.cwd(),
+        baseDir,
+        ...derivedPaths,
+        host: undefined,
+        staticDir: resolved.staticDir,
+        devUrl: undefined,
+        noBrowser: false,
+        startupPresentation: "browser",
+        desktopBootstrapToken: undefined,
+        unsafeNoAuth: false,
+        basicAuthUsername: undefined,
+        basicAuthPassword: undefined,
+        basicAuthRealm: "T3 Code",
+        supabaseProjectUrl: new URL("https://project-ref.supabase.co"),
+        supabaseAnonKey: "anon-public-key",
+        supabaseJwtAudience: "authenticated",
+        supabaseServiceRoleSecretName: "supabase/service-role",
+        autoBootstrapProjectFromCwd: true,
+        logWebSocketEvents: false,
       });
     }),
   );
@@ -225,6 +300,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         basicAuthUsername: undefined,
         basicAuthPassword: undefined,
         basicAuthRealm: "T3 Code",
+        ...defaultSupabaseConfig,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
       });
@@ -299,6 +375,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         basicAuthUsername: undefined,
         basicAuthPassword: undefined,
         basicAuthRealm: "T3 Code",
+        ...defaultSupabaseConfig,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
       });
@@ -423,6 +500,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         basicAuthUsername: undefined,
         basicAuthPassword: undefined,
         basicAuthRealm: "T3 Code",
+        ...defaultSupabaseConfig,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
       });
@@ -492,6 +570,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         basicAuthUsername: undefined,
         basicAuthPassword: undefined,
         basicAuthRealm: "T3 Code",
+        ...defaultSupabaseConfig,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
       });
@@ -556,6 +635,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         basicAuthUsername: undefined,
         basicAuthPassword: undefined,
         basicAuthRealm: "T3 Code",
+        ...defaultSupabaseConfig,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
       });

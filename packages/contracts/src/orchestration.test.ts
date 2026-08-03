@@ -9,6 +9,8 @@ import {
   OrchestrationEvent,
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
+  OrchestrationProject,
+  OrchestrationProjectShell,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -25,6 +27,8 @@ const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffI
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
 const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateCommand);
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
+const decodeOrchestrationProject = Schema.decodeUnknownEffect(OrchestrationProject);
+const decodeOrchestrationProjectShell = Schema.decodeUnknownEffect(OrchestrationProjectShell);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
@@ -111,11 +115,56 @@ it.effect("decodes project.create with createWorkspaceRootIfMissing enabled", ()
       projectId: "project-1",
       title: "Project Title",
       workspaceRoot: "/tmp/workspace",
+      ownership: {
+        tenantId: "tenant-acme",
+        tenantDisplayName: "Acme",
+        workspaceId: "workspace-acme",
+        workspaceTitle: "Acme Workspace",
+        organizationId: null,
+        organizationDisplayName: null,
+        ownerUserId: "user-acme",
+        ownerDisplayName: "Acme Owner",
+      },
       createWorkspaceRootIfMissing: true,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
 
     assert.strictEqual(parsed.createWorkspaceRootIfMissing, true);
+    assert.strictEqual(parsed.ownership?.workspaceTitle, "Acme Workspace");
+  }),
+);
+
+it.effect("decodes project ownership metadata on full and shell project snapshots", () =>
+  Effect.gen(function* () {
+    const project = {
+      id: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      ownership: {
+        tenantId: "tenant-acme",
+        tenantDisplayName: "Acme",
+        workspaceId: "workspace-app",
+        workspaceTitle: "Acme App",
+        organizationId: "org-acme",
+        organizationDisplayName: "Acme Inc",
+        ownerUserId: "user-1",
+        ownerDisplayName: "Ada Lovelace",
+      },
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+
+    const parsedProject = yield* decodeOrchestrationProject(project);
+    const parsedShell = yield* decodeOrchestrationProjectShell({
+      ...project,
+      deletedAt: undefined,
+    });
+
+    assert.strictEqual(parsedProject.ownership?.workspaceTitle, "Acme App");
+    assert.strictEqual(parsedShell.ownership?.organizationDisplayName, "Acme Inc");
   }),
 );
 
@@ -283,9 +332,25 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       },
+      favorite: true,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection?.provider, "claudeAgent");
+    assert.strictEqual(parsed.favorite, true);
+  }),
+);
+
+it.effect("decodes thread favorite metadata commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.meta.update",
+      commandId: "cmd-favorite-1",
+      threadId: "thread-1",
+      favorite: true,
+    });
+
+    assert.strictEqual(parsed.type, "thread.meta.update");
+    assert.strictEqual(parsed.favorite, true);
   }),
 );
 

@@ -31,6 +31,19 @@ const ProviderSessionStatus = Schema.Literals([
   "closed",
 ]);
 
+const ProviderLaunchEnvKey = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
+).check(Schema.isMaxLength(128));
+const ProviderLaunchEnvValue = Schema.String.check(Schema.isMaxLength(8_192));
+const ProviderLaunchEnv = Schema.Record(ProviderLaunchEnvKey, ProviderLaunchEnvValue).check(
+  Schema.isMaxProperties(128),
+);
+
+export const ProviderLaunchEnvironment = Schema.Struct({
+  env: ProviderLaunchEnv,
+});
+export type ProviderLaunchEnvironment = typeof ProviderLaunchEnvironment.Type;
+
 export const ProviderSession = Schema.Struct({
   provider: ProviderKind,
   status: ProviderSessionStatus,
@@ -54,6 +67,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   resumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
+  providerLaunchEnvironment: Schema.optional(ProviderLaunchEnvironment),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;

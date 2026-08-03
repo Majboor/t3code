@@ -2,6 +2,7 @@ import { ArrowLeftIcon, RotateCcwIcon } from "lucide-react";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
+import { resolvePrivateRouteRedirect } from "../authRouting";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 import { Button } from "../components/ui/button";
 import { SidebarInset, SidebarTrigger } from "../components/ui/sidebar";
@@ -109,8 +110,9 @@ function SettingsRouteLayout() {
 
 export const Route = createFileRoute("/settings")({
   beforeLoad: async ({ context, location }) => {
-    if (context.authGateState.status !== "authenticated") {
-      throw redirect({ to: "/pair", replace: true });
+    const redirectTo = resolvePrivateRouteRedirect({ authGateState: context.authGateState });
+    if (redirectTo) {
+      throw redirect({ to: redirectTo, replace: true });
     }
 
     if (location.pathname === "/settings") {

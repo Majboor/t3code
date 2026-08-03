@@ -31,7 +31,7 @@ import {
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useCommandPaletteStore } from "../commandPaletteStore";
+import { useCommandPaletteStore, type AddProjectWorkspaceContext } from "../commandPaletteStore";
 import { readEnvironmentApi } from "../environmentApi";
 import { readPrimaryEnvironmentDescriptor, usePrimaryEnvironmentId } from "../environments/primary";
 import {
@@ -225,6 +225,8 @@ function OpenCommandPaletteDialog() {
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
+  const [addProjectWorkspaceContext, setAddProjectWorkspaceContext] =
+    useState<AddProjectWorkspaceContext | null>(null);
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const primaryEnvironmentLabel = readPrimaryEnvironmentDescriptor()?.label ?? null;
@@ -542,6 +544,7 @@ function OpenCommandPaletteDialog() {
   function popView(): void {
     if (viewStack.length <= 1) {
       setAddProjectEnvironmentId(null);
+      setAddProjectWorkspaceContext(null);
     }
     setViewStack((previousViews) => previousViews.slice(0, -1));
     setHighlightedItemValue(null);
@@ -557,8 +560,12 @@ function OpenCommandPaletteDialog() {
   }
 
   const startAddProjectBrowse = useCallback(
-    (environmentId: EnvironmentId): void => {
+    (
+      environmentId: EnvironmentId,
+      workspaceContext: AddProjectWorkspaceContext | null = null,
+    ): void => {
       setAddProjectEnvironmentId(environmentId);
+      setAddProjectWorkspaceContext(workspaceContext);
       pushPaletteView({
         addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
         groups: [],
@@ -594,39 +601,48 @@ function OpenCommandPaletteDialog() {
     [addProjectEnvironmentItems],
   );
 
-  const openAddProjectFlow = useCallback(() => {
-    if (addProjectEnvironmentOptions.length > 1) {
-      pushPaletteView({
-        addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
-        groups: addProjectEnvironmentGroups,
-      });
-      return;
-    }
+  const openAddProjectFlow = useCallback(
+    (workspaceContext: AddProjectWorkspaceContext | null = null) => {
+      if (workspaceContext) {
+        startAddProjectBrowse(workspaceContext.environmentId, workspaceContext);
+        return;
+      }
 
-    const environmentId = defaultAddProjectEnvironmentId;
-    if (!environmentId) {
-      toastManager.add({
-        type: "error",
-        title: "Unable to browse projects",
-        description: "No environment is available.",
-      });
-      return;
-    }
+      if (addProjectEnvironmentOptions.length > 1) {
+        setAddProjectWorkspaceContext(null);
+        pushPaletteView({
+          addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
+          groups: addProjectEnvironmentGroups,
+        });
+        return;
+      }
 
-    startAddProjectBrowse(environmentId);
-  }, [
-    addProjectEnvironmentGroups,
-    addProjectEnvironmentOptions.length,
-    defaultAddProjectEnvironmentId,
-    startAddProjectBrowse,
-  ]);
+      const environmentId = defaultAddProjectEnvironmentId;
+      if (!environmentId) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to browse projects",
+          description: "No environment is available.",
+        });
+        return;
+      }
+
+      startAddProjectBrowse(environmentId);
+    },
+    [
+      addProjectEnvironmentGroups,
+      addProjectEnvironmentOptions.length,
+      defaultAddProjectEnvironmentId,
+      startAddProjectBrowse,
+    ],
+  );
 
   useEffect(() => {
     if (openIntent?.kind !== "add-project") {
       return;
     }
     clearOpenIntent();
-    openAddProjectFlow();
+    openAddProjectFlow(openIntent.workspace ?? null);
   }, [clearOpenIntent, openAddProjectFlow, openIntent]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
@@ -779,6 +795,9 @@ function OpenCommandPaletteDialog() {
           title: inferProjectTitleFromPath(cwd),
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: true,
+          ...(addProjectWorkspaceContext
+            ? { ownership: addProjectWorkspaceContext.ownership }
+            : {}),
           defaultModelSelection: {
             provider: "codex",
             model: DEFAULT_MODEL_BY_PROVIDER.codex,
@@ -800,6 +819,7 @@ function OpenCommandPaletteDialog() {
     [
       browseEnvironmentId,
       browseEnvironmentPlatform,
+      addProjectWorkspaceContext,
       currentProjectCwdForBrowse,
       handleNewThread,
       navigate,

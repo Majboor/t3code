@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   ModelSelection,
   OrchestrationLatestTurn,
+  OrchestrationProjectOwnership,
   OrchestrationProposedPlanId,
   RepositoryIdentity,
   OrchestrationSessionStatus,
@@ -85,6 +86,7 @@ export interface Project {
   environmentId: EnvironmentId;
   name: string;
   cwd: string;
+  ownership?: OrchestrationProjectOwnership | null;
   repositoryIdentity?: RepositoryIdentity | null;
   defaultModelSelection: ModelSelection | null;
   createdAt?: string | undefined;
@@ -106,6 +108,7 @@ export interface Thread {
   proposedPlans: ProposedPlan[];
   error: string | null;
   createdAt: string;
+  favorite?: boolean | undefined;
   archivedAt: string | null;
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
@@ -127,6 +130,7 @@ export interface ThreadShell {
   interactionMode: ProviderInteractionMode;
   error: string | null;
   createdAt: string;
+  favorite?: boolean | undefined;
   archivedAt: string | null;
   updatedAt?: string | undefined;
   branch: string | null;
@@ -146,6 +150,7 @@ export interface SidebarThreadSummary {
   interactionMode: ProviderInteractionMode;
   session: ThreadSession | null;
   createdAt: string;
+  favorite?: boolean | undefined;
   archivedAt: string | null;
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;

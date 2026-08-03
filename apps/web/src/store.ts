@@ -214,6 +214,7 @@ function mapProject(
     environmentId,
     name: project.title,
     cwd: project.workspaceRoot,
+    ownership: project.ownership ?? null,
     repositoryIdentity: project.repositoryIdentity ?? null,
     defaultModelSelection: project.defaultModelSelection
       ? normalizeModelSelection(project.defaultModelSelection)
@@ -239,6 +240,7 @@ function mapThread(thread: OrchestrationThread, environmentId: EnvironmentId): T
     proposedPlans: thread.proposedPlans.map(mapProposedPlan),
     error: sanitizeThreadErrorMessage(thread.session?.lastError),
     createdAt: thread.createdAt,
+    favorite: thread.favorite ?? false,
     archivedAt: thread.archivedAt,
     updatedAt: thread.updatedAt,
     latestTurn: thread.latestTurn,
@@ -270,6 +272,7 @@ function mapThreadShell(
     interactionMode: thread.interactionMode,
     error: sanitizeThreadErrorMessage(thread.session?.lastError),
     createdAt: thread.createdAt,
+    favorite: thread.favorite ?? false,
     archivedAt: thread.archivedAt,
     updatedAt: thread.updatedAt,
     branch: thread.branch,
@@ -288,6 +291,7 @@ function mapThreadShell(
     interactionMode: thread.interactionMode,
     session,
     createdAt: thread.createdAt,
+    favorite: thread.favorite ?? false,
     archivedAt: thread.archivedAt,
     updatedAt: thread.updatedAt,
     latestTurn: thread.latestTurn,
@@ -318,6 +322,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     interactionMode: thread.interactionMode,
     error: thread.error,
     createdAt: thread.createdAt,
+    favorite: thread.favorite,
     archivedAt: thread.archivedAt,
     updatedAt: thread.updatedAt,
     branch: thread.branch,
@@ -389,6 +394,7 @@ function sidebarThreadSummariesEqual(
     left.interactionMode === right.interactionMode &&
     threadSessionsEqual(left.session, right.session) &&
     left.createdAt === right.createdAt &&
+    (left.favorite ?? false) === (right.favorite ?? false) &&
     left.archivedAt === right.archivedAt &&
     left.updatedAt === right.updatedAt &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
@@ -414,6 +420,7 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     left.interactionMode === right.interactionMode &&
     left.error === right.error &&
     left.createdAt === right.createdAt &&
+    (left.favorite ?? false) === (right.favorite ?? false) &&
     left.archivedAt === right.archivedAt &&
     left.updatedAt === right.updatedAt &&
     left.branch === right.branch &&
@@ -1151,6 +1158,7 @@ function applyEnvironmentOrchestrationEvent(
           id: event.payload.projectId,
           title: event.payload.title,
           workspaceRoot: event.payload.workspaceRoot,
+          ...(event.payload.ownership !== undefined ? { ownership: event.payload.ownership } : {}),
           repositoryIdentity: event.payload.repositoryIdentity ?? null,
           defaultModelSelection: event.payload.defaultModelSelection,
           scripts: event.payload.scripts,
@@ -1205,6 +1213,7 @@ function applyEnvironmentOrchestrationEvent(
         ...project,
         ...(event.payload.title !== undefined ? { name: event.payload.title } : {}),
         ...(event.payload.workspaceRoot !== undefined ? { cwd: event.payload.workspaceRoot } : {}),
+        ...(event.payload.ownership !== undefined ? { ownership: event.payload.ownership } : {}),
         ...(event.payload.repositoryIdentity !== undefined
           ? { repositoryIdentity: event.payload.repositoryIdentity ?? null }
           : {}),
@@ -1255,6 +1264,7 @@ function applyEnvironmentOrchestrationEvent(
           worktreePath: event.payload.worktreePath,
           latestTurn: null,
           createdAt: event.payload.createdAt,
+          favorite: false,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
           deletedAt: null,
@@ -1297,6 +1307,7 @@ function applyEnvironmentOrchestrationEvent(
         ...(event.payload.worktreePath !== undefined
           ? { worktreePath: event.payload.worktreePath }
           : {}),
+        ...(event.payload.favorite !== undefined ? { favorite: event.payload.favorite } : {}),
         updatedAt: event.payload.updatedAt,
       }));
 
