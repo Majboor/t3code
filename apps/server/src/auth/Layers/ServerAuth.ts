@@ -10,8 +10,14 @@ import {
   type AuthUserProfile,
   AuthSessionId,
   type TenantSessionContext,
+  type Tenant,
+  TenantId,
   type TenantMembership,
+  MembershipId,
+  TenantRuntimeId,
   type TenantRole,
+  type Workspace,
+  WorkspaceId,
   UserId,
   type AuthWebSocketTokenResult,
 } from "@t3tools/contracts";
@@ -123,6 +129,96 @@ export const makeServerAuth = Effect.gen(function* () {
     return roles.length > 0 ? (roles as [TenantRole, ...TenantRole[]]) : null;
   };
 
+  const tenancyLoadError = (cause: unknown): AuthError =>
+    new AuthError({
+      message: "Failed to load tenant memberships.",
+      status: 500,
+      cause,
+    });
+
+  const provisionPersonalTenant = (input: {
+    readonly userId: UserId;
+    readonly displayName: string;
+  }): Effect.Effect<TenantMembership, AuthError> =>
+    Effect.gen(function* () {
+      const [organizations, collaboration, workspaces] = yield* Effect.all([
+        tenancyRepository.loadOrganizations(),
+        tenancyRepository.loadCollaboration(),
+        tenancyRepository.loadWorkspaces(),
+      ]).pipe(Effect.mapError(tenancyLoadError));
+      const existing = [...organizations.memberships, ...collaboration.memberships].find(
+        (membership) => membership.userId === input.userId && membership.disabledAt === null,
+      );
+      if (existing) {
+        return existing;
+      }
+      const now = yield* DateTime.now;
+      const createdAt = DateTime.formatIso(DateTime.toUtc(now));
+      const suffix = crypto.randomUUID();
+      const displayName = input.displayName.trim() || "Personal";
+      const tenant: Tenant = {
+        id: TenantId.make(`tenant:personal-${suffix}`),
+        slug: `personal-${suffix}`,
+        displayName,
+        kind: "personal",
+        organizationId: null,
+        runtimeId: TenantRuntimeId.make(`runtime:personal-${suffix}`),
+        createdAt,
+        archivedAt: null,
+      };
+      const membership: TenantMembership = {
+        id: MembershipId.make(`membership:${crypto.randomUUID()}`),
+        tenantId: tenant.id,
+        userId: input.userId,
+        organizationId: null,
+        roles: ["owner"],
+        createdAt,
+        disabledAt: null,
+      };
+      const workspace: Workspace = {
+        id: WorkspaceId.make(`workspace:${crypto.randomUUID()}`),
+        tenantId: tenant.id,
+        organizationId: null,
+        ownerUserId: input.userId,
+        kind: "personal",
+        accessMode: "invite-only",
+        title: `${displayName}'s Workspace`,
+        createdAt,
+        archivedAt: null,
+      };
+      const persistError = (cause: unknown): AuthError =>
+        new AuthError({
+          message: "Failed to provision personal workspace.",
+          status: 500,
+          cause,
+        });
+      yield* tenancyRepository
+        .saveOrganizations({
+          ...organizations,
+          tenants: [...organizations.tenants, tenant],
+        })
+        .pipe(Effect.mapError(persistError));
+      yield* tenancyRepository
+        .saveCollaboration({
+          ...collaboration,
+          memberships: [...collaboration.memberships, membership],
+        })
+        .pipe(Effect.mapError(persistError));
+      yield* tenancyRepository
+        .saveWorkspaces({
+          workspaces: [...workspaces.workspaces, workspace],
+        })
+        .pipe(Effect.mapError(persistError));
+      yield* Effect.logInfo("auth.onboarding.personal-tenant-provisioned").pipe(
+        Effect.annotateLogs({
+          userId: input.userId,
+          tenantId: tenant.id,
+          workspaceId: workspace.id,
+        }),
+      );
+      return membership;
+    });
+
   const resolveLocalTenantSessionContext = (input: {
     readonly sessionId: AuthSessionId;
     readonly subject: string;
@@ -146,9 +242,20 @@ export const makeServerAuth = Effect.gen(function* () {
             }),
         ),
       );
-      const activeMemberships = [...organizations.memberships, ...collaboration.memberships].filter(
+      let activeMemberships = [...organizations.memberships, ...collaboration.memberships].filter(
         (membership) => membership.userId === userId && membership.disabledAt === null,
       );
+      if (activeMemberships.length === 0) {
+        const account = yield* localAccounts.getByUserId({ userId }).pipe(
+          Effect.map((entry) => (Option.isSome(entry) ? entry.value : undefined)),
+          Effect.mapError(tenancyLoadError),
+        );
+        const provisioned = yield* provisionPersonalTenant({
+          userId,
+          displayName: account?.displayName ?? "Personal",
+        });
+        activeMemberships = [provisioned];
+      }
       const firstMembership = activeMemberships[0];
       if (!firstMembership) {
         return undefined;
@@ -335,40 +442,53 @@ export const makeServerAuth = Effect.gen(function* () {
       );
       const issuedAt = yield* DateTime.now;
       const expiresAt = DateTime.fromDateUnsafe(new Date(identity.claims.exp * 1000));
-      const tenantSessionContext = yield* Effect.try({
-        try: () =>
-          mapSupabaseIdentityToTenantSessionContext({
-            authSessionId: AuthSessionId.make(`supabase:${identity.subject}`),
-            identity,
-            memberships: [...organizations.memberships, ...collaboration.memberships],
-            ...(readSupabaseTenantIdClaim(identity.claims)
-              ? { tenantId: readSupabaseTenantIdClaim(identity.claims) }
-              : {}),
-            ...(readSupabaseActiveWorkspaceIdClaim(identity.claims)
-              ? { activeWorkspaceId: readSupabaseActiveWorkspaceIdClaim(identity.claims) }
-              : {}),
-            issuedAt: DateTime.formatIso(DateTime.toUtc(issuedAt)),
-            expiresAt: DateTime.formatIso(DateTime.toUtc(expiresAt)),
-          }),
-        catch: (cause): SupabaseAuthBridgeError =>
-          cause instanceof SupabaseAuthBridgeError
-            ? cause
-            : new SupabaseAuthBridgeError({
-                message: "Failed to map Supabase tenant session.",
-                status: 500,
-                cause,
-              }),
-      }).pipe(
-        Effect.catchTag("SupabaseAuthBridgeError", (cause) =>
-          cause.message === "Supabase user is not a member of any tenant."
-            ? Effect.void
-            : Effect.fail(
-                new AuthError({
-                  message: cause.message,
-                  ...(cause.status ? { status: cause.status } : {}),
+      const mapTenantSessionContext = (memberships: readonly TenantMembership[]) =>
+        Effect.try({
+          try: () =>
+            mapSupabaseIdentityToTenantSessionContext({
+              authSessionId: AuthSessionId.make(`supabase:${identity.subject}`),
+              identity,
+              memberships,
+              ...(readSupabaseTenantIdClaim(identity.claims)
+                ? { tenantId: readSupabaseTenantIdClaim(identity.claims) }
+                : {}),
+              ...(readSupabaseActiveWorkspaceIdClaim(identity.claims)
+                ? { activeWorkspaceId: readSupabaseActiveWorkspaceIdClaim(identity.claims) }
+                : {}),
+              issuedAt: DateTime.formatIso(DateTime.toUtc(issuedAt)),
+              expiresAt: DateTime.formatIso(DateTime.toUtc(expiresAt)),
+            }),
+          catch: (cause): SupabaseAuthBridgeError =>
+            cause instanceof SupabaseAuthBridgeError
+              ? cause
+              : new SupabaseAuthBridgeError({
+                  message: "Failed to map Supabase tenant session.",
+                  status: 500,
                   cause,
                 }),
-              ),
+        });
+      const bridgeAuthError = (cause: SupabaseAuthBridgeError): AuthError =>
+        new AuthError({
+          message: cause.message,
+          ...(cause.status ? { status: cause.status } : {}),
+          cause,
+        });
+      const tenantSessionContext = yield* mapTenantSessionContext([
+        ...organizations.memberships,
+        ...collaboration.memberships,
+      ]).pipe(
+        Effect.catchTag("SupabaseAuthBridgeError", (cause) =>
+          cause.message === "Supabase user is not a member of any tenant."
+            ? provisionPersonalTenant({
+                userId: identity.userId,
+                displayName: identity.displayName,
+              }).pipe(
+                Effect.flatMap((membership) => mapTenantSessionContext([membership])),
+                Effect.catchTag("SupabaseAuthBridgeError", (mapCause) =>
+                  Effect.fail(bridgeAuthError(mapCause)),
+                ),
+              )
+            : Effect.fail(bridgeAuthError(cause)),
         ),
       );
       const client = deriveAuthClientMetadata({

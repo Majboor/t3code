@@ -212,7 +212,7 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
     }).pipe(Effect.provide(makeServerAuthLayer())),
   );
 
-  it.effect("authenticates local password accounts as pending tenant users", () =>
+  it.effect("provisions personal tenants for local password accounts on first login", () =>
     Effect.gen(function* () {
       const serverAuth = yield* ServerAuth;
 
@@ -231,9 +231,11 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
 
       expect(signupSession.subject).toMatch(/^local-user:local:/);
       expect(signupSession.userId).toBeDefined();
-      expect(signupSession.tenantSessionContext).toBeUndefined();
+      expect(signupSession.tenantSessionContext).toBeDefined();
+      expect(signupSession.tenantSessionContext?.tenantId).toMatch(/^tenant:personal-/);
+      expect(signupSession.tenantSessionContext?.roles).toEqual(["owner"]);
       expect(signupProfile.userId).toBe(signupSession.userId);
-      expect(signupProfile.tenantStatus).toBe("pending-membership");
+      expect(signupProfile.tenantStatus).toBe("active");
       expect(signupProfile.displayName).toBe("Employee Example");
 
       const login = yield* serverAuth.authenticatePassword(
@@ -250,6 +252,9 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
 
       expect(loginSession.subject).toBe(signupSession.subject);
       expect(loginSession.userId).toBe(signupSession.userId);
+      expect(loginSession.tenantSessionContext?.tenantId).toBe(
+        signupSession.tenantSessionContext?.tenantId,
+      );
     }).pipe(Effect.provide(makeServerAuthLayer({ localPasswordAuth: true }))),
   );
 
@@ -481,39 +486,39 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
     ),
   );
 
-  it.effect(
-    "authenticates Supabase bearer tokens without membership as pending tenant sessions",
-    () =>
-      Effect.gen(function* () {
-        const fixture = makeSignedSupabaseFixture();
-        const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
-        try {
-          const serverAuth = yield* ServerAuth;
-          const session = yield* serverAuth.authenticateHttpRequest(makeBearerRequest(fixture.jwt));
-          const sessionState = yield* serverAuth.getSessionState(makeBearerRequest(fixture.jwt));
-          const profile = yield* serverAuth.getUserProfile(makeBearerRequest(fixture.jwt));
+  it.effect("provisions personal tenants for Supabase bearer tokens without membership", () =>
+    Effect.gen(function* () {
+      const fixture = makeSignedSupabaseFixture();
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      try {
+        const serverAuth = yield* ServerAuth;
+        const session = yield* serverAuth.authenticateHttpRequest(makeBearerRequest(fixture.jwt));
+        const sessionState = yield* serverAuth.getSessionState(makeBearerRequest(fixture.jwt));
+        const profile = yield* serverAuth.getUserProfile(makeBearerRequest(fixture.jwt));
 
-          expect(session.subject).toBe(SUPABASE_SUBJECT);
-          expect(session.role).toBe("client");
-          expect(session.method).toBe("bearer-session-token");
-          expect(session.userId).toBe(SUPABASE_USER_ID);
-          expect(session.tenantSessionContext).toBeUndefined();
-          expect(sessionState.tenantStatus).toBe("pending-membership");
-          expect(sessionState.tenantSession).toBeUndefined();
-          expect(profile.userId).toBe(SUPABASE_USER_ID);
-          expect(profile.tenantStatus).toBe("pending-membership");
-          expect(profile.tenantSession).toBeUndefined();
-        } finally {
-          fetchSpy.mockRestore();
-        }
-      }).pipe(
-        Effect.provide(
-          makeServerAuthLayer({
-            supabaseProjectUrl: new URL(SUPABASE_PROJECT_URL),
-            supabaseJwtAudience: "authenticated",
-          }),
-        ),
+        expect(session.subject).toBe(SUPABASE_SUBJECT);
+        expect(session.role).toBe("client");
+        expect(session.method).toBe("bearer-session-token");
+        expect(session.userId).toBe(SUPABASE_USER_ID);
+        expect(session.tenantSessionContext).toBeDefined();
+        expect(session.tenantSessionContext?.tenantId).toMatch(/^tenant:personal-/);
+        expect(session.tenantSessionContext?.roles).toEqual(["owner"]);
+        expect(sessionState.tenantStatus).toBe("active");
+        expect(sessionState.tenantSession?.tenantId).toBe(session.tenantSessionContext?.tenantId);
+        expect(profile.userId).toBe(SUPABASE_USER_ID);
+        expect(profile.tenantStatus).toBe("active");
+        expect(profile.tenantSession?.tenantId).toBe(session.tenantSessionContext?.tenantId);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(
+      Effect.provide(
+        makeServerAuthLayer({
+          supabaseProjectUrl: new URL(SUPABASE_PROJECT_URL),
+          supabaseJwtAudience: "authenticated",
+        }),
       ),
+    ),
   );
 
   it.effect("denies Supabase bearer tokens without an active tenant membership", () =>
