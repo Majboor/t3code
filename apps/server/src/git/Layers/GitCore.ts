@@ -2365,6 +2365,92 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
       ),
     );
 
+  const listConflictPaths = (cwd: string): Effect.Effect<string[], GitCommandError> =>
+    runGitStdout(
+      "GitCore.listConflictPaths",
+      cwd,
+      ["diff", "--name-only", "--diff-filter=U"],
+      true,
+    ).pipe(
+      Effect.map((stdout) =>
+        stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+      ),
+    );
+
+  const getMergeState: GitCoreShape["getMergeState"] = Effect.fn("getMergeState")(function* (cwd) {
+    const mergeHead = yield* executeGit(
+      "GitCore.getMergeState.mergeHead",
+      cwd,
+      ["rev-parse", "-q", "--verify", "MERGE_HEAD"],
+      { allowNonZeroExit: true },
+    );
+    if (mergeHead.code === 0) {
+      return { inProgress: "merge" as const, conflictPaths: yield* listConflictPaths(cwd) };
+    }
+    const rebaseHead = yield* executeGit(
+      "GitCore.getMergeState.rebaseHead",
+      cwd,
+      ["rev-parse", "-q", "--verify", "REBASE_HEAD"],
+      { allowNonZeroExit: true },
+    );
+    if (rebaseHead.code === 0) {
+      return { inProgress: "rebase" as const, conflictPaths: yield* listConflictPaths(cwd) };
+    }
+    return { inProgress: null, conflictPaths: [] };
+  });
+
+  const mergeBranch: GitCoreShape["mergeBranch"] = Effect.fn("mergeBranch")(function* (input) {
+    const mode = input.mode ?? "merge";
+    const args = mode === "merge" ? ["merge", "--no-edit", input.branch] : ["rebase", input.branch];
+    const result = yield* executeGit(`GitCore.mergeBranch.${mode}`, input.cwd, args, {
+      allowNonZeroExit: true,
+      timeoutMs: 60_000,
+    });
+    if (result.code === 0) {
+      const upToDate =
+        /already up to date/i.test(result.stdout) || /is up to date/i.test(result.stdout);
+      return {
+        status: upToDate ? ("up-to-date" as const) : ("completed" as const),
+        mode,
+        branch: input.branch,
+        conflictPaths: [],
+      };
+    }
+    const conflictPaths = yield* listConflictPaths(input.cwd);
+    if (conflictPaths.length > 0) {
+      return { status: "conflicts" as const, mode, branch: input.branch, conflictPaths };
+    }
+    yield* runGit(
+      `GitCore.mergeBranch.${mode}.cleanup`,
+      input.cwd,
+      mode === "merge" ? ["merge", "--abort"] : ["rebase", "--abort"],
+      true,
+    );
+    const stderr = result.stderr.trim();
+    return yield* createGitCommandError(
+      `GitCore.mergeBranch.${mode}`,
+      input.cwd,
+      args,
+      stderr.length > 0 ? stderr : `git ${mode} failed`,
+    );
+  });
+
+  const abortMerge: GitCoreShape["abortMerge"] = Effect.fn("abortMerge")(function* (cwd) {
+    const merge = yield* executeGit("GitCore.abortMerge.merge", cwd, ["merge", "--abort"], {
+      allowNonZeroExit: true,
+    });
+    if (merge.code === 0) {
+      return { aborted: true };
+    }
+    const rebase = yield* executeGit("GitCore.abortMerge.rebase", cwd, ["rebase", "--abort"], {
+      allowNonZeroExit: true,
+    });
+    return { aborted: rebase.code === 0 };
+  });
+
   return {
     execute,
     status,
@@ -2392,6 +2478,9 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     checkoutBranch,
     initRepo,
     listLocalBranchNames,
+    mergeBranch,
+    getMergeState,
+    abortMerge,
   } satisfies GitCoreShape;
 });
 

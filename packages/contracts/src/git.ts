@@ -195,6 +195,45 @@ export const GitInitInput = Schema.Struct({
 });
 export type GitInitInput = typeof GitInitInput.Type;
 
+export const GitMergeMode = Schema.Literals(["merge", "rebase"]);
+export type GitMergeMode = typeof GitMergeMode.Type;
+
+export const GitMergeBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  branch: TrimmedNonEmptyStringSchema,
+  mode: Schema.optional(GitMergeMode),
+});
+export type GitMergeBranchInput = typeof GitMergeBranchInput.Type;
+
+export const GitMergeBranchResult = Schema.Struct({
+  status: Schema.Literals(["completed", "up-to-date", "conflicts"]),
+  mode: GitMergeMode,
+  branch: TrimmedNonEmptyStringSchema,
+  conflictPaths: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+export type GitMergeBranchResult = typeof GitMergeBranchResult.Type;
+
+export const GitMergeStateInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+});
+export type GitMergeStateInput = typeof GitMergeStateInput.Type;
+
+export const GitMergeStateResult = Schema.Struct({
+  inProgress: Schema.NullOr(GitMergeMode),
+  conflictPaths: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+export type GitMergeStateResult = typeof GitMergeStateResult.Type;
+
+export const GitAbortMergeInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+});
+export type GitAbortMergeInput = typeof GitAbortMergeInput.Type;
+
+export const GitAbortMergeResult = Schema.Struct({
+  aborted: Schema.Boolean,
+});
+export type GitAbortMergeResult = typeof GitAbortMergeResult.Type;
+
 // RPC Results
 
 const GitStatusPr = Schema.Struct({

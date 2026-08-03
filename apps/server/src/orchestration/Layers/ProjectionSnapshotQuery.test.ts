@@ -453,13 +453,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           hasPendingApprovals: true,
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
+          favorite: false,
         },
       ]);
 
       const threadDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
       assert.equal(threadDetail._tag, "Some");
       if (threadDetail._tag === "Some") {
-        assert.deepEqual(threadDetail.value, snapshot.threads[0]);
+        // Thread details carry the per-session favorite flag; the read model does not.
+        assert.deepEqual(threadDetail.value, { ...snapshot.threads[0], favorite: false });
       }
     }),
   );

@@ -21,7 +21,7 @@ export interface GitActionMenuItem {
 export interface GitQuickAction {
   label: string;
   disabled: boolean;
-  kind: "run_action" | "run_pull" | "open_pr" | "show_hint";
+  kind: "run_action" | "run_pull" | "run_merge" | "open_pr" | "show_hint";
   action?: GitStackedAction;
   hint?: string;
 }
@@ -233,10 +233,10 @@ export function resolveQuickAction(
 
   if (isDiverged) {
     return {
-      label: "Sync branch",
-      disabled: true,
-      kind: "show_hint",
-      hint: "Branch has diverged from upstream. Rebase/merge first.",
+      label: "Merge upstream",
+      disabled: false,
+      kind: "run_merge",
+      hint: "Branch has diverged from upstream. Merge to reconcile both histories.",
     };
   }
 

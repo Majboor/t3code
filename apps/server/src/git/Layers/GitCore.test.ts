@@ -2423,4 +2423,107 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
   });
+
+  describe("merge and conflict handling", () => {
+    it.effect("merges a diverged branch and reports up-to-date on repeat", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* writeTextFile(path.join(tmp, "feature.txt"), "feature\n");
+        yield* git(tmp, ["add", "feature.txt"]);
+        yield* git(tmp, ["commit", "-m", "feature commit"]);
+
+        yield* git(tmp, ["checkout", initialBranch]);
+        yield* writeTextFile(path.join(tmp, "main.txt"), "main\n");
+        yield* git(tmp, ["add", "main.txt"]);
+        yield* git(tmp, ["commit", "-m", "main commit"]);
+
+        const merged = yield* core.mergeBranch({ cwd: tmp, branch: "feature" });
+        expect(merged.status).toBe("completed");
+        expect(merged.mode).toBe("merge");
+        expect(merged.conflictPaths).toEqual([]);
+        expect(existsSync(path.join(tmp, "feature.txt"))).toBe(true);
+
+        const state = yield* core.getMergeState(tmp);
+        expect(state.inProgress).toBeNull();
+        expect(state.conflictPaths).toEqual([]);
+
+        const again = yield* core.mergeBranch({ cwd: tmp, branch: "feature" });
+        expect(again.status).toBe("up-to-date");
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.effect("reports conflicting paths and aborts a conflicted merge", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+
+        yield* writeTextFile(path.join(tmp, "shared.txt"), "base\n");
+        yield* git(tmp, ["add", "shared.txt"]);
+        yield* git(tmp, ["commit", "-m", "add shared"]);
+
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* writeTextFile(path.join(tmp, "shared.txt"), "feature side\n");
+        yield* git(tmp, ["add", "shared.txt"]);
+        yield* git(tmp, ["commit", "-m", "feature edit"]);
+
+        yield* git(tmp, ["checkout", initialBranch]);
+        yield* writeTextFile(path.join(tmp, "shared.txt"), "main side\n");
+        yield* git(tmp, ["add", "shared.txt"]);
+        yield* git(tmp, ["commit", "-m", "main edit"]);
+
+        const conflicted = yield* core.mergeBranch({ cwd: tmp, branch: "feature" });
+        expect(conflicted.status).toBe("conflicts");
+        expect(conflicted.conflictPaths).toEqual(["shared.txt"]);
+
+        const state = yield* core.getMergeState(tmp);
+        expect(state.inProgress).toBe("merge");
+        expect(state.conflictPaths).toEqual(["shared.txt"]);
+
+        const aborted = yield* core.abortMerge(tmp);
+        expect(aborted.aborted).toBe(true);
+
+        const cleared = yield* core.getMergeState(tmp);
+        expect(cleared.inProgress).toBeNull();
+        expect(cleared.conflictPaths).toEqual([]);
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.effect("rebases a branch when mode is rebase", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+
+        yield* writeTextFile(path.join(tmp, "base.txt"), "base\n");
+        yield* git(tmp, ["add", "base.txt"]);
+        yield* git(tmp, ["commit", "-m", "base commit"]);
+
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* writeTextFile(path.join(tmp, "feature.txt"), "feature\n");
+        yield* git(tmp, ["add", "feature.txt"]);
+        yield* git(tmp, ["commit", "-m", "feature commit"]);
+
+        yield* git(tmp, ["checkout", initialBranch]);
+        yield* writeTextFile(path.join(tmp, "main.txt"), "main\n");
+        yield* git(tmp, ["add", "main.txt"]);
+        yield* git(tmp, ["commit", "-m", "main commit"]);
+
+        yield* git(tmp, ["checkout", "feature"]);
+        const rebased = yield* core.mergeBranch({
+          cwd: tmp,
+          branch: initialBranch,
+          mode: "rebase",
+        });
+
+        expect(rebased.status).toBe("completed");
+        expect(rebased.mode).toBe("rebase");
+        expect(existsSync(path.join(tmp, "main.txt"))).toBe(true);
+      }).pipe(Effect.provide(TestLayer)),
+    );
+  });
 });

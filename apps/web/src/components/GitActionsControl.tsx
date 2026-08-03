@@ -43,6 +43,7 @@ import { openInPreferredEditor } from "~/editorPreferences";
 import {
   gitInitMutationOptions,
   gitMutationKeys,
+  gitMergeBranchMutationOptions,
   gitPullMutationOptions,
   gitRunStackedActionMutationOptions,
 } from "~/lib/gitReactQuery";
@@ -198,7 +199,9 @@ function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {
 function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   const iconClassName = "size-3.5";
   if (quickAction.kind === "open_pr") return <GitHubIcon className={iconClassName} />;
-  if (quickAction.kind === "run_pull") return <InfoIcon className={iconClassName} />;
+  if (quickAction.kind === "run_pull" || quickAction.kind === "run_merge") {
+    return <InfoIcon className={iconClassName} />;
+  }
   if (quickAction.kind === "run_action") {
     if (quickAction.action === "commit") return <GitCommitIcon className={iconClassName} />;
     if (quickAction.action === "push" || quickAction.action === "commit_push") {
@@ -346,6 +349,9 @@ export default function GitActionsControl({
   const pullMutation = useMutation(
     gitPullMutationOptions({ environmentId: activeEnvironmentId, cwd: gitCwd, queryClient }),
   );
+  const mergeBranchMutation = useMutation(
+    gitMergeBranchMutationOptions({ environmentId: activeEnvironmentId, cwd: gitCwd, queryClient }),
+  );
 
   const isRunStackedActionRunning =
     useIsMutating({
@@ -353,7 +359,9 @@ export default function GitActionsControl({
     }) > 0;
   const isPullRunning =
     useIsMutating({ mutationKey: gitMutationKeys.pull(activeEnvironmentId, gitCwd) }) > 0;
-  const isGitActionRunning = isRunStackedActionRunning || isPullRunning;
+  const isMergeRunning =
+    useIsMutating({ mutationKey: gitMutationKeys.mergeBranch(activeEnvironmentId, gitCwd) }) > 0;
+  const isGitActionRunning = isRunStackedActionRunning || isPullRunning || isMergeRunning;
   const isSelectingWorktreeBase =
     !activeServerThread &&
     activeDraftThread?.envMode === "worktree" &&
@@ -765,6 +773,48 @@ export default function GitActionsControl({
         }),
         error: (err) => ({
           title: "Pull failed",
+          description: err instanceof Error ? err.message : "An error occurred.",
+          data: threadToastData,
+        }),
+      });
+      void promise.catch(() => undefined);
+      return;
+    }
+    if (quickAction.kind === "run_merge") {
+      const branch = gitStatusForActions?.branch;
+      if (!branch) {
+        toastManager.add({
+          type: "error",
+          title: "Merge unavailable",
+          description: "Current branch could not be determined.",
+          data: threadToastData,
+        });
+        return;
+      }
+      const promise = mergeBranchMutation.mutateAsync({ branch: `origin/${branch}` });
+      toastManager.promise(promise, {
+        loading: { title: "Merging upstream...", data: threadToastData },
+        success: (result) => ({
+          title:
+            result.status === "conflicts"
+              ? "Merge stopped on conflicts"
+              : result.status === "up-to-date"
+                ? "Already up to date"
+                : "Merged upstream",
+          description:
+            result.status === "conflicts"
+              ? `Resolve ${result.conflictPaths.length} conflicting file${
+                  result.conflictPaths.length === 1 ? "" : "s"
+                }: ${result.conflictPaths.slice(0, 3).join(", ")}${
+                  result.conflictPaths.length > 3 ? "..." : ""
+                }`
+              : result.status === "up-to-date"
+                ? `${branch} already contains upstream commits.`
+                : `Merged ${result.branch} into ${branch}.`,
+          data: threadToastData,
+        }),
+        error: (err) => ({
+          title: "Merge failed",
           description: err instanceof Error ? err.message : "An error occurred.",
           data: threadToastData,
         }),

@@ -232,6 +232,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         supabaseAnonKey: "anon-public-key",
         supabaseJwtAudience: "authenticated",
         supabaseServiceRoleSecretName: "supabase/service-role",
+        localPasswordAuth: false,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: false,
       });

@@ -1,5 +1,11 @@
 import type {
+  GitAbortMergeInput,
+  GitAbortMergeResult,
   GitCheckoutInput,
+  GitMergeBranchInput,
+  GitMergeBranchResult,
+  GitMergeStateInput,
+  GitMergeStateResult,
   GitCheckoutResult,
   GitCreateBranchInput,
   GitPreparePullRequestThreadInput,
@@ -319,6 +325,9 @@ export interface EnvironmentApi {
     createBranch: (input: GitCreateBranchInput) => Promise<GitCreateBranchResult>;
     checkout: (input: GitCheckoutInput) => Promise<GitCheckoutResult>;
     init: (input: GitInitInput) => Promise<void>;
+    mergeBranch: (input: GitMergeBranchInput) => Promise<GitMergeBranchResult>;
+    getMergeState: (input: GitMergeStateInput) => Promise<GitMergeStateResult>;
+    abortMerge: (input: GitAbortMergeInput) => Promise<GitAbortMergeResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,

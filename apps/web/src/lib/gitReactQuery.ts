@@ -41,6 +41,10 @@ export const gitMutationKeys = {
     ["git", "mutation", "run-stacked-action", environmentId ?? null, cwd] as const,
   pull: (environmentId: EnvironmentId | null, cwd: string | null) =>
     ["git", "mutation", "pull", environmentId ?? null, cwd] as const,
+  mergeBranch: (environmentId: EnvironmentId | null, cwd: string | null) =>
+    ["git", "mutation", "merge-branch", environmentId ?? null, cwd] as const,
+  abortMerge: (environmentId: EnvironmentId | null, cwd: string | null) =>
+    ["git", "mutation", "abort-merge", environmentId ?? null, cwd] as const,
   preparePullRequestThread: (environmentId: EnvironmentId | null, cwd: string | null) =>
     ["git", "mutation", "prepare-pull-request-thread", environmentId ?? null, cwd] as const,
 };
@@ -245,6 +249,46 @@ export function gitPullMutationOptions(input: {
       if (!input.cwd || !input.environmentId) throw new Error("Git pull is unavailable.");
       const api = ensureEnvironmentApi(input.environmentId);
       return api.git.pull({ cwd: input.cwd });
+    },
+    onSuccess: async () => {
+      await invalidateGitBranchQueries(input.queryClient, input.environmentId, input.cwd);
+    },
+  });
+}
+
+export function gitMergeBranchMutationOptions(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return mutationOptions({
+    mutationKey: gitMutationKeys.mergeBranch(input.environmentId, input.cwd),
+    mutationFn: async (args: { branch: string; mode?: "merge" | "rebase" }) => {
+      if (!input.cwd || !input.environmentId) throw new Error("Git merge is unavailable.");
+      const api = ensureEnvironmentApi(input.environmentId);
+      return api.git.mergeBranch({
+        cwd: input.cwd,
+        branch: args.branch,
+        ...(args.mode ? { mode: args.mode } : {}),
+      });
+    },
+    onSuccess: async () => {
+      await invalidateGitBranchQueries(input.queryClient, input.environmentId, input.cwd);
+    },
+  });
+}
+
+export function gitAbortMergeMutationOptions(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return mutationOptions({
+    mutationKey: gitMutationKeys.abortMerge(input.environmentId, input.cwd),
+    mutationFn: async () => {
+      if (!input.cwd || !input.environmentId) throw new Error("Git merge abort is unavailable.");
+      const api = ensureEnvironmentApi(input.environmentId);
+      return api.git.abortMerge({ cwd: input.cwd });
     },
     onSuccess: async () => {
       await invalidateGitBranchQueries(input.queryClient, input.environmentId, input.cwd);

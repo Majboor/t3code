@@ -20,6 +20,10 @@ import type {
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
+  GitAbortMergeResult,
+  GitMergeBranchInput,
+  GitMergeBranchResult,
+  GitMergeStateResult,
   GitPullResult,
   GitRemoveWorktreeInput,
   GitStatusInput,
@@ -314,6 +318,23 @@ export interface GitCoreShape {
    * List local branch names (short format).
    */
   readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
+
+  /**
+   * Merge or rebase another branch into the current branch, reporting conflicts.
+   */
+  readonly mergeBranch: (
+    input: GitMergeBranchInput,
+  ) => Effect.Effect<GitMergeBranchResult, GitCommandError>;
+
+  /**
+   * Report whether a merge/rebase is in progress and which paths conflict.
+   */
+  readonly getMergeState: (cwd: string) => Effect.Effect<GitMergeStateResult, GitCommandError>;
+
+  /**
+   * Abort an in-progress merge or rebase.
+   */
+  readonly abortMerge: (cwd: string) => Effect.Effect<GitAbortMergeResult, GitCommandError>;
 }
 
 /**

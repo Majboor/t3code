@@ -897,6 +897,42 @@ const getAuthenticatedSessionCookieHeader = (credential = defaultDesktopBootstra
     return cookie.split(";")[0] ?? cookie;
   });
 
+// Creates a durable local-account browser session via password signup.
+// Requires buildAppUnderTest({ config: { localPasswordAuth: true } }).
+// Unlike anonymous paired-client sessions, these sessions carry a userId and
+// may accept collaboration invites.
+const signUpLocalMemberSessionCookie = (input: {
+  readonly email: string;
+  readonly displayName: string;
+}) =>
+  Effect.gen(function* () {
+    const passwordUrl = yield* getHttpServerUrl("/api/auth/password");
+    const response = yield* Effect.promise(() =>
+      fetch(passwordUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          email: input.email,
+          password: "local-member-password-123",
+          mode: "signup",
+          displayName: input.displayName,
+        }),
+      }),
+    );
+    if (!response.ok) {
+      return yield* Effect.fail(
+        new Error(`Expected local password signup to succeed, got ${response.status}`),
+      );
+    }
+    const cookie = response.headers.get("set-cookie");
+    if (!cookie) {
+      return yield* Effect.fail(new Error("Expected local password signup to set a cookie."));
+    }
+    return cookie.split(";")[0] ?? cookie;
+  });
+
 const getAuthenticatedBearerSessionToken = (credential = defaultDesktopBootstrapToken) =>
   Effect.gen(function* () {
     const { response, body } = yield* bootstrapBearerSession(credential);
@@ -2569,14 +2605,24 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     "exposes collaboration presence, invites, shared prompts, and activity over websocket rpc",
     () =>
       Effect.gen(function* () {
-        yield* buildAppUnderTest();
+        // Invite acceptance now requires a durable identity, so the invited
+        // member authenticates with a Supabase bearer token instead of the
+        // owner self-accepting the invite.
+        const fixture = makeSignedSupabaseFixture();
+        yield* buildAppUnderTest({
+          config: {
+            supabaseProjectUrl: new URL(supabaseProjectUrl),
+            supabaseAnonKey: "public-anon-key",
+            supabaseJwtAudience: "authenticated",
+          },
+        });
 
         const workspaceId = WorkspaceId.make("workspace-accessible-collab");
         const threadId = ThreadId.make("thread-accessible-collab");
         const expiresAt = new Date(Date.now() + 60_000).toISOString();
         const wsUrl = yield* getWsServerUrl("/ws");
 
-        const result = yield* Effect.scoped(
+        const setup = yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) =>
             Effect.gen(function* () {
               const organization = yield* client[WS_METHODS.organizationsCreate]({
@@ -2598,7 +2644,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               const createdInvite = yield* client[WS_METHODS.collaborationInvitesCreate]({
                 tenantId,
                 workspaceId,
-                email: "teammate@example.com",
+                email: "member@example.test",
                 scope: "workspace",
                 roles: ["developer"],
                 expiresAt,
@@ -2607,21 +2653,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 tenantId,
                 workspaceId,
               });
-              const acceptedInvite = yield* client[WS_METHODS.collaborationInvitesAccept]({
-                inviteId: createdInvite.invite.id,
-              });
-              const promptActivity = yield* client[WS_METHODS.collaborationSharedPromptRecord]({
-                tenantId,
-                workspaceId,
-                threadId,
-                prompt: "Review the tenant-safe auth bridge implementation.",
-              });
-              const activity = yield* client[WS_METHODS.collaborationActivityList]({
-                tenantId,
-                workspaceId,
-                threadId,
-                limit: 10,
-              });
 
               return {
                 tenantId,
@@ -2629,28 +2660,70 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 users,
                 createdInvite,
                 listedInvites,
-                acceptedInvite,
-                promptActivity,
-                activity,
               };
             }),
           ),
         );
 
-        assert.equal(result.presence.presence.tenantId, result.tenantId);
-        assert.equal(result.presence.presence.workspaceId, workspaceId);
-        assert.equal(result.users.users.length, 1);
-        assert.equal(result.users.users[0]?.status, "active");
-        assert.equal(result.createdInvite.invite.email, "teammate@example.com");
-        assert.include(
-          result.createdInvite.acceptUrlPath,
-          encodeURIComponent(result.createdInvite.invite.id),
-        );
-        assert.equal(result.listedInvites.invites.length, 1);
-        assert.equal(result.acceptedInvite.membership.roles[0], "developer");
-        assert.equal(result.acceptedInvite.invite.acceptedAt !== null, true);
-        assert.equal(result.promptActivity.activity.kind, "prompted");
-        assert.equal(result.activity.activities[0]?.kind, "prompted");
+        const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+        try {
+          const memberWsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+          const acceptedInvite = yield* Effect.scoped(
+            withWsRpcClient(
+              memberWsUrl,
+              (client) =>
+                client[WS_METHODS.collaborationInvitesAccept]({
+                  inviteId: setup.createdInvite.invite.id,
+                }),
+              {
+                headers: {
+                  authorization: `Bearer ${fixture.jwt}`,
+                },
+              },
+            ),
+          );
+
+          const result = yield* Effect.scoped(
+            withWsRpcClient(wsUrl, (client) =>
+              Effect.gen(function* () {
+                const promptActivity = yield* client[WS_METHODS.collaborationSharedPromptRecord]({
+                  tenantId: setup.tenantId,
+                  workspaceId,
+                  threadId,
+                  prompt: "Review the tenant-safe auth bridge implementation.",
+                });
+                const activity = yield* client[WS_METHODS.collaborationActivityList]({
+                  tenantId: setup.tenantId,
+                  workspaceId,
+                  threadId,
+                  limit: 10,
+                });
+                return {
+                  promptActivity,
+                  activity,
+                };
+              }),
+            ),
+          );
+
+          assert.equal(setup.presence.presence.tenantId, setup.tenantId);
+          assert.equal(setup.presence.presence.workspaceId, workspaceId);
+          assert.equal(setup.users.users.length, 1);
+          assert.equal(setup.users.users[0]?.status, "active");
+          assert.equal(setup.createdInvite.invite.email, "member@example.test");
+          assert.include(
+            setup.createdInvite.acceptUrlPath,
+            encodeURIComponent(setup.createdInvite.invite.id),
+          );
+          assert.equal(setup.listedInvites.invites.length, 1);
+          assert.equal(acceptedInvite.membership.roles[0], "developer");
+          assert.equal(acceptedInvite.membership.userId, supabaseUserId);
+          assert.equal(acceptedInvite.invite.acceptedAt !== null, true);
+          assert.equal(result.promptActivity.activity.kind, "prompted");
+          assert.equal(result.activity.activities[0]?.kind, "prompted");
+        } finally {
+          fetchSpy.mockRestore();
+        }
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -3532,9 +3605,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const tenantId = TenantId.make("tenant-supabase-provider-start-persist");
       const organizationId = OrganizationId.make("org-supabase-provider-start-persist");
+      // Personal provider account creation now requires provider.connect, which
+      // the developer role no longer grants; use admin so the turn dispatch can
+      // provision the isolation records under test.
       const membership = makeSupabaseMembership({
         tenantId,
         organizationId,
+        roles: ["admin"],
       });
       const fixture = makeSignedSupabaseFixture();
       let capturedRepository: TenancyRepositoryShape | undefined;
@@ -3840,10 +3917,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           terminalOpenInputs[0]?.env?.T3_PROVIDER_HOME,
           result.authTerminal.terminal.cwd,
         );
-        assert.equal(
-          terminalOpenInputs[0]?.env?.T3_PROVIDER_ACCOUNT_ID,
-          `provider-account:${tenantId}:${supabaseUserId}:codex`,
-        );
+        // The auth terminal now reuses the already-seeded provider account for
+        // this tenant/owner/provider instead of deriving a fresh account id.
+        assert.equal(terminalOpenInputs[0]?.env?.T3_PROVIDER_ACCOUNT_ID, accountId);
         assert.isUndefined(terminalOpenInputs[0]?.env?.OPENAI_API_KEY);
         assert.equal(terminalWriteInputs.length, 1);
         assert.equal(terminalWriteInputs[0]?.threadId, defaultThreadId);
@@ -5099,13 +5175,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("revokes collaboration invites and blocks revoked invite acceptance", () =>
     Effect.gen(function* () {
-      yield* buildAppUnderTest();
+      // Invite acceptance now requires a durable identity, so the revoked
+      // invite is exercised by a Supabase-authenticated member instead of the
+      // anonymous owner session.
+      const fixture = makeSignedSupabaseFixture();
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseAnonKey: "public-anon-key",
+          supabaseJwtAudience: "authenticated",
+        },
+      });
 
       const workspaceId = WorkspaceId.make("workspace-revoke-invite-collab");
       const wsUrl = yield* getWsServerUrl("/ws");
       const expiresAt = new Date(Date.now() + 60_000).toISOString();
 
-      const result = yield* Effect.scoped(
+      const setup = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
             const organization = yield* client[WS_METHODS.organizationsCreate]({
@@ -5115,7 +5201,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             const createdInvite = yield* client[WS_METHODS.collaborationInvitesCreate]({
               tenantId: organization.tenant.id,
               workspaceId,
-              email: "revoked-member@example.com",
+              email: "member@example.test",
               scope: "workspace",
               roles: ["developer"],
               expiresAt,
@@ -5124,22 +5210,47 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               tenantId: organization.tenant.id,
               inviteId: createdInvite.invite.id,
             });
-            const acceptRevokedInvite = yield* client[WS_METHODS.collaborationInvitesAccept]({
-              inviteId: createdInvite.invite.id,
-            }).pipe(Effect.result);
+            return {
+              organization,
+              createdInvite,
+              revokedInvite,
+            };
+          }),
+        ),
+      );
+
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+      const acceptRevokedInvite = yield* Effect.scoped(
+        withWsRpcClient(
+          yield* getWsServerUrl("/ws", { authenticated: false }),
+          (client) =>
+            client[WS_METHODS.collaborationInvitesAccept]({
+              inviteId: setup.createdInvite.invite.id,
+            }).pipe(Effect.result),
+          {
+            headers: {
+              authorization: `Bearer ${fixture.jwt}`,
+            },
+          },
+        ),
+      ).pipe(Effect.ensuring(Effect.sync(() => fetchSpy.mockRestore())));
+
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
             const listedInvites = yield* client[WS_METHODS.collaborationInvitesList]({
-              tenantId: organization.tenant.id,
+              tenantId: setup.organization.tenant.id,
               workspaceId,
             });
             const activity = yield* client[WS_METHODS.collaborationActivityList]({
-              tenantId: organization.tenant.id,
+              tenantId: setup.organization.tenant.id,
               workspaceId,
               limit: 10,
             });
 
             return {
-              createdInvite,
-              revokedInvite,
+              createdInvite: setup.createdInvite,
+              revokedInvite: setup.revokedInvite,
               acceptRevokedInvite,
               listedInvites,
               activity,
@@ -5170,7 +5281,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     "lets a paired member accept a workspace invite and share presence and prompts with the owner",
     () =>
       Effect.gen(function* () {
-        yield* buildAppUnderTest();
+        yield* buildAppUnderTest({
+          config: {
+            localPasswordAuth: true,
+          },
+        });
 
         const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
         const ownerProfileUrl = yield* getHttpServerUrl("/api/auth/profile");
@@ -5226,27 +5341,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         );
 
-        const pairingTokenUrl = yield* getHttpServerUrl("/api/auth/pairing-token");
-        const pairingResponse = yield* Effect.promise(() =>
-          fetch(pairingTokenUrl, {
-            method: "POST",
-            headers: {
-              cookie: ownerCookie,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({
-              label: "Teammate Browser",
-            }),
-          }),
-        );
-        const pairingBody = (yield* Effect.promise(() => pairingResponse.json())) as {
-          readonly credential: string;
-        };
-        assert.equal(pairingResponse.status, 200);
-
-        const memberWsUrl = yield* getWsServerUrl("/ws", {
-          credential: pairingBody.credential,
+        // Anonymous paired-client sessions can no longer accept invites, so the
+        // paired teammate signs in with a durable local account before pairing
+        // its browser session to the workspace invite.
+        const memberCookie = yield* signUpLocalMemberSessionCookie({
+          email: "member@example.com",
+          displayName: "Teammate Browser",
         });
+        const memberWsUrl = appendSessionCookieToWsUrl(
+          yield* getWsServerUrl("/ws", { authenticated: false }),
+          memberCookie,
+        );
 
         const memberResult = yield* Effect.scoped(
           withWsRpcClient(memberWsUrl, (client) =>
@@ -5419,7 +5524,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     "exercises invite e2e server fixture with fresh browser members and revoked links",
     () =>
       Effect.gen(function* () {
-        yield* buildAppUnderTest();
+        yield* buildAppUnderTest({
+          config: {
+            localPasswordAuth: true,
+          },
+        });
 
         const runId = crypto.randomUUID();
         const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
@@ -5466,27 +5575,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         );
 
-        const pairingTokenUrl = yield* getHttpServerUrl("/api/auth/pairing-token");
-        const freshPairingResponse = yield* Effect.promise(() =>
-          fetch(pairingTokenUrl, {
-            method: "POST",
-            headers: {
-              cookie: ownerCookie,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({
-              label: `Fresh Invite Browser ${runId}`,
-            }),
-          }),
-        );
-        const freshPairingBody = (yield* Effect.promise(() => freshPairingResponse.json())) as {
-          readonly credential: string;
-        };
-        assert.equal(freshPairingResponse.status, 200);
-
-        const freshMemberWsUrl = yield* getWsServerUrl("/ws", {
-          credential: freshPairingBody.credential,
+        // Fresh browser members need a durable identity to accept invites, so
+        // the member signs up with a local account instead of an anonymous
+        // paired-client credential.
+        const freshMemberCookie = yield* signUpLocalMemberSessionCookie({
+          email: `fresh-${runId}@example.test`,
+          displayName: `Fresh Invite Browser ${runId}`,
         });
+        const freshMemberWsUrl = appendSessionCookieToWsUrl(
+          yield* getWsServerUrl("/ws", { authenticated: false }),
+          freshMemberCookie,
+        );
         const freshMemberResult = yield* Effect.scoped(
           withWsRpcClient(freshMemberWsUrl, (client) =>
             Effect.gen(function* () {
@@ -5564,7 +5663,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("accepts invite links through the real browser route against the server fixture", () =>
     Effect.gen(function* () {
-      yield* buildAppUnderTest();
+      yield* buildAppUnderTest({
+        config: {
+          localPasswordAuth: true,
+        },
+      });
 
       const path = yield* Path.Path;
       const runId = crypto.randomUUID();
@@ -5623,35 +5726,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      const pairingTokenUrl = yield* getHttpServerUrl("/api/auth/pairing-token");
-      const issuePairingCredential = (label: string) =>
-        Effect.gen(function* () {
-          const response = yield* Effect.promise(() =>
-            fetch(pairingTokenUrl, {
-              method: "POST",
-              headers: {
-                cookie: ownerCookie,
-                "content-type": "application/json",
-              },
-              body: JSON.stringify({ label }),
-            }),
-          );
-          const body = (yield* Effect.promise(() => response.json())) as {
-            readonly credential: string;
-          };
-          assert.equal(response.status, 200);
-          return body.credential;
-        });
-
-      const freshCredential = yield* issuePairingCredential(`Fresh Invite Browser ${runId}`);
-      const returningCredential = yield* issuePairingCredential(
-        `Returning Invite Browser ${runId}`,
-      );
-      const revokedCredential = yield* issuePairingCredential(`Revoked Invite Browser ${runId}`);
-      const freshSessionCookie = yield* getAuthenticatedSessionCookieHeader(freshCredential);
-      const returningSessionCookie =
-        yield* getAuthenticatedSessionCookieHeader(returningCredential);
-      const revokedSessionCookie = yield* getAuthenticatedSessionCookieHeader(revokedCredential);
+      // Browser members need durable identities to accept invites through the
+      // real /invite route, so each browser signs up with a local account
+      // instead of exchanging an anonymous paired-client credential.
+      const freshSessionCookie = yield* signUpLocalMemberSessionCookie({
+        email: `browser-route-${runId}@example.test`,
+        displayName: `Fresh Invite Browser ${runId}`,
+      });
+      const returningSessionCookie = yield* signUpLocalMemberSessionCookie({
+        email: `browser-route-returning-${runId}@example.test`,
+        displayName: `Returning Invite Browser ${runId}`,
+      });
+      const revokedSessionCookie = yield* signUpLocalMemberSessionCookie({
+        email: `browser-route-revoked-member-${runId}@example.test`,
+        displayName: `Revoked Invite Browser ${runId}`,
+      });
       const webRoot = path.resolve(import.meta.dirname, "../../web");
 
       yield* Effect.promise(async () => {

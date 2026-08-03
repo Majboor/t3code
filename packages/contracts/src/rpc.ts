@@ -24,6 +24,12 @@ import {
   GitListBranchesInput,
   GitListBranchesResult,
   GitManagerServiceError,
+  GitAbortMergeInput,
+  GitAbortMergeResult,
+  GitMergeBranchInput,
+  GitMergeBranchResult,
+  GitMergeStateInput,
+  GitMergeStateResult,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullInput,
@@ -177,6 +183,9 @@ export const WS_METHODS = {
   gitCreateBranch: "git.createBranch",
   gitCheckout: "git.checkout",
   gitInit: "git.init",
+  gitMergeBranch: "git.mergeBranch",
+  gitGetMergeState: "git.getMergeState",
+  gitAbortMerge: "git.abortMerge",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
@@ -418,6 +427,24 @@ export const WsGitCheckoutRpc = Rpc.make(WS_METHODS.gitCheckout, {
 
 export const WsGitInitRpc = Rpc.make(WS_METHODS.gitInit, {
   payload: GitInitInput,
+  error: GitCommandError,
+});
+
+export const WsGitMergeBranchRpc = Rpc.make(WS_METHODS.gitMergeBranch, {
+  payload: GitMergeBranchInput,
+  success: GitMergeBranchResult,
+  error: GitCommandError,
+});
+
+export const WsGitGetMergeStateRpc = Rpc.make(WS_METHODS.gitGetMergeState, {
+  payload: GitMergeStateInput,
+  success: GitMergeStateResult,
+  error: GitCommandError,
+});
+
+export const WsGitAbortMergeRpc = Rpc.make(WS_METHODS.gitAbortMerge, {
+  payload: GitAbortMergeInput,
+  success: GitAbortMergeResult,
   error: GitCommandError,
 });
 
@@ -716,6 +743,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitCreateBranchRpc,
   WsGitCheckoutRpc,
   WsGitInitRpc,
+  WsGitMergeBranchRpc,
+  WsGitGetMergeStateRpc,
+  WsGitAbortMergeRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
   WsTerminalResizeRpc,

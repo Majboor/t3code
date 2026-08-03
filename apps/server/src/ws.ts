@@ -4279,6 +4279,47 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "git" },
           ),
+        [WS_METHODS.gitMergeBranch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitMergeBranch,
+            withRateLimit(
+              ensureWorkspaceRoot(input.cwd, "project.edit", (message) =>
+                gitRpcError(input.cwd, message),
+              ).pipe(
+                Effect.flatMap(() =>
+                  git.mergeBranch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+                ),
+              ),
+              (message) => gitRpcError(input.cwd, message),
+            ),
+            { "rpc.aggregate": "git" },
+          ),
+        [WS_METHODS.gitGetMergeState]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitGetMergeState,
+            withRateLimit(
+              ensureWorkspaceRoot(input.cwd, "project.view", (message) =>
+                gitRpcError(input.cwd, message),
+              ).pipe(Effect.flatMap(() => git.getMergeState(input.cwd))),
+              (message) => gitRpcError(input.cwd, message),
+            ),
+            { "rpc.aggregate": "git" },
+          ),
+        [WS_METHODS.gitAbortMerge]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitAbortMerge,
+            withRateLimit(
+              ensureWorkspaceRoot(input.cwd, "project.edit", (message) =>
+                gitRpcError(input.cwd, message),
+              ).pipe(
+                Effect.flatMap(() =>
+                  git.abortMerge(input.cwd).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+                ),
+              ),
+              (message) => gitRpcError(input.cwd, message),
+            ),
+            { "rpc.aggregate": "git" },
+          ),
         [WS_METHODS.terminalOpen]: (input) =>
           observeRpcEffect(
             WS_METHODS.terminalOpen,
