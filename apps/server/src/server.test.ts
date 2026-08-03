@@ -1231,7 +1231,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("surfaces pending Supabase membership in auth session and onboarding state", () =>
+  it.effect("provisions personal tenants for new Supabase users in session and onboarding", () =>
     Effect.gen(function* () {
       const fixture = makeSignedSupabaseFixture();
       yield* buildAppUnderTest({
@@ -1264,8 +1264,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(session.authenticated, true);
         assert.equal(session.role, "client");
         assert.equal(session.sessionMethod, "bearer-session-token");
-        assert.equal(session.tenantStatus, "pending-membership");
-        assert.isUndefined(session.tenantSession);
+        assert.equal(session.tenantStatus, "active");
+        assert.isDefined(session.tenantSession);
 
         const profileUrl = yield* getHttpServerUrl("/api/auth/profile");
         const profileResponse = yield* Effect.promise(() =>
@@ -1283,8 +1283,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(profileResponse.status, 200);
         assert.equal(profile.userId, supabaseUserId);
         assert.equal(profile.displayName, "Supabase Member");
-        assert.equal(profile.tenantStatus, "pending-membership");
-        assert.isUndefined(profile.tenantSession);
+        assert.equal(profile.tenantStatus, "active");
+        assert.isDefined(profile.tenantSession);
 
         const onboardingUrl = yield* getHttpServerUrl("/api/auth/onboarding");
         const onboardingResponse = yield* Effect.promise(() =>
@@ -1300,8 +1300,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         assert.equal(onboardingResponse.status, 200);
         assert.equal(onboarding.authenticated, true);
-        assert.equal(onboarding.nextStep, "accept-invite");
-        assert.equal(onboarding.profile.tenantStatus, "pending-membership");
+        assert.equal(onboarding.nextStep, "paired");
+        assert.equal(onboarding.profile.tenantStatus, "active");
         assert.equal(onboarding.profile.userId, supabaseUserId);
       } finally {
         fetchSpy.mockRestore();
@@ -4153,7 +4153,24 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
         });
         let capturedRepository: TenancyRepositoryShape | undefined;
-        const readModel = makeDefaultOrchestrationReadModel();
+        const baseReadModel = makeDefaultOrchestrationReadModel();
+        const tenantOwnership = {
+          tenantId,
+          tenantDisplayName: `Provider Browser ${runId}`,
+          workspaceId: WorkspaceId.make(`workspace-provider-browser-${runId}`),
+          workspaceTitle: `Provider Browser Workspace ${runId}`,
+          organizationId,
+          organizationDisplayName: `Provider Browser ${runId}`,
+          ownerUserId: userId,
+          ownerDisplayName: uniqueName,
+        };
+        const readModel = {
+          ...baseReadModel,
+          projects: baseReadModel.projects.map((project) => ({
+            ...project,
+            ownership: tenantOwnership,
+          })),
+        };
         const terminalOpenInputs: TerminalOpenInput[] = [];
         const terminalWriteInputs: TerminalWriteInput[] = [];
 

@@ -29,6 +29,7 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   type OrchestrationThread,
+  type OrchestrationProjectShell,
   type OrchestrationThreadShell,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
@@ -1375,6 +1376,25 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             ),
           ),
         );
+
+      // Returns null for unscoped local sessions (implicit loopback owner or
+      // legacy paired clients) and the set of member tenant ids otherwise.
+      const sessionVisibleTenantIds = (): Effect.Effect<
+        ReadonlySet<TenantId> | null,
+        OrganizationError
+      > => {
+        if (!session.tenantSessionContext) {
+          return Effect.succeed(null);
+        }
+        if (isImplicitLocalOwnerSession(session)) {
+          return Effect.succeed(null);
+        }
+        return actorMemberships().pipe(
+          Effect.map(
+            (memberships) => new Set(memberships.map((membership) => membership.tenantId)),
+          ),
+        );
+      };
 
       const ensureTenantPermission = (
         tenantId: TenantId,
@@ -3259,12 +3279,65 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                     }),
                 ),
               );
-              const sessionSnapshot = yield* withShellFavoritePreferences(snapshot);
+              const visibleTenantIds = yield* sessionVisibleTenantIds().pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationGetSnapshotError({
+                      message: "Failed to resolve tenant visibility for this session.",
+                      cause,
+                    }),
+                ),
+              );
+              const isVisibleProject = (project: OrchestrationProjectShell): boolean =>
+                visibleTenantIds === null ||
+                (project.ownership !== undefined &&
+                  visibleTenantIds.has(project.ownership.tenantId));
+              const visibleProjectIds = new Set(
+                snapshot.projects.filter(isVisibleProject).map((project) => project.id),
+              );
+              const scopedSnapshot =
+                visibleTenantIds === null
+                  ? snapshot
+                  : {
+                      ...snapshot,
+                      projects: snapshot.projects.filter((project) =>
+                        visibleProjectIds.has(project.id),
+                      ),
+                      threads: snapshot.threads.filter((thread) =>
+                        visibleProjectIds.has(thread.projectId),
+                      ),
+                    };
+              const sessionSnapshot = yield* withShellFavoritePreferences(scopedSnapshot);
+
+              const isVisibleStreamEvent = (event: OrchestrationShellStreamEvent): boolean => {
+                if (visibleTenantIds === null) {
+                  return true;
+                }
+                switch (event.kind) {
+                  case "project-upserted": {
+                    const visible = isVisibleProject(event.project);
+                    if (visible) {
+                      visibleProjectIds.add(event.project.id);
+                    } else {
+                      visibleProjectIds.delete(event.project.id);
+                    }
+                    return visible;
+                  }
+                  case "project-removed":
+                    return visibleProjectIds.delete(event.projectId);
+                  case "thread-upserted":
+                    return visibleProjectIds.has(event.thread.projectId);
+                  case "thread-removed":
+                    return true;
+                }
+              };
 
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
                 Stream.mapEffect(toShellStreamEvent),
                 Stream.flatMap((event) =>
-                  Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
+                  Option.isSome(event) && isVisibleStreamEvent(event.value)
+                    ? Stream.succeed(event.value)
+                    : Stream.empty,
                 ),
               );
 

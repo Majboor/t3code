@@ -511,8 +511,7 @@ export const makeServerAuth = Effect.gen(function* () {
   const authenticateRequest = (request: HttpServerRequest.HttpServerRequest) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request);
-    const credential = cookieToken ?? bearerToken;
-    if (!credential) {
+    if (!cookieToken && !bearerToken) {
       return Effect.fail(
         new AuthError({
           message: "Authentication required.",
@@ -520,13 +519,20 @@ export const makeServerAuth = Effect.gen(function* () {
         }),
       );
     }
-    return authenticateToken(credential).pipe(
-      Effect.catchTag("AuthError", (error) =>
-        bearerToken && credential === bearerToken
-          ? authenticateSupabaseBearerToken(bearerToken, request)
-          : Effect.fail(error),
-      ),
-    );
+    // Explicit bearer identity wins over the ambient cookie session so that a
+    // signed-in cloud user is not silently downgraded to the loopback owner.
+    if (bearerToken) {
+      return authenticateToken(bearerToken).pipe(
+        Effect.catchTag("AuthError", () =>
+          authenticateSupabaseBearerToken(bearerToken, request).pipe(
+            Effect.catchTag("AuthError", (error) =>
+              cookieToken ? authenticateToken(cookieToken) : Effect.fail(error),
+            ),
+          ),
+        ),
+      );
+    }
+    return authenticateToken(cookieToken!);
   };
 
   const getSessionState: ServerAuthShape["getSessionState"] = (request) =>
