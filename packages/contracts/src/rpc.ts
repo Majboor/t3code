@@ -42,6 +42,18 @@ import {
   GitStatusResult,
   GitStatusStreamEvent,
 } from "./git.ts";
+import {
+  DeployCreateTargetInput,
+  DeployCreateTargetResult,
+  DeployDeleteTargetInput,
+  DeployError,
+  DeployListRunsInput,
+  DeployListRunsResult,
+  DeployListTargetsInput,
+  DeployListTargetsResult,
+  DeployRunInput,
+  DeployRunResult,
+} from "./deploy.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
   CollaborationActivityListInput,
@@ -228,6 +240,13 @@ export const WS_METHODS = {
   collaborationSharedPromptRecord: "collaboration.sharedPrompt.record",
   collaborationActivityList: "collaboration.activity.list",
   subscribeCollaboration: "collaboration.subscribe",
+
+  // Deploy methods
+  deployListTargets: "deploy.targets.list",
+  deployCreateTarget: "deploy.targets.create",
+  deployDeleteTarget: "deploy.targets.delete",
+  deployRun: "deploy.run",
+  deployListRuns: "deploy.runs.list",
 
   // Workspace / tenancy methods
   workspacesCreate: "workspaces.create",
@@ -428,6 +447,35 @@ export const WsGitCheckoutRpc = Rpc.make(WS_METHODS.gitCheckout, {
 export const WsGitInitRpc = Rpc.make(WS_METHODS.gitInit, {
   payload: GitInitInput,
   error: GitCommandError,
+});
+
+export const WsDeployListTargetsRpc = Rpc.make(WS_METHODS.deployListTargets, {
+  payload: DeployListTargetsInput,
+  success: DeployListTargetsResult,
+  error: DeployError,
+});
+
+export const WsDeployCreateTargetRpc = Rpc.make(WS_METHODS.deployCreateTarget, {
+  payload: DeployCreateTargetInput,
+  success: DeployCreateTargetResult,
+  error: DeployError,
+});
+
+export const WsDeployDeleteTargetRpc = Rpc.make(WS_METHODS.deployDeleteTarget, {
+  payload: DeployDeleteTargetInput,
+  error: DeployError,
+});
+
+export const WsDeployRunRpc = Rpc.make(WS_METHODS.deployRun, {
+  payload: DeployRunInput,
+  success: DeployRunResult,
+  error: DeployError,
+});
+
+export const WsDeployListRunsRpc = Rpc.make(WS_METHODS.deployListRuns, {
+  payload: DeployListRunsInput,
+  success: DeployListRunsResult,
+  error: DeployError,
 });
 
 export const WsGitMergeBranchRpc = Rpc.make(WS_METHODS.gitMergeBranch, {
@@ -746,6 +794,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitMergeBranchRpc,
   WsGitGetMergeStateRpc,
   WsGitAbortMergeRpc,
+  WsDeployListTargetsRpc,
+  WsDeployCreateTargetRpc,
+  WsDeployDeleteTargetRpc,
+  WsDeployRunRpc,
+  WsDeployListRunsRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
   WsTerminalResizeRpc,

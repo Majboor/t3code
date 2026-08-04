@@ -84,6 +84,8 @@ import {
 import { CollaborationServiceLive } from "./collaboration/Layers/CollaborationService.ts";
 import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
+import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
+import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
 import { TenantRuntimeLifecycleOwnerLive } from "./tenancy/Layers/TenantRuntimeLifecycleOwner.ts";
 
@@ -261,9 +263,17 @@ const TenancyRepositoryLayerLive = TenancyRepositoryLive.pipe(Layer.provide(Pers
 const ThreadPreferenceLayerLive = ProjectionThreadPreferenceRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
+const DeployRepositoryLayerLive = DeployRepositoryLive.pipe(Layer.provide(PersistenceLayerLive));
+
+const DeployLayerLive = DeployServiceLive.pipe(
+  Layer.provide(DeployRepositoryLayerLive),
+  Layer.provide(ServerSecretStoreLive),
+);
+
 const PersistenceServicesLayerLive = Layer.mergeAll(
   TenancyRepositoryLayerLive,
   ThreadPreferenceLayerLive,
+  DeployLayerLive,
 );
 
 const TenantRuntimeLifecycleOwnerLayerLive = TenantRuntimeLifecycleOwnerLive.pipe(

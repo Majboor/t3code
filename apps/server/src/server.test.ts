@@ -106,6 +106,8 @@ import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResol
 import { CollaborationServiceLive } from "./collaboration/Layers/CollaborationService.ts";
 import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
+import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
+import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
 import {
   ProjectSetupScriptRunner,
@@ -305,6 +307,11 @@ const organizationTestLayer = OrganizationServiceLive.pipe(
 
 const threadPreferenceTestLayer = ProjectionThreadPreferenceRepositoryLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
+);
+
+const deployTestLayer = DeployServiceLive.pipe(
+  Layer.provide(DeployRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(ServerSecretStoreLive),
 );
 
 const makeBrowserOtlpPayload = (spanName: string) =>
@@ -651,6 +658,7 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(seedTenancyLayer),
       Layer.provideMerge(tenancyRepositoryTestLayer),
       Layer.provideMerge(threadPreferenceTestLayer),
+      Layer.provideMerge(deployTestLayer),
       Layer.provideMerge(collaborationTestLayer),
       Layer.provideMerge(organizationTestLayer),
       Layer.provide(workspaceAndProjectServicesLayer),

@@ -16,6 +16,9 @@ import {
   AuthSessionId,
   CollaborationError,
   CommandId,
+  DeployError,
+  type DeployTargetId,
+  type ProjectId,
   EventId,
   FilesystemBrowseError,
   GitCommandError,
@@ -119,6 +122,7 @@ import { respondToAuthError } from "./auth/http.ts";
 import { CollaborationService } from "./collaboration/Services/CollaborationService.ts";
 import { OrganizationService } from "./organizations/Services/OrganizationService.ts";
 import { TenancyRepository } from "./persistence/Services/Tenancy.ts";
+import { DeployService } from "./deploy/Services/DeployService.ts";
 import { ProjectionThreadPreferenceRepository } from "./persistence/Services/ProjectionThreadPreferences.ts";
 
 const WS_RPC_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -730,6 +734,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const collaboration = yield* CollaborationService;
       const organizations = yield* OrganizationService;
       const tenancyRepository = yield* TenancyRepository;
+      const deployService = yield* DeployService;
       const threadPreferences = yield* ProjectionThreadPreferenceRepository;
       const rateLimitRef = yield* Ref.make({
         windowStartedAt: Date.now(),
@@ -2413,6 +2418,75 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }),
         );
 
+      const ensureDeployProjectAccess = (
+        projectId: ProjectId,
+        permission: TenantPermission,
+      ): Effect.Effect<void, DeployError> =>
+        orchestrationEngine.getReadModel().pipe(
+          Effect.mapError(
+            () =>
+              new DeployError({
+                code: "project-not-found",
+                message: `Project ${projectId} was not found.`,
+              }),
+          ),
+          Effect.flatMap((readModel) => {
+            const project = readModel.projects.find((candidate) => candidate.id === projectId);
+            if (!project) {
+              return Effect.fail(
+                new DeployError({
+                  code: "project-not-found",
+                  message: `Project ${projectId} was not found.`,
+                }),
+              );
+            }
+            return ensureWorkspaceRoot(
+              project.workspaceRoot,
+              permission,
+              (message) => new DeployError({ code: "forbidden", message }),
+            );
+          }),
+        );
+
+      const resolveDeployTargetProject = (
+        targetId: DeployTargetId,
+      ): Effect.Effect<{ readonly id: ProjectId; readonly workspaceRoot: string }, DeployError> =>
+        deployService.listTargets({}).pipe(
+          Effect.flatMap((targets) => {
+            const target = targets.find((candidate) => candidate.id === targetId);
+            if (!target) {
+              return Effect.fail(
+                new DeployError({
+                  code: "target-not-found",
+                  message: `Deploy target ${targetId} was not found.`,
+                }),
+              );
+            }
+            return orchestrationEngine.getReadModel().pipe(
+              Effect.mapError(
+                () =>
+                  new DeployError({
+                    code: "project-not-found",
+                    message: `Project ${target.projectId} was not found.`,
+                  }),
+              ),
+              Effect.flatMap((readModel) => {
+                const project = readModel.projects.find(
+                  (candidate) => candidate.id === target.projectId,
+                );
+                return project
+                  ? Effect.succeed({ id: project.id, workspaceRoot: project.workspaceRoot })
+                  : Effect.fail(
+                      new DeployError({
+                        code: "project-not-found",
+                        message: `Project ${target.projectId} was not found.`,
+                      }),
+                    );
+              }),
+            );
+          }),
+        );
+
       const gitRpcError = (cwd: string, message: string): GitCommandError =>
         new GitCommandError({
           operation: "authorize",
@@ -3645,6 +3719,92 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               (message) => new OrganizationError({ code: "invalid-role", message }),
             ),
             { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.deployListTargets]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployListTargets,
+            withRateLimit(
+              (input.projectId === undefined
+                ? Effect.void
+                : ensureDeployProjectAccess(input.projectId, "project.view")
+              ).pipe(
+                Effect.flatMap(() =>
+                  deployService.listTargets(
+                    input.projectId !== undefined ? { projectId: input.projectId } : {},
+                  ),
+                ),
+                Effect.map((targets) => ({ targets })),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.deployCreateTarget]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployCreateTarget,
+            withRateLimit(
+              ensureDeployProjectAccess(input.projectId, "project.edit").pipe(
+                Effect.flatMap(() => deployService.createTarget(input)),
+                Effect.map((target) => ({ target })),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.deployDeleteTarget]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployDeleteTarget,
+            withRateLimit(
+              resolveDeployTargetProject(input.targetId).pipe(
+                Effect.flatMap((project) => ensureDeployProjectAccess(project.id, "project.edit")),
+                Effect.flatMap(() => deployService.deleteTarget(input)),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.deployRun]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployRun,
+            withRateLimit(
+              resolveDeployTargetProject(input.targetId).pipe(
+                Effect.flatMap((project) =>
+                  ensureDeployProjectAccess(project.id, "project.edit").pipe(
+                    Effect.flatMap(() =>
+                      deployService.run({
+                        targetId: input.targetId,
+                        actor: { label: collaborationActor.displayName },
+                        workspaceRoot: project.workspaceRoot,
+                      }),
+                    ),
+                  ),
+                ),
+                Effect.map((run) => ({ run })),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.deployListRuns]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployListRuns,
+            withRateLimit(
+              (input.projectId === undefined
+                ? Effect.void
+                : ensureDeployProjectAccess(input.projectId, "project.view")
+              ).pipe(
+                Effect.flatMap(() =>
+                  deployService.listRuns({
+                    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+                    ...(input.targetId !== undefined ? { targetId: input.targetId } : {}),
+                    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+                  }),
+                ),
+                Effect.map((runs) => ({ runs })),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
           ),
         [WS_METHODS.organizationEmployeesInvite]: (input) =>
           observeRpcEffect(

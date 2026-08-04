@@ -5,6 +5,8 @@ import {
   CommandId,
   OrchestrationReadModel,
   ProjectId,
+  type DeployTarget,
+  DeployTargetId,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
 import {
@@ -44,6 +46,10 @@ import {
 import { readBootstrapEnvelope } from "./bootstrap.ts";
 import { expandHomePath, resolveBaseDir } from "./os-jank.ts";
 import { runServer } from "./server.ts";
+import { DeployService, type DeployServiceShape } from "./deploy/Services/DeployService.ts";
+import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
+import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
+import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { AuthControlPlaneRuntimeLive } from "./auth/Layers/AuthControlPlane.ts";
 import {
   formatIssuedPairingCredential,
@@ -1159,6 +1165,197 @@ const projectCommand = Command.make("project").pipe(
   Command.withSubcommands([projectAddCommand, projectRemoveCommand, projectRenameCommand]),
 );
 
+const runDeployCommand = Effect.fn("runDeployCommand")(function* (
+  flags: { readonly baseDir: Option.Option<string> },
+  run: (deploy: DeployServiceShape) => Effect.Effect<string, Error>,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  return yield* Effect.gen(function* () {
+    const deploy = yield* DeployService;
+    const output = yield* run(deploy);
+    yield* Console.log(output);
+  }).pipe(
+    Effect.provide(
+      DeployServiceLive.pipe(
+        Layer.provide(DeployRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
+        Layer.provide(ServerSecretStoreLive),
+        Layer.provide(Layer.succeed(ServerConfig, config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
+      ),
+    ),
+  );
+});
+
+const formatDeployTarget = (target: DeployTarget): string => {
+  const location =
+    target.kind === "ssh" && target.ssh
+      ? `ssh ${target.ssh.user}@${target.ssh.host}${target.ssh.remotePath ? `:${target.ssh.remotePath}` : ""}`
+      : "local";
+  return `${target.id}  ${target.name}  [${location}]  ${target.command}`;
+};
+
+const deployListCommand = Command.make("list", {
+  baseDir: baseDirFlag,
+  project: Flag.string("project").pipe(
+    Flag.withDescription("Only list targets for this project id."),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription("List deploy targets."),
+  Command.withHandler((flags) =>
+    runDeployCommand(flags, (deploy) =>
+      deploy
+        .listTargets(
+          Option.isSome(flags.project) ? { projectId: ProjectId.make(flags.project.value) } : {},
+        )
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.map((targets) =>
+            targets.length === 0
+              ? "No deploy targets configured."
+              : targets.map(formatDeployTarget).join("\n"),
+          ),
+        ),
+    ),
+  ),
+);
+
+const deployAddCommand = Command.make("add", {
+  baseDir: baseDirFlag,
+  project: Flag.string("project").pipe(Flag.withDescription("Project id to attach the target to.")),
+  name: Flag.string("name").pipe(Flag.withDescription("Human readable target name.")),
+  command: Flag.string("command").pipe(Flag.withDescription("Command to execute when deploying.")),
+  sshHost: Flag.string("ssh-host").pipe(
+    Flag.withDescription("Deploy over SSH to this host."),
+    Flag.optional,
+  ),
+  sshUser: Flag.string("ssh-user").pipe(
+    Flag.withDescription("SSH user (required with --ssh-host)."),
+    Flag.optional,
+  ),
+  sshPath: Flag.string("ssh-path").pipe(
+    Flag.withDescription("Remote directory to run the command in."),
+    Flag.optional,
+  ),
+  sshPasswordSecret: Flag.string("ssh-password-secret").pipe(
+    Flag.withDescription("Secret store name holding the SSH password."),
+    Flag.optional,
+  ),
+  sshIdentityFile: Flag.string("ssh-identity-file").pipe(
+    Flag.withDescription("Path to an SSH private key."),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription("Add a deploy target."),
+  Command.withHandler((flags) =>
+    runDeployCommand(flags, (deploy) => {
+      const host = Option.getOrUndefined(flags.sshHost);
+      const user = Option.getOrUndefined(flags.sshUser);
+      if (host !== undefined && user === undefined) {
+        return Effect.fail(new Error("--ssh-user is required when --ssh-host is provided."));
+      }
+      const remotePath = Option.getOrUndefined(flags.sshPath);
+      const passwordSecretName = Option.getOrUndefined(flags.sshPasswordSecret);
+      const identityFile = Option.getOrUndefined(flags.sshIdentityFile);
+      return deploy
+        .createTarget({
+          projectId: ProjectId.make(flags.project),
+          name: flags.name,
+          command: flags.command,
+          kind: host !== undefined ? "ssh" : "command",
+          ...(host !== undefined && user !== undefined
+            ? {
+                ssh: {
+                  host,
+                  user,
+                  ...(remotePath !== undefined ? { remotePath } : {}),
+                  ...(passwordSecretName !== undefined ? { passwordSecretName } : {}),
+                  ...(identityFile !== undefined ? { identityFile } : {}),
+                },
+              }
+            : {}),
+        })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.map((target) => `Added deploy target ${target.id} (${target.name}).`),
+        );
+    }),
+  ),
+);
+
+const deployRunCommand = Command.make("run", {
+  baseDir: baseDirFlag,
+  target: Argument.string("target").pipe(Argument.withDescription("Deploy target id to run.")),
+}).pipe(
+  Command.withDescription("Run a deploy target from the current working directory."),
+  Command.withHandler((flags) =>
+    runDeployCommand(flags, (deploy) =>
+      deploy
+        .run({
+          targetId: DeployTargetId.make(flags.target),
+          actor: { label: "cli" },
+          workspaceRoot: process.cwd(),
+        })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.flatMap((deployRun) =>
+            deployRun.status === "succeeded"
+              ? Effect.succeed(`Deploy ${deployRun.id} succeeded.\n${deployRun.output}`.trimEnd())
+              : Effect.fail(
+                  new Error(
+                    `Deploy ${deployRun.id} failed (exit ${deployRun.exitCode ?? "unknown"}).\n${deployRun.output}`.trimEnd(),
+                  ),
+                ),
+          ),
+        ),
+    ),
+  ),
+);
+
+const deployRunsCommand = Command.make("runs", {
+  baseDir: baseDirFlag,
+  target: Flag.string("target").pipe(
+    Flag.withDescription("Only show runs for this target id."),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription("Show recent deploy runs."),
+  Command.withHandler((flags) =>
+    runDeployCommand(flags, (deploy) =>
+      deploy
+        .listRuns(
+          Option.isSome(flags.target)
+            ? { targetId: DeployTargetId.make(flags.target.value), limit: 20 }
+            : { limit: 20 },
+        )
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.map((runs) =>
+            runs.length === 0
+              ? "No deploy runs recorded."
+              : runs
+                  .map(
+                    (entry) =>
+                      `${entry.startedAt}  ${entry.status.padEnd(9)}  ${entry.targetId}  by ${entry.triggeredBy}`,
+                  )
+                  .join("\n"),
+          ),
+        ),
+    ),
+  ),
+);
+
+const deployCommand = Command.make("deploy").pipe(
+  Command.withDescription("Manage and run deploy targets."),
+  Command.withSubcommands([
+    deployListCommand,
+    deployAddCommand,
+    deployRunCommand,
+    deployRunsCommand,
+  ]),
+);
+
 const runServerCommand = (
   flags: CliServerFlags,
   options?: {
@@ -1192,5 +1389,5 @@ const serveCommand = Command.make("serve", { ...sharedServerCommandFlags }).pipe
 export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
   Command.withDescription("Run the T3 Code server."),
   Command.withHandler((flags) => runServerCommand(flags)),
-  Command.withSubcommands([startCommand, serveCommand, authCommand, projectCommand]),
+  Command.withSubcommands([startCommand, serveCommand, authCommand, projectCommand, deployCommand]),
 );
