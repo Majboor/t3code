@@ -39,6 +39,7 @@ import { isElectron } from "../../env";
 import {
   fetchUserProfile,
   readSupabaseBrowserAccessToken,
+  signOutLocalServerSession,
   signOutSupabaseBrowserSession,
   updateUserProfile,
 } from "../../environments/primary";
@@ -519,6 +520,17 @@ export function AccountSettingsPanel() {
     setStatusMessage("Supabase browser session removed. Sign in again to reconnect.");
   }, []);
 
+  // Every authenticated session needs a way out, not just Supabase ones.
+  const handleSignOut = useCallback(async () => {
+    if (canSignOutSupabaseSession) {
+      signOutSupabaseBrowserSession();
+    }
+    await signOutLocalServerSession().catch(() => undefined);
+    setProfile(null);
+    setErrorMessage(null);
+    window.location.assign("/pair");
+  }, [canSignOutSupabaseSession]);
+
   useEffect(() => {
     void refreshProfile();
   }, [refreshProfile]);
@@ -616,12 +628,21 @@ export function AccountSettingsPanel() {
                   </div>
                 </div>
               </div>
-              {canSignOutSupabaseSession ? (
-                <Button size="xs" variant="destructive-outline" onClick={handleSupabaseSignOut}>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="xs"
+                  variant="destructive-outline"
+                  onClick={() => void handleSignOut()}
+                >
                   <LogOutIcon className="size-3.5" />
-                  Sign out of Supabase
+                  Sign out
                 </Button>
-              ) : null}
+                {canSignOutSupabaseSession ? (
+                  <Button size="xs" variant="outline" onClick={handleSupabaseSignOut}>
+                    Forget Supabase session
+                  </Button>
+                ) : null}
+              </div>
             </div>
           ) : null}
         </SettingsRow>
