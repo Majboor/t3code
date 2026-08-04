@@ -123,6 +123,7 @@ import { CollaborationService } from "./collaboration/Services/CollaborationServ
 import { OrganizationService } from "./organizations/Services/OrganizationService.ts";
 import { TenancyRepository } from "./persistence/Services/Tenancy.ts";
 import { DeployService } from "./deploy/Services/DeployService.ts";
+import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
 import { ProjectionThreadPreferenceRepository } from "./persistence/Services/ProjectionThreadPreferences.ts";
 
 const WS_RPC_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -865,10 +866,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             }),
           );
         }
-        const targetWorkspaceId = requestedOwnership?.workspaceId ?? activeWorkspaceId;
-        if (targetWorkspaceId === null || targetWorkspaceId === undefined) {
-          return Effect.succeed(command.ownership);
-        }
+        const requestedWorkspaceId = requestedOwnership?.workspaceId ?? activeWorkspaceId;
 
         return Effect.all({
           organizations: tenancyRepository.loadOrganizations(),
@@ -882,6 +880,16 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               }),
           ),
           Effect.flatMap(({ organizations: snapshot, workspaces }) => {
+            // Without an explicit target, land the project in the tenant's own
+            // workspace so members keep access to the files they just added.
+            const targetWorkspaceId =
+              requestedWorkspaceId ??
+              workspaces.workspaces.find(
+                (entry) => entry.tenantId === tenantSession.tenantId && entry.archivedAt === null,
+              )?.id;
+            if (targetWorkspaceId === null || targetWorkspaceId === undefined) {
+              return Effect.succeed(command.ownership);
+            }
             const tenant = snapshot.tenants.find((entry) => entry.id === tenantSession.tenantId);
             const organization =
               tenantSession.organizationId === null
@@ -2322,42 +2330,38 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }),
         );
 
+      // A tenant owns a workspace root when one of its projects contains that path.
+      // Provider-session isolation only has to arbitrate paths the tenant does not
+      // already own, otherwise members could not read their own project files.
+      const ownsWorkspaceRoot = (cwd: string, tenantId: TenantId): Effect.Effect<boolean, never> =>
+        orchestrationEngine.getReadModel().pipe(
+          Effect.map((readModel) =>
+            readModel.projects.some(
+              (project) =>
+                project.ownership?.tenantId === tenantId &&
+                isPathInsideRoot(cwd, project.workspaceRoot),
+            ),
+          ),
+          Effect.catchCause(() => Effect.succeed(false)),
+        );
+
       const ensureTenantWorkspacePermission = <E>(
         cwd: string,
         permission: TenantPermission,
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        if (session.tenantSessionContext) {
-          if (!hasTenantPermission({ roles: session.tenantSessionContext.roles, permission })) {
+        const tenantSession = session.tenantSessionContext;
+        if (tenantSession) {
+          if (!hasTenantPermission({ roles: tenantSession.roles, permission })) {
             return Effect.fail(toError(forbiddenMessage(permission)));
           }
 
-          return tenancyRepository.loadProviderIsolation().pipe(
-            Effect.mapError(() => toError(forbiddenMessage(permission))),
-            Effect.flatMap((snapshot) => {
-              const matchingProviderSession = snapshot.providerSessions.find((providerSession) => {
-                if (
-                  providerSession.endedAt !== null ||
-                  providerSession.tenantId !== session.tenantSessionContext?.tenantId ||
-                  !isPathInsideRoot(cwd, providerSession.cwd)
-                ) {
-                  return false;
-                }
-                const providerAccount = snapshot.providerAccounts.find(
-                  (account) => account.id === providerSession.providerAccountId,
-                );
-                return providerAccount
-                  ? evaluateProviderAccountAccess({
-                      account: providerAccount,
-                      providerSession,
-                      tenantSession: session.tenantSessionContext,
-                    }).allowed
-                  : false;
-              });
-              return matchingProviderSession
+          return ownsWorkspaceRoot(cwd, tenantSession.tenantId).pipe(
+            Effect.flatMap((owned) =>
+              owned
                 ? Effect.void
-                : Effect.fail(toError(forbiddenMessage(permission)));
-            }),
+                : ensureProviderSessionGrantsWorkspaceRoot(cwd, permission, toError),
+            ),
           );
         }
 
@@ -2367,6 +2371,39 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
 
         return Effect.void;
       };
+
+      const ensureProviderSessionGrantsWorkspaceRoot = <E>(
+        cwd: string,
+        permission: TenantPermission,
+        toError: (message: string) => E,
+      ): Effect.Effect<void, E> =>
+        tenancyRepository.loadProviderIsolation().pipe(
+          Effect.mapError(() => toError(forbiddenMessage(permission))),
+          Effect.flatMap((snapshot) => {
+            const matchingProviderSession = snapshot.providerSessions.find((providerSession) => {
+              if (
+                providerSession.endedAt !== null ||
+                providerSession.tenantId !== session.tenantSessionContext?.tenantId ||
+                !isPathInsideRoot(cwd, providerSession.cwd)
+              ) {
+                return false;
+              }
+              const providerAccount = snapshot.providerAccounts.find(
+                (account) => account.id === providerSession.providerAccountId,
+              );
+              return providerAccount
+                ? evaluateProviderAccountAccess({
+                    account: providerAccount,
+                    providerSession,
+                    tenantSession: session.tenantSessionContext,
+                  }).allowed
+                : false;
+            });
+            return matchingProviderSession
+              ? Effect.void
+              : Effect.fail(toError(forbiddenMessage(permission)));
+          }),
+        );
 
       const ensureAnyTenantWorkspacePermission = <E>(
         roots: readonly string[],

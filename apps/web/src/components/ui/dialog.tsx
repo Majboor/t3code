@@ -149,7 +149,9 @@ function DialogPanel({
   ...props
 }: React.ComponentProps<"div"> & { scrollFade?: boolean }) {
   return (
-    <ScrollArea scrollFade={scrollFade}>
+    // The panel is one flex child of the popup column: it may shrink and scroll,
+    // but it must not claim the popup's full height or the footer renders outside it.
+    <ScrollArea className="h-auto min-h-0 w-full flex-1" scrollFade={scrollFade}>
       <div
         className={cn(
           "p-6 in-[[data-slot=dialog-popup]:has([data-slot=dialog-header])]:pt-1 in-[[data-slot=dialog-popup]:has([data-slot=dialog-footer]:not(.border-t))]:pb-1",
