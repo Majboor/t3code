@@ -211,6 +211,22 @@ export class T3Client {
     return snapshot.projects;
   }
 
+  /** Register a folder as a project in the caller's workspace. */
+  addProject(input: { readonly workspaceRoot: string; readonly title: string }) {
+    const projectId = crypto.randomUUID() as ProjectId;
+    return this.run((client) =>
+      client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+        type: "project.create",
+        commandId: crypto.randomUUID() as CommandId,
+        projectId,
+        title: input.title,
+        workspaceRoot: input.workspaceRoot,
+        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+        createdAt: new Date().toISOString(),
+      } as never),
+    ).then(() => projectId);
+  }
+
   /** Send a prompt to an existing thread's agent. */
   promptAgent(input: PromptAgentInput): Promise<unknown> {
     return this.run((client) =>
@@ -221,6 +237,32 @@ export class T3Client {
         prompt: input.prompt,
       } as never),
     );
+  }
+
+  // ── Git ──
+
+  /** Merge or rebase a branch into the checkout at `cwd`, reporting conflicts. */
+  mergeBranch(input: {
+    readonly cwd: string;
+    readonly branch: string;
+    readonly mode?: "merge" | "rebase";
+  }) {
+    return this.run((client) =>
+      client[WS_METHODS.gitMergeBranch]({
+        cwd: input.cwd,
+        branch: input.branch,
+        ...(input.mode ? { mode: input.mode } : {}),
+      }),
+    );
+  }
+
+  /** Report whether a merge or rebase is in progress and which paths conflict. */
+  getMergeState(cwd: string) {
+    return this.run((client) => client[WS_METHODS.gitGetMergeState]({ cwd }));
+  }
+
+  abortMerge(cwd: string) {
+    return this.run((client) => client[WS_METHODS.gitAbortMerge]({ cwd }));
   }
 
   // ── Deploys ──
