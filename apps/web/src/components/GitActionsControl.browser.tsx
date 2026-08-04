@@ -100,9 +100,11 @@ vi.mock("~/lib/gitReactQuery", () => ({
   gitInitMutationOptions: vi.fn(() => ({ __kind: "init" })),
   gitMutationKeys: {
     pull: vi.fn(() => ["pull"]),
+    mergeBranch: vi.fn(() => ["merge-branch"]),
     runStackedAction: vi.fn(() => ["run-stacked-action"]),
   },
   gitPullMutationOptions: vi.fn(() => ({ __kind: "pull" })),
+  gitMergeBranchMutationOptions: vi.fn(() => ({ __kind: "merge-branch" })),
   gitRunStackedActionMutationOptions: vi.fn(() => ({ __kind: "run-stacked-action" })),
   invalidateGitQueries: invalidateGitQueriesSpy,
 }));

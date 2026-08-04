@@ -175,6 +175,14 @@ vi.mock("../../environments/primary", () => {
       tenantStatus: "active",
     })),
     submitServerAuthCredential: vi.fn(async () => undefined),
+    signOutLocalServerSession: vi.fn(async () => undefined),
+    submitLocalPasswordAuth: vi.fn(async () => ({
+      authenticated: true,
+      role: "client",
+      sessionMethod: "browser-session-cookie",
+      tenantStatus: "active",
+    })),
+    takePairingTokenFromUrl: vi.fn(() => null),
     submitSupabasePasswordAuth: vi.fn(async () => ({
       authenticated: true,
       auth: {

@@ -346,7 +346,20 @@ function createMockEnvironmentApi(input: {
         undefined) as EnvironmentApi["orchestration"]["subscribeThread"],
     },
     collaboration: {} as EnvironmentApi["collaboration"],
-    organizations: {} as EnvironmentApi["organizations"],
+    organizations: {
+      list: (async () => ({
+        organizations: [],
+        tenants: [],
+        employees: [],
+        invites: [],
+        memberships: [],
+        teams: [],
+        departments: [],
+        grants: [],
+        reviews: [],
+        workspaces: [],
+      })) as EnvironmentApi["organizations"]["list"],
+    } as EnvironmentApi["organizations"],
     providerAccounts: {} as EnvironmentApi["providerAccounts"],
   };
 }
@@ -2187,7 +2200,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const docsWorkspaceLink = await waitForElement(
         () =>
           Array.from(
-            document.querySelectorAll<HTMLElement>('[data-testid="dashboard-workspace-link"]'),
+            document.querySelectorAll<HTMLElement>(
+              '[data-testid="dashboard-workspace-project-link"]',
+            ),
           ).find((element) => element.textContent?.includes("Docs Portal")) ?? null,
         "Unable to find Docs Portal dashboard link.",
       );
