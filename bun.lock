@@ -152,6 +152,21 @@
         "vitest": "catalog:",
       },
     },
+    "packages/sdk": {
+      "name": "@t3tools/sdk",
+      "version": "0.0.0-alpha.1",
+      "dependencies": {
+        "@t3tools/contracts": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/language-service": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "packages/shared": {
       "name": "@t3tools/shared",
       "version": "0.0.0-alpha.1",
@@ -705,6 +720,8 @@
     "@t3tools/marketing": ["@t3tools/marketing@workspace:apps/marketing"],
 
     "@t3tools/scripts": ["@t3tools/scripts@workspace:scripts"],
+
+    "@t3tools/sdk": ["@t3tools/sdk@workspace:packages/sdk"],
 
     "@t3tools/shared": ["@t3tools/shared@workspace:packages/shared"],
 

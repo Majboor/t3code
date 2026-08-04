@@ -994,6 +994,69 @@ describe("GeneralSettingsPanel observability", () => {
     expect(providerAccounts.disconnect).toHaveBeenCalledWith({ providerAccountId: accountId });
   });
 
+  it("shows provider account linking as an informative state on loopback backends", async () => {
+    Reflect.deleteProperty(window, "desktopBridge");
+    const environmentId = EnvironmentId.make("environment-local");
+    useStore.setState({
+      activeEnvironmentId: environmentId,
+      environmentStateById: {},
+    });
+    const providerAccounts = {
+      list: vi
+        .fn()
+        .mockRejectedValue(
+          new Error("Provider account operations require a hosted tenant session."),
+        ),
+      connect: vi.fn(),
+      openAuthTerminal: vi.fn(),
+      confirm: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    __setEnvironmentApiOverrideForTests(environmentId, {
+      providerAccounts,
+    } as never);
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({
+            authenticated: true,
+            auth: createBaseServerConfig().auth,
+            role: "owner",
+            sessionMethod: "browser-session-cookie",
+            expiresAt: "2036-05-07T00:00:00.000Z",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unhandled fetch GET ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ConnectionsSettings />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Provider Accounts")).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText("Provider account linking requires a hosted tenant session.", {
+          exact: false,
+        }),
+      )
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Connect Codex" }))
+      .not.toBeInTheDocument();
+    expect(providerAccounts.list).toHaveBeenCalledWith();
+  });
+
   it("shows a disabled network access toggle with guidance in desktop builds", async () => {
     const desktopBridge = createDesktopBridgeStub();
     window.desktopBridge = desktopBridge;

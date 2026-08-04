@@ -11,6 +11,7 @@ import { DateTime } from "effect";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
+import { ProviderAccountsSection } from "./ProviderAccountsSection";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -1427,6 +1428,8 @@ export function ConnectionsSettings() {
           </div>
         ) : null}
       </SettingsSection>
+
+      <ProviderAccountsSection />
     </SettingsPageContainer>
   );
 }

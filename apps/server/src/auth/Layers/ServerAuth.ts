@@ -947,18 +947,6 @@ export const makeServerAuth = Effect.gen(function* () {
         const websocketToken = requestUrl.value.searchParams.get(WEBSOCKET_TOKEN_QUERY_PARAM);
         if (websocketToken && websocketToken.trim().length > 0) {
           return yield* sessions.verifyWebSocketToken(websocketToken).pipe(
-            Effect.map((session) => ({
-              sessionId: session.sessionId,
-              subject: session.subject,
-              method: session.method,
-              role: session.role,
-              client: session.client,
-              ...(session.userId ? { userId: session.userId } : {}),
-              ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
-              ...(session.tenantSessionContext
-                ? { tenantSessionContext: session.tenantSessionContext }
-                : {}),
-            })),
             Effect.mapError(
               (cause) =>
                 new AuthError({
@@ -966,6 +954,33 @@ export const makeServerAuth = Effect.gen(function* () {
                   status: 401,
                   cause,
                 }),
+            ),
+            // Websocket tokens carry no tenant context of their own, so resolve
+            // it the same way an HTTP session would.
+            Effect.flatMap((session) =>
+              Effect.map(
+                session.tenantSessionContext
+                  ? Effect.succeed(session.tenantSessionContext)
+                  : resolveLocalTenantSessionContext({
+                      sessionId: session.sessionId,
+                      subject: session.subject,
+                      ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
+                    }),
+                (tenantSessionContext) => ({
+                  sessionId: session.sessionId,
+                  subject: session.subject,
+                  method: session.method,
+                  role: session.role,
+                  client: session.client,
+                  ...(tenantSessionContext?.userId
+                    ? { userId: tenantSessionContext.userId }
+                    : session.userId
+                      ? { userId: session.userId }
+                      : {}),
+                  ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
+                  ...(tenantSessionContext ? { tenantSessionContext } : {}),
+                }),
+              ),
             ),
           );
         }
