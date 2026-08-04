@@ -59,6 +59,8 @@ We are not accepting contributions yet.
 
 Observability guide: [docs/observability.md](./docs/observability.md)
 Roadmap and milestones: [docs/product-roadmap.md](./docs/product-roadmap.md)
+Deployments: [docs/deployments.md](./docs/deployments.md)
+Scripting with the SDK: [packages/sdk/README.md](./packages/sdk/README.md)
 
 ## If you REALLY want to contribute still.... read this first
 

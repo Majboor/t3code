@@ -6,9 +6,20 @@ This file is the short operational backlog. For the broader milestone plan, see
 ## Core LLM and providers
 
 - [ ] Make the OpenAI-compatible core LLM the default model/runtime path
-- [ ] Keep Codex login exposed as a stubbed provider flow for now
-- [ ] Keep Claude login exposed as a stubbed provider flow for now
+- [x] Expose Codex and Claude provider connect flows in settings
 - [ ] Add real core-LLM smoke test coverage against `/chat/completions`
+
+## Collaboration and deployment
+
+- [x] Auto-provision a personal tenant and workspace on first login
+- [x] Scope workspaces, projects, and sessions to tenant memberships
+- [x] Workspace invites with roles, acceptance, and presence
+- [x] Merge/rebase with conflict reporting on diverged branches
+- [x] Deploy targets (local command and SSH) with recorded runs
+- [x] `@t3tools/sdk` for scripting workspaces, agents, and deploys
+- [ ] Share workspace diff review state across collaborators
+- [ ] Sandbox agent processes per workspace (ProviderSandboxMode is unused)
+- [ ] Add `workspaces.list`/`update`/`archive` RPCs
 
 ## Chat and thread polish
 
