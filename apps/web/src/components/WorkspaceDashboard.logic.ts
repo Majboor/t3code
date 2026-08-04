@@ -517,14 +517,24 @@ function membersForWorkspace(
   if (members.length > 0) {
     return members;
   }
+  // Personal tenants have no employee records, so fall back to the tenant name
+  // rather than showing a raw provider-prefixed user id.
+  const tenant = source.snapshot.tenants.find((entry) => entry.id === workspace.tenantId);
   return [
     {
       id: String(workspace.ownerUserId),
-      displayName: String(workspace.ownerUserId),
+      displayName: tenant?.displayName ?? humanizeUserId(String(workspace.ownerUserId)),
       email: null,
       status: "owner",
     },
   ];
+}
+
+/** Turns `supabase:6f0e...` into something a person can read. */
+export function humanizeUserId(userId: string): string {
+  const withoutProvider = userId.replace(/^(?:supabase|local|auth|invited|local-user):/, "");
+  const cleaned = withoutProvider.replace(/[-_.]+/g, " ").trim();
+  return cleaned.length > 0 ? cleaned : userId;
 }
 
 function pendingInvitesForWorkspace(

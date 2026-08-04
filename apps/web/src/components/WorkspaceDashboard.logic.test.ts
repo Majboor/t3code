@@ -16,6 +16,7 @@ import {
   formatProjectOwnershipLabel,
   getProjectActivityAt,
   getThreadActivityAt,
+  humanizeUserId,
 } from "./WorkspaceDashboard.logic";
 import type { Project, SidebarThreadSummary } from "../types";
 
@@ -512,3 +513,15 @@ function makeThread(input: {
     hasActionableProposedPlan: false,
   };
 }
+
+describe("humanizeUserId", () => {
+  it("strips provider prefixes from user ids", () => {
+    expect(humanizeUserId("supabase:fdc0efa3-dc89-4788")).toBe("fdc0efa3 dc89 4788");
+    expect(humanizeUserId("local:8496f94e")).toBe("8496f94e");
+    expect(humanizeUserId("auth:loopback-local-owner")).toBe("loopback local owner");
+  });
+
+  it("keeps ids that carry no provider prefix", () => {
+    expect(humanizeUserId("plain-owner")).toBe("plain owner");
+  });
+});
