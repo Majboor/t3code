@@ -11,6 +11,7 @@ import {
   Stream,
 } from "effect";
 import path from "node:path";
+import os from "node:os";
 import {
   type AuthAccessStreamEvent,
   AuthSessionId,
@@ -60,6 +61,7 @@ import {
   TenantId,
   TenantRuntimeId,
   type TenantPermission,
+  type TenantRole,
   TerminalCwdError,
   ThreadId,
   UserId,
@@ -2330,19 +2332,35 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }),
         );
 
-      // A tenant owns a workspace root when one of its projects contains that path.
-      // Provider-session isolation only has to arbitrate paths the tenant does not
-      // already own, otherwise members could not read their own project files.
-      const ownsWorkspaceRoot = (cwd: string, tenantId: TenantId): Effect.Effect<boolean, never> =>
-        orchestrationEngine.getReadModel().pipe(
-          Effect.map((readModel) =>
-            readModel.projects.some(
-              (project) =>
-                project.ownership?.tenantId === tenantId &&
-                isPathInsideRoot(cwd, project.workspaceRoot),
-            ),
-          ),
-          Effect.catchCause(() => Effect.succeed(false)),
+      // A collaborator can belong to several tenants at once — their own personal
+      // tenant plus every workspace they were invited into. Authorize against the
+      // roles they hold in the tenant that actually owns the path, not just the
+      // tenant that happens to be active on the session.
+      const resolveWorkspaceRootTenantRoles = (
+        cwd: string,
+      ): Effect.Effect<ReadonlyArray<TenantRole> | null, never> =>
+        Effect.all({
+          readModel: orchestrationEngine.getReadModel(),
+          memberships: actorMemberships(),
+        }).pipe(
+          Effect.map(({ readModel, memberships }) => {
+            const owningTenantIds = new Set(
+              readModel.projects
+                .filter(
+                  (project) =>
+                    project.ownership !== undefined && isPathInsideRoot(cwd, project.workspaceRoot),
+                )
+                .map((project) => project.ownership!.tenantId),
+            );
+            if (owningTenantIds.size === 0) {
+              return null;
+            }
+            const roles = memberships
+              .filter((membership) => owningTenantIds.has(membership.tenantId))
+              .flatMap((membership) => membership.roles);
+            return roles.length > 0 ? roles : null;
+          }),
+          Effect.catchCause(() => Effect.succeed(null)),
         );
 
       const ensureTenantWorkspacePermission = <E>(
@@ -2352,16 +2370,18 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       ): Effect.Effect<void, E> => {
         const tenantSession = session.tenantSessionContext;
         if (tenantSession) {
-          if (!hasTenantPermission({ roles: tenantSession.roles, permission })) {
-            return Effect.fail(toError(forbiddenMessage(permission)));
-          }
-
-          return ownsWorkspaceRoot(cwd, tenantSession.tenantId).pipe(
-            Effect.flatMap((owned) =>
-              owned
-                ? Effect.void
-                : ensureProviderSessionGrantsWorkspaceRoot(cwd, permission, toError),
-            ),
+          return resolveWorkspaceRootTenantRoles(cwd).pipe(
+            Effect.flatMap((owningRoles) => {
+              if (owningRoles !== null) {
+                return hasTenantPermission({ roles: owningRoles, permission })
+                  ? Effect.void
+                  : Effect.fail(toError(forbiddenMessage(permission)));
+              }
+              // Unowned path: fall back to provider-session isolation.
+              return hasTenantPermission({ roles: tenantSession.roles, permission })
+                ? ensureProviderSessionGrantsWorkspaceRoot(cwd, permission, toError)
+                : Effect.fail(toError(forbiddenMessage(permission)));
+            }),
           );
         }
 
@@ -2633,6 +2653,50 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }),
         );
 
+      // Loopback-bound servers serve a single operator machine; remote-reachable
+      // deployments are treated as multi-tenant and always isolate providers.
+      const isSingleMachineServer = isLoopbackHost(config.host) && !isWildcardHost(config.host);
+
+      // On a single operator machine a freshly isolated provider home has no
+      // credentials, which leaves the CLI unable to initialize. Seed it once from
+      // the operator's own login so local tenants work before linking an account.
+      const OPERATOR_PROVIDER_CREDENTIAL_FILES = {
+        codex: ["auth.json", "config.toml"],
+        claudeAgent: [".credentials.json", "settings.json"],
+      } as const satisfies Record<ProviderKind, ReadonlyArray<string>>;
+
+      const operatorProviderHome = (provider: ProviderKind): string =>
+        provider === "codex"
+          ? (process.env["CODEX_HOME"] ?? path.join(os.homedir(), ".codex"))
+          : path.join(os.homedir(), ".claude");
+
+      const seedProviderHomeFromOperator = (
+        provider: ProviderKind,
+        authHomeDir: string,
+      ): Effect.Effect<void, never> => {
+        if (!isSingleMachineServer) {
+          return Effect.void;
+        }
+        const sourceHome = operatorProviderHome(provider);
+        return Effect.forEach(
+          OPERATOR_PROVIDER_CREDENTIAL_FILES[provider],
+          (fileName) =>
+            Effect.gen(function* () {
+              const target = path.join(authHomeDir, fileName);
+              if (yield* fileSystem.exists(target)) {
+                return;
+              }
+              const source = path.join(sourceHome, fileName);
+              if (!(yield* fileSystem.exists(source))) {
+                return;
+              }
+              yield* fileSystem.copyFile(source, target);
+              yield* fileSystem.chmod(target, 0o600);
+            }).pipe(Effect.ignore),
+          { discard: true },
+        );
+      };
+
       const persistHostedProviderConnectionForTurnStart = (
         command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
       ): Effect.Effect<void, OrchestrationDispatchCommandError> => {
@@ -2716,23 +2780,47 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             }
             const planAccount = plan.account;
             const planProviderSession = plan.providerSession;
-            return tenancyRepository.saveProviderIsolation(plan.snapshot).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationDispatchCommandError({
-                    message: "Failed to persist hosted provider account isolation.",
-                    cause,
+            // The provider is launched with these directories as its home; create
+            // them up front or the CLI exits before it can complete initialize.
+            return Effect.all(
+              [planAccount.authHomeDir, planAccount.configDir, planAccount.secretsDir].map(
+                (directory) =>
+                  fileSystem
+                    .makeDirectory(directory, { recursive: true })
+                    .pipe(Effect.andThen(fileSystem.chmod(directory, 0o700))),
+              ),
+              { discard: true },
+            )
+              .pipe(
+                Effect.andThen(
+                  seedProviderHomeFromOperator(planAccount.provider, planAccount.authHomeDir),
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationDispatchCommandError({
+                      message: "Failed to prepare the isolated provider home directory.",
+                      cause,
+                    }),
+                ),
+                Effect.flatMap(() => tenancyRepository.saveProviderIsolation(plan.snapshot)),
+              )
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationDispatchCommandError({
+                      message: "Failed to persist hosted provider account isolation.",
+                      cause,
+                    }),
+                ),
+                Effect.tap(() =>
+                  recordProviderAccountLaunchAuditEvents(tenantSession, {
+                    provider: planAccount.provider,
+                    providerAccountId: planAccount.id,
+                    createdAccount: plan.createdAccount,
+                    cwd: planProviderSession.cwd,
                   }),
-              ),
-              Effect.tap(() =>
-                recordProviderAccountLaunchAuditEvents(tenantSession, {
-                  provider: planAccount.provider,
-                  providerAccountId: planAccount.id,
-                  createdAccount: plan.createdAccount,
-                  cwd: planProviderSession.cwd,
-                }),
-              ),
-            );
+                ),
+              );
           }),
         );
       };

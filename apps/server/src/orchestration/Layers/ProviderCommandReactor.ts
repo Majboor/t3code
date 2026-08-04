@@ -307,12 +307,20 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+        // Provider homes hold credentials, so a session may only be reused by the
+        // tenant that owns the project. Matching on path alone would hand one
+        // tenant's provider login to another.
+        const owningTenantId = readModel.projects.find(
+          (project) =>
+            project.ownership !== undefined && isPathInsideRoot(input.cwd!, project.workspaceRoot),
+        )?.ownership?.tenantId;
         const providerSession = snapshot.providerSessions
           .filter(
             (session) =>
               session.endedAt === null &&
               session.provider === input.provider &&
-              isPathInsideRoot(input.cwd!, session.cwd),
+              isPathInsideRoot(input.cwd!, session.cwd) &&
+              (owningTenantId === undefined || session.tenantId === owningTenantId),
           )
           .toSorted((left, right) => {
             const leftAccount = snapshot.providerAccounts.find(
