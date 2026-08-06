@@ -134,6 +134,34 @@ it.effect("decodes project.create with createWorkspaceRootIfMissing enabled", ()
   }),
 );
 
+it.effect("decodes an ownership key that is present but undefined", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeProjectCreateCommand({
+      type: "project.create",
+      commandId: "cmd-1",
+      projectId: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      ownership: undefined,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const project = yield* decodeOrchestrationProject({
+      id: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      ownership: undefined,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    });
+
+    assert.strictEqual(command.ownership, undefined);
+    assert.strictEqual(project.ownership, undefined);
+  }),
+);
+
 it.effect("decodes project ownership metadata on full and shell project snapshots", () =>
   Effect.gen(function* () {
     const project = {

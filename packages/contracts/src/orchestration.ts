@@ -159,11 +159,17 @@ export const OrchestrationProjectOwnership = Schema.Struct({
 });
 export type OrchestrationProjectOwnership = typeof OrchestrationProjectOwnership.Type;
 
+// Ownership travels through spreads on both sides of the wire, and a spread of
+// an absent key yields a key that is present and undefined. `optionalKey` alone
+// rejects that shape, so accept undefined as well — every reader already guards
+// with `!== undefined`.
+const OptionalProjectOwnership = Schema.optional(OrchestrationProjectOwnership);
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
-  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
+  ownership: OptionalProjectOwnership,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
@@ -331,7 +337,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
-  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
+  ownership: OptionalProjectOwnership,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
@@ -422,7 +428,7 @@ export const ProjectCreateCommand = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
-  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
+  ownership: OptionalProjectOwnership,
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   createdAt: IsoDateTime,
@@ -434,7 +440,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   projectId: ProjectId,
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
-  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
+  ownership: OptionalProjectOwnership,
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
@@ -769,7 +775,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
-  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
+  ownership: OptionalProjectOwnership,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
@@ -781,7 +787,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
-  ownership: Schema.optionalKey(OrchestrationProjectOwnership),
+  ownership: OptionalProjectOwnership,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
