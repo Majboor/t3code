@@ -13,7 +13,10 @@ import { useCallback, useEffect, useState } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
 import { useCollaborationGovernance } from "../../hooks/useCollaborationGovernance";
+import { useGitStatus } from "../../lib/gitStatusState";
 import { cn } from "../../lib/utils";
+import { selectProjectByRef, useStore } from "../../store";
+import { CollaborationBranchSection } from "./CollaborationBranchSection";
 import {
   CollaborationGovernancePanel,
   CollaborationWorkingPills,
@@ -134,6 +137,13 @@ export function CollaborationPresenceBar({
 
   const visiblePresence = presence.filter((entry) => entry.status !== "offline").slice(0, 5);
   const governance = useCollaborationGovernance({ environmentId, tenantId, workspaceId });
+  const project = useStore((store) =>
+    selectProjectByRef(store, projectId ? { environmentId, projectId } : null),
+  );
+  const gitStatus = useGitStatus({ environmentId, cwd: project?.cwd ?? null });
+  // Whichever branch this person is on now is the shared one they would branch
+  // away from.
+  const baseBranch = gitStatus.data?.branch ?? null;
   const pendingCount = governance.pendingApprovals.length;
   // Only an approver can clear the queue, so only they get nagged about it.
   const showPendingBadge = governance.canDecide && pendingCount > 0;
@@ -193,6 +203,15 @@ export function CollaborationPresenceBar({
           </div>
           <div className="mt-3">
             <CollaborationWorkingPills presence={visiblePresence} />
+          </div>
+          <div className="mt-3">
+            <CollaborationBranchSection
+              environmentId={environmentId}
+              governance={governance}
+              workspaceRoot={project?.cwd ?? null}
+              baseBranch={baseBranch}
+              displayName={visiblePresence[0]?.displayName ?? "collaborator"}
+            />
           </div>
           <div className="mt-3">
             <CollaborationGovernancePanel governance={governance} />

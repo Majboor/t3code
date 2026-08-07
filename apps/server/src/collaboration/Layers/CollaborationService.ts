@@ -804,14 +804,17 @@ const makeCollaborationService = Effect.gen(function* () {
       return { claim };
     });
 
-  const listBranchClaims: CollaborationServiceShape["listBranchClaims"] = (input) =>
+  const listBranchClaims: CollaborationServiceShape["listBranchClaims"] = (actor, input) =>
     Ref.get(stateRef).pipe(
-      Effect.map((state) => ({
-        claims: Array.from(state.branchClaims.values()).filter(
-          (claim) =>
-            claim.tenantId === input.tenantId && claim.workspaceId === input.workspaceId,
-        ),
-      })),
+      Effect.map((state) => {
+        const claims = Array.from(state.branchClaims.values()).filter(
+          (claim) => claim.tenantId === input.tenantId && claim.workspaceId === input.workspaceId,
+        );
+        return {
+          claims,
+          mine: claims.find((claim) => claim.userId === actor.userId) ?? null,
+        };
+      }),
     );
 
   const releaseBranch: CollaborationServiceShape["releaseBranch"] = (actor, input) =>

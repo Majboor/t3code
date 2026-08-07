@@ -22,6 +22,13 @@ export interface CollaborationGovernance {
   readonly canDecide: boolean;
   readonly preferences: CollaborationViewPreferences | null;
   readonly branchClaims: readonly CollaborationBranchClaim[];
+  /** This viewer's own branch, when they have claimed one. */
+  readonly myBranchClaim: CollaborationBranchClaim | null;
+  readonly claimBranch: (input: {
+    branch: string;
+    baseBranch: string;
+    worktreePath: string;
+  }) => Promise<CollaborationBranchClaim>;
   /** Latest author per workspace-relative path. */
   readonly touchesByPath: ReadonlyMap<string, CollaborationFileTouch>;
   readonly loading: boolean;
@@ -59,6 +66,7 @@ export function useCollaborationGovernance(input: {
   const [canDecide, setCanDecide] = useState(false);
   const [preferences, setPreferences] = useState<CollaborationViewPreferences | null>(null);
   const [branchClaims, setBranchClaims] = useState<readonly CollaborationBranchClaim[]>(NO_CLAIMS);
+  const [myBranchClaim, setMyBranchClaim] = useState<CollaborationBranchClaim | null>(null);
   const [touches, setTouches] = useState<readonly CollaborationFileTouch[]>([]);
   const [loading, setLoading] = useState(false);
   const requestSequenceRef = useRef(0);
@@ -99,6 +107,7 @@ export function useCollaborationGovernance(input: {
         setCanDecide(approvalsResult.canDecide);
         setPreferences(viewResult.preferences);
         setBranchClaims(claimsResult.claims);
+        setMyBranchClaim(claimsResult.mine);
         setTouches(touchesResult.touches);
       })
       .catch(() => undefined)
@@ -143,9 +152,8 @@ export function useCollaborationGovernance(input: {
             ]);
             break;
           case "branch-released":
-            setBranchClaims((current) =>
-              current.filter((entry) => entry.userId !== event.userId),
-            );
+            setBranchClaims((current) => current.filter((entry) => entry.userId !== event.userId));
+            setMyBranchClaim((current) => (current?.userId === event.userId ? null : current));
             break;
           case "files-touched":
             setTouches((current) => {
@@ -226,6 +234,28 @@ export function useCollaborationGovernance(input: {
     [environmentId, scope],
   );
 
+  const claimBranch = useCallback(
+    async (patch: { branch: string; baseBranch: string; worktreePath: string }) => {
+      if (!environmentId || !scope) {
+        throw new Error("This workspace is not shared.");
+      }
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        throw new Error("Environment is unavailable.");
+      }
+      const result = await api.collaboration.claimBranch({ ...scope, ...patch });
+      // The stream also delivers this, but the offer should disappear the
+      // instant the button is pressed rather than a round trip later.
+      setMyBranchClaim(result.claim);
+      setBranchClaims((current) => [
+        result.claim,
+        ...current.filter((entry) => entry.userId !== result.claim.userId),
+      ]);
+      return result.claim;
+    },
+    [environmentId, scope],
+  );
+
   const setViewPreferences = useCallback(
     async (patch: { showOthersPrompts?: boolean; showOthersFiles?: boolean }) => {
       if (!environmentId || !scope) {
@@ -249,6 +279,8 @@ export function useCollaborationGovernance(input: {
     canDecide,
     preferences,
     branchClaims,
+    myBranchClaim,
+    claimBranch,
     touchesByPath,
     loading,
     refresh,

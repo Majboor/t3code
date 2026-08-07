@@ -140,6 +140,7 @@ export interface CollaborationServiceShape {
   ) => Effect.Effect<CollaborationBranchClaimResult, CollaborationError>;
 
   readonly listBranchClaims: (
+    actor: CollaborationActor,
     input: CollaborationBranchListInput,
   ) => Effect.Effect<CollaborationBranchListResult, CollaborationError>;
 

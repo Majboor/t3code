@@ -907,6 +907,11 @@ export type CollaborationBranchListInput = typeof CollaborationBranchListInput.T
 
 export const CollaborationBranchListResult = Schema.Struct({
   claims: Schema.Array(CollaborationBranchClaim),
+  /**
+   * The caller's own claim, so a browser can tell whether it needs to offer a
+   * branch without knowing which user it is signed in as.
+   */
+  mine: Schema.NullOr(CollaborationBranchClaim),
 });
 export type CollaborationBranchListResult = typeof CollaborationBranchListResult.Type;
 

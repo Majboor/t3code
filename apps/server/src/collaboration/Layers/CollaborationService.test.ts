@@ -181,8 +181,13 @@ it.effect("tracks one branch claim per person and releases it", () =>
       worktreePath: "/tmp/lead",
     });
 
-    const claimed = yield* collaboration.listBranchClaims(scope);
+    const claimed = yield* collaboration.listBranchClaims(member, scope);
     assert.strictEqual(claimed.claims.length, 2);
+    // The caller gets their own claim picked out, so a browser never has to
+    // know which user it is signed in as.
+    assert.strictEqual(claimed.mine?.branch, "member/work");
+    const asLead = yield* collaboration.listBranchClaims(lead, scope);
+    assert.strictEqual(asLead.mine?.branch, "lead/work");
 
     // Re-claiming replaces rather than accumulates.
     yield* collaboration.claimBranch(member, {
@@ -191,14 +196,15 @@ it.effect("tracks one branch claim per person and releases it", () =>
       baseBranch: "main",
       worktreePath: "/tmp/member-2",
     });
-    const replaced = yield* collaboration.listBranchClaims(scope);
+    const replaced = yield* collaboration.listBranchClaims(member, scope);
     assert.strictEqual(replaced.claims.length, 2);
     assert.ok(replaced.claims.some((claim) => claim.branch === "member/other"));
 
     const released = yield* collaboration.releaseBranch(member, scope);
     assert.strictEqual(released.released, true);
-    const remaining = yield* collaboration.listBranchClaims(scope);
+    const remaining = yield* collaboration.listBranchClaims(member, scope);
     assert.strictEqual(remaining.claims.length, 1);
+    assert.strictEqual(remaining.mine, null);
   }).pipe(Effect.provide(makeLayer())),
 );
 

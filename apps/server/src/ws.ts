@@ -3904,7 +3904,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             WS_METHODS.collaborationBranchList,
             withRateLimit(
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
-                Effect.flatMap(() => collaboration.listBranchClaims(input)),
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listBranchClaims(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),
