@@ -813,6 +813,7 @@ const makeCollaborationService = Effect.gen(function* () {
         return {
           claims,
           mine: claims.find((claim) => claim.userId === actor.userId) ?? null,
+          viewerDisplayName: actor.displayName,
         };
       }),
     );

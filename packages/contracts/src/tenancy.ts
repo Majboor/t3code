@@ -912,6 +912,8 @@ export const CollaborationBranchListResult = Schema.Struct({
    * branch without knowing which user it is signed in as.
    */
   mine: Schema.NullOr(CollaborationBranchClaim),
+  /** The caller's own display name, so a new branch can be named after them. */
+  viewerDisplayName: TrimmedNonEmptyString,
 });
 export type CollaborationBranchListResult = typeof CollaborationBranchListResult.Type;
 

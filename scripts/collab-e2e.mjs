@@ -82,6 +82,32 @@ function diskContains(name) {
   return existsSync(path.join(PROJECT_DIR, name));
 }
 
+/** Runs git in the workspace, returning stdout so callers can assert on it. */
+function git(...args) {
+  return execFileSync("git", args, {
+    cwd: PROJECT_DIR,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Collab E2E",
+      GIT_AUTHOR_EMAIL: "collab@example.test",
+      GIT_COMMITTER_NAME: "Collab E2E",
+      GIT_COMMITTER_EMAIL: "collab@example.test",
+    },
+  }).trim();
+}
+
+/**
+ * The branch flow needs a real repository: worktrees, branches and the
+ * base-vs-head comparison all refuse to run outside one.
+ */
+function initRepository() {
+  git("init", "--initial-branch=main");
+  git("add", ".");
+  git("commit", "-m", "seed");
+  return git("rev-parse", "--abbrev-ref", "HEAD");
+}
+
 // ── browser helpers ─────────────────────────────────────────────────────────
 
 /** A context per account: separate cookies and storage, i.e. a private window. */
@@ -228,6 +254,55 @@ async function createFileViaUi(page, name) {
   return true;
 }
 
+// ── collaboration panel ─────────────────────────────────────────────────────
+
+/** The governance controls live behind the "Collab" popover in the header. */
+async function openCollabPanel(page) {
+  await closeWorkspacePanel(page);
+  const trigger = page.locator('button[aria-label="Open collaboration panel"]').first();
+  if ((await trigger.count()) === 0) return false;
+  await trigger.click().catch(() => undefined);
+  await sleep(UI_SETTLE_MS);
+  return (await page.locator('[data-testid="collaboration-approval-modes"]').count()) > 0
+    || (await page.locator('[data-testid="collaboration-view-toggle"]').count()) > 0;
+}
+
+async function closeCollabPanel(page) {
+  const trigger = page.locator('button[aria-label="Close collaboration panel"]').first();
+  if ((await trigger.count()) > 0) {
+    await trigger.click().catch(() => undefined);
+    await sleep(1_000);
+  }
+}
+
+/** Only the lead sees the mode buttons, so this is A's lever. */
+async function setApprovalMode(page, label) {
+  if (!(await openCollabPanel(page))) return false;
+  const button = page
+    .locator('[data-testid="collaboration-approval-modes"] button', { hasText: label })
+    .first();
+  if ((await button.count()) === 0) return false;
+  await button.click();
+  await sleep(UI_SETTLE_MS);
+  const pressed = await button.getAttribute("aria-pressed");
+  await closeCollabPanel(page);
+  return pressed === "true";
+}
+
+/** Waits for a testid to show up in the collaboration popover. */
+async function waitForCollabElement(page, testId, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await openCollabPanel(page))) return false;
+    if ((await page.locator(`[data-testid="${testId}"]`).count()) > 0) {
+      return true;
+    }
+    await closeCollabPanel(page);
+    await sleep(3_000);
+  }
+  return false;
+}
+
 async function sendAgentMessage(page, prompt) {
   await closeWorkspacePanel(page);
   const composer = page.locator('[data-testid="composer-editor"], textarea').first();
@@ -368,6 +443,110 @@ try {
       await waitForFileInTree(accountA2.page, agentFileB),
     );
   }
+
+  phase("The lead makes prompts need approval");
+  check(
+    "A switches the workspace to 'Needs approval'",
+    await setApprovalMode(accountA2.page, "Needs approval"),
+  );
+  const blockedPrompt = `Create a file named blocked-${RUN_ID}.txt.`;
+  await sendAgentMessage(accountB.page, blockedPrompt);
+  await sleep(UI_SETTLE_MS);
+  const bAfterBlocked = await bodyText(accountB.page);
+  check(
+    "B's prompt is held for review",
+    /waiting for the workspace lead/i.test(bAfterBlocked),
+    // The agent must not have acted on a prompt nobody approved.
+    diskContains(`blocked-${RUN_ID}.txt`) ? "the agent ran it anyway" : "",
+  );
+  check(
+    "A sees the prompt waiting",
+    await waitForCollabElement(accountA2.page, "collaboration-approval-row"),
+  );
+  const approveButton = accountA2.page.locator('button[aria-label="Approve prompt"]').first();
+  const canApprove = (await approveButton.count()) > 0;
+  if (canApprove) {
+    await approveButton.click();
+    await sleep(UI_SETTLE_MS);
+  }
+  check("A can approve it", canApprove);
+  await closeCollabPanel(accountA2.page);
+
+  phase("The lead moves the workspace onto personal branches");
+  // Branching needs a repository, and it is created here rather than at setup
+  // on purpose: in a git workspace the tree hides files that were already on
+  // disk the first time a session listed it, which would confound every
+  // "does the other person see this file" check above. That is a pre-existing
+  // listing bug, not a collaboration one.
+  const baseBranch = initRepository();
+  check("the workspace becomes a git repository", baseBranch === "main", `on ${baseBranch}`);
+  check(
+    "A switches the workspace to 'Own branch'",
+    await setApprovalMode(accountA2.page, "Own branch"),
+  );
+  check(
+    "B is asked whether to create a branch",
+    await waitForCollabElement(accountB.page, "collaboration-branch-offer"),
+  );
+  const createBranch = accountB.page.locator('[data-testid="collaboration-branch-create"]').first();
+  const offeredBranch = (await createBranch.count()) > 0;
+  if (offeredBranch) {
+    await createBranch.click();
+    await sleep(6_000);
+  }
+  const branchNames = offeredBranch ? git("branch", "--list") : "";
+  check("B's branch exists in git", /collab\//.test(branchNames), branchNames.replace(/\s+/g, " "));
+  check(
+    "B sees their branch compared with main",
+    await waitForCollabElement(accountB.page, "collaboration-branch-compare"),
+  );
+
+  phase("Both branches change the same file");
+  const contestedFile = "seed-one.txt";
+  const bBranch = (git("branch", "--list", "collab/*").match(/collab\/\S+/) ?? [null])[0];
+  if (bBranch) {
+    // Commit a divergent change on each side so the comparison has something
+    // to overlap on; the UI has no commit button of its own.
+    git("worktree", "list");
+    const worktreeLine = git("worktree", "list")
+      .split("\n")
+      .find((line) => line.includes(bBranch.replace("collab/", "")));
+    const bWorktree = worktreeLine ? worktreeLine.split(/\s+/)[0] : null;
+
+    writeFileViaPython(contestedFile, "changed by A on main\n");
+    git("commit", "-am", "A edits the shared file");
+
+    if (bWorktree) {
+      execFileSync("python3", [
+        "-c",
+        "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])",
+        path.join(bWorktree, contestedFile),
+        "changed by B on their branch\n",
+      ]);
+      execFileSync("git", ["commit", "-am", "B edits the shared file"], {
+        cwd: bWorktree,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Collab E2E",
+          GIT_AUTHOR_EMAIL: "collab@example.test",
+          GIT_COMMITTER_NAME: "Collab E2E",
+          GIT_COMMITTER_EMAIL: "collab@example.test",
+        },
+      });
+    }
+    check("both branches committed a change to the same file", bWorktree !== null);
+  } else {
+    check("both branches committed a change to the same file", false, "no branch to work on");
+  }
+
+  check(
+    "B is warned the file is contested",
+    await waitForCollabElement(accountB.page, "collaboration-conflict-warning", 30_000),
+  );
+  const conflictText = await bodyText(accountB.page);
+  check("the warning names the contested file", conflictText.includes(contestedFile));
+  await closeCollabPanel(accountB.page);
 
   phase("Result");
   console.log(`  workspace: ${PROJECT_DIR}`);

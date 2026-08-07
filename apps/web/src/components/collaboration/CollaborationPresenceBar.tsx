@@ -210,7 +210,7 @@ export function CollaborationPresenceBar({
               governance={governance}
               workspaceRoot={project?.cwd ?? null}
               baseBranch={baseBranch}
-              displayName={visiblePresence[0]?.displayName ?? "collaborator"}
+              displayName={governance.viewerDisplayName}
             />
           </div>
           <div className="mt-3">

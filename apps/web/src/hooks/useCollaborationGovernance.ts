@@ -24,6 +24,8 @@ export interface CollaborationGovernance {
   readonly branchClaims: readonly CollaborationBranchClaim[];
   /** This viewer's own branch, when they have claimed one. */
   readonly myBranchClaim: CollaborationBranchClaim | null;
+  /** The viewer's own name, so a branch can be named after the right person. */
+  readonly viewerDisplayName: string;
   readonly claimBranch: (input: {
     branch: string;
     baseBranch: string;
@@ -67,6 +69,7 @@ export function useCollaborationGovernance(input: {
   const [preferences, setPreferences] = useState<CollaborationViewPreferences | null>(null);
   const [branchClaims, setBranchClaims] = useState<readonly CollaborationBranchClaim[]>(NO_CLAIMS);
   const [myBranchClaim, setMyBranchClaim] = useState<CollaborationBranchClaim | null>(null);
+  const [viewerDisplayName, setViewerDisplayName] = useState("collaborator");
   const [touches, setTouches] = useState<readonly CollaborationFileTouch[]>([]);
   const [loading, setLoading] = useState(false);
   const requestSequenceRef = useRef(0);
@@ -108,6 +111,7 @@ export function useCollaborationGovernance(input: {
         setPreferences(viewResult.preferences);
         setBranchClaims(claimsResult.claims);
         setMyBranchClaim(claimsResult.mine);
+        setViewerDisplayName(claimsResult.viewerDisplayName);
         setTouches(touchesResult.touches);
       })
       .catch(() => undefined)
@@ -280,6 +284,7 @@ export function useCollaborationGovernance(input: {
     preferences,
     branchClaims,
     myBranchClaim,
+    viewerDisplayName,
     claimBranch,
     touchesByPath,
     loading,
