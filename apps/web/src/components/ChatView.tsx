@@ -2895,6 +2895,26 @@ export default function ChatView(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
+      if (activeProject.ownership) {
+        // Ask the workspace whether this prompt may run. In an open workspace,
+        // and for an approver, this is a no-op that returns straight away.
+        const gate = await api.collaboration
+          .submitApproval({
+            tenantId: activeProject.ownership.tenantId,
+            workspaceId: activeProject.ownership.workspaceId,
+            threadId: threadIdForSend,
+            prompt: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+          })
+          // Most workspaces are open, so a collaboration outage should not stop
+          // everyone from working. Failing closed here would do exactly that.
+          .catch(() => ({ approval: null, mayRun: true }));
+
+        if (!gate.mayRun) {
+          throw new Error(
+            "This workspace reviews prompts before they run. Yours is waiting for the workspace lead.",
+          );
+        }
+      }
       await capturePendingWorkspaceLiveDiffBaseline(threadIdForSend, activeWorkspaceRoot);
       beginLocalDispatch({ preparingWorktree: false });
       await api.orchestration.dispatchCommand({

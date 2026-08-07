@@ -4,6 +4,7 @@ import { FileDiff } from "@pierre/diffs/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type {
+  CollaborationFileTouch,
   GitWorkingTreeFileStatus,
   ProjectCreateEntryInput,
   ProjectDirectoryEntry,
@@ -38,8 +39,9 @@ import {
   useState,
 } from "react";
 
-import { ensureEnvironmentApi } from "~/environmentApi";
+import { ensureEnvironmentApi, readEnvironmentApi } from "~/environmentApi";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import { useCollaborationGovernance } from "~/hooks/useCollaborationGovernance";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
@@ -111,12 +113,25 @@ const EMPTY_WORKSPACE_DIFF_STAT_MAP = new Map<
 const EMPTY_WORKSPACE_DIFF_REVIEW_ITEMS: ReadonlyArray<WorkspaceDiffReviewItem> = [];
 const EMPTY_WORKSPACE_DIFF_REVIEW_IDS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACE_WORKING_TREE_FILES: ReadonlyArray<WorkspaceWorkingTreeFileStat> = [];
+const EMPTY_WORKSPACE_AUTHORS: ReadonlyMap<string, CollaborationFileTouch> = new Map();
 // The tree mirrors a directory that anyone can change without telling us: a
 // collaborator in another browser, the agent, or a process outside the app
 // entirely. Re-list what is on screen on a timer so it stops going stale.
 const WORKSPACE_TREE_POLL_INTERVAL_MS = 5_000;
 const WORKSPACE_ACCEPTED_DIFF_STORAGE_PREFIX = "t3code:workspace-accepted-diffs:v1";
 const WORKSPACE_DIFF_REVIEW_STORAGE_PREFIX = "t3code:workspace-diff-review:v1";
+
+/**
+ * A stable colour per collaborator, derived from the id so everyone's browser
+ * agrees without the server having to hand out a palette.
+ */
+function authorColor(userId: string): string {
+  let hash = 0;
+  for (let index = 0; index < userId.length; index += 1) {
+    hash = (hash * 31 + userId.charCodeAt(index)) % 360;
+  }
+  return `hsl(${hash} 70% 55%)`;
+}
 
 /** Lets a polled re-list keep the existing array when the directory is unchanged. */
 function directoryEntriesMatch(
@@ -279,6 +294,8 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   changed: boolean;
   diffStat?: { additions: number; deletions: number } | null;
   status?: GitWorkingTreeFileStatus | null;
+  /** Who last wrote this file, when someone else did. */
+  author?: { userId: string; displayName: string } | null;
   onToggleDirectory: (directoryPath: string) => void;
   onOpenFile: (relativePath: string) => void;
   onSelectEntry: (entry: Pick<ProjectDirectoryEntry, "kind" | "path">) => void;
@@ -356,6 +373,15 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
         className="size-3.5"
       />
       <span className="truncate text-xs">{entry.name}</span>
+      {props.author ? (
+        <span
+          className="ml-1 size-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: authorColor(props.author.userId) }}
+          title={`Last changed by ${props.author.displayName}`}
+          data-testid="workspace-entry-author"
+          data-author={props.author.displayName}
+        />
+      ) : null}
       {props.changed || props.status ? (
         <span
           className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums"
@@ -485,6 +511,16 @@ export default function WorkspacePanel({
       }),
     [activeEnvironmentId, activeProject?.id, activeThread?.id, activeWorkspaceRoot],
   );
+  const collaborationGovernance = useCollaborationGovernance({
+    environmentId: activeEnvironmentId,
+    tenantId: activeProject?.ownership?.tenantId ?? null,
+    workspaceId: activeProject?.ownership?.workspaceId ?? null,
+  });
+  // "Collaboration off" is a personal filter, so other people's marks simply
+  // stop being drawn for this viewer.
+  const workspaceAuthorByPath = collaborationGovernance.preferences?.showOthersFiles === false
+    ? EMPTY_WORKSPACE_AUTHORS
+    : collaborationGovernance.touchesByPath;
   const workspaceLabel = activeWorkspaceRoot ? basenameOfPath(activeWorkspaceRoot) : "Workspace";
   const workspaceScopeLabel = activeThread?.worktreePath ? "Thread workspace" : "Project workspace";
   const activeRunningTurnId =
@@ -2215,6 +2251,29 @@ export default function WorkspacePanel({
     resolveLatestVisibleDiffState,
   ]);
 
+  const collaborationScope = activeProject?.ownership ?? null;
+  /** Claims authorship of paths this person just wrote, for the tree's colouring. */
+  const recordFileTouches = useCallback(
+    (paths: readonly string[]) => {
+      if (!activeEnvironmentId || !collaborationScope || paths.length === 0) {
+        return;
+      }
+      const api = readEnvironmentApi(activeEnvironmentId);
+      if (!api) {
+        return;
+      }
+      void api.collaboration
+        .touchFiles({
+          tenantId: collaborationScope.tenantId,
+          workspaceId: collaborationScope.workspaceId,
+          paths,
+        })
+        // Authorship marks are decoration; never fail a save over one.
+        .catch(() => undefined);
+    },
+    [activeEnvironmentId, collaborationScope],
+  );
+
   const saveActiveFile = useCallback(async () => {
     if (!activeEnvironmentId || !activeWorkspaceRoot || !activeFilePath || !activeFileState) {
       return;
@@ -2234,6 +2293,8 @@ export default function WorkspacePanel({
         relativePath: activeFilePath,
         contents: nextContents,
       });
+
+      recordFileTouches([activeFilePath]);
 
       const nextFileState: ProjectReadFileResult = {
         relativePath: activeFilePath,
@@ -2307,6 +2368,7 @@ export default function WorkspacePanel({
     activeWorkspaceRoot,
     draftByPath,
     queryClient,
+    recordFileTouches,
     setAcceptedDiffStateByPath,
     setDiffReviewStateByKey,
   ]);
@@ -2380,6 +2442,9 @@ export default function WorkspacePanel({
         kind: createDialogState.kind,
       });
 
+      if (createDialogState.kind === "file") {
+        recordFileTouches([relativePath]);
+      }
       await loadDirectory(actionDirectoryPath);
       if (createDialogState.kind === "directory") {
         setExpandedDirectoriesByPath((current) => ({
@@ -2414,6 +2479,7 @@ export default function WorkspacePanel({
     createDialogState.name,
     loadDirectory,
     openFile,
+    recordFileTouches,
   ]);
 
   const uploadFilesToDirectory = useCallback(
@@ -2525,6 +2591,9 @@ export default function WorkspacePanel({
             changed={visibleDiffState !== null}
             diffStat={visibleDiffState?.stat ?? null}
             status={status}
+            author={
+              entry.kind === "file" ? (workspaceAuthorByPath.get(entryPath) ?? null) : null
+            }
             onToggleDirectory={toggleDirectory}
             onOpenFile={openFile}
             onSelectEntry={setSelectedEntry}
@@ -2552,6 +2621,7 @@ export default function WorkspacePanel({
       selectedEntry.path,
       toggleDirectory,
       workingTreeStatusByPath,
+      workspaceAuthorByPath,
     ],
   );
 

@@ -12,7 +12,12 @@ import {
 import { useCallback, useEffect, useState } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
+import { useCollaborationGovernance } from "../../hooks/useCollaborationGovernance";
 import { cn } from "../../lib/utils";
+import {
+  CollaborationGovernancePanel,
+  CollaborationWorkingPills,
+} from "./CollaborationGovernancePanel";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
@@ -128,6 +133,11 @@ export function CollaborationPresenceBar({
   }, [environmentId, load, tenantId, threadId, workspaceId]);
 
   const visiblePresence = presence.filter((entry) => entry.status !== "offline").slice(0, 5);
+  const governance = useCollaborationGovernance({ environmentId, tenantId, workspaceId });
+  const pendingCount = governance.pendingApprovals.length;
+  // Only an approver can clear the queue, so only they get nagged about it.
+  const showPendingBadge = governance.canDecide && pendingCount > 0;
+
   if (!tenantId || !workspaceId || !projectId) {
     return null;
   }
@@ -162,6 +172,14 @@ export function CollaborationPresenceBar({
         >
           <UsersRoundIcon className="size-3.5" />
           <span className="hidden @2xl/header-actions:inline">Collab</span>
+          {showPendingBadge ? (
+            <span
+              data-testid="collaboration-pending-badge"
+              className="ml-1 flex size-4 items-center justify-center rounded-full bg-primary text-[9px] font-medium text-primary-foreground"
+            >
+              {pendingCount}
+            </span>
+          ) : null}
         </PopoverTrigger>
         <PopoverPopup
           align="end"
@@ -173,20 +191,11 @@ export function CollaborationPresenceBar({
             <div className="text-sm font-medium">Collaboration</div>
             <div className="text-xs text-muted-foreground">{visiblePresence.length} present</div>
           </div>
-          <div className="mt-3 grid gap-2">
-            {visiblePresence.length > 0 ? (
-              visiblePresence.map((entry) => (
-                <div key={entry.userId} className="flex items-center gap-2 text-sm">
-                  <span className="flex size-6 items-center justify-center rounded-full bg-muted text-[10px] font-medium">
-                    {presenceInitials(entry)}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{entry.displayName}</span>
-                  <span className="text-xs text-muted-foreground">{entry.status}</span>
-                </div>
-              ))
-            ) : (
-              <div className="text-sm text-muted-foreground">No one else is present.</div>
-            )}
+          <div className="mt-3">
+            <CollaborationWorkingPills presence={visiblePresence} />
+          </div>
+          <div className="mt-3">
+            <CollaborationGovernancePanel governance={governance} />
           </div>
           <div className="mt-3 border-t border-border pt-3">
             <Textarea

@@ -100,6 +100,7 @@ export interface WsRpcClient {
     readonly checkout: RpcUnaryMethod<typeof WS_METHODS.gitCheckout>;
     readonly init: RpcUnaryMethod<typeof WS_METHODS.gitInit>;
     readonly mergeBranch: RpcUnaryMethod<typeof WS_METHODS.gitMergeBranch>;
+    readonly compareBranches: RpcUnaryMethod<typeof WS_METHODS.gitCompareBranches>;
     readonly getMergeState: RpcUnaryMethod<typeof WS_METHODS.gitGetMergeState>;
     readonly abortMerge: RpcUnaryMethod<typeof WS_METHODS.gitAbortMerge>;
     readonly resolvePullRequest: RpcUnaryMethod<typeof WS_METHODS.gitResolvePullRequest>;
@@ -128,6 +129,18 @@ export interface WsRpcClient {
     readonly revokeInvite: RpcUnaryMethod<typeof WS_METHODS.collaborationInvitesRevoke>;
     readonly recordSharedPrompt: RpcUnaryMethod<typeof WS_METHODS.collaborationSharedPromptRecord>;
     readonly listActivity: RpcUnaryMethod<typeof WS_METHODS.collaborationActivityList>;
+    readonly getSettings: RpcUnaryMethod<typeof WS_METHODS.collaborationSettingsGet>;
+    readonly updateSettings: RpcUnaryMethod<typeof WS_METHODS.collaborationSettingsUpdate>;
+    readonly submitApproval: RpcUnaryMethod<typeof WS_METHODS.collaborationApprovalsSubmit>;
+    readonly listApprovals: RpcUnaryMethod<typeof WS_METHODS.collaborationApprovalsList>;
+    readonly decideApproval: RpcUnaryMethod<typeof WS_METHODS.collaborationApprovalsDecide>;
+    readonly getViewPreferences: RpcUnaryMethod<typeof WS_METHODS.collaborationViewGet>;
+    readonly updateViewPreferences: RpcUnaryMethod<typeof WS_METHODS.collaborationViewUpdate>;
+    readonly claimBranch: RpcUnaryMethod<typeof WS_METHODS.collaborationBranchClaim>;
+    readonly listBranchClaims: RpcUnaryMethod<typeof WS_METHODS.collaborationBranchList>;
+    readonly releaseBranch: RpcUnaryMethod<typeof WS_METHODS.collaborationBranchRelease>;
+    readonly touchFiles: RpcUnaryMethod<typeof WS_METHODS.collaborationFilesTouch>;
+    readonly listFileTouches: RpcUnaryMethod<typeof WS_METHODS.collaborationFilesTouchList>;
     readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribeCollaboration>;
   };
   readonly workspaces: {
@@ -257,6 +270,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       init: (input) => transport.request((client) => client[WS_METHODS.gitInit](input)),
       mergeBranch: (input) =>
         transport.request((client) => client[WS_METHODS.gitMergeBranch](input)),
+      compareBranches: (input) =>
+        transport.request((client) => client[WS_METHODS.gitCompareBranches](input)),
       getMergeState: (input) =>
         transport.request((client) => client[WS_METHODS.gitGetMergeState](input)),
       abortMerge: (input) => transport.request((client) => client[WS_METHODS.gitAbortMerge](input)),
@@ -310,6 +325,30 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.collaborationSharedPromptRecord](input)),
       listActivity: (input) =>
         transport.request((client) => client[WS_METHODS.collaborationActivityList](input)),
+      getSettings: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationSettingsGet](input)),
+      updateSettings: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationSettingsUpdate](input)),
+      submitApproval: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationApprovalsSubmit](input)),
+      listApprovals: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationApprovalsList](input)),
+      decideApproval: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationApprovalsDecide](input)),
+      getViewPreferences: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationViewGet](input)),
+      updateViewPreferences: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationViewUpdate](input)),
+      claimBranch: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationBranchClaim](input)),
+      listBranchClaims: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationBranchList](input)),
+      releaseBranch: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationBranchRelease](input)),
+      touchFiles: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationFilesTouch](input)),
+      listFileTouches: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationFilesTouchList](input)),
       subscribe: (input, listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeCollaboration](input),

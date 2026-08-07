@@ -1,0 +1,260 @@
+import type {
+  CollaborationApprovalMode,
+  CollaborationBranchClaim,
+  CollaborationFileTouch,
+  CollaborationPromptApproval,
+  CollaborationViewPreferences,
+  CollaborationWorkspaceSettings,
+  EnvironmentId,
+  TenantId,
+  WorkspaceId,
+} from "@t3tools/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { readEnvironmentApi } from "../environmentApi";
+
+export interface CollaborationGovernance {
+  readonly settings: CollaborationWorkspaceSettings | null;
+  /** Whether this person may change the approval mode or the approver list. */
+  readonly canManage: boolean;
+  readonly approvals: readonly CollaborationPromptApproval[];
+  readonly pendingApprovals: readonly CollaborationPromptApproval[];
+  readonly canDecide: boolean;
+  readonly preferences: CollaborationViewPreferences | null;
+  readonly branchClaims: readonly CollaborationBranchClaim[];
+  /** Latest author per workspace-relative path. */
+  readonly touchesByPath: ReadonlyMap<string, CollaborationFileTouch>;
+  readonly loading: boolean;
+  readonly refresh: () => void;
+  readonly setApprovalMode: (mode: CollaborationApprovalMode) => Promise<void>;
+  readonly setApprovers: (userIds: readonly string[]) => Promise<void>;
+  readonly decide: (
+    approvalId: CollaborationPromptApproval["id"],
+    decision: "approved" | "rejected",
+  ) => Promise<void>;
+  readonly setViewPreferences: (input: {
+    showOthersPrompts?: boolean;
+    showOthersFiles?: boolean;
+  }) => Promise<void>;
+}
+
+const NO_APPROVALS: readonly CollaborationPromptApproval[] = [];
+const NO_CLAIMS: readonly CollaborationBranchClaim[] = [];
+
+/**
+ * Workspace governance for the collaboration UI: the approval mode and queue,
+ * this person's own view filter, who is on which branch, and who last touched
+ * each file. Everything refreshes from the collaboration stream, so a decision
+ * made in one browser lands in the others without a reload.
+ */
+export function useCollaborationGovernance(input: {
+  environmentId: EnvironmentId | null;
+  tenantId: TenantId | null;
+  workspaceId: WorkspaceId | null;
+}): CollaborationGovernance {
+  const { environmentId, tenantId, workspaceId } = input;
+  const [settings, setSettings] = useState<CollaborationWorkspaceSettings | null>(null);
+  const [canManage, setCanManage] = useState(false);
+  const [approvals, setApprovals] = useState<readonly CollaborationPromptApproval[]>(NO_APPROVALS);
+  const [canDecide, setCanDecide] = useState(false);
+  const [preferences, setPreferences] = useState<CollaborationViewPreferences | null>(null);
+  const [branchClaims, setBranchClaims] = useState<readonly CollaborationBranchClaim[]>(NO_CLAIMS);
+  const [touches, setTouches] = useState<readonly CollaborationFileTouch[]>([]);
+  const [loading, setLoading] = useState(false);
+  const requestSequenceRef = useRef(0);
+
+  const scope = useMemo(
+    () => (tenantId && workspaceId ? { tenantId, workspaceId } : null),
+    [tenantId, workspaceId],
+  );
+
+  const refresh = useCallback(() => {
+    if (!environmentId || !scope) {
+      return;
+    }
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      return;
+    }
+
+    // A slow earlier load must not overwrite the results of a later one.
+    requestSequenceRef.current += 1;
+    const sequence = requestSequenceRef.current;
+    setLoading(true);
+
+    Promise.all([
+      api.collaboration.getSettings(scope),
+      api.collaboration.listApprovals(scope),
+      api.collaboration.getViewPreferences(scope),
+      api.collaboration.listBranchClaims(scope),
+      api.collaboration.listFileTouches(scope),
+    ])
+      .then(([settingsResult, approvalsResult, viewResult, claimsResult, touchesResult]) => {
+        if (sequence !== requestSequenceRef.current) {
+          return;
+        }
+        setSettings(settingsResult.settings);
+        setCanManage(settingsResult.canManage);
+        setApprovals(approvalsResult.approvals);
+        setCanDecide(approvalsResult.canDecide);
+        setPreferences(viewResult.preferences);
+        setBranchClaims(claimsResult.claims);
+        setTouches(touchesResult.touches);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (sequence === requestSequenceRef.current) {
+          setLoading(false);
+        }
+      });
+  }, [environmentId, scope]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!environmentId || !scope) {
+      return;
+    }
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      return;
+    }
+
+    return api.collaboration.subscribe(
+      scope,
+      (event) => {
+        switch (event.type) {
+          case "settings-updated":
+            setSettings(event.settings);
+            break;
+          case "approval-requested":
+          case "approval-decided":
+            setApprovals((current) => [
+              event.approval,
+              ...current.filter((entry) => entry.id !== event.approval.id),
+            ]);
+            break;
+          case "branch-claimed":
+            setBranchClaims((current) => [
+              event.claim,
+              ...current.filter((entry) => entry.userId !== event.claim.userId),
+            ]);
+            break;
+          case "branch-released":
+            setBranchClaims((current) =>
+              current.filter((entry) => entry.userId !== event.userId),
+            );
+            break;
+          case "files-touched":
+            setTouches((current) => {
+              const touchedPaths = new Set(event.touches.map((touch) => touch.path));
+              return [...event.touches, ...current.filter((entry) => !touchedPaths.has(entry.path))];
+            });
+            break;
+          default:
+            break;
+        }
+      },
+      { onResubscribe: refresh },
+    );
+  }, [environmentId, refresh, scope]);
+
+  const touchesByPath = useMemo(() => {
+    const byPath = new Map<string, CollaborationFileTouch>();
+    for (const touch of touches) {
+      const existing = byPath.get(touch.path);
+      if (!existing || existing.touchedAt < touch.touchedAt) {
+        byPath.set(touch.path, touch);
+      }
+    }
+    return byPath;
+  }, [touches]);
+
+  const pendingApprovals = useMemo(
+    () => approvals.filter((approval) => approval.status === "pending"),
+    [approvals],
+  );
+
+  const callSettingsUpdate = useCallback(
+    async (patch: {
+      approvalMode?: CollaborationApprovalMode;
+      approverUserIds?: readonly string[];
+    }) => {
+      if (!environmentId || !scope) {
+        return;
+      }
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        return;
+      }
+      const result = await api.collaboration.updateSettings({ ...scope, ...patch } as never);
+      setSettings(result.settings);
+      setCanManage(result.canManage);
+    },
+    [environmentId, scope],
+  );
+
+  const setApprovalMode = useCallback(
+    (mode: CollaborationApprovalMode) => callSettingsUpdate({ approvalMode: mode }),
+    [callSettingsUpdate],
+  );
+
+  const setApprovers = useCallback(
+    (userIds: readonly string[]) => callSettingsUpdate({ approverUserIds: userIds }),
+    [callSettingsUpdate],
+  );
+
+  const decide = useCallback(
+    async (
+      approvalId: CollaborationPromptApproval["id"],
+      decision: "approved" | "rejected",
+    ) => {
+      if (!environmentId || !scope) {
+        return;
+      }
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        return;
+      }
+      const result = await api.collaboration.decideApproval({ ...scope, approvalId, decision });
+      setApprovals((current) =>
+        current.map((entry) => (entry.id === result.approval.id ? result.approval : entry)),
+      );
+    },
+    [environmentId, scope],
+  );
+
+  const setViewPreferences = useCallback(
+    async (patch: { showOthersPrompts?: boolean; showOthersFiles?: boolean }) => {
+      if (!environmentId || !scope) {
+        return;
+      }
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        return;
+      }
+      const result = await api.collaboration.updateViewPreferences({ ...scope, ...patch } as never);
+      setPreferences(result.preferences);
+    },
+    [environmentId, scope],
+  );
+
+  return {
+    settings,
+    canManage,
+    approvals,
+    pendingApprovals,
+    canDecide,
+    preferences,
+    branchClaims,
+    touchesByPath,
+    loading,
+    refresh,
+    setApprovalMode,
+    setApprovers,
+    decide,
+    setViewPreferences,
+  };
+}

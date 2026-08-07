@@ -2,6 +2,8 @@ import type {
   GitAbortMergeInput,
   GitAbortMergeResult,
   GitCheckoutInput,
+  GitCompareBranchesInput,
+  GitCompareBranchesResult,
   GitMergeBranchInput,
   GitMergeBranchResult,
   GitMergeStateInput,
@@ -67,6 +69,27 @@ import type {
 } from "./orchestration.ts";
 import type {
   CollaborationActivityListInput,
+  CollaborationApprovalDecideInput,
+  CollaborationApprovalDecideResult,
+  CollaborationApprovalListInput,
+  CollaborationApprovalListResult,
+  CollaborationApprovalSubmitInput,
+  CollaborationApprovalSubmitResult,
+  CollaborationBranchClaimInput,
+  CollaborationBranchClaimResult,
+  CollaborationBranchListInput,
+  CollaborationBranchListResult,
+  CollaborationBranchReleaseInput,
+  CollaborationBranchReleaseResult,
+  CollaborationFileTouchInput,
+  CollaborationFileTouchListInput,
+  CollaborationFileTouchResult,
+  CollaborationSettingsGetInput,
+  CollaborationSettingsResult,
+  CollaborationSettingsUpdateInput,
+  CollaborationViewGetInput,
+  CollaborationViewResult,
+  CollaborationViewUpdateInput,
   CollaborationActivityListResult,
   CollaborationInviteAcceptInput,
   CollaborationInviteAcceptResult,
@@ -326,6 +349,7 @@ export interface EnvironmentApi {
     checkout: (input: GitCheckoutInput) => Promise<GitCheckoutResult>;
     init: (input: GitInitInput) => Promise<void>;
     mergeBranch: (input: GitMergeBranchInput) => Promise<GitMergeBranchResult>;
+    compareBranches: (input: GitCompareBranchesInput) => Promise<GitCompareBranchesResult>;
     getMergeState: (input: GitMergeStateInput) => Promise<GitMergeStateResult>;
     abortMerge: (input: GitAbortMergeInput) => Promise<GitAbortMergeResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
@@ -386,6 +410,36 @@ export interface EnvironmentApi {
     listActivity: (
       input: CollaborationActivityListInput,
     ) => Promise<CollaborationActivityListResult>;
+    getSettings: (input: CollaborationSettingsGetInput) => Promise<CollaborationSettingsResult>;
+    updateSettings: (
+      input: CollaborationSettingsUpdateInput,
+    ) => Promise<CollaborationSettingsResult>;
+    submitApproval: (
+      input: CollaborationApprovalSubmitInput,
+    ) => Promise<CollaborationApprovalSubmitResult>;
+    listApprovals: (
+      input: CollaborationApprovalListInput,
+    ) => Promise<CollaborationApprovalListResult>;
+    decideApproval: (
+      input: CollaborationApprovalDecideInput,
+    ) => Promise<CollaborationApprovalDecideResult>;
+    getViewPreferences: (input: CollaborationViewGetInput) => Promise<CollaborationViewResult>;
+    updateViewPreferences: (
+      input: CollaborationViewUpdateInput,
+    ) => Promise<CollaborationViewResult>;
+    claimBranch: (
+      input: CollaborationBranchClaimInput,
+    ) => Promise<CollaborationBranchClaimResult>;
+    listBranchClaims: (
+      input: CollaborationBranchListInput,
+    ) => Promise<CollaborationBranchListResult>;
+    releaseBranch: (
+      input: CollaborationBranchReleaseInput,
+    ) => Promise<CollaborationBranchReleaseResult>;
+    touchFiles: (input: CollaborationFileTouchInput) => Promise<CollaborationFileTouchResult>;
+    listFileTouches: (
+      input: CollaborationFileTouchListInput,
+    ) => Promise<CollaborationFileTouchResult>;
     subscribe: (
       input: CollaborationStreamInput,
       callback: (event: CollaborationStreamEvent) => void,

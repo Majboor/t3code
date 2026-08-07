@@ -43,6 +43,21 @@
       background-position: -200% 0;
     }
   }
+  /* Fills a presence pill left to right so "someone is working" reads as motion. */
+  @keyframes collab-fill {
+    0% {
+      transform: scaleX(0);
+      transform-origin: left;
+    }
+    60% {
+      transform: scaleX(1);
+      transform-origin: left;
+    }
+    100% {
+      transform: scaleX(0);
+      transform-origin: right;
+    }
+  }
 }
 
 @layer base {
