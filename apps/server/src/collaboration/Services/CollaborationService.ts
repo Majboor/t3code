@@ -114,6 +114,15 @@ export interface CollaborationServiceShape {
     input: CollaborationApprovalSubmitInput,
   ) => Effect.Effect<CollaborationApprovalSubmitResult, CollaborationError>;
 
+  /**
+   * Spends an approval so a turn may start. Returns whether the run is allowed;
+   * an approval is good for exactly one turn.
+   */
+  readonly consumeApprovalForTurn: (
+    actor: CollaborationActor,
+    input: CollaborationSettingsGetInput,
+  ) => Effect.Effect<{ readonly mayRun: boolean }, CollaborationError>;
+
   readonly listApprovals: (
     actor: CollaborationActor,
     input: CollaborationApprovalListInput,

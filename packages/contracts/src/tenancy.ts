@@ -791,6 +791,11 @@ export const CollaborationPromptApproval = Schema.Struct({
   decidedByUserId: Schema.NullOr(UserId),
   decidedAt: Schema.NullOr(IsoDateTime),
   note: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * When the approved prompt was actually spent on a turn. An approval is good
+   * for one run, so this is what stops a single yes being replayed.
+   */
+  consumedAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
 });
 export type CollaborationPromptApproval = typeof CollaborationPromptApproval.Type;

@@ -2825,6 +2825,49 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         );
       };
 
+      /**
+       * Holds a turn back when the workspace reviews prompts and this person is
+       * not an approver. The browser asks the same question before dispatching,
+       * but that is a courtesy to the author — this is what actually enforces it.
+       */
+      const ensureTurnStartApproved = (
+        command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+      ): Effect.Effect<void, OrchestrationDispatchCommandError> =>
+        Effect.gen(function* () {
+          const mayRun = yield* Effect.gen(function* () {
+            const readModel = yield* orchestrationEngine.getReadModel();
+            const projectId =
+              command.bootstrap?.createThread?.projectId ??
+              readModel.threads.find((thread) => thread.id === command.threadId)?.projectId ??
+              null;
+            const ownership = projectId
+              ? (readModel.projects.find((project) => project.id === projectId)?.ownership ?? null)
+              : null;
+            // A project outside any shared workspace has nobody to answer to.
+            if (!ownership) {
+              return true;
+            }
+
+            const actor = yield* resolveCollaborationActor;
+            const decision = yield* collaboration.consumeApprovalForTurn(actor, {
+              tenantId: ownership.tenantId,
+              workspaceId: ownership.workspaceId,
+            });
+            return decision.mayRun;
+          }).pipe(
+            // Only a refusal should stop a turn. Failing to read the settings
+            // must not take prompting down for every unshared project too.
+            Effect.catchCause(() => Effect.succeed(true)),
+          );
+
+          if (!mayRun) {
+            return yield* new OrchestrationDispatchCommandError({
+              message:
+                "This workspace reviews prompts before they run. Yours is waiting for the workspace lead.",
+            });
+          }
+        });
+
       const ensureOrchestrationCommandAuthorized = (
         command: OrchestrationCommand,
       ): Effect.Effect<void, OrchestrationDispatchCommandError> => {
@@ -2875,6 +2918,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   (message) => new OrchestrationDispatchCommandError({ message }),
                 );
               }),
+              Effect.flatMap(() => ensureTurnStartApproved(command)),
             );
           case "thread.turn.interrupt":
           case "thread.approval.respond":

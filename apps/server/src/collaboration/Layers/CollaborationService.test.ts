@@ -142,6 +142,70 @@ it.effect("hands approval rights to a delegate without making them lead", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
+it.effect("refuses a turn until an approval exists, then spends it once", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    yield* collaboration.updateSettings(lead, { ...scope, approvalMode: "blocking" });
+
+    const blocked = yield* collaboration.consumeApprovalForTurn(member, scope);
+    assert.strictEqual(blocked.mayRun, false);
+
+    const submitted = yield* collaboration.submitPromptForApproval(member, {
+      ...scope,
+      prompt: "needs a yes",
+    });
+    const approvalId = submitted.approval?.id;
+    assert.ok(approvalId);
+
+    // Still refused while the request is only pending.
+    const pending = yield* collaboration.consumeApprovalForTurn(member, scope);
+    assert.strictEqual(pending.mayRun, false);
+
+    yield* collaboration.decideApproval(lead, { ...scope, approvalId, decision: "approved" });
+
+    const allowed = yield* collaboration.consumeApprovalForTurn(member, scope);
+    assert.strictEqual(allowed.mayRun, true);
+
+    // One yes buys exactly one turn.
+    const replayed = yield* collaboration.consumeApprovalForTurn(member, scope);
+    assert.strictEqual(replayed.mayRun, false);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("lets the author re-send an approved prompt instead of queueing it again", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    yield* collaboration.updateSettings(lead, { ...scope, approvalMode: "blocking" });
+    const submitted = yield* collaboration.submitPromptForApproval(member, {
+      ...scope,
+      prompt: "needs a yes",
+    });
+    const approvalId = submitted.approval?.id;
+    assert.ok(approvalId);
+    yield* collaboration.decideApproval(lead, { ...scope, approvalId, decision: "approved" });
+
+    const resent = yield* collaboration.submitPromptForApproval(member, {
+      ...scope,
+      prompt: "needs a yes",
+    });
+    assert.strictEqual(resent.mayRun, true);
+    assert.strictEqual(resent.approval?.id, approvalId);
+
+    const queue = yield* collaboration.listApprovals(lead, scope);
+    assert.strictEqual(queue.approvals.length, 1);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("does not withhold the run in staged mode", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    yield* collaboration.updateSettings(lead, { ...scope, approvalMode: "staged" });
+
+    const allowed = yield* collaboration.consumeApprovalForTurn(member, scope);
+    assert.strictEqual(allowed.mayRun, true);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
 it.effect("keeps view preferences private to each person", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;

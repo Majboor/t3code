@@ -631,6 +631,26 @@ const makeCollaborationService = Effect.gen(function* () {
       };
     });
 
+  /** The oldest approved-but-unspent approval this person still holds. */
+  const findSpendableApproval = Effect.fn("findSpendableApproval")(function* (
+    userId: UserId,
+    input: { readonly tenantId: string; readonly workspaceId: string },
+  ) {
+    const state = yield* Ref.get(stateRef);
+    return (
+      Array.from(state.approvals.values())
+        .filter(
+          (approval) =>
+            approval.tenantId === input.tenantId &&
+            approval.workspaceId === input.workspaceId &&
+            approval.requestedByUserId === userId &&
+            approval.status === "approved" &&
+            approval.consumedAt === null,
+        )
+        .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))[0] ?? null
+    );
+  });
+
   const submitPromptForApproval: CollaborationServiceShape["submitPromptForApproval"] = (
     actor,
     input,
@@ -641,6 +661,14 @@ const makeCollaborationService = Effect.gen(function* () {
       // nobody, so both cases skip the record entirely.
       if (settings.approvalMode === "open" || isApprover(settings, actor.userId)) {
         return { approval: null, mayRun: true };
+      }
+
+      // A prompt that has already been approved and not yet spent is what the
+      // author re-sends after being told to wait. Queueing it again would mean
+      // they could never actually run it.
+      const alreadyApproved = yield* findSpendableApproval(actor.userId, input);
+      if (alreadyApproved) {
+        return { approval: alreadyApproved, mayRun: true };
       }
 
       const approval: CollaborationPromptApproval = {
@@ -656,6 +684,7 @@ const makeCollaborationService = Effect.gen(function* () {
         decidedByUserId: null,
         decidedAt: null,
         note: null,
+        consumedAt: null,
         createdAt: nowIso(),
       };
 
@@ -735,6 +764,35 @@ const makeCollaborationService = Effect.gen(function* () {
       yield* PubSub.publish(events, { type: "approval-decided", approval: decided });
 
       return { approval: decided };
+    });
+
+  const consumeApprovalForTurn: CollaborationServiceShape["consumeApprovalForTurn"] = (
+    actor,
+    input,
+  ) =>
+    Effect.gen(function* () {
+      const settings = yield* resolveSettings(input);
+      // Only `blocking` withholds the run itself. `staged` deliberately lets the
+      // work happen and reviews it at the merge instead.
+      if (settings.approvalMode !== "blocking" || isApprover(settings, actor.userId)) {
+        return { mayRun: true };
+      }
+
+      const spendable = yield* findSpendableApproval(actor.userId, input);
+      if (!spendable) {
+        return { mayRun: false };
+      }
+
+      const consumed: CollaborationPromptApproval = { ...spendable, consumedAt: nowIso() };
+      yield* Ref.update(stateRef, (state) => {
+        const approvals = new Map(state.approvals);
+        approvals.set(consumed.id, consumed);
+        return { ...state, approvals };
+      });
+      yield* persist;
+      yield* PubSub.publish(events, { type: "approval-decided", approval: consumed });
+
+      return { mayRun: true };
     });
 
   const getViewPreferences: CollaborationServiceShape["getViewPreferences"] = (actor, input) =>
@@ -897,6 +955,7 @@ const makeCollaborationService = Effect.gen(function* () {
     getSettings,
     updateSettings,
     submitPromptForApproval,
+    consumeApprovalForTurn,
     listApprovals,
     decideApproval,
     getViewPreferences,

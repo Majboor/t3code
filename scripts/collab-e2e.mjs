@@ -220,7 +220,11 @@ async function visibleFileNames(page) {
     .evaluateAll((nodes) =>
       nodes
         .map((node) => (node.textContent ?? "").trim())
-        .filter((text) => /^[\w.-]+\.(txt|md|json|js|ts)$/.test(text)),
+        // A row in a git repository carries a status badge and diff counts
+        // after the name ("notes.txtU"), so match the name as a prefix rather
+        // than expecting the whole label to be a file name.
+        .map((text) => /^[\w.-]+\.(?:txt|md|json|js|ts)/.exec(text)?.[0] ?? "")
+        .filter(Boolean),
     );
 }
 
@@ -336,6 +340,8 @@ try {
   writeFileViaPython("seed-one.txt", "seed one\n");
   writeFileViaPython("seed-two.md", "# seed two\n");
   check("python seeded the folder", readdirSync(PROJECT_DIR).length === 2, PROJECT_DIR);
+  const baseBranch = initRepository();
+  check("the folder is a git repository", baseBranch === "main", `on ${baseBranch}`);
 
   phase("Account A: sign up and add the Desktop folder");
   check("A signs up", await signUp(accountA, ACCOUNT_A), ACCOUNT_A);
@@ -472,19 +478,15 @@ try {
   check("A can approve it", canApprove);
   await closeCollabPanel(accountA2.page);
 
+  // The point of approving is that the work then happens, so re-send it.
+  await sendAgentMessage(accountB.page, blockedPrompt);
+  check(
+    "the approved prompt runs",
+    await waitForFileOnDisk(`blocked-${RUN_ID}.txt`, AGENT_TURN_MS),
+    `blocked-${RUN_ID}.txt`,
+  );
+
   phase("The lead moves the workspace onto personal branches");
-  // Branching needs a repository, and it is created here rather than at setup
-  // on purpose: in a git workspace the tree hides files that were already on
-  // disk the first time a session listed it, which would confound every
-  // "does the other person see this file" check above. That is a pre-existing
-  // listing bug, not a collaboration one.
-  const baseBranch = initRepository();
-  check("the workspace becomes a git repository", baseBranch === "main", `on ${baseBranch}`);
-  // Both pages cached a git status from before the repository existed, and the
-  // branch offer needs a base branch to offer to branch away from.
-  await openProject(accountB.page);
-  await openProject(accountA2.page);
-  await sleep(UI_SETTLE_MS);
   check(
     "A switches the workspace to 'Own branch'",
     await setApprovalMode(accountA2.page, "Own branch"),

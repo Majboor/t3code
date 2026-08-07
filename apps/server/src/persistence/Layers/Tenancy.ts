@@ -359,6 +359,7 @@ const makeTenancyRepository = Effect.gen(function* () {
               row.decided_by_user_id === null ? null : UserId.make(row.decided_by_user_id),
             decidedAt: row.decided_at,
             note: row.note,
+            consumedAt: row.consumed_at ?? null,
             createdAt: row.created_at,
           }),
         ),
@@ -566,7 +567,7 @@ const makeTenancyRepository = Effect.gen(function* () {
                   ${approval.threadId}, ${approval.requestedByUserId}, ${approval.requestedByName},
                   ${approval.prompt}, ${approval.mode}, ${approval.status},
                   ${approval.decidedByUserId}, ${approval.decidedAt}, ${approval.note},
-                  ${approval.createdAt}
+                  ${approval.createdAt}, ${approval.consumedAt}
                 )
               `;
             }
