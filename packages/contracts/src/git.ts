@@ -213,6 +213,13 @@ export const GitMergeBranchResult = Schema.Struct({
 });
 export type GitMergeBranchResult = typeof GitMergeBranchResult.Type;
 
+export const GitCompareBranchesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  baseBranch: TrimmedNonEmptyStringSchema,
+  headBranch: TrimmedNonEmptyStringSchema,
+});
+export type GitCompareBranchesInput = typeof GitCompareBranchesInput.Type;
+
 export const GitMergeStateInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
@@ -261,6 +268,23 @@ export const GitWorkingTreeFile = Schema.Struct({
   deletions: NonNegativeInt,
 });
 export type GitWorkingTreeFile = typeof GitWorkingTreeFile.Type;
+
+export const GitCompareBranchesResult = Schema.Struct({
+  baseBranch: TrimmedNonEmptyStringSchema,
+  headBranch: TrimmedNonEmptyStringSchema,
+  /** Commits on head that base does not have, and the reverse. */
+  aheadCount: NonNegativeInt,
+  behindCount: NonNegativeInt,
+  files: Schema.Array(GitWorkingTreeFile),
+  insertions: NonNegativeInt,
+  deletions: NonNegativeInt,
+  /**
+   * Paths both branches changed since they diverged. Only a real merge settles
+   * whether they actually conflict, so this is a warning rather than a verdict.
+   */
+  overlappingPaths: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+export type GitCompareBranchesResult = typeof GitCompareBranchesResult.Type;
 
 const GitStatusLocalShape = {
   isRepo: Schema.Boolean,

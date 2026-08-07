@@ -48,6 +48,7 @@ import Migration0032 from "./Migrations/032_ProjectionThreadPreferences.ts";
 import Migration0033 from "./Migrations/033_LocalAuthAccounts.ts";
 import Migration0034 from "./Migrations/034_TenantRuntimeTables.ts";
 import Migration0035 from "./Migrations/035_DeployTargets.ts";
+import Migration0036 from "./Migrations/036_CollaborationGovernance.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -95,6 +96,7 @@ export const migrationEntries = [
   [33, "LocalAuthAccounts", Migration0033],
   [34, "TenantRuntimeTables", Migration0034],
   [35, "DeployTargets", Migration0035],
+  [36, "CollaborationGovernance", Migration0036],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

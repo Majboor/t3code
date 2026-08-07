@@ -2438,6 +2438,62 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     );
   });
 
+  const compareBranches: GitCoreShape["compareBranches"] = Effect.fn("compareBranches")(
+    function* (input) {
+      const { cwd, baseBranch, headBranch } = input;
+      const range = `${baseBranch}...${headBranch}`;
+
+      // `a...b` diffs from the merge base, so the result is what head added
+      // rather than everything base has moved on to since.
+      const [counts, numstat] = yield* Effect.all([
+        executeGit("GitCore.compareBranches.count", cwd, [
+          "rev-list",
+          "--left-right",
+          "--count",
+          range,
+        ]),
+        executeGit("GitCore.compareBranches.numstat", cwd, [
+          "diff",
+          "--numstat",
+          range,
+        ]),
+      ]);
+
+      const [behindRaw, aheadRaw] = counts.stdout.trim().split(/\s+/);
+      const entries = parseNumstatEntries(numstat.stdout);
+
+      // Anything base also changed since the split is a candidate conflict.
+      const baseChanged = yield* executeGit("GitCore.compareBranches.baseNumstat", cwd, [
+        "diff",
+        "--numstat",
+        `${headBranch}...${baseBranch}`,
+      ]);
+      const baseChangedPaths = new Set(
+        parseNumstatEntries(baseChanged.stdout).map((entry) => entry.path),
+      );
+
+      const files = entries.map((entry) => ({
+        path: entry.path,
+        status: "modified" as const,
+        insertions: entry.insertions,
+        deletions: entry.deletions,
+      }));
+
+      return {
+        baseBranch,
+        headBranch,
+        aheadCount: Number.parseInt(aheadRaw ?? "0", 10) || 0,
+        behindCount: Number.parseInt(behindRaw ?? "0", 10) || 0,
+        files,
+        insertions: entries.reduce((total, entry) => total + entry.insertions, 0),
+        deletions: entries.reduce((total, entry) => total + entry.deletions, 0),
+        overlappingPaths: entries
+          .map((entry) => entry.path)
+          .filter((path) => baseChangedPaths.has(path)),
+      };
+    },
+  );
+
   const abortMerge: GitCoreShape["abortMerge"] = Effect.fn("abortMerge")(function* (cwd) {
     const merge = yield* executeGit("GitCore.abortMerge.merge", cwd, ["merge", "--abort"], {
       allowNonZeroExit: true,
@@ -2479,6 +2535,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     initRepo,
     listLocalBranchNames,
     mergeBranch,
+    compareBranches,
     getMergeState,
     abortMerge,
   } satisfies GitCoreShape;

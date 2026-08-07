@@ -1,6 +1,11 @@
 import type {
   CollaborationActivity,
+  CollaborationBranchClaim,
+  CollaborationFileTouch,
   CollaborationPresence,
+  CollaborationPromptApproval,
+  CollaborationViewPreferences,
+  CollaborationWorkspaceSettings,
   Organization,
   OrganizationAccessGrant,
   OrganizationAccessReview,
@@ -39,6 +44,13 @@ export interface CollaborationPersistenceSnapshot {
   readonly invites: ReadonlyArray<TenantInvite>;
   readonly memberships: ReadonlyArray<TenantMembership>;
   readonly activities: ReadonlyArray<CollaborationActivity>;
+  // Governance arrived after the first snapshots were written, so readers have
+  // to cope with these being absent on disk.
+  readonly settings?: ReadonlyArray<CollaborationWorkspaceSettings>;
+  readonly approvals?: ReadonlyArray<CollaborationPromptApproval>;
+  readonly viewPreferences?: ReadonlyArray<CollaborationViewPreferences>;
+  readonly branchClaims?: ReadonlyArray<CollaborationBranchClaim>;
+  readonly fileTouches?: ReadonlyArray<CollaborationFileTouch>;
 }
 
 export interface WorkspacePersistenceSnapshot {

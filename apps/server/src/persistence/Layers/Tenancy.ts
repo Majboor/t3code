@@ -14,8 +14,14 @@ import {
   ThreadId,
   UserId,
   WorkspaceId,
+  CollaborationApprovalId,
   type CollaborationActivity,
+  type CollaborationBranchClaim,
+  type CollaborationFileTouch,
   type CollaborationPresence,
+  type CollaborationPromptApproval,
+  type CollaborationViewPreferences,
+  type CollaborationWorkspaceSettings,
   type Organization,
   type OrganizationAccessGrant,
   type OrganizationAccessReview,
@@ -240,11 +246,26 @@ const makeTenancyRepository = Effect.gen(function* () {
 
   const loadCollaboration: TenancyRepositoryShape["loadCollaboration"] = () =>
     Effect.gen(function* () {
-      const [presenceRows, inviteRows, membershipRows, activityRows] = yield* Effect.all([
+      const [
+        presenceRows,
+        inviteRows,
+        membershipRows,
+        activityRows,
+        settingsRows,
+        approvalRows,
+        viewRows,
+        branchRows,
+        touchRows,
+      ] = yield* Effect.all([
         sql`SELECT * FROM collaboration_presence`,
         sql`SELECT * FROM tenant_invites WHERE workspace_id IS NOT NULL`,
         sql`SELECT * FROM tenant_memberships WHERE organization_id IS NULL`,
         sql`SELECT * FROM collaboration_activities ORDER BY created_at ASC, activity_id ASC`,
+        sql`SELECT * FROM collaboration_workspace_settings`,
+        sql`SELECT * FROM collaboration_prompt_approvals ORDER BY created_at ASC`,
+        sql`SELECT * FROM collaboration_view_preferences`,
+        sql`SELECT * FROM collaboration_branch_claims`,
+        sql`SELECT * FROM collaboration_file_touches`,
       ]).pipe(Effect.mapError(toSqlError("TenancyRepository.loadCollaboration:query")));
 
       return {
@@ -309,6 +330,68 @@ const makeTenancyRepository = Effect.gen(function* () {
             kind: row.kind,
             summary: row.summary,
             createdAt: row.created_at,
+          }),
+        ),
+        settings: (settingsRows as any[]).map(
+          (row): CollaborationWorkspaceSettings => ({
+            tenantId: TenantId.make(row.tenant_id),
+            workspaceId: WorkspaceId.make(row.workspace_id),
+            leadUserId: row.lead_user_id === null ? null : UserId.make(row.lead_user_id),
+            approvalMode: row.approval_mode,
+            approverUserIds: (parseArray(row.approver_user_ids_json) as string[]).map((id) =>
+              UserId.make(id),
+            ),
+            updatedAt: row.updated_at,
+          }),
+        ),
+        approvals: (approvalRows as any[]).map(
+          (row): CollaborationPromptApproval => ({
+            id: CollaborationApprovalId.make(row.approval_id),
+            tenantId: TenantId.make(row.tenant_id),
+            workspaceId: WorkspaceId.make(row.workspace_id),
+            threadId: row.thread_id === null ? null : ThreadId.make(row.thread_id),
+            requestedByUserId: UserId.make(row.requested_by_user_id),
+            requestedByName: row.requested_by_name,
+            prompt: row.prompt,
+            mode: row.mode,
+            status: row.status,
+            decidedByUserId:
+              row.decided_by_user_id === null ? null : UserId.make(row.decided_by_user_id),
+            decidedAt: row.decided_at,
+            note: row.note,
+            createdAt: row.created_at,
+          }),
+        ),
+        viewPreferences: (viewRows as any[]).map(
+          (row): CollaborationViewPreferences => ({
+            tenantId: TenantId.make(row.tenant_id),
+            workspaceId: WorkspaceId.make(row.workspace_id),
+            userId: UserId.make(row.user_id),
+            showOthersPrompts: row.show_others_prompts !== 0,
+            showOthersFiles: row.show_others_files !== 0,
+            updatedAt: row.updated_at,
+          }),
+        ),
+        branchClaims: (branchRows as any[]).map(
+          (row): CollaborationBranchClaim => ({
+            tenantId: TenantId.make(row.tenant_id),
+            workspaceId: WorkspaceId.make(row.workspace_id),
+            userId: UserId.make(row.user_id),
+            displayName: row.display_name,
+            branch: row.branch,
+            baseBranch: row.base_branch,
+            worktreePath: row.worktree_path,
+            createdAt: row.created_at,
+          }),
+        ),
+        fileTouches: (touchRows as any[]).map(
+          (row): CollaborationFileTouch => ({
+            tenantId: TenantId.make(row.tenant_id),
+            workspaceId: WorkspaceId.make(row.workspace_id),
+            userId: UserId.make(row.user_id),
+            displayName: row.display_name,
+            path: row.path,
+            touchedAt: row.touched_at,
           }),
         ),
       } satisfies CollaborationPersistenceSnapshot;
@@ -458,6 +541,69 @@ const makeTenancyRepository = Effect.gen(function* () {
                 ${activity.summary}, ${activity.createdAt}
               )
             `;
+          }
+
+          // An absent governance array means "this caller does not manage that
+          // table", which is not the same as "delete everything in it".
+          if (snapshot.settings) {
+            yield* sql`DELETE FROM collaboration_workspace_settings`;
+            for (const settings of snapshot.settings) {
+              yield* sql`
+                INSERT INTO collaboration_workspace_settings VALUES (
+                  ${settings.tenantId}, ${settings.workspaceId}, ${settings.leadUserId},
+                  ${settings.approvalMode}, ${JSON.stringify(settings.approverUserIds)},
+                  ${settings.updatedAt}
+                )
+              `;
+            }
+          }
+          if (snapshot.approvals) {
+            yield* sql`DELETE FROM collaboration_prompt_approvals`;
+            for (const approval of snapshot.approvals) {
+              yield* sql`
+                INSERT INTO collaboration_prompt_approvals VALUES (
+                  ${approval.id}, ${approval.tenantId}, ${approval.workspaceId},
+                  ${approval.threadId}, ${approval.requestedByUserId}, ${approval.requestedByName},
+                  ${approval.prompt}, ${approval.mode}, ${approval.status},
+                  ${approval.decidedByUserId}, ${approval.decidedAt}, ${approval.note},
+                  ${approval.createdAt}
+                )
+              `;
+            }
+          }
+          if (snapshot.viewPreferences) {
+            yield* sql`DELETE FROM collaboration_view_preferences`;
+            for (const preferences of snapshot.viewPreferences) {
+              yield* sql`
+                INSERT INTO collaboration_view_preferences VALUES (
+                  ${preferences.tenantId}, ${preferences.workspaceId}, ${preferences.userId},
+                  ${preferences.showOthersPrompts ? 1 : 0}, ${preferences.showOthersFiles ? 1 : 0},
+                  ${preferences.updatedAt}
+                )
+              `;
+            }
+          }
+          if (snapshot.branchClaims) {
+            yield* sql`DELETE FROM collaboration_branch_claims`;
+            for (const claim of snapshot.branchClaims) {
+              yield* sql`
+                INSERT INTO collaboration_branch_claims VALUES (
+                  ${claim.tenantId}, ${claim.workspaceId}, ${claim.userId}, ${claim.displayName},
+                  ${claim.branch}, ${claim.baseBranch}, ${claim.worktreePath}, ${claim.createdAt}
+                )
+              `;
+            }
+          }
+          if (snapshot.fileTouches) {
+            yield* sql`DELETE FROM collaboration_file_touches`;
+            for (const touch of snapshot.fileTouches) {
+              yield* sql`
+                INSERT INTO collaboration_file_touches VALUES (
+                  ${touch.tenantId}, ${touch.workspaceId}, ${touch.path}, ${touch.userId},
+                  ${touch.displayName}, ${touch.touchedAt}
+                )
+              `;
+            }
           }
         }),
       )

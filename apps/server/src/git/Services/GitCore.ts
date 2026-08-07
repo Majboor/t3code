@@ -21,6 +21,8 @@ import type {
   GitListBranchesInput,
   GitListBranchesResult,
   GitAbortMergeResult,
+  GitCompareBranchesInput,
+  GitCompareBranchesResult,
   GitMergeBranchInput,
   GitMergeBranchResult,
   GitMergeStateResult,
@@ -325,6 +327,13 @@ export interface GitCoreShape {
   readonly mergeBranch: (
     input: GitMergeBranchInput,
   ) => Effect.Effect<GitMergeBranchResult, GitCommandError>;
+
+  /**
+   * Diff two branches from their merge base, and flag paths both have touched.
+   */
+  readonly compareBranches: (
+    input: GitCompareBranchesInput,
+  ) => Effect.Effect<GitCompareBranchesResult, GitCommandError>;
 
   /**
    * Report whether a merge/rebase is in progress and which paths conflict.

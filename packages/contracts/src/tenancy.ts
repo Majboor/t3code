@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import {
   AuthSessionId,
+  CollaborationApprovalId,
   InviteId,
   IsoDateTime,
   MembershipId,
@@ -618,6 +619,10 @@ export class CollaborationError extends Schema.TaggedErrorClass<CollaborationErr
       "invite-revoked",
       "invite-accepted",
       "invalid-membership-rule",
+      "approval-not-found",
+      "approval-already-decided",
+      "not-an-approver",
+      "branch-claim-not-found",
     ]),
     cause: Schema.optional(Schema.Defect),
   },
@@ -725,6 +730,226 @@ export const CollaborationActivityListResult = Schema.Struct({
 });
 export type CollaborationActivityListResult = typeof CollaborationActivityListResult.Type;
 
+// ── Collaboration governance ────────────────────────────────────────────────
+
+/**
+ * How a workspace treats a prompt from someone who is not an approver.
+ * `open` runs it straight away, `blocking` holds it until an approver says yes,
+ * and `staged` lets it run on the author's own branch so the shared branch only
+ * moves once the work is merged.
+ */
+export const CollaborationApprovalMode = Schema.Literals(["open", "blocking", "staged"]);
+export type CollaborationApprovalMode = typeof CollaborationApprovalMode.Type;
+
+export const CollaborationWorkspaceSettings = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  /** The person who created the workspace. Always an approver, never removable. */
+  leadUserId: Schema.NullOr(UserId),
+  approvalMode: CollaborationApprovalMode,
+  /** Extra people the lead has handed approval rights to. */
+  approverUserIds: Schema.Array(UserId),
+  updatedAt: IsoDateTime,
+});
+export type CollaborationWorkspaceSettings = typeof CollaborationWorkspaceSettings.Type;
+
+export const CollaborationSettingsGetInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationSettingsGetInput = typeof CollaborationSettingsGetInput.Type;
+
+export const CollaborationSettingsUpdateInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  approvalMode: Schema.optional(CollaborationApprovalMode),
+  approverUserIds: Schema.optional(Schema.Array(UserId)),
+});
+export type CollaborationSettingsUpdateInput = typeof CollaborationSettingsUpdateInput.Type;
+
+export const CollaborationSettingsResult = Schema.Struct({
+  settings: CollaborationWorkspaceSettings,
+  /** Whether the caller may change these settings. */
+  canManage: Schema.Boolean,
+});
+export type CollaborationSettingsResult = typeof CollaborationSettingsResult.Type;
+
+export const CollaborationApprovalStatus = Schema.Literals(["pending", "approved", "rejected"]);
+export type CollaborationApprovalStatus = typeof CollaborationApprovalStatus.Type;
+
+export const CollaborationPromptApproval = Schema.Struct({
+  id: CollaborationApprovalId,
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  threadId: Schema.NullOr(ThreadId),
+  requestedByUserId: UserId,
+  requestedByName: TrimmedNonEmptyString,
+  prompt: TrimmedNonEmptyString,
+  /** The mode in force when the prompt was submitted. */
+  mode: CollaborationApprovalMode,
+  status: CollaborationApprovalStatus,
+  decidedByUserId: Schema.NullOr(UserId),
+  decidedAt: Schema.NullOr(IsoDateTime),
+  note: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+export type CollaborationPromptApproval = typeof CollaborationPromptApproval.Type;
+
+export const CollaborationApprovalSubmitInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  prompt: TrimmedNonEmptyString,
+});
+export type CollaborationApprovalSubmitInput = typeof CollaborationApprovalSubmitInput.Type;
+
+export const CollaborationApprovalSubmitResult = Schema.Struct({
+  /** Absent when the workspace let the prompt through without a review. */
+  approval: Schema.NullOr(CollaborationPromptApproval),
+  /** True when the caller may send the prompt to the agent right now. */
+  mayRun: Schema.Boolean,
+});
+export type CollaborationApprovalSubmitResult = typeof CollaborationApprovalSubmitResult.Type;
+
+export const CollaborationApprovalListInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  status: Schema.optional(CollaborationApprovalStatus),
+  limit: Schema.optional(PositiveInt),
+});
+export type CollaborationApprovalListInput = typeof CollaborationApprovalListInput.Type;
+
+export const CollaborationApprovalListResult = Schema.Struct({
+  approvals: Schema.Array(CollaborationPromptApproval),
+  canDecide: Schema.Boolean,
+});
+export type CollaborationApprovalListResult = typeof CollaborationApprovalListResult.Type;
+
+export const CollaborationApprovalDecideInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  approvalId: CollaborationApprovalId,
+  decision: Schema.Literals(["approved", "rejected"]),
+  note: Schema.optional(TrimmedNonEmptyString),
+});
+export type CollaborationApprovalDecideInput = typeof CollaborationApprovalDecideInput.Type;
+
+export const CollaborationApprovalDecideResult = Schema.Struct({
+  approval: CollaborationPromptApproval,
+});
+export type CollaborationApprovalDecideResult = typeof CollaborationApprovalDecideResult.Type;
+
+/**
+ * A personal filter, not a workspace mode: turning collaboration off hides
+ * other people's prompts and files from your own view and nobody else's.
+ */
+export const CollaborationViewPreferences = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  userId: UserId,
+  showOthersPrompts: Schema.Boolean,
+  showOthersFiles: Schema.Boolean,
+  updatedAt: IsoDateTime,
+});
+export type CollaborationViewPreferences = typeof CollaborationViewPreferences.Type;
+
+export const CollaborationViewGetInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationViewGetInput = typeof CollaborationViewGetInput.Type;
+
+export const CollaborationViewUpdateInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  showOthersPrompts: Schema.optional(Schema.Boolean),
+  showOthersFiles: Schema.optional(Schema.Boolean),
+});
+export type CollaborationViewUpdateInput = typeof CollaborationViewUpdateInput.Type;
+
+export const CollaborationViewResult = Schema.Struct({
+  preferences: CollaborationViewPreferences,
+});
+export type CollaborationViewResult = typeof CollaborationViewResult.Type;
+
+/** One person's own branch and worktree inside a shared workspace. */
+export const CollaborationBranchClaim = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  userId: UserId,
+  displayName: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  baseBranch: TrimmedNonEmptyString,
+  worktreePath: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+export type CollaborationBranchClaim = typeof CollaborationBranchClaim.Type;
+
+export const CollaborationBranchClaimInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  branch: TrimmedNonEmptyString,
+  baseBranch: TrimmedNonEmptyString,
+  worktreePath: TrimmedNonEmptyString,
+});
+export type CollaborationBranchClaimInput = typeof CollaborationBranchClaimInput.Type;
+
+export const CollaborationBranchClaimResult = Schema.Struct({
+  claim: CollaborationBranchClaim,
+});
+export type CollaborationBranchClaimResult = typeof CollaborationBranchClaimResult.Type;
+
+export const CollaborationBranchListInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationBranchListInput = typeof CollaborationBranchListInput.Type;
+
+export const CollaborationBranchListResult = Schema.Struct({
+  claims: Schema.Array(CollaborationBranchClaim),
+});
+export type CollaborationBranchListResult = typeof CollaborationBranchListResult.Type;
+
+export const CollaborationBranchReleaseInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationBranchReleaseInput = typeof CollaborationBranchReleaseInput.Type;
+
+export const CollaborationBranchReleaseResult = Schema.Struct({
+  released: Schema.Boolean,
+});
+export type CollaborationBranchReleaseResult = typeof CollaborationBranchReleaseResult.Type;
+
+/** Who last touched a file, so the tree can colour it by author. */
+export const CollaborationFileTouch = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  userId: UserId,
+  displayName: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  touchedAt: IsoDateTime,
+});
+export type CollaborationFileTouch = typeof CollaborationFileTouch.Type;
+
+export const CollaborationFileTouchInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  paths: Schema.Array(TrimmedNonEmptyString),
+});
+export type CollaborationFileTouchInput = typeof CollaborationFileTouchInput.Type;
+
+export const CollaborationFileTouchResult = Schema.Struct({
+  touches: Schema.Array(CollaborationFileTouch),
+});
+export type CollaborationFileTouchResult = typeof CollaborationFileTouchResult.Type;
+
+export const CollaborationFileTouchListInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationFileTouchListInput = typeof CollaborationFileTouchListInput.Type;
+
 export const CollaborationStreamInput = Schema.Struct({
   tenantId: TenantId,
   workspaceId: WorkspaceId,
@@ -753,6 +978,32 @@ export const CollaborationStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("activity-appended"),
     activity: CollaborationActivity,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("settings-updated"),
+    settings: CollaborationWorkspaceSettings,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("approval-requested"),
+    approval: CollaborationPromptApproval,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("approval-decided"),
+    approval: CollaborationPromptApproval,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("branch-claimed"),
+    claim: CollaborationBranchClaim,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("branch-released"),
+    tenantId: TenantId,
+    workspaceId: WorkspaceId,
+    userId: UserId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("files-touched"),
+    touches: Schema.Array(CollaborationFileTouch),
   }),
 ]);
 export type CollaborationStreamEvent = typeof CollaborationStreamEvent.Type;

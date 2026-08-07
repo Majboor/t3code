@@ -2,7 +2,33 @@ import type {
   CollaborationActivity,
   CollaborationActivityListInput,
   CollaborationActivityListResult,
+  CollaborationApprovalDecideInput,
+  CollaborationApprovalDecideResult,
+  CollaborationApprovalListInput,
+  CollaborationApprovalListResult,
+  CollaborationApprovalSubmitInput,
+  CollaborationApprovalSubmitResult,
+  CollaborationBranchClaim,
+  CollaborationBranchClaimInput,
+  CollaborationBranchClaimResult,
+  CollaborationBranchListInput,
+  CollaborationBranchListResult,
+  CollaborationBranchReleaseInput,
+  CollaborationBranchReleaseResult,
   CollaborationError,
+  CollaborationFileTouch,
+  CollaborationFileTouchInput,
+  CollaborationFileTouchListInput,
+  CollaborationFileTouchResult,
+  CollaborationPromptApproval,
+  CollaborationSettingsGetInput,
+  CollaborationSettingsResult,
+  CollaborationSettingsUpdateInput,
+  CollaborationViewGetInput,
+  CollaborationViewPreferences,
+  CollaborationViewResult,
+  CollaborationViewUpdateInput,
+  CollaborationWorkspaceSettings,
   CollaborationInviteAcceptInput,
   CollaborationInviteAcceptResult,
   CollaborationInviteCreateInput,
@@ -72,6 +98,64 @@ export interface CollaborationServiceShape {
   readonly stream: (
     input: CollaborationStreamInput,
   ) => Stream.Stream<CollaborationStreamEvent, CollaborationError>;
+
+  readonly getSettings: (
+    actor: CollaborationActor,
+    input: CollaborationSettingsGetInput,
+  ) => Effect.Effect<CollaborationSettingsResult, CollaborationError>;
+
+  readonly updateSettings: (
+    actor: CollaborationActor,
+    input: CollaborationSettingsUpdateInput,
+  ) => Effect.Effect<CollaborationSettingsResult, CollaborationError>;
+
+  readonly submitPromptForApproval: (
+    actor: CollaborationActor,
+    input: CollaborationApprovalSubmitInput,
+  ) => Effect.Effect<CollaborationApprovalSubmitResult, CollaborationError>;
+
+  readonly listApprovals: (
+    actor: CollaborationActor,
+    input: CollaborationApprovalListInput,
+  ) => Effect.Effect<CollaborationApprovalListResult, CollaborationError>;
+
+  readonly decideApproval: (
+    actor: CollaborationActor,
+    input: CollaborationApprovalDecideInput,
+  ) => Effect.Effect<CollaborationApprovalDecideResult, CollaborationError>;
+
+  readonly getViewPreferences: (
+    actor: CollaborationActor,
+    input: CollaborationViewGetInput,
+  ) => Effect.Effect<CollaborationViewResult, CollaborationError>;
+
+  readonly updateViewPreferences: (
+    actor: CollaborationActor,
+    input: CollaborationViewUpdateInput,
+  ) => Effect.Effect<CollaborationViewResult, CollaborationError>;
+
+  readonly claimBranch: (
+    actor: CollaborationActor,
+    input: CollaborationBranchClaimInput,
+  ) => Effect.Effect<CollaborationBranchClaimResult, CollaborationError>;
+
+  readonly listBranchClaims: (
+    input: CollaborationBranchListInput,
+  ) => Effect.Effect<CollaborationBranchListResult, CollaborationError>;
+
+  readonly releaseBranch: (
+    actor: CollaborationActor,
+    input: CollaborationBranchReleaseInput,
+  ) => Effect.Effect<CollaborationBranchReleaseResult, CollaborationError>;
+
+  readonly touchFiles: (
+    actor: CollaborationActor,
+    input: CollaborationFileTouchInput,
+  ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;
+
+  readonly listFileTouches: (
+    input: CollaborationFileTouchListInput,
+  ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;
 }
 
 export interface CollaborationState {
@@ -79,6 +163,14 @@ export interface CollaborationState {
   readonly invites: ReadonlyMap<string, TenantInvite>;
   readonly memberships: ReadonlyMap<string, TenantMembership>;
   readonly activities: ReadonlyArray<CollaborationActivity>;
+  /** Keyed by `tenantId:workspaceId`. */
+  readonly settings: ReadonlyMap<string, CollaborationWorkspaceSettings>;
+  readonly approvals: ReadonlyMap<string, CollaborationPromptApproval>;
+  /** Keyed by `tenantId:workspaceId:userId`. */
+  readonly viewPreferences: ReadonlyMap<string, CollaborationViewPreferences>;
+  readonly branchClaims: ReadonlyMap<string, CollaborationBranchClaim>;
+  /** Keyed by `tenantId:workspaceId:path`. */
+  readonly fileTouches: ReadonlyMap<string, CollaborationFileTouch>;
 }
 
 export class CollaborationService extends Context.Service<

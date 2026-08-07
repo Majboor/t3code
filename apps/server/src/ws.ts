@@ -3801,6 +3801,150 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "collaboration" },
           ),
+        [WS_METHODS.collaborationSettingsGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationSettingsGet,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.getSettings(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationSettingsUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationSettingsUpdate,
+            withRateLimit(
+              // The service does the approver check; the permission gate here
+              // only keeps non-members out of the workspace entirely.
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.updateSettings(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationApprovalsSubmit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationApprovalsSubmit,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "session.prompt").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.submitPromptForApproval(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationApprovalsList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationApprovalsList,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listApprovals(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationApprovalsDecide]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationApprovalsDecide,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.decideApproval(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationViewGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationViewGet,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.getViewPreferences(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationViewUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationViewUpdate,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.updateViewPreferences(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationBranchClaim]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationBranchClaim,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.claimBranch(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationBranchList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationBranchList,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => collaboration.listBranchClaims(input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationBranchRelease]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationBranchRelease,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.releaseBranch(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationFilesTouch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationFilesTouch,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.touchFiles(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationFilesTouchList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationFilesTouchList,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => collaboration.listFileTouches(input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
         [WS_METHODS.subscribeCollaboration]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeCollaboration,
@@ -4575,6 +4719,17 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   git.mergeBranch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
                 ),
               ),
+              (message) => gitRpcError(input.cwd, message),
+            ),
+            { "rpc.aggregate": "git" },
+          ),
+        [WS_METHODS.gitCompareBranches]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitCompareBranches,
+            withRateLimit(
+              ensureWorkspaceRoot(input.cwd, "project.view", (message) =>
+                gitRpcError(input.cwd, message),
+              ).pipe(Effect.flatMap(() => git.compareBranches(input))),
               (message) => gitRpcError(input.cwd, message),
             ),
             { "rpc.aggregate": "git" },

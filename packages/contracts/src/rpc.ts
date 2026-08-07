@@ -26,6 +26,8 @@ import {
   GitManagerServiceError,
   GitAbortMergeInput,
   GitAbortMergeResult,
+  GitCompareBranchesInput,
+  GitCompareBranchesResult,
   GitMergeBranchInput,
   GitMergeBranchResult,
   GitMergeStateInput,
@@ -58,7 +60,22 @@ import { KeybindingsConfigError } from "./keybindings.ts";
 import {
   CollaborationActivityListInput,
   CollaborationActivityListResult,
+  CollaborationApprovalDecideInput,
+  CollaborationApprovalDecideResult,
+  CollaborationApprovalListInput,
+  CollaborationApprovalListResult,
+  CollaborationApprovalSubmitInput,
+  CollaborationApprovalSubmitResult,
+  CollaborationBranchClaimInput,
+  CollaborationBranchClaimResult,
+  CollaborationBranchListInput,
+  CollaborationBranchListResult,
+  CollaborationBranchReleaseInput,
+  CollaborationBranchReleaseResult,
   CollaborationError,
+  CollaborationFileTouchInput,
+  CollaborationFileTouchListInput,
+  CollaborationFileTouchResult,
   CollaborationInviteAcceptInput,
   CollaborationInviteAcceptResult,
   CollaborationInviteCreateInput,
@@ -71,10 +88,16 @@ import {
   CollaborationPresenceListResult,
   CollaborationPresenceUpsertInput,
   CollaborationPresenceUpsertResult,
+  CollaborationSettingsGetInput,
+  CollaborationSettingsResult,
+  CollaborationSettingsUpdateInput,
   CollaborationSharedPromptRecordInput,
   CollaborationSharedPromptRecordResult,
   CollaborationStreamEvent,
   CollaborationStreamInput,
+  CollaborationViewGetInput,
+  CollaborationViewResult,
+  CollaborationViewUpdateInput,
   OrganizationAccessGrantInput,
   OrganizationAccessGrantResult,
   OrganizationAccessRevokeInput,
@@ -196,6 +219,7 @@ export const WS_METHODS = {
   gitCheckout: "git.checkout",
   gitInit: "git.init",
   gitMergeBranch: "git.mergeBranch",
+  gitCompareBranches: "git.compareBranches",
   gitGetMergeState: "git.getMergeState",
   gitAbortMerge: "git.abortMerge",
   gitResolvePullRequest: "git.resolvePullRequest",
@@ -239,6 +263,18 @@ export const WS_METHODS = {
   collaborationInvitesRevoke: "collaboration.invites.revoke",
   collaborationSharedPromptRecord: "collaboration.sharedPrompt.record",
   collaborationActivityList: "collaboration.activity.list",
+  collaborationSettingsGet: "collaboration.settings.get",
+  collaborationSettingsUpdate: "collaboration.settings.update",
+  collaborationApprovalsSubmit: "collaboration.approvals.submit",
+  collaborationApprovalsList: "collaboration.approvals.list",
+  collaborationApprovalsDecide: "collaboration.approvals.decide",
+  collaborationViewGet: "collaboration.view.get",
+  collaborationViewUpdate: "collaboration.view.update",
+  collaborationBranchClaim: "collaboration.branch.claim",
+  collaborationBranchList: "collaboration.branch.list",
+  collaborationBranchRelease: "collaboration.branch.release",
+  collaborationFilesTouch: "collaboration.files.touch",
+  collaborationFilesTouchList: "collaboration.files.touchList",
   subscribeCollaboration: "collaboration.subscribe",
 
   // Deploy methods
@@ -484,6 +520,12 @@ export const WsGitMergeBranchRpc = Rpc.make(WS_METHODS.gitMergeBranch, {
   error: GitCommandError,
 });
 
+export const WsGitCompareBranchesRpc = Rpc.make(WS_METHODS.gitCompareBranches, {
+  payload: GitCompareBranchesInput,
+  success: GitCompareBranchesResult,
+  error: GitCommandError,
+});
+
 export const WsGitGetMergeStateRpc = Rpc.make(WS_METHODS.gitGetMergeState, {
   payload: GitMergeStateInput,
   success: GitMergeStateResult,
@@ -651,6 +693,78 @@ export const WsCollaborationActivityListRpc = Rpc.make(WS_METHODS.collaborationA
   error: CollaborationError,
 });
 
+export const WsCollaborationSettingsGetRpc = Rpc.make(WS_METHODS.collaborationSettingsGet, {
+  payload: CollaborationSettingsGetInput,
+  success: CollaborationSettingsResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationSettingsUpdateRpc = Rpc.make(WS_METHODS.collaborationSettingsUpdate, {
+  payload: CollaborationSettingsUpdateInput,
+  success: CollaborationSettingsResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationApprovalsSubmitRpc = Rpc.make(WS_METHODS.collaborationApprovalsSubmit, {
+  payload: CollaborationApprovalSubmitInput,
+  success: CollaborationApprovalSubmitResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationApprovalsListRpc = Rpc.make(WS_METHODS.collaborationApprovalsList, {
+  payload: CollaborationApprovalListInput,
+  success: CollaborationApprovalListResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationApprovalsDecideRpc = Rpc.make(WS_METHODS.collaborationApprovalsDecide, {
+  payload: CollaborationApprovalDecideInput,
+  success: CollaborationApprovalDecideResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationViewGetRpc = Rpc.make(WS_METHODS.collaborationViewGet, {
+  payload: CollaborationViewGetInput,
+  success: CollaborationViewResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationViewUpdateRpc = Rpc.make(WS_METHODS.collaborationViewUpdate, {
+  payload: CollaborationViewUpdateInput,
+  success: CollaborationViewResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationBranchClaimRpc = Rpc.make(WS_METHODS.collaborationBranchClaim, {
+  payload: CollaborationBranchClaimInput,
+  success: CollaborationBranchClaimResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationBranchListRpc = Rpc.make(WS_METHODS.collaborationBranchList, {
+  payload: CollaborationBranchListInput,
+  success: CollaborationBranchListResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationBranchReleaseRpc = Rpc.make(WS_METHODS.collaborationBranchRelease, {
+  payload: CollaborationBranchReleaseInput,
+  success: CollaborationBranchReleaseResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationFilesTouchRpc = Rpc.make(WS_METHODS.collaborationFilesTouch, {
+  payload: CollaborationFileTouchInput,
+  success: CollaborationFileTouchResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationFilesTouchListRpc = Rpc.make(WS_METHODS.collaborationFilesTouchList, {
+  payload: CollaborationFileTouchListInput,
+  success: CollaborationFileTouchResult,
+  error: CollaborationError,
+});
+
 export const WsSubscribeCollaborationRpc = Rpc.make(WS_METHODS.subscribeCollaboration, {
   payload: CollaborationStreamInput,
   success: CollaborationStreamEvent,
@@ -792,6 +906,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitCheckoutRpc,
   WsGitInitRpc,
   WsGitMergeBranchRpc,
+  WsGitCompareBranchesRpc,
   WsGitGetMergeStateRpc,
   WsGitAbortMergeRpc,
   WsDeployListTargetsRpc,
@@ -817,6 +932,18 @@ export const WsRpcGroup = RpcGroup.make(
   WsCollaborationInvitesRevokeRpc,
   WsCollaborationSharedPromptRecordRpc,
   WsCollaborationActivityListRpc,
+  WsCollaborationSettingsGetRpc,
+  WsCollaborationSettingsUpdateRpc,
+  WsCollaborationApprovalsSubmitRpc,
+  WsCollaborationApprovalsListRpc,
+  WsCollaborationApprovalsDecideRpc,
+  WsCollaborationViewGetRpc,
+  WsCollaborationViewUpdateRpc,
+  WsCollaborationBranchClaimRpc,
+  WsCollaborationBranchListRpc,
+  WsCollaborationBranchReleaseRpc,
+  WsCollaborationFilesTouchRpc,
+  WsCollaborationFilesTouchListRpc,
   WsSubscribeCollaborationRpc,
   WsWorkspacesCreateRpc,
   WsOrganizationsCreateRpc,
