@@ -48,6 +48,19 @@ function check(step, ok, detail = "") {
   console.log(`  ${mark}  ${step}${detail ? `  — ${detail}` : ""}`);
 }
 
+/**
+ * A tree that only catches up once the project is reopened is the bug this
+ * suite exists to catch, so needing the reload counts as a failure.
+ */
+function checkLiveTreeUpdate(step, result) {
+  const detail = !result.found
+    ? "never appeared"
+    : result.neededReload
+      ? "only after a reload — the tree did not update live"
+      : "";
+  check(step, result.found && !result.neededReload, detail);
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Writes a file through python3, so the change originates outside the app. */
@@ -295,9 +308,10 @@ try {
   phase("A file written on disk by python");
   const pythonFile = `python-made-${RUN_ID}.txt`;
   writeFileViaPython(pythonFile, "written by python\n");
-  const pythonInB = await waitForFileInTree(accountB.page, pythonFile);
-  check("B sees the python-written file", pythonInB.found,
-    pythonInB.found && pythonInB.neededReload ? "only after a reload" : "");
+  checkLiveTreeUpdate(
+    "B sees the python-written file",
+    await waitForFileInTree(accountB.page, pythonFile),
+  );
 
   phase("Account B creates a file in the app");
   const bFile = `from-b-${RUN_ID}.txt`;
@@ -310,8 +324,7 @@ try {
   check("A logs back in", await logIn(accountA2, ACCOUNT_A));
   check("A reopens the project", await openProject(accountA2.page));
   const aSeesB = await waitForFileInTree(accountA2.page, bFile);
-  check("A sees the file B created", aSeesB.found,
-    aSeesB.found && aSeesB.neededReload ? "only after a reload" : "");
+  check("A sees the file B created", aSeesB.found);
   const aSeesPython = (await visibleFileNames(accountA2.page)).includes(pythonFile);
   check("A sees the python-written file", aSeesPython);
 
@@ -319,9 +332,7 @@ try {
   const aFile = `from-a-${RUN_ID}.txt`;
   check("A uses New file", await createFileViaUi(accountA2.page, aFile));
   check("A's file lands on disk", await waitForFileOnDisk(aFile, FILE_APPEAR_TIMEOUT_MS));
-  const bSeesA = await waitForFileInTree(accountB.page, aFile);
-  check("B sees the file A created", bSeesA.found,
-    bSeesA.found && bSeesA.neededReload ? "only after a reload" : "");
+  checkLiveTreeUpdate("B sees the file A created", await waitForFileInTree(accountB.page, aFile));
 
   phase("Both accounts drive the agent");
   const agentFileA = `agent-a-${RUN_ID}.txt`;
@@ -335,9 +346,10 @@ try {
     !/Provider turn start failed|Timed out waiting for initialize/.test(aThread),
     aThread.match(/(Provider turn start failed|Timed out[^\n]*)/)?.[0] ?? "");
   if (agentAOnDisk) {
-    const bSeesAgentA = await waitForFileInTree(accountB.page, agentFileA);
-    check("B sees what A's agent wrote", bSeesAgentA.found,
-      bSeesAgentA.found && bSeesAgentA.neededReload ? "only after a reload" : "");
+    checkLiveTreeUpdate(
+      "B sees what A's agent wrote",
+      await waitForFileInTree(accountB.page, agentFileA),
+    );
   }
 
   const agentFileB = `agent-b-${RUN_ID}.txt`;
@@ -351,9 +363,10 @@ try {
     !/Provider turn start failed|Timed out waiting for initialize/.test(bThread),
     bThread.match(/(Provider turn start failed|Timed out[^\n]*)/)?.[0] ?? "");
   if (agentBOnDisk) {
-    const aSeesAgentB = await waitForFileInTree(accountA2.page, agentFileB);
-    check("A sees what B's agent wrote", aSeesAgentB.found,
-      aSeesAgentB.found && aSeesAgentB.neededReload ? "only after a reload" : "");
+    checkLiveTreeUpdate(
+      "A sees what B's agent wrote",
+      await waitForFileInTree(accountA2.page, agentFileB),
+    );
   }
 
   phase("Result");

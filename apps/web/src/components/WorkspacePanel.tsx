@@ -111,8 +111,31 @@ const EMPTY_WORKSPACE_DIFF_STAT_MAP = new Map<
 const EMPTY_WORKSPACE_DIFF_REVIEW_ITEMS: ReadonlyArray<WorkspaceDiffReviewItem> = [];
 const EMPTY_WORKSPACE_DIFF_REVIEW_IDS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACE_WORKING_TREE_FILES: ReadonlyArray<WorkspaceWorkingTreeFileStat> = [];
+// The tree mirrors a directory that anyone can change without telling us: a
+// collaborator in another browser, the agent, or a process outside the app
+// entirely. Re-list what is on screen on a timer so it stops going stale.
+const WORKSPACE_TREE_POLL_INTERVAL_MS = 5_000;
 const WORKSPACE_ACCEPTED_DIFF_STORAGE_PREFIX = "t3code:workspace-accepted-diffs:v1";
 const WORKSPACE_DIFF_REVIEW_STORAGE_PREFIX = "t3code:workspace-diff-review:v1";
+
+/** Lets a polled re-list keep the existing array when the directory is unchanged. */
+function directoryEntriesMatch(
+  left: ReadonlyArray<ProjectDirectoryEntry>,
+  right: ReadonlyArray<ProjectDirectoryEntry>,
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      entry.name === other.name &&
+      entry.path === other.path &&
+      entry.kind === other.kind
+    );
+  });
+}
 
 function buildWorkspaceLiveDiffKey(
   turnKey: string,
@@ -595,13 +618,18 @@ export default function WorkspacePanel({
     useState<WorkspaceCompletedLiveDiffState | null>(null);
 
   const loadDirectory = useCallback(
-    async (directoryPath: string | null, options?: { force?: boolean }) => {
+    async (directoryPath: string | null, options?: { force?: boolean; silent?: boolean }) => {
       if (!activeEnvironmentId || !activeWorkspaceRoot) {
         return;
       }
 
       const key = directoryKey(directoryPath);
-      setLoadingDirectoriesByPath((current) => ({ ...current, [key]: true }));
+      // A background re-list shows no spinner and stays quiet on failure, or a
+      // polled directory would blink and toast every few seconds.
+      const silent = options?.silent ?? false;
+      if (!silent) {
+        setLoadingDirectoriesByPath((current) => ({ ...current, [key]: true }));
+      }
 
       try {
         const result = await queryClient.fetchQuery(
@@ -617,11 +645,20 @@ export default function WorkspacePanel({
           return;
         }
 
-        setDirectoryEntriesByPath((current) => ({
-          ...current,
-          [key]: result.entries,
-        }));
+        setDirectoryEntriesByPath((current) => {
+          const previous = current[key];
+          if (previous && directoryEntriesMatch(previous, result.entries)) {
+            return current;
+          }
+          return {
+            ...current,
+            [key]: result.entries,
+          };
+        });
       } catch (error) {
+        if (silent) {
+          return;
+        }
         const description =
           error instanceof Error ? error.message : "An unexpected error occurred.";
         const previousToast = workspaceFilesErrorToastRef.current;
@@ -639,11 +676,13 @@ export default function WorkspacePanel({
           });
         }
       } finally {
-        setLoadingDirectoriesByPath((current) => {
-          const next = { ...current };
-          delete next[key];
-          return next;
-        });
+        if (!silent) {
+          setLoadingDirectoriesByPath((current) => {
+            const next = { ...current };
+            delete next[key];
+            return next;
+          });
+        }
       }
     },
     [activeEnvironmentId, activeWorkspaceRoot, queryClient],
@@ -787,18 +826,26 @@ export default function WorkspacePanel({
     [directoryEntriesByPath, loadDirectory],
   );
 
-  const refreshExpandedDirectories = useCallback(() => {
-    const directoryPaths = Object.keys(expandedDirectoriesByPathRef.current).map((pathValue) =>
-      pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
-    );
-    if (directoryPaths.length === 0) {
-      return;
-    }
+  const refreshExpandedDirectories = useCallback(
+    (options?: { silent?: boolean }) => {
+      const directoryPaths = Object.keys(expandedDirectoriesByPathRef.current).map((pathValue) =>
+        pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
+      );
+      if (directoryPaths.length === 0) {
+        return;
+      }
 
-    void Promise.all(
-      directoryPaths.map((directoryPath) => loadDirectory(directoryPath, { force: true })),
-    ).catch(() => undefined);
-  }, [loadDirectory]);
+      void Promise.all(
+        directoryPaths.map((directoryPath) =>
+          loadDirectory(directoryPath, {
+            force: true,
+            ...(options?.silent ? { silent: true } : {}),
+          }),
+        ),
+      ).catch(() => undefined);
+    },
+    [loadDirectory],
+  );
 
   useLayoutEffect(() => {
     if (activeRunningTurnKey === null) {
@@ -1964,6 +2011,28 @@ export default function WorkspacePanel({
     refreshCleanOpenFiles,
     refreshExpandedDirectories,
   ]);
+
+  useEffect(() => {
+    if (!activeEnvironmentId || !activeWorkspaceRoot) {
+      return;
+    }
+
+    const refreshTree = () => {
+      // A hidden tab has nobody looking at the tree; catch up when it comes back.
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      refreshExpandedDirectories({ silent: true });
+    };
+
+    const intervalId = window.setInterval(refreshTree, WORKSPACE_TREE_POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", refreshTree);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", refreshTree);
+    };
+  }, [activeEnvironmentId, activeWorkspaceRoot, refreshExpandedDirectories]);
 
   useEffect(() => {
     if (
