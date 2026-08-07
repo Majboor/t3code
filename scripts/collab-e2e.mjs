@@ -480,6 +480,11 @@ try {
   // listing bug, not a collaboration one.
   const baseBranch = initRepository();
   check("the workspace becomes a git repository", baseBranch === "main", `on ${baseBranch}`);
+  // Both pages cached a git status from before the repository existed, and the
+  // branch offer needs a base branch to offer to branch away from.
+  await openProject(accountB.page);
+  await openProject(accountA2.page);
+  await sleep(UI_SETTLE_MS);
   check(
     "A switches the workspace to 'Own branch'",
     await setApprovalMode(accountA2.page, "Own branch"),
@@ -544,8 +549,13 @@ try {
     "B is warned the file is contested",
     await waitForCollabElement(accountB.page, "collaboration-conflict-warning", 30_000),
   );
-  const conflictText = await bodyText(accountB.page);
-  check("the warning names the contested file", conflictText.includes(contestedFile));
+  // Read the warning itself; the file name appears in the tree regardless.
+  const warningText = await accountB.page
+    .locator('[data-testid="collaboration-conflict-warning"]')
+    .first()
+    .innerText()
+    .catch(() => "");
+  check("the warning names the contested file", warningText.includes(contestedFile), warningText.replace(/\s+/g, " ").slice(0, 80));
   await closeCollabPanel(accountB.page);
 
   phase("Result");
