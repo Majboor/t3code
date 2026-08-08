@@ -56,6 +56,7 @@ import Migration0040 from "./Migrations/040_CollaborationActivityVisibility.ts";
 import Migration0041 from "./Migrations/041_CollaborationMemberUsage.ts";
 import Migration0042 from "./Migrations/042_AuthUserProfileAvatarImages.ts";
 import Migration0043 from "./Migrations/043_PackRegistry.ts";
+import Migration0044 from "./Migrations/044_Analytics.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -111,6 +112,7 @@ export const migrationEntries = [
   [41, "CollaborationMemberUsage", Migration0041],
   [42, "AuthUserProfileAvatarImages", Migration0042],
   [43, "PackRegistry", Migration0043],
+  [44, "Analytics", Migration0044],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
