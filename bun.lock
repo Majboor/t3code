@@ -152,6 +152,25 @@
         "vitest": "catalog:",
       },
     },
+    "packages/pack-cli": {
+      "name": "@t3tools/pack-cli",
+      "version": "0.0.0-alpha.1",
+      "bin": {
+        "t3-pack": "./src/bin.ts",
+      },
+      "dependencies": {
+        "@t3tools/contracts": "workspace:*",
+        "@t3tools/sdk": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/language-service": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "packages/sdk": {
       "name": "@t3tools/sdk",
       "version": "0.0.0-alpha.1",
@@ -718,6 +737,8 @@
     "@t3tools/desktop": ["@t3tools/desktop@workspace:apps/desktop"],
 
     "@t3tools/marketing": ["@t3tools/marketing@workspace:apps/marketing"],
+
+    "@t3tools/pack-cli": ["@t3tools/pack-cli@workspace:packages/pack-cli"],
 
     "@t3tools/scripts": ["@t3tools/scripts@workspace:scripts"],
 
