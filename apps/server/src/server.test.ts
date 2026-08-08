@@ -114,6 +114,9 @@ import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
 import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
+import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
+import { AnalyticsStore, type AnalyticsStoreShape } from "./analytics/Services/AnalyticsStore.ts";
+import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
 import {
   ProjectSetupScriptRunner,
@@ -326,6 +329,10 @@ const deployTestLayer = DeployServiceLive.pipe(
   Layer.provide(ServerSecretStoreLive),
 );
 
+const analyticsTestLayer = AnalyticsStoreLive.pipe(
+  Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+);
+
 const makeBrowserOtlpPayload = (spanName: string) =>
   Effect.gen(function* () {
     const collector = yield* Effect.acquireRelease(
@@ -449,6 +456,8 @@ const buildAppUnderTest = (options?: {
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
   };
   seedTenancy?: (repository: TenancyRepositoryShape) => Effect.Effect<void>;
+  /** Runs against the same store the routes use, which a test cannot otherwise reach. */
+  seedAnalytics?: (store: AnalyticsStoreShape) => Effect.Effect<void>;
 }) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -526,6 +535,12 @@ const buildAppUnderTest = (options?: {
     const seedTenancyLayer = Layer.effectDiscard(
       options?.seedTenancy
         ? Effect.service(TenancyRepository).pipe(Effect.flatMap(options.seedTenancy))
+        : Effect.void,
+    );
+
+    const seedAnalyticsLayer = Layer.effectDiscard(
+      options?.seedAnalytics
+        ? Effect.service(AnalyticsStore).pipe(Effect.flatMap(options.seedAnalytics))
         : Effect.void,
     );
 
@@ -668,9 +683,11 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provideMerge(authTestLayer),
       Layer.provideMerge(seedTenancyLayer),
+      Layer.provideMerge(seedAnalyticsLayer),
       Layer.provideMerge(tenancyRepositoryTestLayer),
       Layer.provideMerge(threadPreferenceTestLayer),
       Layer.provideMerge(deployTestLayer),
+      Layer.provideMerge(analyticsTestLayer),
       Layer.provideMerge(collaborationTestLayer),
       Layer.provideMerge(organizationTestLayer),
       Layer.provideMerge(packRegistryTestLayer),
@@ -1710,6 +1727,80 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 401);
       assert.equal(response.headers.get("access-control-allow-origin"), "*");
       assert.equal(body.error, "Authentication required.");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("takes an analytics event from a deployment holding the stream's key", () =>
+    Effect.gen(function* () {
+      let ingestKey = "";
+      let countAfter = -1;
+      const projectId = ProjectId.make("project-ingest");
+
+      yield* buildAppUnderTest({
+        seedAnalytics: (store) =>
+          store
+            .declareStream({
+              projectId,
+              name: "page.view" as never,
+              purpose: "Which pages get read",
+              properties: [
+                { name: "path" as never, type: "string", purpose: "The page", required: true },
+              ],
+            })
+            .pipe(
+              Effect.map((declared) => {
+                ingestKey = declared.ingestKey;
+              }),
+              Effect.orDie,
+            ),
+      });
+
+      // A deployment has no session, only its key — so no cookie here.
+      const accepted = yield* HttpClient.post("/api/analytics/events", {
+        body: HttpBody.jsonUnsafe({
+          projectId: "project-ingest",
+          stream: "page.view",
+          ingestKey,
+          properties: { path: "/about" },
+        }),
+      });
+      assert.equal(accepted.status, 202);
+
+      const refused = yield* HttpClient.post("/api/analytics/events", {
+        body: HttpBody.jsonUnsafe({
+          projectId: "project-ingest",
+          stream: "page.view",
+          ingestKey: "not-the-key",
+          properties: { path: "/about" },
+        }),
+      });
+      assert.equal(refused.status, 403);
+      // The refusal must not say which of project, stream or key was wrong.
+      assert.equal(((yield* refused.json) as { error: string }).error, "rejected");
+
+      const undeclared = yield* HttpClient.post("/api/analytics/events", {
+        body: HttpBody.jsonUnsafe({
+          projectId: "project-ingest",
+          stream: "page.view",
+          ingestKey,
+          properties: { path: "/about", sneaky: "value" },
+        }),
+      });
+      assert.equal(undeclared.status, 422);
+
+      yield* buildAppUnderTest({
+        seedAnalytics: (store) =>
+          store
+            .query({ projectId, stream: "page.view" as never, aggregate: "count" })
+            .pipe(
+              Effect.map((result) => {
+                countAfter = result.buckets[0]?.value ?? 0;
+              }),
+              Effect.orDie,
+            ),
+      });
+      // Only the event with the right key and a declared shape was kept.
+      assert.equal(countAfter, 1);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -4,6 +4,7 @@ import type { Server as NodeHttpServerType } from "node:http";
 import type { Socket as NodeNetSocket } from "node:net";
 
 import { ServerConfig } from "./config.ts";
+import { analyticsIngestRouteLayer } from "./analytics/http.ts";
 import {
   attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,
@@ -88,6 +89,8 @@ import { OrganizationServiceLive } from "./organizations/Layers/OrganizationServ
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
+import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
+import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
 import { TenantRuntimeLifecycleOwnerLive } from "./tenancy/Layers/TenantRuntimeLifecycleOwner.ts";
 
@@ -272,10 +275,15 @@ const DeployLayerLive = DeployServiceLive.pipe(
   Layer.provide(ServerSecretStoreLive),
 );
 
+const AnalyticsLayerLive = AnalyticsStoreLive.pipe(
+  Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+);
+
 const PersistenceServicesLayerLive = Layer.mergeAll(
   TenancyRepositoryLayerLive,
   ThreadPreferenceLayerLive,
   DeployLayerLive,
+  AnalyticsLayerLive,
 );
 
 const TenantRuntimeLifecycleOwnerLayerLive = TenantRuntimeLifecycleOwnerLive.pipe(
@@ -351,6 +359,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   authSessionSignOutRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
+  analyticsIngestRouteLayer,
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
   otlpTracesProxyRouteLayer,
