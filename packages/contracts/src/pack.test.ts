@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   PACK_FORMAT_VERSION,
+  PACK_SUPERSEDED_FORMAT_VERSIONS,
   PackId,
   PackManifest,
   PackManifestEnvelope,
@@ -49,6 +50,7 @@ const minimalManifest = {
   capability: {
     does: "Turns a cart total into a paid Stripe order.",
   },
+  knowledge: {},
   requirements: {},
   interfaces: [
     {
@@ -70,7 +72,18 @@ const minimalManifest = {
     commands: {},
   },
   permissions: {},
-  verification: { status: "unverified" },
+  verification: {
+    record: {
+      measuredAt: "2026-08-07T09:12:00.000Z",
+      installsAttempted: 0,
+      installsSucceeded: 0,
+      deploymentsAttempted: 0,
+      deploymentsSurviving: 0,
+      cumulativeServiceDays: 0,
+      breakagesCaught: 0,
+      breakagesFixed: 0,
+    },
+  },
   visibility: { scope: "unlisted" },
   integration: {
     prompt: "Install the stripe-checkout pack and call createCheckoutSession from your cart page.",
@@ -157,6 +170,228 @@ const fullManifest = {
         name: "payment-completed",
         kind: "webhook",
         description: "Fires once Stripe confirms the payment intent succeeded.",
+      },
+    ],
+  },
+  knowledge: {
+    failureModes: [
+      {
+        id: "webhook-retry-double-charge",
+        symptom: "A buyer is charged twice for one cart within a few seconds.",
+        trigger:
+          "Stripe redelivers payment_intent.succeeded when the first delivery times out. Handlers keyed on the event id alone still create a second order because the order write and the event write are not in one transaction.",
+        triggerKinds: ["retry", "idempotency", "race-condition"],
+        attributedTo: { kind: "provider", service: "stripe", apiVersion: "2026-04-10" },
+        severity: "critical",
+        silent: true,
+        detection: {
+          signal: "reconciliation-mismatch",
+          match: "orders.payment_intent_id count > 1",
+          checkId: "webhook-idempotency",
+        },
+        resolution: {
+          kind: "fixed",
+          inVersion: "1.1.0",
+          change:
+            "Insert the event id into a processed_events table inside the same transaction as the order write, and return 200 on conflict.",
+          checkId: "webhook-idempotency",
+        },
+        firstSeenAt: "2026-05-02T04:19:00.000Z",
+        lastSeenAt: "2026-06-18T22:40:00.000Z",
+        deploymentsAffected: 11,
+        conditions: {
+          observedAt: "2026-06-18T22:40:00.000Z",
+          accountTier: "standard",
+          regions: ["us", "eu-west-1"],
+          apiVersion: "2026-04-10",
+          observedAcrossDeployments: 11,
+          untestedAxes: ["plan"],
+        },
+        origin: {
+          introducedIn: "1.1.0",
+          source: {
+            kind: "maintenance-agent",
+            provider: "claudeAgent",
+            model: "claude-opus-5",
+            runId: "run_01J9ZMAINT",
+          },
+          recordedAt: "2026-05-02T05:00:00.000Z",
+          deploymentKeyIds: ["dep_1f8c", "dep_44ae"],
+        },
+      },
+      {
+        id: "restricted-key-missing-read-scope",
+        symptom: "Reconciliation returns 403 while checkout itself keeps working.",
+        trigger:
+          "A restricted key created with only checkout_sessions:write passes install, because nothing reads payment intents until the first reconcile run hours later.",
+        triggerKinds: ["permission-denied", "misconfiguration"],
+        attributedTo: { kind: "provider", service: "stripe" },
+        severity: "medium",
+        detection: { signal: "provider-error-code", match: "resource_missing|permission_error" },
+        resolution: {
+          kind: "open",
+          currentAdvice:
+            "Run `checkout reconcile --since 1h` immediately after install so a missing scope fails while the console is still open.",
+        },
+        firstSeenAt: "2026-07-11T13:05:00.000Z",
+        deploymentsAffected: 4,
+        conditions: {
+          observedAt: "2026-07-11T13:05:00.000Z",
+          accountTier: "standard",
+          regions: ["us"],
+          consoleVersion: "2026.07",
+          untestedAxes: ["account-tier", "region"],
+        },
+        origin: {
+          introducedIn: "1.2.0",
+          source: { kind: "install-report", target: "cursor" },
+          recordedAt: "2026-07-11T14:00:00.000Z",
+        },
+      },
+    ],
+    integration: [
+      {
+        id: "stripe-restricted-key",
+        title: "Create the restricted Stripe key the pack actually needs",
+        detail: {
+          kind: "credential-retrieval",
+          environmentVariable: "STRIPE_SECRET_KEY",
+          service: "stripe",
+          credentialKind: "restricted-key",
+          consoleUrl: "https://dashboard.stripe.com/apikeys",
+          navigation: [
+            {
+              action: "Open Developers → API keys in the Stripe dashboard.",
+              url: "https://dashboard.stripe.com/apikeys",
+              expect: "A table headed Standard keys with a Restricted keys section beneath it.",
+            },
+            {
+              action: "Choose Create restricted key, not Reveal on the standard secret key.",
+              expect: "A permission list with every resource set to None by default.",
+            },
+            {
+              action:
+                "Set Checkout Sessions to Write and Payment Intents to Read, leave the rest at None, then create.",
+              expect: "The key is shown once, prefixed rk_live_ rather than sk_live_.",
+            },
+          ],
+          scopes: [
+            {
+              name: "checkout_sessions:write",
+              purpose: "Creates the hosted session the buyer is redirected to.",
+              required: true,
+            },
+            {
+              name: "payment_intents:read",
+              purpose: "Reconciles orders against Stripe after a missed webhook.",
+              required: true,
+            },
+          ],
+          rotation:
+            "Restricted keys are not rotated by Stripe. Create the replacement, deploy, then delete the old key from the same screen.",
+        },
+        conditions: {
+          observedAt: "2026-07-30T09:00:00.000Z",
+          accountTier: "standard",
+          regions: ["us"],
+          consoleVersion: "2026.07",
+          observedAcrossDeployments: 26,
+          untestedAxes: ["account-tier", "region", "locale"],
+        },
+        origin: {
+          introducedIn: "1.0.0",
+          source: { kind: "human-report", reportedByUserId: "user-1" },
+          recordedAt: "2026-03-04T11:00:00.000Z",
+          supersedes: "stripe-secret-key-legacy",
+        },
+        standing: {
+          state: "holding",
+          confirmedInInstalls: 26,
+          contradictedInInstalls: 1,
+          lastConfirmedAt: "2026-07-30T09:00:00.000Z",
+        },
+        commonMistake:
+          "Models send the installer to Settings → API keys and tell them to copy the standard secret key, which grants the whole account and is the wrong key entirely.",
+        preventsFailureModeIds: ["restricted-key-missing-read-scope"],
+      },
+      {
+        id: "wire-webhook-before-cart",
+        title: "Mount the webhook route before touching the cart page",
+        detail: {
+          kind: "wiring",
+          prompt:
+            "Mount POST /api/checkout/webhook with the raw request body, verify the signature, then persist the event id and the order in one transaction. Only once that round-trips should you add the cart button that calls /api/checkout/sessions.",
+          interfaceId: "checkout-api",
+          touches: ["source/server.ts", "source/webhook.ts"],
+        },
+        conditions: {
+          observedAt: "2026-07-30T09:00:00.000Z",
+          observedAcrossDeployments: 26,
+        },
+        origin: {
+          introducedIn: "1.1.0",
+          source: { kind: "deployment-telemetry", signal: "checkout.payment_succeeded" },
+          recordedAt: "2026-05-03T08:00:00.000Z",
+        },
+        preventsFailureModeIds: ["webhook-retry-double-charge"],
+      },
+      {
+        id: "checkout-customisation-boundary",
+        title: "What is safe to change in the checkout flow",
+        detail: {
+          kind: "boundary",
+          decisions: [
+            {
+              subject: "Success and cancel URLs, currency, and the line item labels.",
+              latitude: "safe-to-change",
+              reason: "Read from configuration and never used to key anything.",
+            },
+            {
+              subject: "The processed_events insert inside the order transaction.",
+              latitude: "frozen",
+              reason: "Removing it reintroduces duplicate charges under webhook retries.",
+              failureModeId: "webhook-retry-double-charge",
+              path: "source/webhook.ts",
+            },
+          ],
+        },
+        conditions: { observedAt: "2026-07-30T09:00:00.000Z" },
+        origin: {
+          introducedIn: "1.1.0",
+          source: {
+            kind: "maintenance-agent",
+            provider: "claudeAgent",
+            model: "claude-opus-5",
+          },
+          recordedAt: "2026-05-03T08:00:00.000Z",
+        },
+      },
+      {
+        id: "idempotency-pattern",
+        title: "Key idempotency on the provider event id, not the order id",
+        detail: {
+          kind: "pattern",
+          rule: "Every handler writes the provider event id to a uniquely indexed table in the same transaction as the effect it causes, and treats a conflict as success.",
+          rationale:
+            "Retries are the provider's normal behaviour, so at-least-once delivery has to be absorbed rather than avoided.",
+          example: "INSERT INTO processed_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING",
+        },
+        conditions: {
+          observedAt: "2026-07-30T09:00:00.000Z",
+          apiVersion: "2026-04-10",
+          observedAcrossDeployments: 26,
+        },
+        origin: {
+          introducedIn: "1.1.0",
+          source: {
+            kind: "inherited",
+            packId: PackId.make("pack_01H0PARENT"),
+            packName: "payments-core",
+            packVersion: "0.4.1",
+            entryId: "idempotency-pattern",
+          },
+          recordedAt: "2026-05-03T08:00:00.000Z",
+        },
       },
     ],
   },
@@ -357,20 +592,63 @@ const fullManifest = {
     ],
   },
   verification: {
-    status: "verified",
-    verifiedAt: "2026-08-07T18:00:00.000Z",
-    verifier: {
-      displayName: "T3 Pack Review",
-      userId: "user-reviewer",
+    record: {
+      measuredAt: "2026-08-07T18:00:00.000Z",
+      installsAttempted: 41,
+      installsSucceeded: 37,
+      deploymentsAttempted: 37,
+      deploymentsSurviving: 29,
+      survival: {
+        cohortSize: 37,
+        aliveAtDay30: 31,
+        aliveAtDay60: 27,
+        aliveAtDay90: 22,
+      },
+      cumulativeServiceDays: 2_940,
+      longestServiceDays: 188,
+      firstDeployedAt: "2026-02-01T10:00:00.000Z",
+      breakagesCaught: 2,
+      breakagesFixed: 1,
+      knowledgeContradictions: 1,
     },
     checks: [
-      { id: "manifest-schema", outcome: "pass" },
-      { id: "secret-scan", outcome: "pass" },
-      { id: "permissions-reviewed", outcome: "pass", note: "Privileged port justified." },
-      { id: "build-reproducible", outcome: "waived", note: "Build not yet deterministic." },
+      {
+        id: "webhook-idempotency",
+        title: "Replays a duplicate payment_intent.succeeded and expects one order.",
+        command: "npm run test:idempotency",
+        runsOn: ["install", "schedule"],
+        guardsFailureModeId: "webhook-retry-double-charge",
+        runs: 812,
+        passes: 810,
+        deploymentsCovered: 29,
+        lastRunAt: "2026-08-07T06:00:00.000Z",
+        lastOutcome: "pass",
+      },
+      {
+        id: "restricted-key-scopes",
+        title: "Calls both Stripe endpoints the pack needs with the supplied key.",
+        command: "node scripts/verify-key.mjs",
+        runsOn: ["install"],
+        runs: 37,
+        passes: 33,
+        deploymentsCovered: 37,
+        lastRunAt: "2026-08-05T12:00:00.000Z",
+        lastOutcome: "pass",
+      },
     ],
-    expiresAt: "2027-08-07T18:00:00.000Z",
-    notes: "Reviewed against release 1.2.0 bytes.",
+    attestations: [
+      {
+        attestedAt: "2026-08-07T18:00:00.000Z",
+        attestedBy: { type: "user", userId: "user-reviewer", displayName: "Acme Platform" },
+        did: ["installed-from-clean", "ran-checks", "deployed-to-production"],
+        conditions: {
+          observedAt: "2026-08-07T18:00:00.000Z",
+          accountTier: "standard",
+          regions: ["us"],
+        },
+        note: "Installed into an unrelated Next.js storefront from a clean checkout.",
+      },
+    ],
   },
   visibility: { scope: "public" },
   integration: {
@@ -469,14 +747,26 @@ describe("PackManifest", () => {
     expect(parsed.signature?.algorithm).toBe("ed25519");
   });
 
-  it("keeps the verified state inseparable from its verifier and checks", () => {
+  it("carries production signals a consumer can threshold itself", () => {
     const parsed = decodeManifest(fullManifest);
+    const record = parsed.verification.record;
 
-    if (parsed.verification.status !== "verified") {
-      throw new Error("Expected a verified manifest");
-    }
-    expect(parsed.verification.verifier.displayName).toBe("T3 Pack Review");
-    expect(parsed.verification.checks).toHaveLength(4);
+    expect(record.installsAttempted).toBeGreaterThan(record.installsSucceeded);
+    expect(record.deploymentsSurviving).toBe(29);
+    expect(record.breakagesCaught).toBe(2);
+    expect(parsed.verification.checks?.[0]?.guardsFailureModeId).toBe(
+      "webhook-retry-double-charge",
+    );
+    expect(parsed.verification.advisories).toBeUndefined();
+  });
+
+  it("keeps an attestation from outranking what production reported", () => {
+    const parsed = decodeManifest(fullManifest);
+    const attestation = parsed.verification.attestations?.[0];
+
+    expect(attestation?.did).toContain("deployed-to-production");
+    expect(attestation?.conditions?.accountTier).toBe("standard");
+    expect(Object.keys(parsed.verification)).not.toContain("status");
   });
 
   it("resolves a service binding through the interface that hosts it", () => {
@@ -497,35 +787,47 @@ describe("PackManifest", () => {
     expect(parsed.formatVersion).toBe(PACK_FORMAT_VERSION);
     expect(parsed.requirements.environment).toBeUndefined();
     expect(parsed.permissions.network).toBeUndefined();
-    expect(parsed.verification.status).toBe("unverified");
+    expect(parsed.knowledge.failureModes).toBeUndefined();
+    expect(parsed.verification.record.deploymentsAttempted).toBe(0);
     expect(parsed.visibility.scope).toBe("unlisted");
     expect(parsed.runtime.commands.start).toBeUndefined();
   });
 
   it("rejects an unsupported format version", () => {
-    expect(() => decodeManifest({ ...minimalManifest, formatVersion: "2.0" })).toThrow();
+    expect(() => decodeManifest({ ...minimalManifest, formatVersion: "3.0" })).toThrow();
+    expect(() =>
+      decodeManifest({ ...minimalManifest, formatVersion: PACK_SUPERSEDED_FORMAT_VERSIONS[0] }),
+    ).toThrow();
+  });
+
+  it("insists on a knowledge section even when there is nothing in it", () => {
+    const { knowledge: _knowledge, ...withoutKnowledge } = minimalManifest;
+
+    expect(() => decodeManifest(withoutKnowledge)).toThrow();
+  });
+
+  it("insists on a scar record even when every count is zero", () => {
+    expect(() => decodeManifest({ ...minimalManifest, verification: {} })).toThrow();
   });
 
   it("rejects a pack with no interface", () => {
     expect(() => decodeManifest({ ...minimalManifest, interfaces: [] })).toThrow();
   });
 
-  it("rejects a verified status without a verifier or checks", () => {
-    expect(() =>
-      decodeManifest({
-        ...minimalManifest,
-        verification: { status: "verified", verifiedAt: "2026-08-07T18:00:00.000Z" },
-      }),
-    ).toThrow();
-
+  it("rejects a scar record with no as-of moment", () => {
     expect(() =>
       decodeManifest({
         ...minimalManifest,
         verification: {
-          status: "verified",
-          verifiedAt: "2026-08-07T18:00:00.000Z",
-          verifier: { displayName: "T3 Pack Review" },
-          checks: [],
+          record: {
+            installsAttempted: 40,
+            installsSucceeded: 40,
+            deploymentsAttempted: 40,
+            deploymentsSurviving: 40,
+            cumulativeServiceDays: 900,
+            breakagesCaught: 0,
+            breakagesFixed: 0,
+          },
         },
       }),
     ).toThrow();
@@ -658,6 +960,138 @@ describe("PackManifest", () => {
   });
 });
 
+describe("pack knowledge", () => {
+  const knowledge = decodeManifest(fullManifest).knowledge;
+
+  it("carries the credential retrieval a model would otherwise invent", () => {
+    const entry = knowledge.integration?.find((item) => item.id === "stripe-restricted-key");
+
+    if (entry?.detail.kind !== "credential-retrieval") {
+      throw new Error("Expected credential retrieval knowledge");
+    }
+    expect(entry.detail.environmentVariable).toBe("STRIPE_SECRET_KEY");
+    expect(entry.detail.navigation).toHaveLength(3);
+    expect(entry.detail.navigation[0]?.expect).toBeDefined();
+    expect(entry.detail.scopes?.every((scope) => scope.required)).toBe(true);
+    expect(entry.commonMistake).toContain("standard secret key");
+  });
+
+  it("scopes each claim to the conditions it was seen under rather than the pack", () => {
+    const observedAt = knowledge.integration?.map((entry) => entry.conditions.observedAt);
+    const credential = knowledge.integration?.[0];
+
+    expect(observedAt).toHaveLength(4);
+    expect(credential?.conditions.accountTier).toBe("standard");
+    expect(credential?.conditions.untestedAxes).toContain("region");
+    expect(knowledge.failureModes?.[0]?.conditions.regions).toEqual(["us", "eu-west-1"]);
+  });
+
+  it("records which release introduced each piece and where it came from", () => {
+    const inherited = knowledge.integration?.find((entry) => entry.id === "idempotency-pattern");
+    const failure = knowledge.failureModes?.[0];
+
+    if (inherited?.origin.source.kind !== "inherited") {
+      throw new Error("Expected inherited knowledge");
+    }
+    expect(inherited.origin.source.packName).toBe("payments-core");
+    expect(inherited.origin.introducedIn).toBe("1.1.0");
+    expect(failure?.origin.source.kind).toBe("maintenance-agent");
+    expect(failure?.origin.deploymentKeyIds).toHaveLength(2);
+  });
+
+  it("ties a frozen customisation decision to the failure that froze it", () => {
+    const boundary = knowledge.integration?.find(
+      (entry) => entry.id === "checkout-customisation-boundary",
+    );
+
+    if (boundary?.detail.kind !== "boundary") {
+      throw new Error("Expected boundary knowledge");
+    }
+    const frozen = boundary.detail.decisions.find((entry) => entry.latitude === "frozen");
+    expect(frozen?.failureModeId).toBe("webhook-retry-double-charge");
+  });
+
+  it("keeps an unresolved failure mode carrying advice rather than silence", () => {
+    const open = knowledge.failureModes?.find(
+      (entry) => entry.id === "restricted-key-missing-read-scope",
+    );
+
+    if (open?.resolution.kind !== "open") {
+      throw new Error("Expected an open failure mode");
+    }
+    expect(open.resolution.currentAdvice).toContain("reconcile");
+    expect(open.deploymentsAffected).toBe(4);
+  });
+
+  it("rejects a failure mode with no conditions", () => {
+    const [first] = knowledge.failureModes ?? [];
+    const { conditions: _conditions, ...unconditioned } = first ?? {};
+
+    expect(() =>
+      decodeManifest({
+        ...minimalManifest,
+        knowledge: { failureModes: [unconditioned] },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects conditions with no observation date", () => {
+    expect(() =>
+      decodeManifest({
+        ...minimalManifest,
+        knowledge: {
+          integration: [
+            {
+              id: "stripe-restricted-key",
+              title: "Create the restricted Stripe key.",
+              detail: {
+                kind: "credential-retrieval",
+                environmentVariable: "STRIPE_SECRET_KEY",
+                service: "stripe",
+                navigation: [{ action: "Open Developers → API keys." }],
+              },
+              conditions: { accountTier: "standard" },
+              origin: {
+                introducedIn: "1.0.0",
+                source: { kind: "deployment-telemetry" },
+                recordedAt: "2026-03-04T11:00:00.000Z",
+              },
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects credential knowledge that names no way to reach the console", () => {
+    expect(() =>
+      decodeManifest({
+        ...minimalManifest,
+        knowledge: {
+          integration: [
+            {
+              id: "stripe-restricted-key",
+              title: "Create the restricted Stripe key.",
+              detail: {
+                kind: "credential-retrieval",
+                environmentVariable: "STRIPE_SECRET_KEY",
+                service: "stripe",
+                navigation: [],
+              },
+              conditions: { observedAt: "2026-07-30T09:00:00.000Z" },
+              origin: {
+                introducedIn: "1.0.0",
+                source: { kind: "deployment-telemetry" },
+                recordedAt: "2026-03-04T11:00:00.000Z",
+              },
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+  });
+});
+
 describe("PackManifestEnvelope", () => {
   it("reads the format version ahead of the rest of the manifest", () => {
     const parsed = decodeEnvelope({ formatVersion: "9.9", identity: { garbage: true } });
@@ -683,7 +1117,16 @@ describe("pack registry projections", () => {
       interfaceKinds: ["api", "web"],
       requiredEnvironment: ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
       requiredAccounts: ["stripe"],
-      verificationStatus: "verified",
+      installsAttempted: 41,
+      installsSucceeded: 37,
+      deploymentsSurviving: 29,
+      cumulativeServiceDays: 2_940,
+      breakagesCaught: 2,
+      knownFailureModes: 2,
+      openFailureModes: 1,
+      integrationKnowledgeEntries: 4,
+      knowledgeOldestObservedAt: "2026-06-18T22:40:00.000Z",
+      hasAdvisory: false,
       visibilityScope: "public",
       license: "Apache-2.0",
       updatedAt: "2026-08-07T18:00:00.000Z",
@@ -691,6 +1134,8 @@ describe("pack registry projections", () => {
 
     expect(parsed.requiredEnvironment).toHaveLength(2);
     expect(parsed.interfaceKinds).toEqual(["api", "web"]);
+    expect(parsed.installsSucceeded).toBeLessThan(parsed.installsAttempted);
+    expect(parsed.openFailureModes).toBe(1);
   });
 
   it("reports publish readiness separately from schema validity", () => {
