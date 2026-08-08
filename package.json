@@ -42,6 +42,7 @@
     "test": "turbo run test",
     "test:desktop-smoke": "turbo run smoke-test --filter=@t3tools/desktop",
     "test:collab": "node scripts/collab-e2e.mjs",
+    "test:pack-deploy": "node scripts/pack-deploy-e2e.mjs",
     "fmt": "bun --bun oxfmt",
     "fmt:check": "bun --bun oxfmt --check",
     "build:contracts": "turbo run build --filter=@t3tools/contracts",

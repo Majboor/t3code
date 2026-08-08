@@ -10,6 +10,11 @@
   already running (`bun run dev` with `T3CODE_LOCAL_PASSWORD_AUTH=true`) and a
   configured provider, so it is not part of the default gate. Run it when you touch
   workspace files, collaboration, or auth.
+- `T3_DEPLOY_SSH_HOST=<host> bun run test:pack-deploy` builds a Flask/Jinja2 app in a
+  real workspace, registers it as a deploy target through the `t3 deploy` CLI, deploys
+  it over SSH and checks every page it serves. Needs key-based SSH to the host: a
+  `command` target never receives the password secret, and the deploy pack refuses to
+  put one on a command line. `deploy run` tars the directory it is called from.
 - `T3_E2E_SKIP_AGENT=1` drops the phases that need a model, which is how CI runs it
   without any provider credentials. Known limitation: the branch comparison and the
   conflict warning never appear for a member who has not run a turn, so that mode
