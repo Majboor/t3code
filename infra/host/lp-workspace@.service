@@ -94,6 +94,26 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @obsolete
 
+# --- Network --------------------------------------------------------------
+# Default-deny for every IPv4/IPv6 packet the workspace sends or receives.
+#
+# RestrictAddressFamilies above decides which *kinds* of socket exist; it says
+# nothing about where they may connect. Without this line a workspace reaches
+# all of 127.0.0.1, and on a shared host that means every unauthenticated
+# service someone else left on loopback.
+#
+# A deployment re-opens exactly what it needs through a drop-in of
+# IPAddressAllow= entries (see infra/deploy). A workspace with no such drop-in
+# has no network at all, which is the right default for one that has not
+# declared what it needs.
+#
+# Note for anyone extending this: an IPAddressAllow= entry beats IPAddressDeny=
+# outright, whatever the prefix lengths are. Adding a narrower deny alongside a
+# broader allow does nothing. Exclusions have to be expressed as gaps in the
+# allow list.
+IPAddressDeny=any
+IPAccounting=yes
+
 # --- Resource limits ------------------------------------------------------
 # Caps exist so a single misbehaving workspace cannot starve a host that is
 # already running at high memory pressure. MemoryHigh throttles before

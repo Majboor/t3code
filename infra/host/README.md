@@ -243,6 +243,12 @@ Implications:
 - **Reading host secrets** in `/root`, `/home`, or `/etc/shadow`.
 - **Reconnaissance.** `ProtectProc=invisible` hides the other 84 services'
   existence, command lines and environments.
+- **Reaching anything on the network.** `IPAddressDeny=any` means a workspace
+  with no deploy drop-in cannot send or receive an IP packet at all. A
+  deployment re-opens a specific allow list; `infra/deploy/README.md` carries
+  the evidence, including the finding that an `IPAddressAllow=` entry beats
+  `IPAddressDeny=` outright regardless of prefix length, so exclusions must be
+  expressed as gaps in the allow list rather than as denies.
 - **Resource starvation.** `MemoryMax`/`TasksMax` are enforced by the kernel and
   cannot be raised from inside.
 - **Accidental persistence.** Teardown is proven to remove the account, group,
@@ -254,12 +260,11 @@ Implications:
   and the seccomp filter shrink the attack surface, but a kernel LPE defeats
   this model completely. This is the fundamental ceiling of the approach and no
   amount of unit hardening changes it.
-- **Network access.** Workspaces reach the full network, including
-  `127.0.0.1`. On this host that means every unauthenticated localhost service
-  is reachable — `garage` on 3900–3903, `mediamtx` on 8554, several uvicorn
-  apps, and `t3code` itself on 3773. **This is the largest remaining gap.**
-  Closing it needs `IPAddressDeny=`/`IPAddressAllow=` or a per-workspace
-  network namespace, and it should be the next piece of work.
+- **Outbound access to the public internet**, for a workspace whose deploy
+  drop-in allows it. The unit itself now sets `IPAddressDeny=any`, so a bare
+  workspace has no network at all — see below — but the boundary the deploy
+  layer draws is "not this host and not this network", not "only what the pack
+  declared".
 - **CPU starvation.** Only memory and tasks are capped. `CPUQuota=` is not set,
   so a busy loop can still degrade a 6-CPU box shared with 84 services.
 - **Disk exhaustion.** No quota. A workspace can write until `/` is full, which
@@ -287,7 +292,8 @@ unit above already has zero capabilities, seccomp filtering, a read-only
 filesystem, PID hiding and a locked cgroup — a default container has *fewer* of
 those, not more. Docker's genuine advantages are filesystem namespacing (a
 workspace sees only its own root, no host paths at all) and easy per-container
-network isolation, which is precisely the gap identified above. But a container
+network isolation, which was the gap identified above and has since been
+closed within systemd instead. But a container
 configured to match this unit's guarantees requires `--cap-drop=ALL
 --security-opt=no-new-privileges --read-only --user`, which is roughly the same
 amount of configuration, just expressed differently.
@@ -317,9 +323,11 @@ chiefly for network isolation and dependency independence. On *this* host, with
 17G free and Docker already the reason it is full, provisioning a container per
 workspace is the wrong tool. The systemd path delivers most of the isolation
 value at essentially zero disk cost, and its two real gaps (network, disk quota)
-are both closable within systemd via `IPAddressDeny=` and filesystem quotas.
+were both closable within systemd; network egress has since been closed via
+`IPAddressDeny=` plus a computed allow list (see `infra/deploy/`), leaving
+filesystem quotas.
 
 Revisit if any of these becomes true: workspaces need conflicting runtime
-versions; the disk is reclaimed to comfortable headroom; or network isolation
-proves unworkable with `IPAddressDeny=` and a full network namespace per
-workspace is required anyway.
+versions; the disk is reclaimed to comfortable headroom; or per-pack egress
+allow lists outgrow what `IPAddressAllow=` can express and a full network
+namespace per workspace is required anyway.
