@@ -17,10 +17,17 @@
 // line, and a `command` target never receives one anyway.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+
+import {
+  createHarness,
+  createReporter,
+  openIsolatedSession,
+  sleep,
+} from "./lib/e2e-harness.mjs";
 
 const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))("playwright");
 
@@ -29,34 +36,41 @@ const RUN_ID = String(Date.now());
 const DESKTOP_DIR = path.join(os.homedir(), "Desktop");
 const APP_DIR = path.join(existsSync(DESKTOP_DIR) ? DESKTOP_DIR : os.tmpdir(), `t3-pack-${RUN_ID}`);
 const PASSWORD = "PackDeploy!2026";
-const ACCOUNT = `pack.${RUN_ID}@example.test`;
+const ACCOUNT_A = `pack.a.${RUN_ID}@example.test`;
+const ACCOUNT_B = `pack.b.${RUN_ID}@example.test`;
+const ACCOUNT_C = `pack.c.${RUN_ID}@example.test`;
 
 const SSH_HOST = process.env["T3_DEPLOY_SSH_HOST"] ?? "";
 const SSH_USER = process.env["T3_DEPLOY_SSH_USER"] ?? "root";
 const REMOTE_DIR = process.env["T3_DEPLOY_REMOTE_DIR"] ?? `/srv/t3-pack-${RUN_ID}`;
-const PORT = process.env["T3_DEPLOY_PORT"] ?? "18902";
+const PORT = process.env["T3_DEPLOY_PORT"] ?? String(19000 + (Number(RUN_ID) % 400));
 const KEEP = process.env["T3_E2E_KEEP_WORKSPACE"] === "1";
 
 const UI_SETTLE_MS = 2_500;
 const NAVIGATION_MS = 9_000;
+const AGENT_TURN_MS = 120_000;
 
 // Every page the app serves, so "all pages work" is a list rather than a claim.
 const PAGES = ["/", "/about", "/items", "/healthz"];
 
-const results = [];
-let currentPhase = "setup";
-
-function phase(title) {
-  currentPhase = title;
-  console.log(`\n── ${title} ${"─".repeat(Math.max(0, 58 - title.length))}`);
-}
-
-function check(step, ok, detail = "") {
-  results.push({ phase: currentPhase, step, ok });
-  console.log(`  ${ok ? "[32mPASS[0m" : "[31mFAIL[0m"}  ${step}${detail ? `  — ${detail}` : ""}`);
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const { phase, check, finish } = createReporter();
+const {
+  signUp,
+  addProject,
+  openProject,
+  visibleFileNames,
+  editFileViaUi,
+  sendAgentMessage,
+  createInvite,
+  acceptInvite,
+  setApprovalMode,
+} = createHarness({
+  baseUrl: BASE_URL,
+  password: PASSWORD,
+  uiSettleMs: UI_SETTLE_MS,
+  navigationMs: NAVIGATION_MS,
+  probeFile: "app.py",
+});
 
 function writeViaPython(relativePath, contents) {
   execFileSync("python3", [
@@ -110,6 +124,8 @@ function buildFlaskApp() {
   writeViaPython(
     "app.py",
     [
+      "import pathlib",
+      "",
       "from flask import Flask, render_template",
       "",
       "app = Flask(__name__)",
@@ -135,7 +151,8 @@ function buildFlaskApp() {
       "",
       '@app.route("/healthz")',
       "def healthz():",
-      '    return {"status": "ok"}, 200',
+      "    build = pathlib.Path(__file__).with_name('BUILD').read_text().strip()",
+      '    return {"status": "ok", "build": build}, 200',
       "",
     ].join("\n"),
   );
@@ -176,58 +193,31 @@ function buildDeployCommand() {
     `mkdir -p ${REMOTE_DIR}`,
     `tar xzf - -C ${REMOTE_DIR}`,
     `cd ${REMOTE_DIR}`,
-    // Stop the previous run by its recorded pid. `pkill -f` would match this
-    // very ssh command, whose line contains the gunicorn invocation, and kill
-    // the shell running the deploy.
-    "([ -f app.pid ] && kill \"$(cat app.pid)\" 2>/dev/null || true)",
-    "sleep 1",
+    // Free the port by whoever holds it, not by command-line pattern: `pkill -f`
+    // would match this very ssh command, whose line contains the gunicorn
+    // invocation, and kill the shell running the deploy.
+    `fuser -k ${PORT}/tcp 2>/dev/null || true`,
+    "sleep 2",
     // nohup and a pid file, or the server dies with this ssh session.
     `(nohup gunicorn -w 2 -b 127.0.0.1:${PORT} app:app > deploy.log 2>&1 & echo $! > app.pid)`,
     "sleep 4",
-    `curl -fsS http://127.0.0.1:${PORT}/healthz`,
+    // Asking only "is something listening" passes against the deployment that
+    // was already on this port. Demand the build id this deploy just shipped.
+    `curl -fsS http://127.0.0.1:${PORT}/healthz | grep -q "$(cat BUILD)"`,
   ].join(" && ");
   return `tar czf - --exclude .git . | ssh -o BatchMode=yes -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} ${JSON.stringify(remote)}`;
 }
 
-async function signUp(page) {
-  await page.goto(`${BASE_URL}/pair`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-  await sleep(4_000);
-  await page.locator('button:has-text("Sign up")').first().click().catch(() => undefined);
-  await sleep(1_000);
-  await page.fill('input[type="email"]', ACCOUNT);
-  await page.fill('input[type="password"]', PASSWORD);
-  await page.locator('button[type="submit"]').first().click();
-  await sleep(NAVIGATION_MS);
-  return !page.url().includes("/pair");
-}
-
-async function addProject(page) {
-  await page.locator('button:has-text("Add project")').first().click();
-  await sleep(UI_SETTLE_MS);
-  await page.locator("[data-base-ui-portal] input").first().fill(APP_DIR);
-  await sleep(3_000);
-  await page.keyboard.press("Enter");
-  await sleep(NAVIGATION_MS);
-  await page.keyboard.press("Escape").catch(() => undefined);
-  await sleep(1_000);
-}
 
 /**
  * The route carries the project id once a project is open. The projection is
  * the fallback: the deploy CLI needs the id, and a link that has not rendered
  * yet should not be the reason this run stops.
  */
-async function openProjectAndReadId(page) {
-  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await sleep(6_000);
-  const link = page.locator('[data-testid="dashboard-workspace-project-link"]').first();
-  if ((await link.count()) > 0) {
-    await link.click();
-    await sleep(NAVIGATION_MS);
-    const fromRoute = /\/project\/[^/]+\/([^/?#]+)/.exec(page.url())?.[1];
-    if (fromRoute) return fromRoute;
-  }
-  const database = path.join(os.homedir(), ".t3", "dev", "state.sqlite");
+async function readProjectId(page) {
+  const fromRoute = /\/project\/[^/]+\/([^/?#]+)/.exec(page.url())?.[1];
+  if (fromRoute) return fromRoute;
+  const database = path.join(BASE_DIR, "state.sqlite");
   if (!existsSync(database)) return null;
   const row = execFileSync(
     "sqlite3",
@@ -235,6 +225,61 @@ async function openProjectAndReadId(page) {
     { encoding: "utf8" },
   ).trim();
   return row || null;
+}
+
+/**
+ * Ships whatever is in the workspace now. Each deploy stamps a new build id
+ * first, so the remote health check can tell this deployment from the one that
+ * was already on the port.
+ */
+function deploy(targetId) {
+  const build = `${RUN_ID}-${(deployCount += 1)}`;
+  writeViaPython("BUILD", `${build}\n`);
+  try {
+    t3(["deploy", "run", targetId]);
+    return { ok: true, build, output: "" };
+  } catch (error) {
+    return { ok: false, build, output: `${error?.stdout ?? ""}${error?.stderr ?? ""}`.slice(0, 300) };
+  }
+}
+
+/** A deploy is only done when the build now answering is the one just shipped. */
+function checkDeployed(label, result) {
+  check(`${label} deploy succeeds`, result.ok, result.ok ? "" : result.output);
+  const live = liveBuild();
+  check(`${label} deployment serves the build just shipped`, live === result.build,
+    live === result.build ? "" : `serving ${live || "nothing"}, shipped ${result.build}`);
+  return result.ok && live === result.build;
+}
+
+/** What the deployed site actually serves, fetched from the host itself. */
+function fetchPage(route) {
+  return ssh(`curl -s http://127.0.0.1:${PORT}${route}`);
+}
+
+/** The build id the running deployment reports, or "" when it cannot say. */
+function liveBuild() {
+  return /"build"\s*:\s*"([^"]+)"/.exec(fetchPage("/healthz"))?.[1] ?? "";
+}
+
+function pageStatus(route) {
+  return ssh(`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}${route}`);
+}
+
+let deployCount = 0;
+
+function gitInWorkspace(...args) {
+  return execFileSync("git", args, {
+    cwd: APP_DIR,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Pack Deploy E2E",
+      GIT_AUTHOR_EMAIL: "pack@example.test",
+      GIT_COMMITTER_NAME: "Pack Deploy E2E",
+      GIT_COMMITTER_EMAIL: "pack@example.test",
+    },
+  }).trim();
 }
 
 // ── the run ─────────────────────────────────────────────────────────────────
@@ -250,22 +295,28 @@ if (!reachable) {
   process.exit(1);
 }
 
+
 const browser = await chromium.launch();
-const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
-const page = await context.newPage();
+const accountA = await openIsolatedSession(browser, "A");
+const accountB = await openIsolatedSession(browser, "B");
+const accountC = await openIsolatedSession(browser, "C");
 
 try {
   phase("A Flask app in a real workspace");
   mkdirSync(APP_DIR, { recursive: true });
   buildFlaskApp();
+  gitInWorkspace("init", "--initial-branch=main");
+  gitInWorkspace("add", ".");
+  gitInWorkspace("commit", "-m", "seed");
   check("python wrote the app", existsSync(path.join(APP_DIR, "app.py")), APP_DIR);
   check("the templates use inheritance", existsSync(path.join(APP_DIR, "templates/base.html")));
 
-  phase("The workspace becomes a project");
-  check("the account signs up", await signUp(page), ACCOUNT);
-  await addProject(page);
-  const projectId = await openProjectAndReadId(page);
-  check("the project opens and carries an id", Boolean(projectId), projectId ?? "none");
+  phase("A: the workspace becomes a project");
+  check("A signs up", await signUp(accountA, ACCOUNT_A), ACCOUNT_A);
+  await addProject(accountA.page, APP_DIR);
+  check("A opens the project", await openProject(accountA.page));
+  const projectId = await readProjectId(accountA.page);
+  check("the project carries an id", Boolean(projectId), projectId ?? "none");
   if (!projectId) throw new Error("no project id to attach a deploy target to");
 
   phase("Preflight, the way the pack asks for it");
@@ -274,43 +325,110 @@ try {
   const portFree = ssh(`ss -ltn | grep -q ':${PORT} ' && echo busy || echo free`);
   check("the deploy port is free before shipping", portFree.includes("free"), `port ${PORT}: ${portFree}`);
 
-  phase("Register the deploy target");
+  phase("A: register the deploy target and deploy");
   const added = t3(["deploy", "add", "--project", projectId, "--name", `VPS ${RUN_ID}`, "--command", buildDeployCommand()]);
   const targetId = /target (\S+)/.exec(added)?.[1] ?? null;
   check("a deploy target is registered", Boolean(targetId), targetId ?? added);
-  const listed = t3(["deploy", "list", "--project", projectId]);
-  check("the target is listed against the project", listed.includes(targetId ?? " "));
   if (!targetId) throw new Error("no deploy target to run");
-
-  phase("Deploy");
-  let deployOutput = "";
-  let deployFailed = null;
-  try {
-    deployOutput = t3(["deploy", "run", targetId]);
-  } catch (error) {
-    deployFailed = error instanceof Error ? error.message : String(error);
-    deployOutput = `${error?.stdout ?? ""}${error?.stderr ?? ""}`;
-  }
-  check("the deploy run succeeds", deployFailed === null,
-    deployFailed ? deployOutput.replace(/\s+/g, " ").slice(0, 200) : "");
-  const runs = t3(["deploy", "runs", "--target", targetId]);
-  check("the run is recorded for later inspection", /succeeded|failed/.test(runs),
-    runs.replace(/\s+/g, " ").slice(0, 160));
+  checkDeployed("A's first", deploy(targetId));
 
   phase("Every page the app declares");
   for (const route of PAGES) {
-    const status = ssh(`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}${route}`);
-    check(`${route} answers 200`, status === "200", status);
+    check(`${route} answers 200`, pageStatus(route) === "200", pageStatus(route));
   }
-  const home = ssh(`curl -s http://127.0.0.1:${PORT}/`);
+  const home = fetchPage("/");
   check("jinja2 rendered the page, not the template", home.includes('data-page="home"') && !home.includes("{%"));
-  const items = ssh(`curl -s http://127.0.0.1:${PORT}/items`);
-  check("the loop rendered its items", ["first", "second", "third"].every((item) => items.includes(item)));
+  check("the loop rendered its items", ["first", "second", "third"].every((item) => fetchPage("/items").includes(item)));
 
   phase("It is still up after the session that started it closed");
   await sleep(3_000);
-  const survived = ssh(`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}/healthz`);
-  check("the service outlived its deploy session", survived === "200", survived);
+  check("the service outlived its deploy session", pageStatus("/healthz") === "200");
+
+  phase("B joins the workspace");
+  const inviteB = await createInvite(accountA.page, ACCOUNT_B);
+  check("A invites B", Boolean(inviteB), inviteB ?? "none");
+  if (!inviteB) throw new Error("no invite for B");
+  await accountB.page.goto(inviteB, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await sleep(6_000);
+  check("B signs up from the invite", await signUp(accountB, ACCOUNT_B), ACCOUNT_B);
+  const bAccepted = await acceptInvite(accountB, inviteB);
+  check("B accepts the invite", bAccepted.accepted);
+  check("B opens the shared project", await openProject(accountB.page));
+  const bFiles = await visibleFileNames(accountB.page);
+  check("B sees the app files", bFiles.includes("app.py"), bFiles.join(", "));
+
+  phase("B changes the front end and redeploys");
+  const bHeading = `edited-by-b-${RUN_ID}`;
+  const bEdited = await editFileViaUi(accountB.page, {
+    directory: "templates",
+    file: "index.html",
+    contents: `{% extends "base.html" %}{% block body %}<h1 data-page="home">${bHeading}</h1>{% endblock %}\n`,
+  });
+  check("B edits the template in the editor", bEdited.ok, bEdited.why);
+  check("B's edit reached the disk",
+    readFileSync(path.join(APP_DIR, "templates/index.html"), "utf8").includes(bHeading));
+  checkDeployed("B's re", deploy(targetId));
+  check("B's change is live on the deployment", fetchPage("/").includes(bHeading));
+
+  phase("B works on their own branch and merges it back");
+  check("A is back in the project", await openProject(accountA.page));
+  check("A puts the workspace on personal branches",
+    await setApprovalMode(accountA.page, "Own branch"));
+  const branch = `collab/pack-b-${RUN_ID}`;
+  gitInWorkspace("checkout", "-b", branch);
+  const branchHeading = `from-branch-${RUN_ID}`;
+  writeViaPython(
+    "templates/about.html",
+    `{% extends "base.html" %}{% block body %}<h1 data-page="about">${branchHeading}</h1>{% endblock %}\n`,
+  );
+  gitInWorkspace("commit", "-am", "B edits about on their branch");
+  check("the branch holds B's change", gitInWorkspace("branch", "--list").includes(branch));
+  gitInWorkspace("checkout", "main");
+  check("main does not have it yet",
+    !readFileSync(path.join(APP_DIR, "templates/about.html"), "utf8").includes(branchHeading));
+  gitInWorkspace("merge", "--no-ff", "-m", "merge B's branch", branch);
+  check("the merge brings it to main",
+    readFileSync(path.join(APP_DIR, "templates/about.html"), "utf8").includes(branchHeading));
+  checkDeployed("the merged branch's", deploy(targetId));
+  check("the merged change is live", fetchPage("/about").includes(branchHeading));
+
+  phase("C joins and changes the app by prompting the agent");
+  const inviteC = await createInvite(accountA.page, ACCOUNT_C);
+  check("A invites C", Boolean(inviteC), inviteC ?? "none");
+  if (inviteC) {
+    await accountC.page.goto(inviteC, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await sleep(6_000);
+    check("C signs up from the invite", await signUp(accountC, ACCOUNT_C), ACCOUNT_C);
+    const cAccepted = await acceptInvite(accountC, inviteC);
+    check("C accepts the invite", cAccepted.accepted);
+    check("C opens the shared project", await openProject(accountC.page));
+
+    const cHeading = `from-c-${RUN_ID}`;
+    const cFile = "templates/items.html";
+    check("C sends a prompt to the agent",
+      await sendAgentMessage(accountC.page,
+        `Edit ${cFile} so the h1 text is exactly ${cHeading}. Keep the extends and block tags. Do not ask questions.`));
+    const deadline = Date.now() + AGENT_TURN_MS;
+    let applied = false;
+    while (Date.now() < deadline && !applied) {
+      applied = readFileSync(path.join(APP_DIR, cFile), "utf8").includes(cHeading);
+      if (!applied) await sleep(5_000);
+    }
+    check("the agent made C's change on disk", applied,
+      applied ? "" : readFileSync(path.join(APP_DIR, cFile), "utf8").replace(/\s+/g, " ").slice(0, 120));
+    if (applied) {
+      checkDeployed("C's", deploy(targetId));
+      check("C's change is live", fetchPage("/items").includes(cHeading));
+    }
+  }
+
+  phase("Everything still serves after four deploys");
+  for (const route of PAGES) {
+    check(`${route} still answers 200`, pageStatus(route) === "200");
+  }
+  const runs = t3(["deploy", "runs", "--target", targetId]);
+  check("every deploy is recorded", (runs.match(/succeeded/g) ?? []).length >= 3,
+    `${(runs.match(/succeeded/g) ?? []).length} succeeded`);
 
   phase("Result");
   console.log(`  workspace: ${APP_DIR}`);
@@ -320,7 +438,4 @@ try {
   if (!KEEP) rmSync(APP_DIR, { recursive: true, force: true });
 }
 
-const failed = results.filter((result) => !result.ok);
-console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
-for (const result of failed) console.log(`  FAILED  [${result.phase}] ${result.step}`);
-process.exit(failed.length === 0 ? 0 : 1);
+process.exit(finish());

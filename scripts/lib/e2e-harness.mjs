@@ -214,42 +214,65 @@ export function createHarness({
   }
 
   /**
+   * Clicks a row in the file tree by name. Rows wrap an icon beside the label,
+   * so Playwright's text matching does not see the same string `textContent`
+   * does; find the index in the DOM instead. A row in a git repository also
+   * carries a status badge after the name, hence the prefix match.
+   */
+  async function clickTreeEntry(page, name) {
+    const buttons = page.locator("button");
+    const index = await buttons.evaluateAll(
+      (nodes, target) =>
+        nodes.findIndex((node) =>
+          (node.textContent ?? "").trim().replace(/\s+/g, " ").startsWith(target),
+        ),
+      name,
+    );
+    if (index < 0) return false;
+    await buttons.nth(index).click().catch(() => undefined);
+    await sleep(2_500);
+    return true;
+  }
+
+  /**
    * Opens a file in the tree, replaces its contents in the editor and saves it
-   * — the same three moves a person makes. `directory` is clicked first because
+   * — the same three moves a person makes. `directory` is opened first because
    * the tree only lists a folder's children once it is expanded.
    */
   async function editFileViaUi(page, { directory = null, file, contents }) {
-    if (!(await ensureWorkspacePanelOpen(page))) return false;
-
-    if (directory) {
-      const folder = page.locator(`button:text-is("${directory}")`).first();
-      if ((await folder.count()) === 0) return false;
-      await folder.click().catch(() => undefined);
-      await sleep(2_000);
+    if (!(await ensureWorkspacePanelOpen(page))) return { ok: false, why: "workspace panel never opened" };
+    if (directory && !(await clickTreeEntry(page, directory))) {
+      return { ok: false, why: `no tree row named ${directory}` };
     }
+    if (!(await clickTreeEntry(page, file))) return { ok: false, why: `no tree row named ${file}` };
 
-    const entry = page.locator(`button:text-is("${file}")`).first();
-    if ((await entry.count()) === 0) return false;
-    await entry.click().catch(() => undefined);
-    await sleep(3_000);
-
-    const editor = page.locator(".monaco-editor textarea").first();
-    if ((await editor.count()) === 0) return false;
-    await editor.click();
+    // Monaco is fetched at runtime rather than bundled, so the editor arrives a
+    // beat after the file is chosen — and its text surface later still. Focus
+    // has to land on the rendered lines; the hidden textarea does not take it.
+    const lines = page.locator(".monaco-editor .view-lines").first();
+    await lines.waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
+    if (!(await lines.isVisible().catch(() => false))) {
+      return { ok: false, why: "the editor never rendered the file" };
+    }
+    await lines.click();
+    await sleep(500);
     await page.keyboard.press("ControlOrMeta+a");
     await page.keyboard.press("Delete");
-    // Monaco auto-closes brackets and quotes, so typed markup would grow stray
-    // characters. Paste through the clipboard instead of typing.
-    await page.evaluate((text) => navigator.clipboard.writeText(text), contents).catch(() => undefined);
-    await page.keyboard.press("ControlOrMeta+v");
+    // insertText rather than type(): Monaco auto-closes brackets and quotes, so
+    // typed markup grows stray characters. The clipboard is not an option
+    // either — writeText resolves in headless Chromium but the paste does
+    // nothing, which looks exactly like an editor that ignored the edit.
+    await page.keyboard.insertText(contents);
     await sleep(1_500);
 
     const save = page.locator('button[aria-label="Save file"]').first();
-    if ((await save.count()) === 0) return false;
-    if (await save.isDisabled().catch(() => true)) return false;
+    if ((await save.count()) === 0) return { ok: false, why: "no save control" };
+    if (await save.isDisabled().catch(() => true)) {
+      return { ok: false, why: "save stayed disabled, so the editor never saw the change" };
+    }
     await save.click();
     await sleep(3_000);
-    return true;
+    return { ok: true, why: "" };
   }
 
   // ── collaboration panel ───────────────────────────────────────────────────
@@ -358,6 +381,7 @@ export function createHarness({
     visibleFileNames,
     waitForFileInTree,
     createFileViaUi,
+    clickTreeEntry,
     editFileViaUi,
     openCollabPanel,
     closeCollabPanel,
