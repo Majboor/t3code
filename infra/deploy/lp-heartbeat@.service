@@ -1,0 +1,18 @@
+# One telemetry tick for a deployment. Installed by lp-deploy.sh, which
+# substitutes @LP_DEPLOY_DIR@ for the absolute path of the checkout it was run
+# from, because the emitter has to be reachable from a unit long after the shell
+# that deployed it has gone.
+#
+# Runs as root and outside the workspace's sandbox on purpose. A deployment's
+# most interesting events are the ones it cannot send — a crash, an OOM kill,
+# silence — so the emitter must not share the fate of the thing it observes.
+
+[Unit]
+Description=Telemetry tick for lp-workspace@%i
+
+[Service]
+Type=oneshot
+ExecStart=@LP_DEPLOY_DIR@/lp-heartbeat.sh %i
+# One tick must never queue behind a stuck health probe long enough to delay the
+# next one; the probe inside has its own shorter timeout.
+TimeoutStartSec=30

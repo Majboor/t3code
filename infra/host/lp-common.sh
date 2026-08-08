@@ -8,6 +8,12 @@
 
 set -euo pipefail
 
+# Sourced twice by anything that pulls in two libraries which both need it, and
+# every constant below is readonly — so without this guard the second source
+# fails the whole script rather than being the no-op the caller expects.
+[[ -n "${LP_COMMON_SOURCED-}" ]] && return 0
+LP_COMMON_SOURCED=1
+
 # Single source of truth for the namespace. Everything the tooling creates on a
 # shared host carries this prefix so an operator who knows nothing about this
 # project can still identify and remove it.

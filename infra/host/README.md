@@ -261,10 +261,11 @@ Implications:
   this model completely. This is the fundamental ceiling of the approach and no
   amount of unit hardening changes it.
 - **Outbound access to the public internet**, for a workspace whose deploy
-  drop-in allows it. The unit itself now sets `IPAddressDeny=any`, so a bare
-  workspace has no network at all — see below — but the boundary the deploy
-  layer draws is "not this host and not this network", not "only what the pack
-  declared".
+  drop-in allows it. The unit itself sets `IPAddressDeny=any`, so a bare
+  workspace has no network at all — see below. A deployment made from a pack
+  gets only the hosts its manifest declared; one made with `--egress public`
+  gets everything routable, and there the boundary is "not this host and not
+  this network" rather than "only what the pack declared".
 - **CPU starvation.** Only memory and tasks are capped. `CPUQuota=` is not set,
   so a busy loop can still degrade a 6-CPU box shared with 84 services.
 - **Disk exhaustion.** No quota. A workspace can write until `/` is full, which

@@ -1,0 +1,22 @@
+# Drives the telemetry tick for one deployment.
+#
+# The cadence arrives as a drop-in written by lp-deploy.sh
+# (lp-heartbeat@<id>.timer.d/10-interval.conf) rather than being fixed here, so
+# that the interval the timer fires at and the interval the went-quiet
+# synthesiser counts in are the same number by construction.
+#
+# The timer deliberately outlives the deployment's own unit: a stopped or
+# crash-looping service stops emitting heartbeats, and the absence is only
+# observable because something else is still ticking.
+
+[Unit]
+Description=Telemetry timer for lp-workspace@%i
+
+[Timer]
+OnActiveSec=60s
+OnUnitActiveSec=60s
+AccuracySec=2s
+Unit=lp-heartbeat@%i.service
+
+[Install]
+WantedBy=timers.target

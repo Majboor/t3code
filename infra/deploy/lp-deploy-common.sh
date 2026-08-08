@@ -12,11 +12,17 @@
 
 set -euo pipefail
 
+[[ -n "${LP_DEPLOY_COMMON_SOURCED-}" ]] && return 0
+LP_DEPLOY_COMMON_SOURCED=1
+
 lp_deploy_common_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../host/lp-common.sh
 source "${lp_deploy_common_dir}/../host/lp-common.sh"
+# shellcheck source=./lp-telemetry.sh
+source "${lp_deploy_common_dir}/lp-telemetry.sh"
 
 readonly LP_HOST_DIR="${lp_deploy_common_dir}/../host"
+readonly LP_DEPLOY_DIR="${lp_deploy_common_dir}"
 
 # Each deployment gets its own address inside 127.90.0.0/16 rather than sharing
 # 127.0.0.1. That is what makes a single-/32 firewall rule possible: the address
@@ -271,12 +277,240 @@ lp_deploy_remove_loopback_alias() {
 
 lp_deploy_url_for() { printf 'http://%s:%s' "$1" "$2"; }
 
+# The kernel logs an IPv6 destination fully expanded and a resolver returns it
+# compressed, so the two spellings of one address do not compare equal. Without
+# this, a denied destination the manifest actually declared is reported as
+# undeclared — which inverts the meaning of the event.
+lp_ipv6_expand() {
+  local addr head tail group fill i out=""
+  local -a head_groups=() tail_groups=() parts=()
+
+  addr="$(tr '[:upper:]' '[:lower:]' <<<"$1")"
+
+  [[ "${addr}" == *:* ]] || { printf '%s' "${addr}"; return 0; }
+
+  if [[ "${addr}" == *"::"* ]]; then
+    head="${addr%%::*}"
+    tail="${addr##*::}"
+  else
+    head="${addr}"
+    tail=""
+  fi
+
+  IFS=':' read -r -a parts <<<"${head}"
+  for group in "${parts[@]}"; do [[ -n "${group}" ]] && head_groups+=("${group}"); done
+  IFS=':' read -r -a parts <<<"${tail}"
+  for group in "${parts[@]}"; do [[ -n "${group}" ]] && tail_groups+=("${group}"); done
+
+  fill="$(( 8 - ${#head_groups[@]} - ${#tail_groups[@]} ))"
+  (( fill < 0 )) && { printf '%s' "${addr}"; return 0; }
+
+  for group in ${head_groups[@]+"${head_groups[@]}"}; do out+="$(printf '%04x' "0x${group}"):"; done
+  for ((i = 0; i < fill; i++)); do out+="0000:"; done
+  for group in ${tail_groups[@]+"${tail_groups[@]}"}; do out+="$(printf '%04x' "0x${group}"):"; done
+
+  printf '%s' "${out%:}"
+}
+
+# --- observing what the filter dropped ------------------------------------
+#
+# The cgroup BPF filter discards a denied packet without a trace: no EPERM, no
+# log line, nothing in `systemctl show` beyond a byte counter that does not name
+# a destination. docs/deployment.md records `egress.denied` as unavailable for
+# exactly that reason and names the two possible fixes; this is the second one,
+# a netfilter log rule.
+#
+# It works because the two hooks run in a fixed order. NF_INET_LOCAL_OUT fires
+# in __ip_local_out, and the cgroup egress program runs later, in ip_output. So
+# a rule here sees the SYN that the filter is about to drop, and can report the
+# destination the filter cannot.
+#
+# The chain's policy is accept and it contains no verdict beyond `return`: it
+# observes, it never decides. Enforcement stays in one place.
+readonly LP_NFT_FAMILY="inet"
+readonly LP_NFT_LOG_PREFIX="lp-egress-deny"
+
+# nftables identifiers take no hyphens, and a workspace id may.
+lp_nft_table_for() { printf 'lp_egress_%s' "${1//-/_}"; }
+
+lp_nft_available() { command -v nft >/dev/null 2>&1; }
+
+# Takes the allow list on stdin: exactly the prefixes written into the unit's
+# IPAddressAllow=, so the set that decides what is logged as denied is literally
+# the set that decides what is permitted, and the two cannot drift.
+lp_nft_install() {
+  local id="$1" uid="$2"
+  local table prefixes v4 v6 sets="" rules=""
+
+  if ! lp_nft_available; then
+    lp_warn "nft is not installed; egress.denied cannot be observed on this host (the BPF filter drops silently)"
+    return 1
+  fi
+
+  table="$(lp_nft_table_for "${id}")"
+  prefixes="$(cat)"
+  v4="$(grep -v ':' <<<"${prefixes}" | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')"
+  v6="$(grep ':' <<<"${prefixes}" | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')"
+
+  # A family with nothing allowed gets no set and no return rule, so every
+  # packet in it falls through to the log rule — which is correct, because the
+  # unit allows nothing in that family either.
+  if [[ -n "${v4}" ]]; then
+    sets+="  set allowed4 { type ipv4_addr; flags interval; elements = { ${v4} } }"$'\n'
+    rules+="    meta skuid ${uid} ip daddr @allowed4 return"$'\n'
+  fi
+  if [[ -n "${v6}" ]]; then
+    sets+="  set allowed6 { type ipv6_addr; flags interval; elements = { ${v6} } }"$'\n'
+    rules+="    meta skuid ${uid} ip6 daddr @allowed6 return"$'\n'
+  fi
+
+  nft delete table "${LP_NFT_FAMILY}" "${table}" 2>/dev/null || true
+
+  # `limit rate` bounds journal cost: a pack in a tight reconnect loop must not
+  # become a logging denial of service against a host with 84 other services.
+  # Only connection openings are logged, which is what a "denied destination"
+  # actually is.
+  nft -f - <<EOF || { lp_warn "could not install the egress observation table ${table}"; return 1; }
+table ${LP_NFT_FAMILY} ${table} {
+${sets}
+  chain observe {
+    type filter hook output priority filter; policy accept;
+${rules}    meta skuid ${uid} tcp flags & (fin|syn|rst|ack) == syn limit rate 10/second burst 5 packets log prefix "${LP_NFT_LOG_PREFIX} ${id}: " level info
+  }
+}
+EOF
+
+  return 0
+}
+
+lp_nft_remove() {
+  local id="$1" table
+  table="$(lp_nft_table_for "${id}")"
+
+  lp_nft_available || return 0
+
+  if nft list table "${LP_NFT_FAMILY}" "${table}" >/dev/null 2>&1; then
+    lp_log "removing egress observation table ${LP_NFT_FAMILY} ${table}"
+    nft delete table "${LP_NFT_FAMILY}" "${table}" || lp_warn "could not delete nft table ${table}"
+  fi
+}
+
+# --- the telemetry timer ---------------------------------------------------
+#
+# A separate unit rather than a loop inside the deployment: the events that
+# matter most are the ones a dead deployment cannot send, so the emitter has to
+# outlive the thing it observes.
+readonly LP_HEARTBEAT_TEMPLATE_SERVICE="lp-heartbeat@.service"
+readonly LP_HEARTBEAT_TEMPLATE_TIMER="lp-heartbeat@.timer"
+
+lp_heartbeat_unit_for() { printf 'lp-heartbeat@%s.service' "$1"; }
+lp_heartbeat_timer_for() { printf 'lp-heartbeat@%s.timer' "$1"; }
+lp_heartbeat_dropin_dir_for() { printf '%s/lp-heartbeat@%s.timer.d' "${LP_UNIT_DIR}" "$1"; }
+
+# The templates are installed rather than copied verbatim: ExecStart has to name
+# the absolute path of the checkout this runner was invoked from, and that is
+# host-specific.
+lp_heartbeat_install_templates() {
+  local src dst
+
+  for src in "${LP_HEARTBEAT_TEMPLATE_SERVICE}" "${LP_HEARTBEAT_TEMPLATE_TIMER}"; do
+    [[ -f "${LP_DEPLOY_DIR}/${src}" ]] || lp_die "unit template not found beside the runner: ${LP_DEPLOY_DIR}/${src}"
+    dst="${LP_UNIT_DIR}/${src}"
+    sed "s|@LP_DEPLOY_DIR@|${LP_DEPLOY_DIR}|g" "${LP_DEPLOY_DIR}/${src}" >"${dst}.tmp"
+    if ! cmp -s "${dst}.tmp" "${dst}"; then
+      mv -- "${dst}.tmp" "${dst}"
+      chmod 0644 "${dst}"
+    else
+      rm -f -- "${dst}.tmp"
+    fi
+  done
+}
+
+lp_heartbeat_enable() {
+  local id="$1" interval="$2" dropin_dir
+
+  lp_heartbeat_install_templates
+
+  dropin_dir="$(lp_heartbeat_dropin_dir_for "${id}")"
+  mkdir -p "${dropin_dir}"
+  cat >"${dropin_dir}/10-interval.conf" <<EOF
+# Generated by lp-deploy.sh for workspace ${id}. The synthesiser reads the same
+# interval out of the deployment's telemetry state, so 'three missed intervals'
+# means the same number of seconds in both places.
+[Timer]
+OnActiveSec=${interval}s
+OnUnitActiveSec=${interval}s
+EOF
+  chmod 0644 "${dropin_dir}/10-interval.conf"
+
+  systemctl daemon-reload
+  systemctl enable --now "$(lp_heartbeat_timer_for "${id}")" >/dev/null 2>&1 \
+    || lp_warn "could not enable $(lp_heartbeat_timer_for "${id}"); heartbeats will not be emitted"
+}
+
+lp_heartbeat_disable() {
+  local id="$1" timer dropin_dir
+  timer="$(lp_heartbeat_timer_for "${id}")"
+  dropin_dir="$(lp_heartbeat_dropin_dir_for "${id}")"
+
+  if systemctl is-active --quiet "${timer}" 2>/dev/null; then
+    systemctl stop "${timer}" || lp_warn "could not stop ${timer}"
+  fi
+  systemctl disable "${timer}" >/dev/null 2>&1 || true
+  systemctl reset-failed "$(lp_heartbeat_unit_for "${id}")" >/dev/null 2>&1 || true
+
+  if [[ -d "${dropin_dir}" ]]; then
+    lp_log "removing timer drop-in directory ${dropin_dir}"
+    rm -rf -- "${dropin_dir}"
+  fi
+}
+
+# Removes the shared templates once nothing is left that could use them, so a
+# host with no deployments carries none of this tooling's units.
+lp_heartbeat_remove_templates_if_unused() {
+  local file remaining=0
+
+  for file in "${LP_UNIT_DIR}"/lp-workspace@*.service.d/"${LP_DEPLOY_DROPIN_NAME}"; do
+    [[ -f "${file}" ]] && remaining="$((remaining + 1))"
+  done
+
+  [[ "${remaining}" -eq 0 ]] || return 0
+
+  for file in "${LP_HEARTBEAT_TEMPLATE_SERVICE}" "${LP_HEARTBEAT_TEMPLATE_TIMER}"; do
+    if [[ -f "${LP_UNIT_DIR}/${file}" ]]; then
+      lp_log "removing shared unit ${LP_UNIT_DIR}/${file} (no deployments left)"
+      rm -f -- "${LP_UNIT_DIR}/${file}"
+    fi
+  done
+
+  rmdir "${LP_TELEMETRY_ROOT}" 2>/dev/null || true
+  systemctl daemon-reload
+}
+
+# Seconds since the unit's main process started. Read from the monotonic clock
+# systemd exposes rather than parsed out of a formatted timestamp, so it is
+# unaffected by the host's timezone or a clock step.
+lp_deploy_uptime_seconds() {
+  local unit="$1" started_us now_us
+  started_us="$(systemctl show "${unit}" -p ExecMainStartTimestampMonotonic --value 2>/dev/null || printf '0')"
+  [[ "${started_us}" =~ ^[0-9]+$ ]] && [[ "${started_us}" != "0" ]] || { printf '0'; return 0; }
+  now_us="$(awk '{printf "%d", $1 * 1000000}' /proc/uptime)"
+  printf '%s' "$(( (now_us - started_us) / 1000000 ))"
+}
+
 # Waits for the deployed service to answer. Polling rather than a single check
 # because "started" and "listening" are different moments for every runtime.
+#
+# The attempt count is published because deployment.healthy carries it: a pack
+# that answers on the first probe and one that answers on the twenty-ninth are
+# different facts about cold start, and the difference is free to record here.
+LP_DEPLOY_HEALTH_ATTEMPTS=0
+
 lp_deploy_wait_healthy() {
   local url="$1" attempts="${2:-30}" attempt
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
+    LP_DEPLOY_HEALTH_ATTEMPTS="${attempt}"
     if curl -fsS -o /dev/null --max-time 3 "${url}" 2>/dev/null; then
       return 0
     fi

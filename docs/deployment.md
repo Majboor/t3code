@@ -35,6 +35,8 @@ and the real evidence for them are in `infra/deploy/README.md` and
 | Network | `IPAddressDeny=any` plus a computed public allow list | `egress.denied` is observable, and a pack cannot quietly ship data to a host service |
 | Supervision | `systemd` `Restart=on-failure`, `MemoryMax`, `TasksMax` | Crashes, OOM kills and restart counts are facts the runtime already holds |
 | Lifecycle | `up`, `stop`, `restart`, `down` | Start, stop and removal are known moments, not inferred from traffic |
+| Manifest | `--pack <dir.pack>`, and a refusal if the host cannot honour it | Every event carries a `packId`, a `contentDigest` and a declared surface |
+| Observation | A per-deployment timer, and a log-only `nftables` rule | A crash, a silence and a denied destination are all observable from outside the deployment |
 
 Everything in Part 2 that is marked **runtime-emitted** is derivable from this
 layer alone, with no cooperation from the pack. That is deliberate and it is the
@@ -517,23 +519,108 @@ not a wider grant.
 
 ### What the deploy runner emits today
 
-Nothing. The runner in `infra/deploy/` implements isolation and lifecycle, not
-telemetry. Being concrete about the gap, because "we will add telemetry later"
-is how the conditions mechanism ends up expensive:
+Tier 1, all of it, and nothing above tier 1.
 
-| Event | Already available from | Work needed |
+The runner in `infra/deploy/` takes a `.pack` directory, derives the start
+command, runtime, port and egress rules from its manifest, and writes
+newline-delimited JSON to `/var/lib/lp-telemetry/<id>/events.ndjson` — root-owned
+and outside the workspace, so a deployment can neither forge its own events nor
+read another's. `infra/deploy/README.md` carries the real captured stream.
+
+| Event | Emitted | By what, and when |
 | --- | --- | --- |
-| `deployment.provisioned/started/stopped/removed` | The runner's own control flow | Emit instead of `lp_log` |
-| `deployment.healthy/unhealthy` | The `up` health probe | Keep probing after `up` returns |
-| `deployment.heartbeat` | `systemctl show -p MemoryCurrent,TasksCurrent,IPIngressBytes,IPEgressBytes,NRestarts` | A timer unit |
-| `failure.observed` (`runtime-crash`, `resource-exhausted`) | `journalctl` exit codes and signals; `oom` from the cgroup | Classification and fingerprinting |
-| `egress.denied` | **Not available.** The BPF filter drops silently and does not log | Needs `IPAccounting` deltas as a proxy, or a `netfilter` log rule |
-| Everything in tier 2 | Nothing — needs the manifest at deploy time | The runner takes `--command`, not a `.pack` |
+| `deployment.provisioned` | yes | The runner, once the user, address, port, filter and build exist |
+| `deployment.started` | yes | The runner on deploy and on `start`/`restart`; the timer for a restart nobody asked for |
+| `deployment.healthy` | yes | The runner's first successful probe, and every later recovery from unhealthy |
+| `deployment.unhealthy` | yes | A failed probe, from the runner during `up` and from the timer afterwards |
+| `deployment.stopped` | yes | The runner for `operator`/`redeploy`/`removed`; the timer for `crash` and `oom`, read from `ExecMainCode`/`ExecMainStatus`/`Result` |
+| `deployment.removed` | yes | The runner, during `down`, before anything is deleted |
+| `deployment.heartbeat` | yes | A per-deployment `systemd` timer, from `MemoryCurrent`, `TasksCurrent`, `IPIngressBytes`, `IPEgressBytes` and `NRestarts` |
+| `deployment.went_quiet` | yes | Synthesised by the same timer after three missed intervals |
+| `egress.denied` | yes | A log-only `nftables` rule at the output hook, aggregated per destination per tick |
 
-The last row is the real one. The runner currently deploys a *directory*, not a
-*pack*, so it has no manifest, no `packId`, no declared surface and no
-conditions. Teaching it to read a manifest is the prerequisite for every event
-above tier 1, and it is a smaller change than any of the rest.
+Three of those are worth a note.
+
+**`deployment.went_quiet` is synthesised on the deployment host, not by the
+control plane.** This document specified the control plane as the synthesiser,
+and that is still right once one exists — but a file of newline-delimited JSON
+has no clock of its own, so nothing downstream can tell a deployment that
+stopped emitting from a deployment that was never deployed. Something on this
+side has to notice the gap and write it down. The timer unit is separate from
+the deployment's unit and outlives it, which is the only reason the absence is
+observable at all.
+
+**`egress.denied` was listed here as *not available*,** because the cgroup BPF
+filter discards a denied packet silently. The `netfilter` route named in that
+row works: `NF_INET_LOCAL_OUT` fires before the cgroup egress program, so a
+log-only rule matched on the deployment's uid sees the SYN the filter is about
+to drop and can report the destination the filter cannot. `declaredInManifest`
+is computed by re-resolving the manifest's hosts at emission time, which is what
+makes "the record moved under a fixed allow list" a visible, repairable finding
+rather than an unexplained outage.
+
+**A run boundary is recorded even when nobody asked for one.** `deploymentRunId`
+is derived from the unit's main-process start timestamp, so a crash and a
+supervisor restart that happened while nothing was watching are still one stop
+and one start, rather than silently merging into the run before them.
+
+#### What is attributed, and what is `unknown`
+
+Every event carries the full envelope: `schemaVersion`, a ULID `eventId`, a
+per-deployment monotonic `sequence`, `PackRef`, `DeploymentRef` and `Conditions`.
+Attribution is by `contentDigest` — a SHA-256 over every file in the pack — on
+every event, for the reason this document gives: a version is a promise about
+behaviour, and a finding attributed to a version can land on code that never ran.
+
+`receivedAt` is `null` on every event, deliberately. The envelope requires the
+pair and the second half is the control plane's clock; writing the deployment's
+clock into it would destroy the exact distinction the pair exists to make.
+
+Following the rule that `"unknown"` is a value and absence is not, these are
+recorded as `unknown` rather than omitted, and this is why:
+
+| Field | Value | Why |
+| --- | --- | --- |
+| `conditions.providers[]` | one entry per `requirements.accounts[].service`, every axis `"unknown"` | The runner never talks to a provider, so it can record that an account is required and nothing about the account |
+| `conditions.dependencies` | `[]` | No lockfile reader. This is the cheapest remaining win — `conditionsDelta` is what turns an observation into a hypothesis, and dependency drift is its most common content |
+| `conditions.agent` | `role: "installer"`, provider and model `"unknown"` | No agent is involved in a deploy today |
+| `conditions.locale` | `"unknown"` | Not a property of the host worth guessing at |
+| `pack.mutations` | `count: 0` | Nothing applies repairs yet, so zero is true rather than a placeholder |
+| `deployment.sdkVersion` | `null` | `runtimeHost` is `logicpacks-managed`; no SDK is in the path |
+
+A deployment made the old way — `--from <dir> --command <cmd>`, no manifest —
+still emits every tier-1 event, with `packId`, `version` and `formatVersion`
+`null` and a real `contentDigest`. The bytes are always identifiable even when
+the pack is not.
+
+#### What still does not emit
+
+| Event | Why not |
+| --- | --- |
+| `failure.observed` | Needs classification and fingerprinting. The raw material is there — exit codes, signals, `Result=oom-kill`, denied destinations — but a `fingerprint` is a stable hash over a *normalised* message, and there is no normaliser. Emitting unfingerprinted failures would fill the corpus with rows that cannot be collapsed, which is worse than emitting none |
+| `failure.resolved` | Nothing tracks an open failure to close |
+| `verification.run` | The manifest's `verification.checks[]` are read but never executed. This is the next honest step and it is small: the commands are declared, the sandbox can run them, and `runsOn: ["deploy"]` already says when |
+| `knowledge.checkpoint_failed` | `requirements.setupSteps` are not executed at all. This document calls it the highest-value event here; it needs an install flow, and this runner deploys something already installed |
+| `install.completed` / `install.abandoned` | Same reason: there is no install flow to instrument |
+| Everything in tier 3 | The pack's own instrumentation. Nothing in the runtime can produce it |
+| `telemetry.dropped` | There is no transport, so there is no back-pressure to count |
+
+And the transport itself does not exist. Events are appended to a file; nothing
+collects them, nothing deduplicates on `eventId`, nothing bounds the file's size
+or drops oldest-first. That is a deliberate stopping point rather than an
+oversight — the contract says a deployment buffers to disk and replays, and disk
+is the half that has to exist before a collector can be written against it.
+Inventing a wire format now would mean inventing the collector's contract twice.
+
+Two enforcement gaps are recorded in the events rather than left to the reader:
+
+- `permissions.network[].ports` cannot be enforced by systemd's address filter,
+  so `deployment.provisioned` carries `portRestrictionsEnforced: false` whenever
+  a manifest names ports. The deployment is reachable to a declared host on every
+  port, and the telemetry says so.
+- The egress allow list is resolved once at deploy time. A record that moves
+  afterwards produces `egress.denied` with `declaredInManifest: true` — correct,
+  and the signal that a redeploy is needed, but not a repair.
 
 ### What this does not do
 
@@ -558,4 +645,10 @@ above tier 1, and it is a smaller change than any of the rest.
 - **`conditionsDelta` is correlation.** It says what changed near a failure, not
   what caused it. The maintenance agent proposes; the verification plan and the
   human are what make the proposal safe.
-- **None of it is implemented.** This is a contract, not a description.
+- **Only tier 1 is implemented, and only on the managed runtime.** Nine event
+  types are emitted to a file on one host. There is no transport, no collector,
+  no failure classification, no verification execution and no install flow, so
+  none of the loop output in this document — findings, repairs, propagation —
+  has any input yet beyond lifecycle facts. The section above is the current
+  line between what emits and what does not, and it is the one part of this
+  document that should be re-read before trusting any of the rest.
