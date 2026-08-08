@@ -18,6 +18,15 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  bodyText,
+  createHarness,
+  createReporter,
+  openIsolatedSession,
+  PERMISSION_ERROR,
+  sleep,
+} from "./lib/e2e-harness.mjs";
+
 // Playwright is installed for the web app's browser tests; borrow that copy
 // rather than adding a second one just for this script.
 const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))("playwright");
@@ -49,24 +58,31 @@ const NAVIGATION_MS = 9_000;
 const AGENT_TURN_MS = 90_000;
 const FILE_APPEAR_TIMEOUT_MS = 20_000;
 
-const results = [];
-let currentPhase = "setup";
+const { phase, check, skip, finish } = createReporter();
+const {
+  waitForText,
+  signUp,
+  logIn,
+  addProject,
+  openProject,
+  visibleFileNames,
+  waitForFileInTree,
+  createFileViaUi,
+  openCollabPanel,
+  closeCollabPanel,
+  setApprovalMode,
+  waitForCollabElement,
+  sendAgentMessage,
+  createInvite,
+} = createHarness({
+  baseUrl: BASE_URL,
+  password: PASSWORD,
+  uiSettleMs: UI_SETTLE_MS,
+  navigationMs: NAVIGATION_MS,
+  fileAppearTimeoutMs: FILE_APPEAR_TIMEOUT_MS,
+  probeFile: "seed-one.txt",
+});
 
-function phase(title) {
-  currentPhase = title;
-  console.log(`\n── ${title} ${"─".repeat(Math.max(0, 58 - title.length))}`);
-}
-
-function check(step, ok, detail = "") {
-  results.push({ phase: currentPhase, step, ok });
-  const mark = ok ? "[32mPASS[0m" : "[31mFAIL[0m";
-  console.log(`  ${mark}  ${step}${detail ? `  — ${detail}` : ""}`);
-}
-
-/**
- * A tree that only catches up once the project is reopened is the bug this
- * suite exists to catch, so needing the reload counts as a failure.
- */
 function checkLiveTreeUpdate(step, result) {
   const detail = !result.found
     ? "never appeared"
@@ -75,16 +91,6 @@ function checkLiveTreeUpdate(step, result) {
       : "";
   check(step, result.found && !result.neededReload, detail);
 }
-
-/**
- * Prints a check that was deliberately not run. Skips stay on screen and out of
- * the tally, so a green run never implies coverage it did not have.
- */
-function skip(step, reason) {
-  console.log(`  [33mSKIP[0m  ${step}  — ${reason}`);
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Writes a file through python3, so the change originates outside the app. */
 function writeFileViaPython(relativePath, contents) {
@@ -131,233 +137,6 @@ function initRepository() {
   return git("rev-parse", "--abbrev-ref", "HEAD");
 }
 
-// ── browser helpers ─────────────────────────────────────────────────────────
-
-/** A context per account: separate cookies and storage, i.e. a private window. */
-async function openIsolatedSession(browser, label) {
-  const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
-  const page = await context.newPage();
-  const consoleErrors = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text().slice(0, 200));
-  });
-  page.on("pageerror", (error) => consoleErrors.push(`pageerror: ${String(error).slice(0, 200)}`));
-  return { label, context, page, consoleErrors };
-}
-
-async function bodyText(page) {
-  return (await page.locator("body").innerText().catch(() => "")) ?? "";
-}
-
-const PERMISSION_ERROR = /Forbidden|does not have (file|project|session|workspace)\./;
-
-async function submitCredentials(page, email, mode) {
-  await page.locator(`button:has-text("${mode === "signup" ? "Sign up" : "Log in"}")`).first()
-    .click()
-    .catch(() => undefined);
-  await sleep(1_000);
-  await page.fill('input[type="email"]', email);
-  await page.fill('input[type="password"]', PASSWORD);
-  await page.locator('button[type="submit"]').first().click();
-  await sleep(NAVIGATION_MS);
-}
-
-async function signUp(session, email) {
-  await session.page.goto(`${BASE_URL}/pair`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-  await sleep(4_000);
-  await submitCredentials(session.page, email, "signup");
-  return !session.page.url().includes("/pair");
-}
-
-async function logIn(session, email) {
-  await session.page.goto(`${BASE_URL}/pair`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-  await sleep(4_000);
-  await submitCredentials(session.page, email, "login");
-  return !session.page.url().includes("/pair");
-}
-
-async function addProject(page, workspaceRoot) {
-  await page.locator('button:has-text("Add project")').first().click();
-  await sleep(UI_SETTLE_MS);
-  await page.locator("[data-base-ui-portal] input").first().fill(workspaceRoot);
-  await sleep(3_000);
-  await page.keyboard.press("Enter");
-  await sleep(NAVIGATION_MS);
-  await page.keyboard.press("Escape").catch(() => undefined);
-  await sleep(1_000);
-}
-
-/** Opens the project's thread view from the dashboard. */
-async function openProject(page) {
-  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await sleep(6_000);
-  const link = page.locator('[data-testid="dashboard-workspace-project-link"]').first();
-  if ((await link.count()) === 0) return false;
-  await link.click();
-  await sleep(NAVIGATION_MS);
-  return true;
-}
-
-/**
- * The file tree lives in a panel that starts collapsed, and the panel only
- * lists anything while a project or thread is selected — a bare reload leaves it
- * showing a placeholder, so recover by walking back in through the dashboard.
- */
-async function ensureWorkspacePanelOpen(page) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const seedVisible = await page
-      .locator('button:text-is("seed-one.txt")')
-      .first()
-      .isVisible()
-      .catch(() => false);
-    if (seedVisible) return true;
-
-    const toggle = page.locator('button[aria-label="Toggle workspace panel"]').first();
-    if ((await toggle.count()) > 0) {
-      await toggle.click().catch(() => undefined);
-      await sleep(3_000);
-    }
-
-    const unselected = (await bodyText(page)).includes("Select a project or thread");
-    if (!unselected) return true;
-    if (attempt === 0) await openProject(page);
-  }
-  return false;
-}
-
-/** The panel renders over the composer, so it has to be dismissed to type. */
-async function closeWorkspacePanel(page) {
-  const close = page.locator('button[aria-label="Close workspace panel"]').first();
-  if ((await close.count()) > 0) {
-    await close.click().catch(() => undefined);
-  } else {
-    await page.locator('button[aria-label="Toggle workspace panel"]').first().click().catch(() => undefined);
-  }
-  await sleep(2_000);
-}
-
-async function visibleFileNames(page) {
-  await ensureWorkspacePanelOpen(page);
-  return page
-    .locator("button")
-    .evaluateAll((nodes) =>
-      nodes
-        .map((node) => (node.textContent ?? "").trim())
-        // A row in a git repository carries a status badge and diff counts
-        // after the name ("notes.txtU"), so match the name as a prefix rather
-        // than expecting the whole label to be a file name.
-        .map((text) => /^[\w.-]+\.(?:txt|md|json|js|ts)/.exec(text)?.[0] ?? "")
-        .filter(Boolean),
-    );
-}
-
-/**
- * Waits for `name` in the file tree, first without touching navigation and then
- * after reopening the project. The two are reported separately so a tree that
- * only updates on refresh is not mistaken for one that updates live.
- */
-async function waitForFileInTree(page, name) {
-  const deadline = Date.now() + FILE_APPEAR_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if ((await visibleFileNames(page)).includes(name)) {
-      return { found: true, neededReload: false };
-    }
-    await sleep(3_000);
-  }
-  await openProject(page);
-  return { found: (await visibleFileNames(page)).includes(name), neededReload: true };
-}
-
-async function createFileViaUi(page, name) {
-  if (!(await ensureWorkspacePanelOpen(page))) return false;
-  const newFile = page.locator('button[aria-label="New file"]').first();
-  if ((await newFile.count()) === 0) return false;
-  await newFile.click();
-  await sleep(1_500);
-  await page.keyboard.type(name);
-  await sleep(700);
-  await page.keyboard.press("Enter");
-  await sleep(5_000);
-  return true;
-}
-
-// ── collaboration panel ─────────────────────────────────────────────────────
-
-/** The governance controls live behind the "Collab" popover in the header. */
-async function openCollabPanel(page) {
-  await closeWorkspacePanel(page);
-  const trigger = page.locator('button[aria-label="Open collaboration panel"]').first();
-  if ((await trigger.count()) === 0) return false;
-  await trigger.click().catch(() => undefined);
-  await sleep(UI_SETTLE_MS);
-  return (await page.locator('[data-testid="collaboration-approval-modes"]').count()) > 0
-    || (await page.locator('[data-testid="collaboration-view-toggle"]').count()) > 0;
-}
-
-async function closeCollabPanel(page) {
-  const trigger = page.locator('button[aria-label="Close collaboration panel"]').first();
-  if ((await trigger.count()) > 0) {
-    await trigger.click().catch(() => undefined);
-    await sleep(1_000);
-  }
-}
-
-/** Only the lead sees the mode buttons, so this is A's lever. */
-async function setApprovalMode(page, label) {
-  if (!(await openCollabPanel(page))) return false;
-  const button = page
-    .locator('[data-testid="collaboration-approval-modes"] button', { hasText: label })
-    .first();
-  if ((await button.count()) === 0) return false;
-  await button.click();
-  await sleep(UI_SETTLE_MS);
-  const pressed = await button.getAttribute("aria-pressed");
-  await closeCollabPanel(page);
-  return pressed === "true";
-}
-
-/** Waits for a testid to show up in the collaboration popover. */
-async function waitForCollabElement(page, testId, timeoutMs = 20_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!(await openCollabPanel(page))) return false;
-    if ((await page.locator(`[data-testid="${testId}"]`).count()) > 0) {
-      return true;
-    }
-    await closeCollabPanel(page);
-    await sleep(3_000);
-  }
-  return false;
-}
-
-async function sendAgentMessage(page, prompt) {
-  await closeWorkspacePanel(page);
-  const composer = page.locator('[data-testid="composer-editor"], textarea').first();
-  if ((await composer.count()) === 0) return false;
-  await composer.click();
-  await composer.fill(prompt).catch(async () => {
-    await page.keyboard.type(prompt);
-  });
-  await page.keyboard.press("Enter");
-  return true;
-}
-
-/** Invites an email to the workspace and returns the link, or null. */
-async function createInvite(page, email) {
-  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await sleep(6_000);
-  await page.locator('button:has-text("Invite")').first().click();
-  await sleep(2_000);
-  await page.locator('[data-slot="dialog-panel"] input[type="email"]').first().fill(email);
-  await page.locator('[data-slot="dialog-footer"] button:has-text("Create invite")').first().click();
-  await sleep(5_000);
-  const codes = await page.locator("code").allInnerTexts();
-  const url = codes.find((text) => text.includes("invite=")) ?? null;
-  await page.locator('button:has-text("Close")').first().click().catch(() => undefined);
-  return url;
-}
-
-/** The roster row for one person, opened so its controls are on screen. */
 async function expandMemberRow(page, email) {
   if (!(await openCollabPanel(page))) return null;
   const rows = page.locator('[data-testid="collaboration-member-row"]');
@@ -388,19 +167,7 @@ async function setMemberReadOnly(page, email, readOnly) {
   return true;
 }
 
-/** Waits for text to show up, and hands back what was on screen either way. */
-async function waitForText(page, pattern, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
-  let seen = "";
-  while (Date.now() < deadline) {
-    seen = await bodyText(page);
-    if (pattern.test(seen)) return { found: true, seen };
-    await sleep(2_000);
-  }
-  return { found: false, seen };
-}
-
-/** Every avatar's background colour, which is how one person stays recognisable. */
+/** Every avatar's colour, which is how one person stays recognisable. */
 async function avatarColors(page) {
   if (!(await openCollabPanel(page))) return [];
   const colors = await page
@@ -753,7 +520,4 @@ try {
   if (!KEEP_WORKSPACE) rmSync(PROJECT_DIR, { recursive: true, force: true });
 }
 
-const failed = results.filter((result) => !result.ok);
-console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
-for (const result of failed) console.log(`  FAILED  [${result.phase}] ${result.step}`);
-process.exit(failed.length === 0 ? 0 : 1);
+process.exit(finish());
