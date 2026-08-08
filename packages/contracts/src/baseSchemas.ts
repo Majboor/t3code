@@ -62,6 +62,8 @@ export const ProviderSessionId = makeEntityId("ProviderSessionId");
 export type ProviderSessionId = typeof ProviderSessionId.Type;
 export const InviteId = makeEntityId("InviteId");
 export type InviteId = typeof InviteId.Type;
+export const CollaborationActivityId = makeEntityId("CollaborationActivityId");
+export type CollaborationActivityId = typeof CollaborationActivityId.Type;
 export const CollaborationApprovalId = makeEntityId("CollaborationApprovalId");
 export type CollaborationApprovalId = typeof CollaborationApprovalId.Type;
 

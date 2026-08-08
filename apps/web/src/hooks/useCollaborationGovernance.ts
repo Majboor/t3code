@@ -26,6 +26,8 @@ export interface CollaborationGovernance {
   readonly myBranchClaim: CollaborationBranchClaim | null;
   /** The viewer's own name, so a branch can be named after the right person. */
   readonly viewerDisplayName: string;
+  /** Who the viewer is, so their own entries can be told apart. */
+  readonly viewerUserId: string | null;
   readonly claimBranch: (input: {
     branch: string;
     baseBranch: string;
@@ -70,6 +72,7 @@ export function useCollaborationGovernance(input: {
   const [branchClaims, setBranchClaims] = useState<readonly CollaborationBranchClaim[]>(NO_CLAIMS);
   const [myBranchClaim, setMyBranchClaim] = useState<CollaborationBranchClaim | null>(null);
   const [viewerDisplayName, setViewerDisplayName] = useState("collaborator");
+  const [viewerUserId, setViewerUserId] = useState<string | null>(null);
   const [touches, setTouches] = useState<readonly CollaborationFileTouch[]>([]);
   const [loading, setLoading] = useState(false);
   const requestSequenceRef = useRef(0);
@@ -99,8 +102,10 @@ export function useCollaborationGovernance(input: {
       api.collaboration.getViewPreferences(scope),
       api.collaboration.listBranchClaims(scope),
       api.collaboration.listFileTouches(scope),
+      api.collaboration.listMembers(scope),
     ])
-      .then(([settingsResult, approvalsResult, viewResult, claimsResult, touchesResult]) => {
+      .then(
+        ([settingsResult, approvalsResult, viewResult, claimsResult, touchesResult, membersResult]) => {
         if (sequence !== requestSequenceRef.current) {
           return;
         }
@@ -113,7 +118,9 @@ export function useCollaborationGovernance(input: {
         setMyBranchClaim(claimsResult.mine);
         setViewerDisplayName(claimsResult.viewerDisplayName);
         setTouches(touchesResult.touches);
-      })
+        setViewerUserId(membersResult.viewerUserId);
+      },
+      )
       .catch(() => undefined)
       .finally(() => {
         if (sequence === requestSequenceRef.current) {
@@ -285,6 +292,7 @@ export function useCollaborationGovernance(input: {
     branchClaims,
     myBranchClaim,
     viewerDisplayName,
+    viewerUserId,
     claimBranch,
     touchesByPath,
     loading,

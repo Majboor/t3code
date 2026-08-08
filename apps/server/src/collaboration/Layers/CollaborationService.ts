@@ -1,4 +1,5 @@
 import {
+  CollaborationActivityId,
   CollaborationApprovalId,
   CollaborationError,
   InviteId,
@@ -133,6 +134,10 @@ function toPromptSummary(actor: CollaborationActor, prompt: string): string {
       ? `${normalizedPrompt.slice(0, 93).trimEnd()}...`
       : normalizedPrompt;
   return `${actor.displayName} shared a prompt: ${excerpt}`;
+}
+
+function newActivityId() {
+  return CollaborationActivityId.make(`activity:${crypto.randomUUID()}`);
 }
 
 function appendActivity(
@@ -276,11 +281,13 @@ const makeCollaborationService = Effect.gen(function* () {
           presence: nextPresence,
         },
         {
+          id: newActivityId(),
           tenantId: input.tenantId,
           workspaceId: input.workspaceId,
           threadId: input.threadId,
           userId: actor.userId,
           kind: activityKind,
+          hiddenAt: null,
           summary:
             input.status === "offline"
               ? `${actor.displayName} left the workspace.`
@@ -326,11 +333,13 @@ const makeCollaborationService = Effect.gen(function* () {
       };
 
       const activity = {
+        id: newActivityId(),
         tenantId: input.tenantId,
         workspaceId: input.workspaceId ?? null,
         threadId: null,
         userId: actor.userId,
         kind: "invited" as const,
+        hiddenAt: null,
         summary: `${actor.displayName} invited ${input.email}.`,
         createdAt,
       };
@@ -419,11 +428,13 @@ const makeCollaborationService = Effect.gen(function* () {
       memberships.set(membership.id, membership);
 
       const activity = {
+        id: newActivityId(),
         tenantId: invite.tenantId,
         workspaceId: invite.workspaceId ?? null,
         threadId: null,
         userId: actor.userId,
         kind: "accepted-invite" as const,
+        hiddenAt: null,
         summary: `${actor.displayName} accepted a collaboration invite.`,
         createdAt: acceptedAt,
       };
@@ -483,11 +494,13 @@ const makeCollaborationService = Effect.gen(function* () {
         revokedAt,
       };
       const activity = {
+        id: newActivityId(),
         tenantId: invite.tenantId,
         workspaceId: invite.workspaceId ?? null,
         threadId: null,
         userId: actor.userId,
         kind: "revoked-invite" as const,
+        hiddenAt: null,
         summary: `${actor.displayName} revoked an invite for ${invite.email}.`,
         createdAt: revokedAt,
       };
@@ -514,12 +527,14 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const recordSharedPrompt: CollaborationServiceShape["recordSharedPrompt"] = (actor, input) => {
     const activity = {
+      id: newActivityId(),
       tenantId: input.tenantId,
       workspaceId: input.workspaceId,
       threadId: input.threadId,
       userId: actor.userId,
       kind: "prompted" as const,
       summary: toPromptSummary(actor, input.prompt),
+      hiddenAt: null,
       createdAt: nowIso(),
     };
     return Ref.update(stateRef, (state) => appendActivity(state, activity)).pipe(
@@ -529,7 +544,7 @@ const makeCollaborationService = Effect.gen(function* () {
     );
   };
 
-  const listActivity: CollaborationServiceShape["listActivity"] = (input) =>
+  const listActivity: CollaborationServiceShape["listActivity"] = (actor, input) =>
     Ref.get(stateRef).pipe(
       Effect.map((state) => {
         const limit = Math.min(input.limit ?? DEFAULT_ACTIVITY_LIMIT, MAX_ACTIVITY_LIMIT);
@@ -537,13 +552,54 @@ const makeCollaborationService = Effect.gen(function* () {
           (activity) =>
             activity.tenantId === input.tenantId &&
             activity.workspaceId === input.workspaceId &&
-            (input.threadId === undefined || activity.threadId === input.threadId),
+            (input.threadId === undefined || activity.threadId === input.threadId) &&
+            // Hidden entries stay visible to the person who wrote them.
+            (activity.hiddenAt === null || activity.userId === actor.userId),
         );
         return {
           activities: activities.slice(-limit).toReversed(),
         };
       }),
     );
+
+  const setActivityVisibility: CollaborationServiceShape["setActivityVisibility"] = (
+    actor,
+    input,
+  ) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.get(stateRef);
+      const existing = state.activities.find(
+        (activity) =>
+          activity.id === input.activityId &&
+          activity.tenantId === input.tenantId &&
+          activity.workspaceId === input.workspaceId,
+      );
+      if (!existing) {
+        return yield* new CollaborationError({
+          code: "invalid-membership-rule",
+          message: "Shared activity was not found.",
+        });
+      }
+      // Your own history is yours to curate; nobody else edits it for you.
+      if (existing.userId !== actor.userId) {
+        return yield* new CollaborationError({
+          code: "not-an-approver",
+          message: "Only the author can change what they share.",
+        });
+      }
+
+      const updated = { ...existing, hiddenAt: input.hidden ? nowIso() : null };
+      yield* Ref.update(stateRef, (current) => ({
+        ...current,
+        activities: current.activities.map((activity) =>
+          activity.id === updated.id ? updated : activity,
+        ),
+      }));
+      yield* persist;
+      yield* PubSub.publish(events, { type: "activity-visibility-changed", activity: updated });
+
+      return { activity: updated };
+    });
 
   const stream: CollaborationServiceShape["stream"] = (input) =>
     Stream.fromPubSub(events).pipe(
@@ -571,6 +627,7 @@ const makeCollaborationService = Effect.gen(function* () {
               (event.invite.workspaceId === null || event.invite.workspaceId === input.workspaceId)
             );
           case "activity-appended":
+          case "activity-visibility-changed":
             return (
               event.activity.tenantId === input.tenantId &&
               event.activity.workspaceId === input.workspaceId &&
@@ -1306,6 +1363,7 @@ const makeCollaborationService = Effect.gen(function* () {
     revokeInvite,
     recordSharedPrompt,
     listActivity,
+    setActivityVisibility,
     stream,
     getSettings,
     updateSettings,

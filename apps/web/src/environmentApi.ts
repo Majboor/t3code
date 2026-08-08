@@ -74,6 +74,7 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       releaseBranch: rpcClient.collaboration.releaseBranch,
       touchFiles: rpcClient.collaboration.touchFiles,
       listFileTouches: rpcClient.collaboration.listFileTouches,
+      setActivityVisibility: rpcClient.collaboration.setActivityVisibility,
       listMembers: rpcClient.collaboration.listMembers,
       updateMember: rpcClient.collaboration.updateMember,
       removeMember: rpcClient.collaboration.removeMember,

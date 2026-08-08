@@ -14,6 +14,7 @@ import {
   ThreadId,
   UserId,
   WorkspaceId,
+  CollaborationActivityId,
   CollaborationApprovalId,
   type CollaborationActivity,
   type CollaborationBranchClaim,
@@ -326,12 +327,14 @@ const makeTenancyRepository = Effect.gen(function* () {
         }),
         activities: (activityRows as any[]).map(
           (row): CollaborationActivity => ({
+            id: CollaborationActivityId.make(row.activity_id),
             tenantId: TenantId.make(row.tenant_id),
             workspaceId: row.workspace_id === null ? null : WorkspaceId.make(row.workspace_id),
             threadId: row.thread_id === null ? null : ThreadId.make(row.thread_id),
             userId: UserId.make(row.user_id),
             kind: row.kind,
             summary: row.summary,
+            hiddenAt: row.hidden_at ?? null,
             createdAt: row.created_at,
           }),
         ),
@@ -552,10 +555,13 @@ const makeTenancyRepository = Effect.gen(function* () {
           }
           for (const activity of snapshot.activities) {
             yield* sql`
-              INSERT INTO collaboration_activities VALUES (
-                ${crypto.randomUUID()}, ${activity.tenantId}, ${activity.workspaceId},
+              INSERT INTO collaboration_activities (
+                activity_id, tenant_id, workspace_id, thread_id, user_id, kind,
+                summary, created_at, hidden_at
+              ) VALUES (
+                ${activity.id}, ${activity.tenantId}, ${activity.workspaceId},
                 ${activity.threadId}, ${activity.userId}, ${activity.kind},
-                ${activity.summary}, ${activity.createdAt}
+                ${activity.summary}, ${activity.createdAt}, ${activity.hiddenAt}
               )
             `;
           }
@@ -615,7 +621,10 @@ const makeTenancyRepository = Effect.gen(function* () {
             yield* sql`DELETE FROM collaboration_member_profiles`;
             for (const profile of snapshot.memberProfiles) {
               yield* sql`
-                INSERT INTO collaboration_member_profiles VALUES (
+                INSERT INTO collaboration_member_profiles (
+                  tenant_id, workspace_id, user_id, color, display_name,
+                  share_profile, share_usage, consent_at, updated_at
+                ) VALUES (
                   ${profile.tenantId}, ${profile.workspaceId}, ${profile.userId},
                   ${profile.color}, ${profile.displayName},
                   ${profile.shareProfile === null ? null : profile.shareProfile ? 1 : 0},

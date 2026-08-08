@@ -2,6 +2,8 @@ import type {
   CollaborationActivity,
   CollaborationActivityListInput,
   CollaborationActivityListResult,
+  CollaborationActivityVisibilityInput,
+  CollaborationActivityVisibilityResult,
   CollaborationApprovalDecideInput,
   CollaborationApprovalDecideResult,
   CollaborationApprovalListInput,
@@ -103,8 +105,15 @@ export interface CollaborationServiceShape {
   ) => Effect.Effect<CollaborationSharedPromptRecordResult, CollaborationError>;
 
   readonly listActivity: (
+    actor: CollaborationActor,
     input: CollaborationActivityListInput,
   ) => Effect.Effect<CollaborationActivityListResult, CollaborationError>;
+
+  /** Takes one of the author's own entries out of the shared history, or puts it back. */
+  readonly setActivityVisibility: (
+    actor: CollaborationActor,
+    input: CollaborationActivityVisibilityInput,
+  ) => Effect.Effect<CollaborationActivityVisibilityResult, CollaborationError>;
 
   readonly stream: (
     input: CollaborationStreamInput,

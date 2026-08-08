@@ -3827,7 +3827,20 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             WS_METHODS.collaborationActivityList,
             withRateLimit(
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
-                Effect.flatMap(() => collaboration.listActivity(input)),
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listActivity(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationActivityVisibility]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationActivityVisibility,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.setActivityVisibility(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),

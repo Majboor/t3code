@@ -4,6 +4,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CollaborationActivityId,
   MembershipId,
   OrganizationAuditEventId,
   OrganizationId,
@@ -152,12 +153,14 @@ it.effect("persists tenancy, organization, and collaboration rows across layer r
         memberships: [],
         activities: [
           {
+            id: CollaborationActivityId.make("activity:restart"),
             tenantId,
             workspaceId,
             threadId: null,
             userId,
             kind: "joined",
             summary: "Owner joined.",
+            hiddenAt: null,
             createdAt: "2026-05-03T00:00:00.000Z",
           },
         ],

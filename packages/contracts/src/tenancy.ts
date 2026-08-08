@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import {
   AuthSessionId,
+  CollaborationActivityId,
   CollaborationApprovalId,
   InviteId,
   IsoDateTime,
@@ -599,15 +600,36 @@ export const CollaborationActivityKind = Schema.Literals([
 export type CollaborationActivityKind = typeof CollaborationActivityKind.Type;
 
 export const CollaborationActivity = Schema.Struct({
+  id: CollaborationActivityId,
   tenantId: TenantId,
   workspaceId: Schema.NullOr(WorkspaceId),
   threadId: Schema.NullOr(ThreadId),
   userId: UserId,
   kind: CollaborationActivityKind,
   summary: TrimmedNonEmptyString,
+  /**
+   * Set when the author has taken this out of the shared history. They keep
+   * seeing it; everyone else stops.
+   */
+  hiddenAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
 });
 export type CollaborationActivity = typeof CollaborationActivity.Type;
+
+export const CollaborationActivityVisibilityInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  activityId: CollaborationActivityId,
+  hidden: Schema.Boolean,
+});
+export type CollaborationActivityVisibilityInput =
+  typeof CollaborationActivityVisibilityInput.Type;
+
+export const CollaborationActivityVisibilityResult = Schema.Struct({
+  activity: CollaborationActivity,
+});
+export type CollaborationActivityVisibilityResult =
+  typeof CollaborationActivityVisibilityResult.Type;
 
 export class CollaborationError extends Schema.TaggedErrorClass<CollaborationError>()(
   "CollaborationError",
@@ -1126,6 +1148,10 @@ export const CollaborationStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("files-touched"),
     touches: Schema.Array(CollaborationFileTouch),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("activity-visibility-changed"),
+    activity: CollaborationActivity,
   }),
   Schema.Struct({
     type: Schema.Literal("member-updated"),

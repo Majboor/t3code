@@ -1,4 +1,5 @@
 import {
+  CollaborationActivityId,
   MembershipId,
   OrganizationAuditEventId,
   OrganizationId,
@@ -262,12 +263,14 @@ export function makeLocalTestingTenancySeed(
       ],
       activities: [
         {
+          id: CollaborationActivityId.make("activity:seed-joined"),
           tenantId: corporateTenantId,
           workspaceId: corporateWorkspaceId,
           threadId: null,
           userId: developerUserId,
           kind: "joined",
           summary: "Local developer joined the seeded corporate workspace.",
+          hiddenAt: null,
           createdAt: now,
         },
       ],

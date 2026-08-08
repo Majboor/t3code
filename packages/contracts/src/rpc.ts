@@ -60,6 +60,8 @@ import { KeybindingsConfigError } from "./keybindings.ts";
 import {
   CollaborationActivityListInput,
   CollaborationActivityListResult,
+  CollaborationActivityVisibilityInput,
+  CollaborationActivityVisibilityResult,
   CollaborationApprovalDecideInput,
   CollaborationApprovalDecideResult,
   CollaborationApprovalListInput,
@@ -272,6 +274,7 @@ export const WS_METHODS = {
   collaborationInvitesRevoke: "collaboration.invites.revoke",
   collaborationSharedPromptRecord: "collaboration.sharedPrompt.record",
   collaborationActivityList: "collaboration.activity.list",
+  collaborationActivityVisibility: "collaboration.activity.visibility",
   collaborationSettingsGet: "collaboration.settings.get",
   collaborationSettingsUpdate: "collaboration.settings.update",
   collaborationApprovalsSubmit: "collaboration.approvals.submit",
@@ -779,6 +782,15 @@ export const WsCollaborationFilesTouchListRpc = Rpc.make(WS_METHODS.collaboratio
   error: CollaborationError,
 });
 
+export const WsCollaborationActivityVisibilityRpc = Rpc.make(
+  WS_METHODS.collaborationActivityVisibility,
+  {
+    payload: CollaborationActivityVisibilityInput,
+    success: CollaborationActivityVisibilityResult,
+    error: CollaborationError,
+  },
+);
+
 export const WsCollaborationMembersListRpc = Rpc.make(WS_METHODS.collaborationMembersList, {
   payload: CollaborationMemberListInput,
   success: CollaborationMemberListResult,
@@ -988,6 +1000,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCollaborationBranchReleaseRpc,
   WsCollaborationFilesTouchRpc,
   WsCollaborationFilesTouchListRpc,
+  WsCollaborationActivityVisibilityRpc,
   WsCollaborationMembersListRpc,
   WsCollaborationMembersUpdateRpc,
   WsCollaborationMembersRemoveRpc,

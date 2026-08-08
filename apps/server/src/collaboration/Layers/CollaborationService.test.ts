@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { TenantId, UserId, WorkspaceId } from "@t3tools/contracts";
+import { TenantId, ThreadId, UserId, WorkspaceId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 
@@ -15,6 +15,7 @@ import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
 const tenantId = TenantId.make("tenant-collab");
 const workspaceId = WorkspaceId.make("workspace-collab");
 const scope = { tenantId, workspaceId };
+const threadId = ThreadId.make("thread-collab");
 
 const lead = { userId: UserId.make("user-lead"), displayName: "Lead" };
 const member = { userId: UserId.make("user-member"), displayName: "Member" };
@@ -203,6 +204,69 @@ it.effect("does not withhold the run in staged mode", () =>
 
     const allowed = yield* collaboration.consumeApprovalForTurn(member, scope);
     assert.strictEqual(allowed.mayRun, true);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("lets an author take one prompt out of the shared history", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    const kept = yield* collaboration.recordSharedPrompt(member, {
+      ...scope,
+      threadId,
+      prompt: "keep this one",
+    });
+    const secret = yield* collaboration.recordSharedPrompt(member, {
+      ...scope,
+      threadId,
+      prompt: "do not share this one",
+    });
+
+    yield* collaboration.setActivityVisibility(member, {
+      ...scope,
+      activityId: secret.activity.id,
+      hidden: true,
+    });
+
+    // Everyone else sees the rest of the history, minus the hidden entry.
+    const asLead = yield* collaboration.listActivity(lead, scope);
+    const leadSummaries = asLead.activities.map((activity) => activity.summary);
+    assert.ok(leadSummaries.some((summary) => summary.includes("keep this one")));
+    assert.ok(!leadSummaries.some((summary) => summary.includes("do not share this one")));
+
+    // The author keeps their own full history.
+    const asAuthor = yield* collaboration.listActivity(member, scope);
+    const authorSummaries = asAuthor.activities.map((activity) => activity.summary);
+    assert.ok(authorSummaries.some((summary) => summary.includes("do not share this one")));
+
+    // And can put it back.
+    yield* collaboration.setActivityVisibility(member, {
+      ...scope,
+      activityId: secret.activity.id,
+      hidden: false,
+    });
+    const restored = yield* collaboration.listActivity(lead, scope);
+    assert.ok(
+      restored.activities.some((activity) => activity.summary.includes("do not share this one")),
+    );
+    assert.strictEqual(kept.activity.hiddenAt, null);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("does not let anyone else edit your shared history", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    const recorded = yield* collaboration.recordSharedPrompt(member, {
+      ...scope,
+      threadId,
+      prompt: "mine to curate",
+    });
+
+    // Even the lead cannot hide someone else's entry.
+    const refused = yield* collaboration
+      .setActivityVisibility(lead, { ...scope, activityId: recorded.activity.id, hidden: true })
+      .pipe(Effect.flip);
+    assert.strictEqual(refused.code, "not-an-approver");
   }).pipe(Effect.provide(makeLayer())),
 );
 

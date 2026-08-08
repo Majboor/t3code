@@ -100,6 +100,8 @@ import type {
   CollaborationViewResult,
   CollaborationViewUpdateInput,
   CollaborationActivityListResult,
+  CollaborationActivityVisibilityInput,
+  CollaborationActivityVisibilityResult,
   CollaborationInviteAcceptInput,
   CollaborationInviteAcceptResult,
   CollaborationInviteCreateInput,
@@ -449,6 +451,9 @@ export interface EnvironmentApi {
     listFileTouches: (
       input: CollaborationFileTouchListInput,
     ) => Promise<CollaborationFileTouchResult>;
+    setActivityVisibility: (
+      input: CollaborationActivityVisibilityInput,
+    ) => Promise<CollaborationActivityVisibilityResult>;
     listMembers: (input: CollaborationMemberListInput) => Promise<CollaborationMemberListResult>;
     updateMember: (input: CollaborationMemberUpdateInput) => Promise<CollaborationMemberResult>;
     removeMember: (

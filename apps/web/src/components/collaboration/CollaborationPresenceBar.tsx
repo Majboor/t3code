@@ -275,8 +275,45 @@ export function CollaborationPresenceBar({
                     className="text-xs"
                   >
                     <div className="text-foreground">{activity.summary}</div>
-                    <div className="text-muted-foreground">
-                      {activity.kind} · {formatTime(activity.createdAt)}
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <span>
+                        {activity.kind} · {formatTime(activity.createdAt)}
+                      </span>
+                      {activity.userId === governance.viewerUserId ? (
+                        <button
+                          type="button"
+                          data-testid="collaboration-activity-visibility"
+                          className="rounded px-1 text-[10px] underline-offset-2 hover:underline"
+                          onClick={() => {
+                            const api = readEnvironmentApi(environmentId);
+                            if (!api) return;
+                            api.collaboration
+                              .setActivityVisibility({
+                                tenantId,
+                                workspaceId,
+                                activityId: activity.id,
+                                hidden: activity.hiddenAt === null,
+                              })
+                              .then((result) => {
+                                setActivities((current) =>
+                                  current.map((entry) =>
+                                    entry.id === result.activity.id ? result.activity : entry,
+                                  ),
+                                );
+                              })
+                              .catch((error: unknown) => {
+                                toastManager.add({
+                                  type: "error",
+                                  title: "Could not change what you share",
+                                  description:
+                                    error instanceof Error ? error.message : "The request failed.",
+                                });
+                              });
+                          }}
+                        >
+                          {activity.hiddenAt === null ? "Hide from others" : "Hidden — show again"}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 ))
