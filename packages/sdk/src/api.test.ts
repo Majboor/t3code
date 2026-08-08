@@ -1,0 +1,369 @@
+import { ORCHESTRATION_WS_METHODS, ProjectId, ThreadId, WS_METHODS } from "@t3tools/contracts";
+import { describe, expect, it } from "vitest";
+
+import { createT3Api } from "./api/index.ts";
+import { connect } from "./client.ts";
+import type { T3RpcClient, T3Transport } from "./transport.ts";
+
+interface RecordedCall {
+  readonly method: string;
+  readonly input: Record<string, unknown>;
+}
+
+/**
+ * Stands in for a connection. Every contract method answers with a canned
+ * value, so a test can assert on the payload the SDK built without a server or
+ * any Effect machinery: unary methods answer with the value itself, streaming
+ * ones with an array of items.
+ */
+function makeStub(responses: Readonly<Record<string, unknown>> = {}): {
+  readonly transport: T3Transport;
+  readonly calls: ReadonlyArray<RecordedCall>;
+} {
+  const calls: RecordedCall[] = [];
+  const client = new Proxy(
+    {},
+    {
+      get: (_target, method) => (input: Record<string, unknown>) => {
+        calls.push({ method: String(method), input });
+        return responses[String(method)];
+      },
+    },
+  ) as T3RpcClient;
+
+  const canned = (execute: (client: T3RpcClient) => unknown): unknown => execute(client) as unknown;
+  const cannedEvents = (execute: (client: T3RpcClient) => unknown): ReadonlyArray<unknown> =>
+    (canned(execute) as ReadonlyArray<unknown> | undefined) ?? [];
+
+  const transport: T3Transport = {
+    request: (execute) => Promise.resolve(canned(execute) as never),
+    first: (execute) => {
+      const events = cannedEvents(execute);
+      return events.length > 0
+        ? Promise.resolve(events[0] as never)
+        : Promise.reject(new Error("Server closed the stream before sending anything."));
+    },
+    drain: (execute, onEvent) => {
+      for (const event of cannedEvents(execute)) {
+        onEvent(event as never);
+      }
+      return Promise.resolve();
+    },
+    subscribe: (execute, onEvent) => {
+      for (const event of cannedEvents(execute)) {
+        onEvent(event as never);
+      }
+      return () => undefined;
+    },
+  };
+
+  return { transport, calls };
+}
+
+const shellSnapshot = {
+  kind: "snapshot",
+  snapshot: {
+    snapshotSequence: 3,
+    projects: [{ id: "project-1", title: "Payments" }],
+    threads: [{ id: "thread-1", projectId: "project-1" }],
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+};
+
+const threadSnapshot = {
+  kind: "snapshot",
+  snapshot: {
+    snapshotSequence: 7,
+    thread: {
+      id: "thread-1",
+      messages: [{ id: "message-1", role: "user", text: "hi" }],
+      checkpoints: [{ turnId: "turn-1", checkpointTurnCount: 1 }],
+      activities: [{ id: "activity-1", kind: "tool" }],
+      proposedPlans: [],
+    },
+  },
+};
+
+describe("workspace projects", () => {
+  it("registers a project as a project.create command and answers with its id", async () => {
+    const { transport, calls } = makeStub({
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: { sequence: 1 },
+    });
+
+    const projectId = await createT3Api(transport).workspace.registerProject({
+      workspaceRoot: "/srv/app",
+      title: "Payments",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe(ORCHESTRATION_WS_METHODS.dispatchCommand);
+    expect(calls[0]?.input).toMatchObject({
+      type: "project.create",
+      projectId,
+      title: "Payments",
+      workspaceRoot: "/srv/app",
+    });
+    expect(calls[0]?.input["commandId"]).toEqual(expect.any(String));
+    expect(Date.parse(String(calls[0]?.input["createdAt"]))).not.toBeNaN();
+  });
+
+  it("keeps a caller-supplied project id rather than minting one", async () => {
+    const { transport } = makeStub({
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: { sequence: 1 },
+    });
+    const chosen = ProjectId.make("project-chosen");
+
+    const projectId = await createT3Api(transport).workspace.registerProject({
+      workspaceRoot: "/srv/app",
+      title: "Payments",
+      projectId: chosen,
+    });
+
+    expect(projectId).toBe(chosen);
+  });
+
+  it("passes file reads through untouched", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.projectsReadFile]: { relativePath: "src/index.ts", contents: "export {};" },
+    });
+
+    const result = await createT3Api(transport).workspace.readFile({
+      cwd: "/srv/app",
+      relativePath: "src/index.ts",
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.projectsReadFile,
+      input: { cwd: "/srv/app", relativePath: "src/index.ts" },
+    });
+    expect(result.contents).toBe("export {};");
+  });
+
+  it("reads the shell snapshot from the first item of the subscription", async () => {
+    const { transport, calls } = makeStub({
+      [ORCHESTRATION_WS_METHODS.subscribeShell]: [shellSnapshot],
+    });
+
+    const projects = await createT3Api(transport).workspace.listProjects();
+
+    expect(calls[0]?.method).toBe(ORCHESTRATION_WS_METHODS.subscribeShell);
+    expect(projects).toHaveLength(1);
+  });
+
+  it("refuses a shell stream that starts with an event instead of a snapshot", async () => {
+    const { transport } = makeStub({
+      [ORCHESTRATION_WS_METHODS.subscribeShell]: [{ kind: "project-removed", sequence: 4 }],
+    });
+
+    await expect(createT3Api(transport).workspace.getSnapshot()).rejects.toThrow(
+      /before the snapshot/,
+    );
+  });
+});
+
+describe("threads", () => {
+  const threadId = ThreadId.make("thread-1");
+
+  it("starts a turn as a user message with the default modes", async () => {
+    const { transport, calls } = makeStub({
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: { sequence: 12 },
+    });
+
+    const result = await createT3Api(transport).threads.startTurn({
+      threadId,
+      prompt: "Add a health check endpoint",
+    });
+
+    const input = calls[0]?.input ?? {};
+    expect(input).toMatchObject({
+      type: "thread.turn.start",
+      threadId,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+    });
+    expect(input["message"]).toMatchObject({
+      messageId: result.messageId,
+      role: "user",
+      text: "Add a health check endpoint",
+      attachments: [],
+    });
+    expect(result).toMatchObject({ threadId, commandId: input["commandId"], sequence: 12 });
+  });
+
+  it("honours an explicit runtime mode, interaction mode, and title seed", async () => {
+    const { transport, calls } = makeStub({
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: { sequence: 1 },
+    });
+
+    await createT3Api(transport).threads.startTurn({
+      threadId,
+      prompt: "Draft a plan",
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+      titleSeed: "Planning",
+    });
+
+    expect(calls[0]?.input).toMatchObject({
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+      titleSeed: "Planning",
+    });
+  });
+
+  it("interrupts without naming a turn when the caller does not know one", async () => {
+    const { transport, calls } = makeStub({
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: { sequence: 2 },
+    });
+
+    await createT3Api(transport).threads.interruptTurn({ threadId });
+
+    expect(calls[0]?.input).toMatchObject({ type: "thread.turn.interrupt", threadId });
+    expect(calls[0]?.input["turnId"]).toBeUndefined();
+  });
+
+  it("answers an approval with the decision it was given", async () => {
+    const { transport, calls } = makeStub({
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: { sequence: 3 },
+    });
+
+    await createT3Api(transport).threads.respondToApproval({
+      threadId,
+      requestId: "request-1" as never,
+      decision: "acceptForSession",
+    });
+
+    expect(calls[0]?.input).toMatchObject({
+      type: "thread.approval.respond",
+      threadId,
+      requestId: "request-1",
+      decision: "acceptForSession",
+    });
+  });
+
+  it("reads messages and turns out of the thread snapshot", async () => {
+    const { transport } = makeStub({
+      [ORCHESTRATION_WS_METHODS.subscribeThread]: [threadSnapshot],
+    });
+    const api = createT3Api(transport);
+
+    expect(await api.threads.listMessages(threadId)).toHaveLength(1);
+    expect(await api.threads.listTurns(threadId)).toHaveLength(1);
+    expect(await api.threads.listActivity(threadId)).toHaveLength(1);
+  });
+
+  it("refuses a thread stream that starts with an event instead of a snapshot", async () => {
+    const { transport } = makeStub({
+      [ORCHESTRATION_WS_METHODS.subscribeThread]: [{ kind: "event", event: {} }],
+    });
+
+    await expect(createT3Api(transport).threads.get(threadId)).rejects.toThrow(
+      /before the snapshot/,
+    );
+  });
+});
+
+describe("changes", () => {
+  it("passes a merge through and answers with the server's verdict", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.gitMergeBranch]: { status: "conflicts", conflictPaths: ["src/index.ts"] },
+    });
+
+    const result = await createT3Api(transport).changes.mergeBranch({
+      cwd: "/srv/app",
+      branch: "feature",
+      mode: "rebase",
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.gitMergeBranch,
+      input: { cwd: "/srv/app", branch: "feature", mode: "rebase" },
+    });
+    expect(result.status).toBe("conflicts");
+  });
+
+  it("reports progress and returns the result the action stream finished with", async () => {
+    const finished = { action: "commit_push" };
+    const { transport } = makeStub({
+      [WS_METHODS.gitRunStackedAction]: [
+        { kind: "phase_started", phase: "commit" },
+        { kind: "action_finished", result: finished },
+      ],
+    });
+    const progress: Array<string> = [];
+
+    const result = await createT3Api(transport).changes.runStackedAction(
+      { actionId: "action-1", cwd: "/srv/app", action: "commit_push" },
+      { onProgress: (event) => progress.push(event.kind) },
+    );
+
+    expect(progress).toEqual(["phase_started", "action_finished"]);
+    expect(result).toBe(finished);
+  });
+
+  it("fails when the action stream ends without a result", async () => {
+    const { transport } = makeStub({
+      [WS_METHODS.gitRunStackedAction]: [{ kind: "action_failed", message: "hook failed" }],
+    });
+
+    await expect(
+      createT3Api(transport).changes.runStackedAction({
+        actionId: "action-1",
+        cwd: "/srv/app",
+        action: "commit",
+      }),
+    ).rejects.toThrow(/without a final result/);
+  });
+});
+
+describe("history and server", () => {
+  it("narrows shared activity down to prompts", async () => {
+    const { transport } = makeStub({
+      [WS_METHODS.collaborationActivityList]: {
+        activities: [
+          { id: "a", kind: "prompted" },
+          { id: "b", kind: "joined" },
+          { id: "c", kind: "prompted" },
+        ],
+      },
+    });
+
+    const prompts = await createT3Api(transport).history.listPrompts({
+      tenantId: "tenant-1" as never,
+      workspaceId: "workspace-1" as never,
+    });
+
+    expect(prompts.map((activity) => activity.id)).toEqual(["a", "c"]);
+  });
+
+  it("wraps a settings patch the way the contract expects", async () => {
+    const { transport, calls } = makeStub({ [WS_METHODS.serverUpdateSettings]: {} });
+
+    await createT3Api(transport).server.updateSettings({ theme: "dark" } as never);
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.serverUpdateSettings,
+      input: { patch: { theme: "dark" } },
+    });
+  });
+
+  it("subscribes to terminal output without an input payload", () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.subscribeTerminalEvents]: [{ type: "data" }],
+    });
+    const seen: Array<unknown> = [];
+
+    const stop = createT3Api(transport).terminals.watch((event) => seen.push(event));
+
+    expect(calls[0]).toEqual({ method: WS_METHODS.subscribeTerminalEvents, input: {} });
+    expect(seen).toHaveLength(1);
+    expect(() => stop()).not.toThrow();
+  });
+});
+
+describe("connect", () => {
+  it("refuses to connect without credentials or a token", async () => {
+    await expect(connect({ baseUrl: "http://127.0.0.1:13773" })).rejects.toThrow(
+      /credentials.*token/,
+    );
+  });
+});

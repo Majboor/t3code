@@ -1,0 +1,110 @@
+# Hardened runner for a single workspace's service.
+#
+# Instantiate as lp-workspace@<workspace-id>.service. The instance name is the
+# bare workspace id; the "lp-" prefix is applied here via specifiers so that the
+# unit name, the Linux user and the workspace directory can never drift apart.
+#
+# The contract with a workspace is deliberately narrow: provide an executable
+# `run` file at the top of the workspace directory. Everything else about the
+# execution environment is fixed by this file, so a workspace cannot opt out of
+# the sandbox by editing its own configuration.
+#
+# Per-workspace resource limits are expected to arrive as a drop-in at
+# lp-workspace@<id>.service.d/10-limits.conf, written by the provisioning
+# script. The values below are the floor that applies if that drop-in is absent.
+
+[Unit]
+Description=Isolated workspace service (%i)
+After=network.target
+# A workspace whose directory has been torn down must not be restartable.
+ConditionPathIsDirectory=/srv/lp-workspaces/lp-%i
+# A crash-looping workspace must not become a denial of service against the
+# host's CPU or the journal. These belong in [Unit]; systemd ignores them with
+# a warning if they are placed in [Service].
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# Identity. The account is created by lp-provision-workspace.sh; systemd is not
+# asked to invent one, because a DynamicUser would change uid between restarts
+# and break ownership of the persistent workspace directory.
+User=lp-%i
+Group=lp-%i
+
+WorkingDirectory=/srv/lp-workspaces/lp-%i
+ExecStart=/srv/lp-workspaces/lp-%i/run
+
+# Optional, workspace-supplied environment. The leading "-" keeps the unit
+# startable when a workspace has no environment file at all.
+EnvironmentFile=-/srv/lp-workspaces/lp-%i/env
+
+Restart=on-failure
+RestartSec=5s
+
+# --- Privilege ------------------------------------------------------------
+# NoNewPrivileges is the keystone: it makes every setuid binary on the host
+# (sudo, su, mount, pkexec) incapable of raising privilege for this process or
+# any descendant, regardless of file permissions.
+NoNewPrivileges=yes
+# An empty bounding set means no capability can ever be acquired, even if a
+# file capability is somehow present on an executable the service can reach.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Blocks the process from creating setuid/setgid files that could later be used
+# as an escalation foothold.
+RestrictSUIDSGID=yes
+
+# --- Filesystem -----------------------------------------------------------
+# strict mounts the entire filesystem hierarchy read-only, then ReadWritePaths
+# punches a single hole for this workspace. The service cannot write anywhere
+# else on the host, including /etc, /usr, /opt and /var.
+ProtectSystem=strict
+# Renders /home, /root and /run/user empty. This is why workspaces live under
+# /srv rather than /home.
+ProtectHome=yes
+ReadWritePaths=/srv/lp-workspaces/lp-%i
+# A private /tmp and /var/tmp, so temporary files cannot be observed by or
+# collide with any other workspace or host service.
+PrivateTmp=yes
+PrivateDevices=yes
+# Hides every process the service does not own, so a workspace cannot enumerate
+# the host's other services or read their command lines.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0077
+
+# --- Kernel and cgroup surface -------------------------------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+# Without this a process could edit its own cgroup limits and escape the memory
+# and task caps set below.
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+# Denies user-namespace creation, which is the usual first step in turning a
+# kernel bug into a container/sandbox escape.
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+
+# --- Resource limits ------------------------------------------------------
+# Caps exist so a single misbehaving workspace cannot starve a host that is
+# already running at high memory pressure. MemoryHigh throttles before
+# MemoryMax kills, which turns a leak into slowness rather than a hard OOM.
+MemoryAccounting=yes
+MemoryHigh=384M
+MemoryMax=512M
+TasksAccounting=yes
+TasksMax=64
+LimitNOFILE=4096
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

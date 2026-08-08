@@ -17,4 +17,5 @@ export * from "./project.ts";
 export * from "./filesystem.ts";
 export * from "./tenancy.ts";
 export * from "./deploy.ts";
+export * from "./pack.ts";
 export * from "./rpc.ts";
