@@ -12,11 +12,13 @@ import {
   formatObservedDate,
   pluralize,
 } from "./packDetail.logic";
+import { PackDeployControl } from "./PackDeployControl";
 import { PackIntegrateControl } from "./PackIntegrateControl";
 import { PackKnowledgeSection } from "./PackKnowledgeSection";
 import { PackPublishControl } from "./PackPublishControl";
 import { PackReleaseHistory } from "./PackReleaseHistory";
 import { PackRequirementsSection } from "./PackRequirementsSection";
+import { PackShareControl } from "./PackShareControl";
 import { PackScarRecordSection } from "./PackScarRecordSection";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -199,6 +201,10 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
         visibility={manifest.visibility}
         onChangeVisibility={changeVisibility}
       />
+
+      <PackShareControl identity={identity} visibility={manifest.visibility} />
+
+      <PackDeployControl runtime={manifest.runtime} requirements={manifest.requirements} />
 
       <section className="rounded-lg border border-border p-4" data-testid="pack-detail-capability">
         <h2 className="text-sm font-medium text-foreground">What it does</h2>

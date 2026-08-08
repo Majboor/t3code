@@ -74,6 +74,7 @@ const {
   waitForCollabElement,
   sendAgentMessage,
   createInvite,
+  ensureWorkspacePanelOpen,
 } = createHarness({
   baseUrl: BASE_URL,
   password: PASSWORD,
@@ -175,6 +176,26 @@ async function avatarColors(page) {
     .evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).backgroundColor));
   await closeCollabPanel(page);
   return colors.filter((color) => color && color !== "rgba(0, 0, 0, 0)");
+}
+
+/** The pills in the collaboration popover: who is here and who is working. */
+async function presencePills(page) {
+  if (!(await openCollabPanel(page))) return [];
+  const pills = await page
+    .locator('[data-testid="collaboration-working-pill"]')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => `${(node.textContent ?? "").trim()}|${node.getAttribute("data-status")}`),
+    );
+  await closeCollabPanel(page);
+  return pills;
+}
+
+/** Who the file tree says last changed each file. */
+async function fileAuthors(page) {
+  await ensureWorkspacePanelOpen(page);
+  return page
+    .locator('[data-testid="workspace-entry-author"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-author") ?? ""));
 }
 
 async function waitForFileOnDisk(name, timeoutMs) {
@@ -502,6 +523,18 @@ try {
   check("the new colour sticks",
     recoloured.length >= 3 && new Set(recoloured).size === recoloured.length,
     [...new Set(recoloured)].join(" "));
+
+  phase("Who is here and who touched what");
+  const pills = await presencePills(accountA2.page);
+  check("the collaboration panel lists who is present", pills.length >= 2, pills.join(" · "));
+  check("each pill carries a status", pills.every((pill) => /\|(active|idle|away)$/.test(pill)),
+    pills.join(" · "));
+  const authors = await fileAuthors(accountA2.page);
+  // B created a file earlier in this run, so somebody's mark has to be on it.
+  check("the tree marks who last changed a file", authors.length > 0, authors.join(", "));
+  check("the mark names a real member",
+    authors.some((name) => name.length > 0 && (name.includes("collab.") || name.includes("@"))),
+    authors.join(", "));
 
   phase("Result");
   console.log(`  workspace: ${PROJECT_DIR}`);
