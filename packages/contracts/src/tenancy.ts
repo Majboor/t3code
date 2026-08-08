@@ -962,6 +962,116 @@ export const CollaborationFileTouchListInput = Schema.Struct({
 });
 export type CollaborationFileTouchListInput = typeof CollaborationFileTouchListInput.Type;
 
+/**
+ * A person in a shared workspace, assembled from their membership, the last
+ * presence they reported and the invite that let them in. Carries everything
+ * the UI needs to draw them: a name, initials and a colour.
+ */
+export const CollaborationMember = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  userId: UserId,
+  displayName: TrimmedNonEmptyString,
+  email: Schema.NullOr(TrimmedNonEmptyString),
+  avatarInitials: TrimmedNonEmptyString,
+  /** A CSS colour, auto-assigned from the id unless an approver overrode it. */
+  color: TrimmedNonEmptyString,
+  colorIsCustom: Schema.Boolean,
+  roles: Schema.Array(TenantRole),
+  isLead: Schema.Boolean,
+  isApprover: Schema.Boolean,
+  status: CollaborationPresenceStatus,
+  lastSeenAt: Schema.NullOr(IsoDateTime),
+  joinedAt: Schema.NullOr(IsoDateTime),
+  /**
+   * What this person agreed to share when they joined. Until they accept,
+   * their email and usage are withheld from everyone else in the workspace.
+   */
+  sharesProfile: Schema.Boolean,
+  sharesUsage: Schema.Boolean,
+  /** Null when this person has not agreed to share their usage. */
+  promptCount: Schema.NullOr(NonNegativeInt),
+  pendingApprovalCount: Schema.NullOr(NonNegativeInt),
+});
+export type CollaborationMember = typeof CollaborationMember.Type;
+
+export const CollaborationMemberListInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationMemberListInput = typeof CollaborationMemberListInput.Type;
+
+export const CollaborationMemberListResult = Schema.Struct({
+  members: Schema.Array(CollaborationMember),
+  canManage: Schema.Boolean,
+  viewerUserId: UserId,
+});
+export type CollaborationMemberListResult = typeof CollaborationMemberListResult.Type;
+
+export const CollaborationMemberUpdateInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  userId: UserId,
+  color: Schema.optional(TrimmedNonEmptyString),
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  isApprover: Schema.optional(Schema.Boolean),
+});
+export type CollaborationMemberUpdateInput = typeof CollaborationMemberUpdateInput.Type;
+
+export const CollaborationMemberRemoveInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  userId: UserId,
+});
+export type CollaborationMemberRemoveInput = typeof CollaborationMemberRemoveInput.Type;
+
+export const CollaborationMemberResult = Schema.Struct({
+  member: CollaborationMember,
+});
+export type CollaborationMemberResult = typeof CollaborationMemberResult.Type;
+
+export const CollaborationMemberRemoveResult = Schema.Struct({
+  removed: Schema.Boolean,
+});
+export type CollaborationMemberRemoveResult = typeof CollaborationMemberRemoveResult.Type;
+
+/**
+ * What a workspace is allowed to see about someone, agreed to when they join.
+ * Joining a shared workspace hands over more than access, so it is asked for
+ * once, up front, rather than assumed.
+ */
+export const CollaborationConsent = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  userId: UserId,
+  /** Name and email visible to the rest of the workspace. */
+  shareProfile: Schema.Boolean,
+  /** Prompt and approval counts visible to the rest of the workspace. */
+  shareUsage: Schema.Boolean,
+  decidedAt: IsoDateTime,
+});
+export type CollaborationConsent = typeof CollaborationConsent.Type;
+
+export const CollaborationConsentGetInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationConsentGetInput = typeof CollaborationConsentGetInput.Type;
+
+export const CollaborationConsentUpdateInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  shareProfile: Schema.Boolean,
+  shareUsage: Schema.Boolean,
+});
+export type CollaborationConsentUpdateInput = typeof CollaborationConsentUpdateInput.Type;
+
+export const CollaborationConsentResult = Schema.Struct({
+  /** Null until this person has been asked. */
+  consent: Schema.NullOr(CollaborationConsent),
+});
+export type CollaborationConsentResult = typeof CollaborationConsentResult.Type;
+
 export const CollaborationStreamInput = Schema.Struct({
   tenantId: TenantId,
   workspaceId: WorkspaceId,
@@ -1016,6 +1126,16 @@ export const CollaborationStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("files-touched"),
     touches: Schema.Array(CollaborationFileTouch),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("member-updated"),
+    member: CollaborationMember,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("member-removed"),
+    tenantId: TenantId,
+    workspaceId: WorkspaceId,
+    userId: UserId,
   }),
 ]);
 export type CollaborationStreamEvent = typeof CollaborationStreamEvent.Type;

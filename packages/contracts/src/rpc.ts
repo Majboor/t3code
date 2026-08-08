@@ -76,6 +76,15 @@ import {
   CollaborationFileTouchInput,
   CollaborationFileTouchListInput,
   CollaborationFileTouchResult,
+  CollaborationConsentGetInput,
+  CollaborationConsentResult,
+  CollaborationConsentUpdateInput,
+  CollaborationMemberListInput,
+  CollaborationMemberListResult,
+  CollaborationMemberRemoveInput,
+  CollaborationMemberRemoveResult,
+  CollaborationMemberResult,
+  CollaborationMemberUpdateInput,
   CollaborationInviteAcceptInput,
   CollaborationInviteAcceptResult,
   CollaborationInviteCreateInput,
@@ -275,6 +284,11 @@ export const WS_METHODS = {
   collaborationBranchRelease: "collaboration.branch.release",
   collaborationFilesTouch: "collaboration.files.touch",
   collaborationFilesTouchList: "collaboration.files.touchList",
+  collaborationMembersList: "collaboration.members.list",
+  collaborationMembersUpdate: "collaboration.members.update",
+  collaborationMembersRemove: "collaboration.members.remove",
+  collaborationConsentGet: "collaboration.consent.get",
+  collaborationConsentUpdate: "collaboration.consent.update",
   subscribeCollaboration: "collaboration.subscribe",
 
   // Deploy methods
@@ -765,6 +779,36 @@ export const WsCollaborationFilesTouchListRpc = Rpc.make(WS_METHODS.collaboratio
   error: CollaborationError,
 });
 
+export const WsCollaborationMembersListRpc = Rpc.make(WS_METHODS.collaborationMembersList, {
+  payload: CollaborationMemberListInput,
+  success: CollaborationMemberListResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationMembersUpdateRpc = Rpc.make(WS_METHODS.collaborationMembersUpdate, {
+  payload: CollaborationMemberUpdateInput,
+  success: CollaborationMemberResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationMembersRemoveRpc = Rpc.make(WS_METHODS.collaborationMembersRemove, {
+  payload: CollaborationMemberRemoveInput,
+  success: CollaborationMemberRemoveResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationConsentGetRpc = Rpc.make(WS_METHODS.collaborationConsentGet, {
+  payload: CollaborationConsentGetInput,
+  success: CollaborationConsentResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationConsentUpdateRpc = Rpc.make(WS_METHODS.collaborationConsentUpdate, {
+  payload: CollaborationConsentUpdateInput,
+  success: CollaborationConsentResult,
+  error: CollaborationError,
+});
+
 export const WsSubscribeCollaborationRpc = Rpc.make(WS_METHODS.subscribeCollaboration, {
   payload: CollaborationStreamInput,
   success: CollaborationStreamEvent,
@@ -944,6 +988,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsCollaborationBranchReleaseRpc,
   WsCollaborationFilesTouchRpc,
   WsCollaborationFilesTouchListRpc,
+  WsCollaborationMembersListRpc,
+  WsCollaborationMembersUpdateRpc,
+  WsCollaborationMembersRemoveRpc,
+  WsCollaborationConsentGetRpc,
+  WsCollaborationConsentUpdateRpc,
   WsSubscribeCollaborationRpc,
   WsWorkspacesCreateRpc,
   WsOrganizationsCreateRpc,

@@ -74,6 +74,11 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       releaseBranch: rpcClient.collaboration.releaseBranch,
       touchFiles: rpcClient.collaboration.touchFiles,
       listFileTouches: rpcClient.collaboration.listFileTouches,
+      listMembers: rpcClient.collaboration.listMembers,
+      updateMember: rpcClient.collaboration.updateMember,
+      removeMember: rpcClient.collaboration.removeMember,
+      getConsent: rpcClient.collaboration.getConsent,
+      updateConsent: rpcClient.collaboration.updateConsent,
       subscribe: (input, callback, options) =>
         rpcClient.collaboration.subscribe(input, callback, options),
     },

@@ -84,6 +84,15 @@ import type {
   CollaborationFileTouchInput,
   CollaborationFileTouchListInput,
   CollaborationFileTouchResult,
+  CollaborationConsentGetInput,
+  CollaborationConsentResult,
+  CollaborationConsentUpdateInput,
+  CollaborationMemberListInput,
+  CollaborationMemberListResult,
+  CollaborationMemberRemoveInput,
+  CollaborationMemberRemoveResult,
+  CollaborationMemberResult,
+  CollaborationMemberUpdateInput,
   CollaborationSettingsGetInput,
   CollaborationSettingsResult,
   CollaborationSettingsUpdateInput,
@@ -440,6 +449,13 @@ export interface EnvironmentApi {
     listFileTouches: (
       input: CollaborationFileTouchListInput,
     ) => Promise<CollaborationFileTouchResult>;
+    listMembers: (input: CollaborationMemberListInput) => Promise<CollaborationMemberListResult>;
+    updateMember: (input: CollaborationMemberUpdateInput) => Promise<CollaborationMemberResult>;
+    removeMember: (
+      input: CollaborationMemberRemoveInput,
+    ) => Promise<CollaborationMemberRemoveResult>;
+    getConsent: (input: CollaborationConsentGetInput) => Promise<CollaborationConsentResult>;
+    updateConsent: (input: CollaborationConsentUpdateInput) => Promise<CollaborationConsentResult>;
     subscribe: (
       input: CollaborationStreamInput,
       callback: (event: CollaborationStreamEvent) => void,

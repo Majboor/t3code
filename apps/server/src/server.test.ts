@@ -2803,10 +2803,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
         try {
+          // One link for everyone: the invite page works whether or not the
+          // visitor already has an account, so both fields carry the same URL.
           assert.equal(
-            setup.invite.accountSetupUrlPath,
-            `/invite?inviteId=${encodeURIComponent(setup.invite.invite.id)}`,
+            setup.invite.acceptUrlPath,
+            `/invite?invite=${encodeURIComponent(setup.invite.invite.id)}`,
           );
+          assert.equal(setup.invite.accountSetupUrlPath, setup.invite.acceptUrlPath);
           assert.notInclude(setup.invite.accountSetupUrlPath ?? "", "token=");
           const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
           const result = yield* Effect.scoped(

@@ -3752,24 +3752,12 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.invite").pipe(
                 Effect.flatMap(() => resolveCollaborationActor),
                 Effect.flatMap((actor) => collaboration.createInvite(actor, input)),
-                Effect.flatMap((result) =>
-                  issueInviteSetupUrlPath({
-                    inviteId: result.invite.id,
-                  }).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new CollaborationError({
-                          code: "invalid-membership-rule",
-                          message: "Failed to create employee setup link.",
-                          cause,
-                        }),
-                    ),
-                    Effect.map((accountSetupUrlPath) => ({
-                      ...result,
-                      accountSetupUrlPath,
-                    })),
-                  ),
-                ),
+                // One link, not two: the invite page accepts it whether or not
+                // the visitor already has an account.
+                Effect.map((result) => ({
+                  ...result,
+                  accountSetupUrlPath: result.acceptUrlPath,
+                })),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),
@@ -3985,6 +3973,66 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             withRateLimit(
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
                 Effect.flatMap(() => collaboration.listFileTouches(input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationMembersList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationMembersList,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listMembers(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationMembersUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationMembersUpdate,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.updateMember(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationMembersRemove]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationMembersRemove,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "membership.manage").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.removeMember(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationConsentGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationConsentGet,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.getConsent(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationConsentUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationConsentUpdate,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.updateConsent(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),

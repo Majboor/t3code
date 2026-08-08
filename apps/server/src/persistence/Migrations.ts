@@ -50,6 +50,8 @@ import Migration0034 from "./Migrations/034_TenantRuntimeTables.ts";
 import Migration0035 from "./Migrations/035_DeployTargets.ts";
 import Migration0036 from "./Migrations/036_CollaborationGovernance.ts";
 import Migration0037 from "./Migrations/037_CollaborationApprovalConsumption.ts";
+import Migration0038 from "./Migrations/038_CollaborationMemberProfiles.ts";
+import Migration0039 from "./Migrations/039_CollaborationMemberConsent.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -99,6 +101,8 @@ export const migrationEntries = [
   [35, "DeployTargets", Migration0035],
   [36, "CollaborationGovernance", Migration0036],
   [37, "CollaborationApprovalConsumption", Migration0037],
+  [38, "CollaborationMemberProfiles", Migration0038],
+  [39, "CollaborationMemberConsent", Migration0039],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

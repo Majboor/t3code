@@ -17,6 +17,7 @@ import { useGitStatus } from "../../lib/gitStatusState";
 import { cn } from "../../lib/utils";
 import { selectProjectByRef, useStore } from "../../store";
 import { CollaborationBranchSection } from "./CollaborationBranchSection";
+import { CollaborationPeople } from "./CollaborationPeople";
 import {
   CollaborationGovernancePanel,
   CollaborationWorkingPills,
@@ -211,6 +212,13 @@ export function CollaborationPresenceBar({
               workspaceRoot={project?.cwd ?? null}
               baseBranch={baseBranch}
               displayName={governance.viewerDisplayName}
+            />
+          </div>
+          <div className="mt-3">
+            <CollaborationPeople
+              environmentId={environmentId}
+              tenantId={tenantId}
+              workspaceId={workspaceId}
             />
           </div>
           <div className="mt-3">

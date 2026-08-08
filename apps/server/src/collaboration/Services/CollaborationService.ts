@@ -20,6 +20,15 @@ import type {
   CollaborationFileTouchInput,
   CollaborationFileTouchListInput,
   CollaborationFileTouchResult,
+  CollaborationConsentGetInput,
+  CollaborationConsentResult,
+  CollaborationConsentUpdateInput,
+  CollaborationMemberListInput,
+  CollaborationMemberListResult,
+  CollaborationMemberRemoveInput,
+  CollaborationMemberRemoveResult,
+  CollaborationMemberResult,
+  CollaborationMemberUpdateInput,
   CollaborationPromptApproval,
   CollaborationSettingsGetInput,
   CollaborationSettingsResult,
@@ -50,6 +59,8 @@ import type {
   UserId,
 } from "@t3tools/contracts";
 import { Context, type Effect, type Stream } from "effect";
+
+import type { CollaborationMemberProfileRecord } from "../../persistence/Services/Tenancy.ts";
 
 export interface CollaborationActor {
   readonly userId: UserId;
@@ -166,6 +177,31 @@ export interface CollaborationServiceShape {
   readonly listFileTouches: (
     input: CollaborationFileTouchListInput,
   ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;
+
+  readonly listMembers: (
+    actor: CollaborationActor,
+    input: CollaborationMemberListInput,
+  ) => Effect.Effect<CollaborationMemberListResult, CollaborationError>;
+
+  readonly updateMember: (
+    actor: CollaborationActor,
+    input: CollaborationMemberUpdateInput,
+  ) => Effect.Effect<CollaborationMemberResult, CollaborationError>;
+
+  readonly removeMember: (
+    actor: CollaborationActor,
+    input: CollaborationMemberRemoveInput,
+  ) => Effect.Effect<CollaborationMemberRemoveResult, CollaborationError>;
+
+  readonly getConsent: (
+    actor: CollaborationActor,
+    input: CollaborationConsentGetInput,
+  ) => Effect.Effect<CollaborationConsentResult, CollaborationError>;
+
+  readonly updateConsent: (
+    actor: CollaborationActor,
+    input: CollaborationConsentUpdateInput,
+  ) => Effect.Effect<CollaborationConsentResult, CollaborationError>;
 }
 
 export interface CollaborationState {
@@ -181,6 +217,8 @@ export interface CollaborationState {
   readonly branchClaims: ReadonlyMap<string, CollaborationBranchClaim>;
   /** Keyed by `tenantId:workspaceId:path`. */
   readonly fileTouches: ReadonlyMap<string, CollaborationFileTouch>;
+  /** Keyed by `tenantId:workspaceId:userId`. */
+  readonly memberProfiles: ReadonlyMap<string, CollaborationMemberProfileRecord>;
 }
 
 export class CollaborationService extends Context.Service<

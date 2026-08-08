@@ -46,6 +46,7 @@ import {
   type TenancyRepositoryError,
 } from "../Errors.ts";
 import {
+  type CollaborationMemberProfileRecord,
   type CollaborationPersistenceSnapshot,
   type OrganizationPersistenceSnapshot,
   type ProviderIsolationPersistenceSnapshot,
@@ -256,6 +257,7 @@ const makeTenancyRepository = Effect.gen(function* () {
         viewRows,
         branchRows,
         touchRows,
+        memberProfileRows,
       ] = yield* Effect.all([
         sql`SELECT * FROM collaboration_presence`,
         sql`SELECT * FROM tenant_invites WHERE workspace_id IS NOT NULL`,
@@ -266,6 +268,7 @@ const makeTenancyRepository = Effect.gen(function* () {
         sql`SELECT * FROM collaboration_view_preferences`,
         sql`SELECT * FROM collaboration_branch_claims`,
         sql`SELECT * FROM collaboration_file_touches`,
+        sql`SELECT * FROM collaboration_member_profiles`,
       ]).pipe(Effect.mapError(toSqlError("TenancyRepository.loadCollaboration:query")));
 
       return {
@@ -393,6 +396,19 @@ const makeTenancyRepository = Effect.gen(function* () {
             displayName: row.display_name,
             path: row.path,
             touchedAt: row.touched_at,
+          }),
+        ),
+        memberProfiles: (memberProfileRows as any[]).map(
+          (row): CollaborationMemberProfileRecord => ({
+            tenantId: row.tenant_id,
+            workspaceId: row.workspace_id,
+            userId: row.user_id,
+            color: row.color,
+            displayName: row.display_name,
+            shareProfile: row.share_profile === null ? null : row.share_profile !== 0,
+            shareUsage: row.share_usage === null ? null : row.share_usage !== 0,
+            consentAt: row.consent_at,
+            updatedAt: row.updated_at,
           }),
         ),
       } satisfies CollaborationPersistenceSnapshot;
@@ -591,6 +607,20 @@ const makeTenancyRepository = Effect.gen(function* () {
                 INSERT INTO collaboration_branch_claims VALUES (
                   ${claim.tenantId}, ${claim.workspaceId}, ${claim.userId}, ${claim.displayName},
                   ${claim.branch}, ${claim.baseBranch}, ${claim.worktreePath}, ${claim.createdAt}
+                )
+              `;
+            }
+          }
+          if (snapshot.memberProfiles) {
+            yield* sql`DELETE FROM collaboration_member_profiles`;
+            for (const profile of snapshot.memberProfiles) {
+              yield* sql`
+                INSERT INTO collaboration_member_profiles VALUES (
+                  ${profile.tenantId}, ${profile.workspaceId}, ${profile.userId},
+                  ${profile.color}, ${profile.displayName},
+                  ${profile.shareProfile === null ? null : profile.shareProfile ? 1 : 0},
+                  ${profile.shareUsage === null ? null : profile.shareUsage ? 1 : 0},
+                  ${profile.consentAt}, ${profile.updatedAt}
                 )
               `;
             }

@@ -39,6 +39,20 @@ export interface OrganizationPersistenceSnapshot {
   readonly auditEvents: ReadonlyArray<OrganizationAuditEvent>;
 }
 
+/** A lead's override of how one member is drawn in one workspace. */
+export interface CollaborationMemberProfileRecord {
+  readonly tenantId: string;
+  readonly workspaceId: string;
+  readonly userId: string;
+  readonly color: string | null;
+  readonly displayName: string | null;
+  /** Null when this person has not been asked to consent yet. */
+  readonly shareProfile: boolean | null;
+  readonly shareUsage: boolean | null;
+  readonly consentAt: string | null;
+  readonly updatedAt: string;
+}
+
 export interface CollaborationPersistenceSnapshot {
   readonly presence: ReadonlyArray<CollaborationPresence>;
   readonly invites: ReadonlyArray<TenantInvite>;
@@ -51,6 +65,7 @@ export interface CollaborationPersistenceSnapshot {
   readonly viewPreferences?: ReadonlyArray<CollaborationViewPreferences>;
   readonly branchClaims?: ReadonlyArray<CollaborationBranchClaim>;
   readonly fileTouches?: ReadonlyArray<CollaborationFileTouch>;
+  readonly memberProfiles?: ReadonlyArray<CollaborationMemberProfileRecord>;
 }
 
 export interface WorkspacePersistenceSnapshot {

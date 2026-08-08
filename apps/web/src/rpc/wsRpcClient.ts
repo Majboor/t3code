@@ -141,6 +141,11 @@ export interface WsRpcClient {
     readonly releaseBranch: RpcUnaryMethod<typeof WS_METHODS.collaborationBranchRelease>;
     readonly touchFiles: RpcUnaryMethod<typeof WS_METHODS.collaborationFilesTouch>;
     readonly listFileTouches: RpcUnaryMethod<typeof WS_METHODS.collaborationFilesTouchList>;
+    readonly listMembers: RpcUnaryMethod<typeof WS_METHODS.collaborationMembersList>;
+    readonly updateMember: RpcUnaryMethod<typeof WS_METHODS.collaborationMembersUpdate>;
+    readonly removeMember: RpcUnaryMethod<typeof WS_METHODS.collaborationMembersRemove>;
+    readonly getConsent: RpcUnaryMethod<typeof WS_METHODS.collaborationConsentGet>;
+    readonly updateConsent: RpcUnaryMethod<typeof WS_METHODS.collaborationConsentUpdate>;
     readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribeCollaboration>;
   };
   readonly workspaces: {
@@ -349,6 +354,16 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.collaborationFilesTouch](input)),
       listFileTouches: (input) =>
         transport.request((client) => client[WS_METHODS.collaborationFilesTouchList](input)),
+      listMembers: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationMembersList](input)),
+      updateMember: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationMembersUpdate](input)),
+      removeMember: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationMembersRemove](input)),
+      getConsent: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationConsentGet](input)),
+      updateConsent: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationConsentUpdate](input)),
       subscribe: (input, listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeCollaboration](input),

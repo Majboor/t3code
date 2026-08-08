@@ -5,6 +5,8 @@ import {
   MembershipId,
   type CollaborationBranchClaim,
   type CollaborationFileTouch,
+  type CollaborationMember,
+  type CollaborationPresence,
   type CollaborationPromptApproval,
   type CollaborationStreamEvent,
   type CollaborationViewPreferences,
@@ -68,6 +70,32 @@ function defaultSettings(input: {
     approverUserIds: [],
     updatedAt: input.updatedAt,
   };
+}
+
+/**
+ * A stable colour per person, derived from the id so every client agrees
+ * without the server handing out a palette. Hues are spread far enough apart
+ * that neighbouring members stay tellable apart.
+ */
+export function defaultMemberColor(userId: string): string {
+  let hash = 0;
+  for (let index = 0; index < userId.length; index += 1) {
+    hash = (hash * 31 + userId.charCodeAt(index)) % 360;
+  }
+  return `hsl(${hash} 70% 55%)`;
+}
+
+/** Initials for an avatar, from a name or failing that an email address. */
+export function toAvatarInitials(displayName: string): string {
+  const nameSource = displayName.includes("@")
+    ? (displayName.split("@")[0] ?? displayName)
+    : displayName;
+  const parts = nameSource.split(/[\s._-]+/).filter((part) => part.length > 0);
+  const initials = parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+  return initials.length > 0 ? initials : "?";
 }
 
 /** The lead approves by definition; everyone else has to be named. */
@@ -174,6 +202,12 @@ const makeCollaborationService = Effect.gen(function* () {
         entry,
       ]),
     ),
+    memberProfiles: new Map(
+      (persisted.memberProfiles ?? []).map((entry) => [
+        scopedKey(entry.tenantId, entry.workspaceId, entry.userId),
+        entry,
+      ]),
+    ),
   });
 
   /** The workspace owner is the lead, when the workspace is known at all. */
@@ -198,6 +232,7 @@ const makeCollaborationService = Effect.gen(function* () {
         viewPreferences: Array.from(state.viewPreferences.values()),
         branchClaims: Array.from(state.branchClaims.values()),
         fileTouches: Array.from(state.fileTouches.values()),
+        memberProfiles: Array.from(state.memberProfiles.values()),
       }),
     ),
     Effect.mapError(
@@ -561,6 +596,13 @@ const makeCollaborationService = Effect.gen(function* () {
             );
           case "branch-released":
             return event.tenantId === input.tenantId && event.workspaceId === input.workspaceId;
+          case "member-updated":
+            return (
+              event.member.tenantId === input.tenantId &&
+              event.member.workspaceId === input.workspaceId
+            );
+          case "member-removed":
+            return event.tenantId === input.tenantId && event.workspaceId === input.workspaceId;
           case "files-touched":
             return event.touches.some(
               (touch) =>
@@ -795,6 +837,319 @@ const makeCollaborationService = Effect.gen(function* () {
       return { mayRun: true };
     });
 
+  /**
+   * Assembles the roster from what is already recorded: memberships say who
+   * belongs, presence says what they are called and whether they are here, and
+   * the accepted invite carries the email.
+   */
+  const buildMembers = Effect.fn("buildMembers")(function* (input: {
+    readonly tenantId: CollaborationMember["tenantId"];
+    readonly workspaceId: CollaborationMember["workspaceId"];
+    /** Whoever is asking always sees their own details in full. */
+    readonly viewerUserId?: UserId;
+  }) {
+    const state = yield* Ref.get(stateRef);
+    const settings = yield* resolveSettings(input);
+
+    const presenceByUser = new Map<string, CollaborationPresence>();
+    for (const presence of state.presence.values()) {
+      if (presence.tenantId !== input.tenantId || presence.workspaceId !== input.workspaceId) {
+        continue;
+      }
+      const existing = presenceByUser.get(presence.userId);
+      if (!existing || existing.lastSeenAt < presence.lastSeenAt) {
+        presenceByUser.set(presence.userId, presence);
+      }
+    }
+
+    const emailByUser = new Map<string, string>();
+    const joinedByUser = new Map<string, string>();
+    for (const invite of state.invites.values()) {
+      if (invite.tenantId !== input.tenantId || invite.acceptedAt === null) {
+        continue;
+      }
+      if (invite.workspaceId !== null && invite.workspaceId !== input.workspaceId) {
+        continue;
+      }
+      const membership = Array.from(state.memberships.values()).find(
+        (candidate) =>
+          candidate.tenantId === invite.tenantId && candidate.createdAt === invite.acceptedAt,
+      );
+      if (membership) {
+        emailByUser.set(membership.userId, invite.email);
+        joinedByUser.set(membership.userId, invite.acceptedAt);
+      }
+    }
+
+    const promptCounts = new Map<string, number>();
+    for (const activity of state.activities) {
+      if (
+        activity.tenantId !== input.tenantId ||
+        activity.workspaceId !== input.workspaceId ||
+        activity.kind !== "prompted"
+      ) {
+        continue;
+      }
+      promptCounts.set(activity.userId, (promptCounts.get(activity.userId) ?? 0) + 1);
+    }
+
+    const pendingCounts = new Map<string, number>();
+    for (const approval of state.approvals.values()) {
+      if (
+        approval.tenantId !== input.tenantId ||
+        approval.workspaceId !== input.workspaceId ||
+        approval.status !== "pending"
+      ) {
+        continue;
+      }
+      pendingCounts.set(
+        approval.requestedByUserId,
+        (pendingCounts.get(approval.requestedByUserId) ?? 0) + 1,
+      );
+    }
+
+    // Anyone who belongs, plus anyone who has shown up, plus the lead even if
+    // they have never reported presence.
+    const userIds = new Set<string>();
+    for (const membership of state.memberships.values()) {
+      if (membership.tenantId === input.tenantId && membership.disabledAt === null) {
+        userIds.add(membership.userId);
+      }
+    }
+    for (const userId of presenceByUser.keys()) {
+      userIds.add(userId);
+    }
+    if (settings.leadUserId) {
+      userIds.add(settings.leadUserId);
+    }
+
+    return Array.from(userIds).map((userId): CollaborationMember => {
+      const typedUserId = userId as CollaborationMember["userId"];
+      const presence = presenceByUser.get(userId) ?? null;
+      const profile = state.memberProfiles.get(
+        scopedKey(input.tenantId, input.workspaceId, userId),
+      );
+      const membership = Array.from(state.memberships.values()).find(
+        (candidate) => candidate.tenantId === input.tenantId && candidate.userId === userId,
+      );
+      const displayName = profile?.displayName ?? presence?.displayName ?? userId;
+      // Silence is not consent: until asked, nothing extra is shared.
+      const sharesProfile = profile?.shareProfile ?? false;
+      const sharesUsage = profile?.shareUsage ?? false;
+      const isViewer = input.viewerUserId === userId;
+
+      return {
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        userId: typedUserId,
+        displayName,
+        email: sharesProfile || isViewer ? (emailByUser.get(userId) ?? null) : null,
+        avatarInitials: presence?.avatarInitials ?? toAvatarInitials(displayName),
+        color: profile?.color ?? defaultMemberColor(userId),
+        colorIsCustom: Boolean(profile?.color),
+        roles: membership?.roles ?? [],
+        isLead: settings.leadUserId === userId,
+        isApprover: isApprover(settings, typedUserId),
+        status: presence?.status ?? "offline",
+        lastSeenAt: presence?.lastSeenAt ?? null,
+        joinedAt: joinedByUser.get(userId) ?? membership?.createdAt ?? null,
+        sharesProfile,
+        sharesUsage,
+        promptCount: sharesUsage || isViewer ? (promptCounts.get(userId) ?? 0) : null,
+        pendingApprovalCount:
+          sharesUsage || isViewer ? (pendingCounts.get(userId) ?? 0) : null,
+      };
+    });
+  });
+
+  const listMembers: CollaborationServiceShape["listMembers"] = (actor, input) =>
+    Effect.gen(function* () {
+      const settings = yield* resolveSettings(input);
+      const members = yield* buildMembers({ ...input, viewerUserId: actor.userId });
+      return {
+        members,
+        canManage: isApprover(settings, actor.userId),
+        viewerUserId: actor.userId,
+      };
+    });
+
+  const updateMember: CollaborationServiceShape["updateMember"] = (actor, input) =>
+    Effect.gen(function* () {
+      const settings = yield* resolveSettings(input);
+      if (!isApprover(settings, actor.userId)) {
+        return yield* new CollaborationError({
+          code: "not-an-approver",
+          message: "Only the workspace lead or an approver can change member settings.",
+        });
+      }
+
+      if (input.color !== undefined || input.displayName !== undefined) {
+        const key = scopedKey(input.tenantId, input.workspaceId, input.userId);
+        yield* Ref.update(stateRef, (state) => {
+          const memberProfiles = new Map(state.memberProfiles);
+          const existing = memberProfiles.get(key);
+          memberProfiles.set(key, {
+            tenantId: input.tenantId,
+            workspaceId: input.workspaceId,
+            userId: input.userId,
+            color: input.color ?? existing?.color ?? null,
+            displayName: input.displayName ?? existing?.displayName ?? null,
+            shareProfile: existing?.shareProfile ?? null,
+            shareUsage: existing?.shareUsage ?? null,
+            consentAt: existing?.consentAt ?? null,
+            updatedAt: nowIso(),
+          });
+          return { ...state, memberProfiles };
+        });
+      }
+
+      if (input.isApprover !== undefined) {
+        const approvers = new Set(settings.approverUserIds);
+        if (input.isApprover) {
+          approvers.add(input.userId);
+        } else {
+          approvers.delete(input.userId);
+        }
+        yield* updateSettings(actor, {
+          tenantId: input.tenantId,
+          workspaceId: input.workspaceId,
+          approverUserIds: [...approvers],
+        });
+      }
+
+      yield* persist;
+      const members = yield* buildMembers(input);
+      const member = members.find((candidate) => candidate.userId === input.userId);
+      if (!member) {
+        return yield* new CollaborationError({
+          code: "invalid-membership-rule",
+          message: "Workspace member was not found.",
+        });
+      }
+      yield* PubSub.publish(events, { type: "member-updated", member });
+      return { member };
+    });
+
+  const removeMember: CollaborationServiceShape["removeMember"] = (actor, input) =>
+    Effect.gen(function* () {
+      const settings = yield* resolveSettings(input);
+      if (!isApprover(settings, actor.userId)) {
+        return yield* new CollaborationError({
+          code: "not-an-approver",
+          message: "Only the workspace lead or an approver can remove members.",
+        });
+      }
+      // The lead is the one account that cannot be locked out of its own
+      // workspace, or nobody would be left who could govern it.
+      if (settings.leadUserId === input.userId) {
+        return yield* new CollaborationError({
+          code: "invalid-membership-rule",
+          message: "The workspace lead cannot be removed.",
+        });
+      }
+
+      const removed = yield* Ref.modify(stateRef, (state) => {
+        const memberships = new Map(state.memberships);
+        let didRemove = false;
+        for (const [id, membership] of memberships) {
+          if (membership.tenantId === input.tenantId && membership.userId === input.userId) {
+            memberships.delete(id);
+            didRemove = true;
+          }
+        }
+        if (!didRemove) {
+          return [false, state] as const;
+        }
+
+        const presence = new Map(state.presence);
+        for (const [key, entry] of presence) {
+          if (
+            entry.tenantId === input.tenantId &&
+            entry.workspaceId === input.workspaceId &&
+            entry.userId === input.userId
+          ) {
+            presence.delete(key);
+          }
+        }
+        return [true, { ...state, memberships, presence }] as const;
+      });
+
+      if (!removed) {
+        return { removed: false };
+      }
+
+      yield* persist;
+      yield* PubSub.publish(events, {
+        type: "member-removed",
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+      });
+      return { removed: true };
+    });
+
+  const getConsent: CollaborationServiceShape["getConsent"] = (actor, input) =>
+    Ref.get(stateRef).pipe(
+      Effect.map((state) => {
+        const profile = state.memberProfiles.get(
+          scopedKey(input.tenantId, input.workspaceId, actor.userId),
+        );
+        if (!profile || profile.consentAt === null) {
+          return { consent: null };
+        }
+        return {
+          consent: {
+            tenantId: input.tenantId,
+            workspaceId: input.workspaceId,
+            userId: actor.userId,
+            shareProfile: profile.shareProfile ?? false,
+            shareUsage: profile.shareUsage ?? false,
+            decidedAt: profile.consentAt,
+          },
+        };
+      }),
+    );
+
+  const updateConsent: CollaborationServiceShape["updateConsent"] = (actor, input) =>
+    Effect.gen(function* () {
+      const decidedAt = nowIso();
+      const key = scopedKey(input.tenantId, input.workspaceId, actor.userId);
+      yield* Ref.update(stateRef, (state) => {
+        const memberProfiles = new Map(state.memberProfiles);
+        const existing = memberProfiles.get(key);
+        memberProfiles.set(key, {
+          tenantId: input.tenantId,
+          workspaceId: input.workspaceId,
+          userId: actor.userId,
+          color: existing?.color ?? null,
+          displayName: existing?.displayName ?? null,
+          shareProfile: input.shareProfile,
+          shareUsage: input.shareUsage,
+          consentAt: decidedAt,
+          updatedAt: decidedAt,
+        });
+        return { ...state, memberProfiles };
+      });
+      yield* persist;
+
+      const members = yield* buildMembers(input);
+      const member = members.find((candidate) => candidate.userId === actor.userId);
+      if (member) {
+        yield* PubSub.publish(events, { type: "member-updated", member });
+      }
+
+      return {
+        consent: {
+          tenantId: input.tenantId,
+          workspaceId: input.workspaceId,
+          userId: actor.userId,
+          shareProfile: input.shareProfile,
+          shareUsage: input.shareUsage,
+          decidedAt,
+        },
+      };
+    });
+
   const getViewPreferences: CollaborationServiceShape["getViewPreferences"] = (actor, input) =>
     Ref.get(stateRef).pipe(
       Effect.map((state) => ({
@@ -965,6 +1320,11 @@ const makeCollaborationService = Effect.gen(function* () {
     releaseBranch,
     touchFiles,
     listFileTouches,
+    listMembers,
+    updateMember,
+    removeMember,
+    getConsent,
+    updateConsent,
   } satisfies CollaborationServiceShape;
 });
 
