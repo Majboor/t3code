@@ -2,10 +2,12 @@ import { ArrowLeftIcon, OctagonAlertIcon } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
-import type { PackVisibilityScope } from "./packDetailSource";
+import type { PackVisibilityScope } from "@t3tools/contracts";
+
 import { packDetailSource } from "./packDetailSource";
 import {
   countKnowledgeEntries,
+  describePublication,
   describeScarRecordBrief,
   formatObservedDate,
   pluralize,
@@ -98,11 +100,15 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
     );
   }
 
-  const { manifest, releases } = detail;
+  const { manifest, history } = detail;
   const { identity, capability, verification } = manifest;
   const advisories = verification.advisories ?? [];
   const knowledgeCount = countKnowledgeEntries(manifest.knowledge);
-  const isOlderRelease = releases.length > 0 && releases[0]?.version !== identity.version;
+  const release = history.releases.find((entry) => entry.version === identity.version);
+  const publication = describePublication(release);
+  // Stated by the registry rather than inferred from the ordering: a manifest
+  // cannot know about a release cut after it.
+  const isOlderRelease = history.latestVersion !== identity.version;
 
   return (
     <PackDetailShell>
@@ -168,6 +174,14 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
           . {manifest.provenance.handover.summary}
         </div>
 
+        <div
+          className="mt-1 text-[11px] leading-4 text-muted-foreground"
+          data-testid="pack-detail-published"
+        >
+          {publication.line}
+          {publication.narrowed === null ? "" : ` ${publication.narrowed}`}
+        </div>
+
         {isOlderRelease ? (
           <div
             className="mt-2 rounded-md border border-border p-2 text-xs leading-5 text-muted-foreground"
@@ -181,6 +195,7 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
 
       <PackPublishControl
         record={verification.record}
+        release={release}
         visibility={manifest.visibility}
         onChangeVisibility={changeVisibility}
       />
@@ -226,15 +241,16 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
 
       <PackKnowledgeSection knowledge={manifest.knowledge} />
 
-      <PackScarRecordSection verification={verification} />
+      <PackScarRecordSection release={release} verification={verification} />
 
       <PackIntegrateControl integration={manifest.integration} />
 
       <PackReleaseHistory
         currentVersion={identity.version}
         knowledge={manifest.knowledge}
+        latestVersion={history.latestVersion}
         packId={packId}
-        releases={releases}
+        releases={history.releases}
       />
     </PackDetailShell>
   );

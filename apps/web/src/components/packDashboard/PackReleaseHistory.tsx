@@ -1,31 +1,33 @@
-import type { PackKnowledge } from "@t3tools/contracts";
+import type { PackKnowledge, PackRelease } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 
-import type { PackRelease } from "./packDetailSource";
 import {
   PACK_VISIBILITY_DESCRIPTIONS,
-  countKnowledgeIntroducedIn,
-  formatObservedDate,
-  pluralize,
+  describePublication,
+  describeReleaseLearning,
+  describeReleaseSignals,
 } from "./packDetail.logic";
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 
 /**
- * Releases read as what each one learned, because a version here is a promise
- * about behaviour rather than a diff. The count is taken from the manifest in
- * front of the reader, so a release newer than the one being read shows nothing
- * rather than borrowing knowledge it had not been taught yet.
+ * Releases read as what each one learned and what each one has survived, both
+ * taken from the format rather than from a note. The learning is counted
+ * against the manifest in front of the reader, so a release newer than the one
+ * being read shows nothing rather than borrowing knowledge it had not been
+ * taught yet.
  */
 export function PackReleaseHistory({
   packId,
   releases,
+  latestVersion,
   currentVersion,
   knowledge,
 }: {
   packId: string;
   releases: readonly PackRelease[];
+  latestVersion: string;
   currentVersion: string;
   knowledge: PackKnowledge;
 }) {
@@ -34,13 +36,15 @@ export function PackReleaseHistory({
       <h2 className="text-sm font-medium text-foreground">Releases</h2>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">
         Each release is a promise about behaviour, so what matters about one is what it had learned
-        by then. Open an older release to read it as it stood.
+        by then and what it has since survived on its own. Open an older release to read it as it
+        stood.
       </p>
 
       <div className="mt-3 grid">
         {releases.map((release) => {
           const isCurrent = release.version === currentVersion;
-          const introduced = countKnowledgeIntroducedIn(knowledge, release.version);
+          const publication = describePublication(release);
+          const learning = describeReleaseLearning(knowledge, release.version);
 
           return (
             <div
@@ -52,31 +56,57 @@ export function PackReleaseHistory({
               data-testid="pack-detail-release"
               data-version={release.version}
               data-current={isCurrent}
+              data-scope={publication.scope ?? "unpublished"}
             >
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="font-mono text-xs text-foreground">{release.version}</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {formatObservedDate(release.publishedAt)}
-                  </span>
-                  <Badge size="sm" variant="outline">
-                    {PACK_VISIBILITY_DESCRIPTIONS[release.visibilityScope].label}
-                  </Badge>
+                  {publication.scope === null ? (
+                    <Badge size="sm" variant="outline">
+                      Never published
+                    </Badge>
+                  ) : (
+                    <Badge size="sm" variant="outline">
+                      {PACK_VISIBILITY_DESCRIPTIONS[publication.scope].label}
+                    </Badge>
+                  )}
+                  {release.version === latestVersion ? (
+                    <Badge size="sm" variant="outline">
+                      Newest
+                    </Badge>
+                  ) : null}
                   {isCurrent ? (
                     <Badge size="sm" variant="secondary">
                       You are reading this one
                     </Badge>
                   ) : null}
                 </div>
-                <div className="mt-0.5 text-xs leading-5 text-muted-foreground">{release.note}</div>
-                {introduced > 0 ? (
+
+                <div
+                  className="mt-0.5 text-[11px] leading-4 text-muted-foreground"
+                  data-testid="pack-detail-release-published"
+                >
+                  {publication.line}
+                  {publication.narrowed === null ? "" : ` ${publication.narrowed}`}
+                </div>
+
+                {learning === null ? null : (
                   <div
-                    className="mt-0.5 text-[11px] leading-4 text-muted-foreground"
+                    className="mt-0.5 text-xs leading-5 text-muted-foreground"
                     data-testid="pack-detail-release-knowledge"
                   >
-                    Brought {pluralize(introduced, "piece")} of knowledge with it.
+                    {learning}
                   </div>
-                ) : null}
+                )}
+
+                {release.signals === undefined ? null : (
+                  <div
+                    className="mt-0.5 text-[11px] leading-4 text-muted-foreground"
+                    data-testid="pack-detail-release-signals"
+                  >
+                    {describeReleaseSignals(release.signals)}
+                  </div>
+                )}
               </div>
 
               {isCurrent ? null : (

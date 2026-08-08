@@ -2,14 +2,17 @@ import type {
   PackConditionAxis,
   PackConditions,
   PackFailureMode,
+  PackFailureStanding,
   PackIntegration,
   PackIntegrationTarget,
   PackKnowledge,
+  PackRelease,
   PackRequirements,
+  PackRunningCost,
   PackScarRecord,
+  PackVisibilityScope,
 } from "@t3tools/contracts";
-
-import type { PackVisibilityScope } from "./packDetailSource";
+import { PACK_SURFACE_HALF_LIFE_DAYS, PACK_VISIBILITY_WIDTH } from "@t3tools/contracts";
 
 const MONTH_NAMES: readonly string[] = [
   "January",
@@ -141,6 +144,109 @@ export function describeConditions(conditions: PackConditions): PackConditionsDe
   };
 }
 
+const MILLISECONDS_PER_DAY = 86_400_000;
+
+export interface PackStalenessDescription {
+  /**
+   * `durable` is not "very fresh": a claim about at-least-once delivery is not
+   * on its way to being wrong, and collapsing it into the same scale as a
+   * console path is what forces one global threshold onto both.
+   */
+  readonly state: "durable" | "fresh" | "aging" | "stale" | "unrated";
+  readonly line: string;
+}
+
+function ageInDays(from: string, now: Date): number | null {
+  const observed = new Date(from);
+  if (Number.isNaN(observed.getTime())) return null;
+  return Math.max(0, Math.round((now.getTime() - observed.getTime()) / MILLISECONDS_PER_DAY));
+}
+
+/**
+ * How much weight to put on one claim given how old it is and how fast its kind
+ * of fact rots. A date alone cannot answer that — six weeks kills a console
+ * path and means nothing to an idempotency rule — so the half-life travels with
+ * the entry and the reader is told which half-life it is reading and where it
+ * came from.
+ */
+export function describeStaleness(
+  conditions: PackConditions,
+  now: Date = new Date(),
+): PackStalenessDescription {
+  const days = ageInDays(conditions.observedAt, now);
+  const rot = conditions.rot;
+
+  if (days === null) {
+    return { state: "unrated", line: "Nothing dates this, so nothing can age it." };
+  }
+
+  const age = pluralize(days, "day");
+  if (rot === undefined) {
+    return {
+      state: "unrated",
+      line: `${capitalize(age)} old, and nothing says how fast this kind of fact rots — so its age is all you have to go on.`,
+    };
+  }
+
+  const halfLife =
+    rot.basis === "observed" ? rot.halfLifeDays : PACK_SURFACE_HALF_LIFE_DAYS[rot.surface];
+  const surface = rot.surface.replaceAll("-", " ");
+
+  if (halfLife === null) {
+    return {
+      state: "durable",
+      line: `${capitalize(age)} old, and about ${surface} rather than a screen — this does not go stale with time, only if the guarantee itself changes.`,
+    };
+  }
+
+  const basis =
+    rot.basis === "observed"
+      ? `measured across ${pluralize(rot.fromInstalls, "install")}`
+      : `the default for ${surface}`;
+  const ratio = days / halfLife;
+
+  if (ratio >= 1) {
+    return {
+      state: "stale",
+      line: `${capitalize(age)} old against a ${halfLife}-day half-life (${basis}). Assume it has moved and check before following it.`,
+    };
+  }
+  if (ratio >= 0.5) {
+    return {
+      state: "aging",
+      line: `${capitalize(age)} old against a ${halfLife}-day half-life (${basis}). Past halfway, so confirm the first step before trusting the rest.`,
+    };
+  }
+  return {
+    state: "fresh",
+    line: `${capitalize(age)} old against a ${halfLife}-day half-life (${basis}), so it is probably still current.`,
+  };
+}
+
+/**
+ * Whether a failure mode still describes the present. Counted in deployments
+ * that carry the resolution, which is why this reads differently from the
+ * standing on an instruction: a confirmation there is somebody following steps
+ * that worked, and here it is somebody being hurt again.
+ */
+export function describeFailureStanding(standing: PackFailureStanding): string {
+  const checked =
+    standing.lastCheckedAt === undefined
+      ? ""
+      : ` Last checked ${formatObservedDate(standing.lastCheckedAt)}.`;
+
+  switch (standing.state) {
+    case "recurring":
+      return `Still recurring: ${pluralize(standing.recurredInDeployments, "deployment")} carrying the resolution hit it anyway.${checked}`;
+    case "holding":
+      return `Holding in ${pluralize(standing.heldInDeployments, "deployment")} since, with ${standing.recurredInDeployments} recurrence${standing.recurredInDeployments === 1 ? "" : "s"}.${checked}`;
+    case "dormant":
+      return `Nothing has hit this in a while and nothing says why — it may be gone, or nobody may be walking that path.${checked}`;
+    case "obsolete":
+      return `The surface this described is gone, so it cannot recur. Kept for installs still sitting on an older release.${checked}`;
+  }
+}
+
 export interface PackScarRecordDescription {
   readonly hasProduction: boolean;
   readonly headline: string;
@@ -169,6 +275,23 @@ export function describeScarRecord(record: PackScarRecord): PackScarRecordDescri
       `${pluralize(record.breakagesCaught, "breakage")} caught, ${record.breakagesFixed} fixed`,
     ].join(" · "),
   };
+}
+
+/**
+ * What one release earned on its own, said next to what the line earned rather
+ * than instead of it. Behaviour belongs to the release that ran and knowledge
+ * accumulates across the line, so a reader handed only the line's number reads
+ * a rewrite as proven, and a reader handed only the release's number reads
+ * every fresh release as untested.
+ */
+export function describeReleaseSignals(signals: PackScarRecord): string {
+  if (signals.deploymentsAttempted === 0) {
+    return "Nothing has run this release yet.";
+  }
+  return [
+    `${signals.deploymentsSurviving} of ${pluralize(signals.deploymentsAttempted, "deployment")} on this release still running`,
+    pluralize(signals.cumulativeServiceDays, "deployment-day"),
+  ].join(" · ");
 }
 
 /**
@@ -212,17 +335,61 @@ export const PACK_VISIBILITY_DESCRIPTIONS: Record<PackVisibilityScope, PackVisib
     },
   };
 
-/**
- * Wider means more people. Ordered so the control can tell an act of publishing
- * apart from an act of withdrawal and say the right consequence for each.
- */
-const VISIBILITY_WIDTH: Record<PackVisibilityScope, number> = {
-  workspace: 0,
-  organization: 1,
-  tenant: 1,
-  unlisted: 2,
-  public: 3,
+/** How each scope reads in a sentence about the moment it started. */
+const VISIBILITY_SINCE_LABELS: Record<PackVisibilityScope, string> = {
+  workspace: "Visible in this workspace",
+  tenant: "Visible across this tenant",
+  organization: "Visible across your organization",
+  unlisted: "Reachable by anyone with the link",
+  public: "Public in the marketplace",
 };
+
+export interface PackPublicationDescription {
+  /** Where it stands now. `null` means it has never been shown to anybody. */
+  readonly scope: PackVisibilityScope | null;
+  /** When it reached that scope, which is not when it was cut. */
+  readonly since: string | null;
+  readonly line: string;
+  /** Said only when it was once wider than it is now, which a single date hides. */
+  readonly narrowed: string | null;
+}
+
+/**
+ * When a release became visible, and to whom. `provenance.extractedAt` answers
+ * a different question — when the bytes were cut — and a release can sit unseen
+ * for a week between the two, so the publish copy cannot borrow it.
+ */
+export function describePublication(release: PackRelease | undefined): PackPublicationDescription {
+  const publications = release?.publications ?? [];
+  const latest = publications.at(-1);
+
+  if (latest === undefined) {
+    return {
+      scope: null,
+      since: null,
+      line:
+        release === undefined
+          ? "Nothing is recorded about when this became visible."
+          : `Cut ${formatObservedDate(release.cutAt)} and never published. Nobody outside this workspace has been able to see it.`,
+      narrowed: null,
+    };
+  }
+
+  const widest = publications.reduce((left, right) =>
+    PACK_VISIBILITY_WIDTH[right.scope] > PACK_VISIBILITY_WIDTH[left.scope] ? right : left,
+  );
+  const narrowed =
+    PACK_VISIBILITY_WIDTH[widest.scope] > PACK_VISIBILITY_WIDTH[latest.scope]
+      ? `It was ${VISIBILITY_SINCE_LABELS[widest.scope].toLowerCase()} from ${formatObservedDate(widest.at)} until ${formatObservedDate(latest.at)}. Installs made in that window are still out there.`
+      : null;
+
+  return {
+    scope: latest.scope,
+    since: latest.at,
+    line: `${VISIBILITY_SINCE_LABELS[latest.scope]} since ${formatObservedDate(latest.at)}.`,
+    narrowed,
+  };
+}
 
 /** The scopes the control offers, narrowest first. */
 export const PACK_VISIBILITY_CHOICES: readonly PackVisibilityScope[] = [
@@ -237,6 +404,8 @@ export interface PackVisibilityChangeDescription {
   readonly consequence: string;
   /** Said only when it applies, so it keeps its force when it does. */
   readonly warning: string | null;
+  /** Where this release stands today and since when, stated before it moves. */
+  readonly sinceLine: string | null;
   readonly confirmLabel: string;
   readonly widening: boolean;
 }
@@ -245,14 +414,28 @@ export interface PackVisibilityChangeDescription {
  * What the change actually does, in plain language and before it happens.
  * Publishing is a second act rather than a side effect of deploying, so the
  * consequence has to be legible at the moment of consent — including the part
- * that cannot be taken back.
+ * that cannot be taken back, and including the date this act is about to write.
  */
 export function describeVisibilityChange(
   from: PackVisibilityScope,
   to: PackVisibilityScope,
   record: PackScarRecord,
+  release?: PackRelease,
 ): PackVisibilityChangeDescription {
-  const widening = VISIBILITY_WIDTH[to] > VISIBILITY_WIDTH[from];
+  const widening = PACK_VISIBILITY_WIDTH[to] > PACK_VISIBILITY_WIDTH[from];
+  const publication = describePublication(release);
+  const sinceLine =
+    release === undefined
+      ? null
+      : [
+          `${release.version}: ${publication.line}`,
+          publication.narrowed,
+          widening
+            ? "Confirming dates it from this moment, and that date travels with the release."
+            : null,
+        ]
+          .filter((part): part is string => part !== null)
+          .join(" ");
   const { hasProduction } = describeScarRecord(record);
   const warning =
     widening && !hasProduction
@@ -265,6 +448,7 @@ export function describeVisibilityChange(
       consequence:
         "Anyone will be able to find and install this. Its record travels with it — every failure mode it has written down, every deployment it has lost, and every count as it stands. Installs made while it is public keep running if you narrow it again later; you cannot recall them.",
       warning,
+      sinceLine,
       confirmLabel: "Publish",
       widening,
     };
@@ -276,6 +460,7 @@ export function describeVisibilityChange(
       consequence:
         "Anyone holding the link can install it. It stays out of search, so it is neither indexed nor ranked, and you cannot tell who has passed the link on.",
       warning,
+      sinceLine,
       confirmLabel: "Share by link",
       widening,
     };
@@ -287,6 +472,7 @@ export function describeVisibilityChange(
       consequence:
         "It leaves search and stops being installable by anyone new. Deployments already running it keep running on the version they have.",
       warning: null,
+      sinceLine,
       confirmLabel: "Make private",
       widening,
     };
@@ -296,6 +482,7 @@ export function describeVisibilityChange(
     title: `Share this with ${PACK_VISIBILITY_DESCRIPTIONS[to].label.toLowerCase()}?`,
     consequence: `${PACK_VISIBILITY_DESCRIPTIONS[to].detail} Its record goes with it, including the releases you abandoned.`,
     warning,
+    sinceLine,
     confirmLabel: "Share",
     widening,
   };
@@ -380,16 +567,124 @@ export function countKnowledgeEntries(knowledge: PackKnowledge): number {
   return (knowledge.failureModes ?? []).length + (knowledge.integration ?? []).length;
 }
 
-/** Accounts the consumer has to pay for, which is the requirement that stings. */
-export function listPaidAccounts(requirements: PackRequirements): readonly string[] {
-  return (requirements.accounts ?? [])
-    .filter((account) => account.costsMoney === true)
-    .map((account) => account.displayName);
+/**
+ * What a release is worth reading for, derived from the manifest instead of
+ * from a note somebody wrote. A release note is prose about intent; the
+ * failures a release closed and the knowledge it brought are facts already in
+ * the format, and they are the two things a reader deciding whether to upgrade
+ * is actually asking about.
+ */
+export function describeReleaseLearning(
+  knowledge: PackKnowledge,
+  version: string,
+): string | null {
+  const fixed = (knowledge.failureModes ?? [])
+    .filter((entry) => entry.resolution.kind === "fixed" && entry.resolution.inVersion === version)
+    .map((entry) => entry.symptom);
+  const introduced = countKnowledgeIntroducedIn(knowledge, version);
+
+  const sentences: string[] = [];
+  if (fixed.length > 0) {
+    sentences.push(`Fixed: ${fixed.join(" ")}`);
+  }
+  if (introduced > 0) {
+    sentences.push(`Brought ${pluralize(introduced, "piece")} of knowledge with it.`);
+  }
+  return sentences.length === 0 ? null : sentences.join(" ");
+}
+
+const COST_MODEL_LABELS: Record<PackRunningCost["model"], string> = {
+  free: "Free",
+  "free-tier": "Free tier",
+  metered: "Metered",
+  subscription: "Subscription",
+  "paid-plan": "Paid plan",
+};
+
+/** The badge on one requirement: how it bills, in two words. */
+export function describeCostModel(model: PackRunningCost["model"]): string {
+  return COST_MODEL_LABELS[model];
+}
+
+/**
+ * What the bill is actually for, without repeating the model — that is the
+ * badge's job, and a line that says "Metered — metered on requests" is noise
+ * where the reader is looking for the threshold.
+ */
+export function describeCostBasis(cost: PackRunningCost): string | null {
+  const parts = [cost.billedOn, cost.freeTierLimit].filter(
+    (part): part is string => part !== undefined,
+  );
+  return parts.length === 0 ? null : parts.join(" ");
+}
+
+export interface PackCostSummary {
+  readonly paying: readonly string[];
+  /** Declared free. Worth naming, because it is a claim rather than a silence. */
+  readonly free: readonly string[];
+  /** Says nothing either way. The half that made the old summary an undercount. */
+  readonly undeclared: readonly string[];
+  readonly line: string;
+}
+
+/**
+ * Everything that bills, across every requirement kind that can. Counting only
+ * `accounts` undercounted every pack that needs a database or a bucket, and
+ * silence is the other half of the undercount: a service with no cost declared
+ * is unknown, and unknown is not free.
+ */
+export function summariseRunningCost(requirements: PackRequirements): PackCostSummary {
+  const paying: string[] = [];
+  const free: string[] = [];
+  const undeclared: string[] = [];
+
+  for (const account of requirements.accounts ?? []) {
+    const model = account.cost?.model;
+    if (model !== undefined) {
+      (model === "free" ? free : paying).push(account.displayName);
+      continue;
+    }
+    if (account.costsMoney === undefined) undeclared.push(account.displayName);
+    else (account.costsMoney ? paying : free).push(account.displayName);
+  }
+
+  for (const service of requirements.services ?? []) {
+    const model = service.cost?.model;
+    if (model === undefined) undeclared.push(service.name);
+    else (model === "free" ? free : paying).push(service.name);
+  }
+
+  if (paying.length === 0 && undeclared.length === 0) {
+    return {
+      paying,
+      free,
+      undeclared,
+      line:
+        free.length === 0
+          ? "Nothing here bills: this pack needs no account and no service of its own."
+          : `Nothing here bills. ${capitalize(formatList([...free]))} ${free.length === 1 ? "is" : "are"} declared free at the scale this pack uses.`,
+    };
+  }
+
+  const sentences: string[] = [];
+  if (paying.length > 0) {
+    sentences.push(
+      `${capitalize(formatList([...paying]))} cost${paying.length === 1 ? "s" : ""} money to run.`,
+    );
+  }
+  if (undeclared.length > 0) {
+    sentences.push(
+      `${capitalize(formatList([...undeclared]))} say${undeclared.length === 1 ? "s" : ""} nothing about cost, and nothing is not free — assume ${undeclared.length === 1 ? "it bills" : "they bill"} until you have checked.`,
+    );
+  }
+  return { paying, free, undeclared, line: sentences.join(" ") };
 }
 
 /**
  * One line on what has to be in place first. Read before anything else on the
- * page, because a key the reader cannot get is what rules a pack out.
+ * page, because a key the reader cannot get is what rules a pack out. What it
+ * costs is a second sentence rather than a parenthesis on the accounts, because
+ * the bill does not arrive only from accounts.
  */
 export function describeRequirements(requirements: PackRequirements): string {
   const parts: string[] = [];
@@ -399,12 +694,7 @@ export function describeRequirements(requirements: PackRequirements): string {
   }
   const accounts = requirements.accounts ?? [];
   if (accounts.length > 0) {
-    const paid = listPaidAccounts(requirements);
-    parts.push(
-      paid.length === 0
-        ? pluralize(accounts.length, "third-party account")
-        : `${pluralize(accounts.length, "third-party account")} (${formatList([...paid])} costs money)`,
-    );
+    parts.push(pluralize(accounts.length, "third-party account"));
   }
   const services = requirements.services ?? [];
   if (services.length > 0) {

@@ -12,12 +12,16 @@ import {
 } from "@t3tools/contracts";
 
 import type {
+  PackPublication,
+  PackReleaseHistory,
+  PackVisibilityScope,
+} from "@t3tools/contracts";
+
+import type {
   PackDetail,
   PackDetailRequest,
   PackDetailSource,
-  PackRelease,
   PackVisibilityChangeRequest,
-  PackVisibilityScope,
 } from "./packDetailSource";
 
 /**
@@ -112,6 +116,12 @@ const STRIPE_CHECKOUT: PackManifest = {
             "Insert the event id into a processed_events table inside the same transaction as the order write, and return 200 on conflict.",
           checkId: "webhook-idempotency",
         },
+        standing: {
+          state: "holding",
+          heldInDeployments: 26,
+          recurredInDeployments: 0,
+          lastCheckedAt: "2026-08-07T06:00:00.000Z",
+        },
         firstSeenAt: "2026-05-02T04:19:00.000Z",
         lastSeenAt: "2026-06-18T22:40:00.000Z",
         deploymentsAffected: 11,
@@ -122,6 +132,7 @@ const STRIPE_CHECKOUT: PackManifest = {
           apiVersion: "2026-04-10",
           observedAcrossDeployments: 11,
           untestedAxes: ["plan"],
+          rot: { basis: "assumed", surface: "protocol-invariant" },
         },
         origin: {
           introducedIn: "1.1.0",
@@ -155,6 +166,12 @@ const STRIPE_CHECKOUT: PackManifest = {
           currentAdvice:
             "Run `checkout reconcile --since 1h` immediately after install, so a missing scope fails while the console is still open in front of you.",
         },
+        standing: {
+          state: "recurring",
+          heldInDeployments: 0,
+          recurredInDeployments: 4,
+          lastCheckedAt: "2026-08-07T06:00:00.000Z",
+        },
         firstSeenAt: "2026-07-11T13:05:00.000Z",
         deploymentsAffected: 4,
         conditions: {
@@ -163,6 +180,7 @@ const STRIPE_CHECKOUT: PackManifest = {
           regions: ["us"],
           consoleVersion: "2026.07",
           untestedAxes: ["account-tier", "region"],
+          rot: { basis: "assumed", surface: "console-navigation" },
         },
         origin: {
           introducedIn: "1.2.0",
@@ -219,6 +237,13 @@ const STRIPE_CHECKOUT: PackManifest = {
           consoleVersion: "2026.07",
           observedAcrossDeployments: 26,
           untestedAxes: ["account-tier", "region", "locale"],
+          rot: {
+            basis: "observed",
+            surface: "console-navigation",
+            halfLifeDays: 63,
+            fromInstalls: 27,
+            measuredAt: "2026-08-07T18:00:00.000Z",
+          },
         },
         origin: {
           introducedIn: "1.0.0",
@@ -249,6 +274,7 @@ const STRIPE_CHECKOUT: PackManifest = {
         conditions: {
           observedAt: "2026-07-30T09:00:00.000Z",
           observedAcrossDeployments: 26,
+          rot: { basis: "assumed", surface: "host-codebase" },
         },
         origin: {
           introducedIn: "1.1.0",
@@ -271,6 +297,7 @@ const STRIPE_CHECKOUT: PackManifest = {
           observedAt: "2026-07-30T09:00:00.000Z",
           apiVersion: "2026-04-10",
           observedAcrossDeployments: 26,
+          rot: { basis: "assumed", surface: "protocol-invariant" },
         },
         origin: {
           introducedIn: "1.1.0",
@@ -346,6 +373,11 @@ const STRIPE_CHECKOUT: PackManifest = {
         signupUrl: "https://dashboard.stripe.com/register",
         requiredScopes: ["checkout_sessions:write", "payment_intents:read"],
         costsMoney: true,
+        cost: {
+          model: "metered",
+          billedOn: "A percentage of every payment processed.",
+          pricingUrl: "https://stripe.com/pricing",
+        },
         providesEnvironment: ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
       },
     ],
@@ -356,6 +388,11 @@ const STRIPE_CHECKOUT: PackManifest = {
         purpose: "Stores orders and their payment state.",
         versionRange: ">=14",
         connectionEnvVar: "DATABASE_URL",
+        cost: {
+          model: "free-tier",
+          billedOn: "Storage and connection hours, wherever it is hosted.",
+          freeTierLimit: "Managed Postgres is typically free to about 500MB and then is not.",
+        },
       },
     ],
     toolchain: [{ name: "node", versionRange: ">=22" }],
@@ -465,6 +502,7 @@ const STRIPE_CHECKOUT: PackManifest = {
   verification: {
     record: {
       measuredAt: "2026-08-07T18:00:00.000Z",
+      scope: "lineage",
       installsAttempted: 41,
       installsSucceeded: 37,
       deploymentsAttempted: 37,
@@ -609,6 +647,7 @@ const RECEIPT_PDF: PackManifest = {
   verification: {
     record: {
       measuredAt: "2026-08-08T08:40:00.000Z",
+      scope: "lineage",
       installsAttempted: 0,
       installsSucceeded: 0,
       deploymentsAttempted: 0,
@@ -627,8 +666,8 @@ const RECEIPT_PDF: PackManifest = {
 
 interface StubEntry {
   readonly manifest: PackManifest;
-  /** Every release, newest first. Only the newest one has a manifest here. */
-  readonly releases: readonly PackRelease[];
+  /** Every release, newest first, as the registry would hold them. */
+  readonly releases: PackReleaseHistory["releases"];
   /** What each earlier release said, so history is readable rather than a list. */
   readonly olderManifests: ReadonlyMap<string, PackManifest>;
 }
@@ -668,21 +707,57 @@ const STUB_ENTRIES: readonly StubEntry[] = [
     releases: [
       {
         version: "1.2.0",
-        publishedAt: "2026-07-30T09:00:00.000Z",
-        visibilityScope: "workspace",
-        note: "Records the restricted key created without the read scope, which passes install and fails hours later.",
+        cutAt: "2026-07-29T16:20:00.000Z",
+        publications: [{ scope: "workspace", at: "2026-07-30T09:00:00.000Z" }],
+        signals: {
+          measuredAt: "2026-08-07T18:00:00.000Z",
+          scope: "release",
+          installsAttempted: 13,
+          installsSucceeded: 11,
+          deploymentsAttempted: 11,
+          deploymentsSurviving: 8,
+          cumulativeServiceDays: 96,
+          breakagesCaught: 1,
+          breakagesFixed: 0,
+        },
       },
       {
         version: "1.1.0",
-        publishedAt: "2026-05-03T08:00:00.000Z",
-        visibilityScope: "workspace",
-        note: "Writes the Stripe event id in the same transaction as the order, so a redelivery cannot double-charge.",
+        cutAt: "2026-05-02T18:00:00.000Z",
+        // Published to the whole tenant for a month and then pulled back to the
+        // workspace: two dates the old single `publishedAt` could not hold.
+        publications: [
+          { scope: "workspace", at: "2026-05-03T08:00:00.000Z" },
+          { scope: "tenant", at: "2026-05-20T11:00:00.000Z" },
+          { scope: "workspace", at: "2026-06-21T09:00:00.000Z" },
+        ],
+        signals: {
+          measuredAt: "2026-08-07T18:00:00.000Z",
+          scope: "release",
+          installsAttempted: 19,
+          installsSucceeded: 18,
+          deploymentsAttempted: 18,
+          deploymentsSurviving: 16,
+          cumulativeServiceDays: 1_470,
+          breakagesCaught: 1,
+          breakagesFixed: 1,
+        },
       },
       {
         version: "1.0.0",
-        publishedAt: "2026-02-01T10:00:00.000Z",
-        visibilityScope: "workspace",
-        note: "First release: session creation, redirect and a webhook handler.",
+        cutAt: "2026-01-31T15:40:00.000Z",
+        publications: [{ scope: "workspace", at: "2026-02-01T10:00:00.000Z" }],
+        signals: {
+          measuredAt: "2026-08-07T18:00:00.000Z",
+          scope: "release",
+          installsAttempted: 9,
+          installsSucceeded: 8,
+          deploymentsAttempted: 8,
+          deploymentsSurviving: 5,
+          cumulativeServiceDays: 1_374,
+          breakagesCaught: 0,
+          breakagesFixed: 0,
+        },
       },
     ],
     olderManifests: new Map([
@@ -690,6 +765,7 @@ const STUB_ENTRIES: readonly StubEntry[] = [
         "1.1.0",
         asEarlierRelease(STRIPE_CHECKOUT, "1.1.0", {
           measuredAt: "2026-07-30T09:00:00.000Z",
+          scope: "lineage",
           installsAttempted: 28,
           installsSucceeded: 26,
           deploymentsAttempted: 26,
@@ -705,6 +781,7 @@ const STUB_ENTRIES: readonly StubEntry[] = [
         "1.0.0",
         asEarlierRelease(STRIPE_CHECKOUT, "1.0.0", {
           measuredAt: "2026-05-03T08:00:00.000Z",
+          scope: "lineage",
           installsAttempted: 9,
           installsSucceeded: 8,
           deploymentsAttempted: 8,
@@ -722,10 +799,11 @@ const STUB_ENTRIES: readonly StubEntry[] = [
     manifest: RECEIPT_PDF,
     releases: [
       {
+        // Cut this morning and shown to nobody: an empty publication log, which
+        // is a different claim from a pack published the moment it was cut.
         version: "0.1.0",
-        publishedAt: "2026-08-08T08:40:00.000Z",
-        visibilityScope: "workspace",
-        note: "Cut from the storefront workspace. Nothing has run it.",
+        cutAt: "2026-08-08T08:40:00.000Z",
+        publications: [],
       },
     ],
     olderManifests: new Map(),
@@ -734,9 +812,25 @@ const STUB_ENTRIES: readonly StubEntry[] = [
 
 /** Visibility is the one thing this stub mutates, because the page changes it. */
 const visibilityByPackId = new Map<string, PackVisibility>();
+/** Each change appends, so the page can show when the current scope started. */
+const publicationsByPackId = new Map<string, readonly PackPublication[]>();
 
 function currentVisibility(manifest: PackManifest): PackVisibility {
   return visibilityByPackId.get(manifest.identity.id) ?? manifest.visibility;
+}
+
+function currentHistory(entry: StubEntry): PackReleaseHistory {
+  const appended = publicationsByPackId.get(entry.manifest.identity.id);
+  const [newest, ...rest] = entry.releases;
+
+  return {
+    packId: entry.manifest.identity.id,
+    latestVersion: entry.manifest.identity.version,
+    releases:
+      appended === undefined
+        ? entry.releases
+        : [{ ...newest, publications: [...newest.publications, ...appended] }, ...rest],
+  };
 }
 
 function findEntry(packId: string): StubEntry | undefined {
@@ -774,7 +868,7 @@ export const stubPackDetailSource: PackDetailSource = {
 
     return Promise.resolve({
       manifest: { ...requested, visibility: currentVisibility(latest) },
-      releases: entry.releases,
+      history: currentHistory(entry),
     });
   },
 
@@ -783,6 +877,10 @@ export const stubPackDetailSource: PackDetailSource = {
     if (!entry) return Promise.reject(new Error("That pack is not in this workspace."));
     const visibility = resolveVisibility(request.scope);
     visibilityByPackId.set(entry.manifest.identity.id, visibility);
+    publicationsByPackId.set(entry.manifest.identity.id, [
+      ...(publicationsByPackId.get(entry.manifest.identity.id) ?? []),
+      { scope: request.scope, at: new Date().toISOString() },
+    ]);
     return Promise.resolve(visibility);
   },
 };

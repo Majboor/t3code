@@ -4,10 +4,13 @@ import { describe, expect, it } from "vitest";
 import {
   PACK_FORMAT_VERSION,
   PACK_SUPERSEDED_FORMAT_VERSIONS,
+  PACK_SURFACE_HALF_LIFE_DAYS,
+  PACK_VISIBILITY_WIDTH,
   PackId,
   PackManifest,
   PackManifestEnvelope,
   PackReadinessReport,
+  PackReleaseHistory,
   PackSigningKeyId,
   PackSummary,
   PackWorkspaceKeyId,
@@ -17,6 +20,7 @@ const decodeManifest = Schema.decodeUnknownSync(PackManifest);
 const decodeEnvelope = Schema.decodeUnknownSync(PackManifestEnvelope);
 const decodeSummary = Schema.decodeUnknownSync(PackSummary);
 const decodeReadinessReport = Schema.decodeUnknownSync(PackReadinessReport);
+const decodeReleaseHistory = Schema.decodeUnknownSync(PackReleaseHistory);
 
 const minimalManifest = {
   formatVersion: PACK_FORMAT_VERSION,
@@ -196,6 +200,12 @@ const fullManifest = {
             "Insert the event id into a processed_events table inside the same transaction as the order write, and return 200 on conflict.",
           checkId: "webhook-idempotency",
         },
+        standing: {
+          state: "holding",
+          heldInDeployments: 26,
+          recurredInDeployments: 0,
+          lastCheckedAt: "2026-08-07T06:00:00.000Z",
+        },
         firstSeenAt: "2026-05-02T04:19:00.000Z",
         lastSeenAt: "2026-06-18T22:40:00.000Z",
         deploymentsAffected: 11,
@@ -206,6 +216,7 @@ const fullManifest = {
           apiVersion: "2026-04-10",
           observedAcrossDeployments: 11,
           untestedAxes: ["plan"],
+          rot: { basis: "assumed", surface: "protocol-invariant" },
         },
         origin: {
           introducedIn: "1.1.0",
@@ -233,6 +244,12 @@ const fullManifest = {
           currentAdvice:
             "Run `checkout reconcile --since 1h` immediately after install so a missing scope fails while the console is still open.",
         },
+        standing: {
+          state: "recurring",
+          heldInDeployments: 0,
+          recurredInDeployments: 4,
+          lastCheckedAt: "2026-08-07T06:00:00.000Z",
+        },
         firstSeenAt: "2026-07-11T13:05:00.000Z",
         deploymentsAffected: 4,
         conditions: {
@@ -241,6 +258,7 @@ const fullManifest = {
           regions: ["us"],
           consoleVersion: "2026.07",
           untestedAxes: ["account-tier", "region"],
+          rot: { basis: "assumed", surface: "console-navigation" },
         },
         origin: {
           introducedIn: "1.2.0",
@@ -297,6 +315,13 @@ const fullManifest = {
           consoleVersion: "2026.07",
           observedAcrossDeployments: 26,
           untestedAxes: ["account-tier", "region", "locale"],
+          rot: {
+            basis: "observed",
+            surface: "console-navigation",
+            halfLifeDays: 63,
+            fromInstalls: 27,
+            measuredAt: "2026-08-07T18:00:00.000Z",
+          },
         },
         origin: {
           introducedIn: "1.0.0",
@@ -428,6 +453,11 @@ const fullManifest = {
         signupUrl: "https://dashboard.stripe.com/register",
         requiredScopes: ["checkout_sessions:write", "payment_intents:read"],
         costsMoney: true,
+        cost: {
+          model: "metered",
+          billedOn: "A percentage of every payment processed.",
+          pricingUrl: "https://stripe.com/pricing",
+        },
         providesEnvironment: ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
       },
     ],
@@ -438,6 +468,11 @@ const fullManifest = {
         purpose: "Stores orders and their payment state.",
         versionRange: ">=14",
         connectionEnvVar: "DATABASE_URL",
+        cost: {
+          model: "free-tier",
+          billedOn: "Storage and connection hours on whatever hosts it.",
+          freeTierLimit: "Most managed providers stop being free somewhere near 500MB.",
+        },
       },
     ],
     toolchain: [{ name: "node", versionRange: ">=22" }],
@@ -594,6 +629,7 @@ const fullManifest = {
   verification: {
     record: {
       measuredAt: "2026-08-07T18:00:00.000Z",
+      scope: "lineage",
       installsAttempted: 41,
       installsSucceeded: 37,
       deploymentsAttempted: 37,
@@ -758,6 +794,48 @@ describe("PackManifest", () => {
       "webhook-retry-double-charge",
     );
     expect(parsed.verification.advisories).toBeUndefined();
+  });
+
+  it("says whether a record covers one release or the whole line", () => {
+    const parsed = decodeManifest(fullManifest);
+    const minimal = decodeManifest(minimalManifest);
+
+    expect(parsed.verification.record.scope).toBe("lineage");
+    // Absent means lineage, which is what every record written before the field
+    // existed meant — so an old manifest keeps reading correctly.
+    expect(minimal.verification.record.scope).toBeUndefined();
+  });
+
+  it("carries the cost of a service, not only of a third-party account", () => {
+    const parsed = decodeManifest(fullManifest);
+    const account = parsed.requirements.accounts?.[0];
+    const service = parsed.requirements.services?.[0];
+
+    expect(account?.cost?.model).toBe("metered");
+    expect(account?.costsMoney).toBe(true);
+    expect(service?.cost?.model).toBe("free-tier");
+    expect(service?.cost?.freeTierLimit).toContain("500MB");
+  });
+
+  it("drops a price rather than freezing one into a manifest that outlives it", () => {
+    const parsed = decodeManifest({
+      ...minimalManifest,
+      requirements: {
+        services: [
+          {
+            kind: "object-storage",
+            name: "receipts",
+            purpose: "Holds rendered receipts.",
+            cost: { model: "metered", monthlyUsd: 12, pricingUrl: "https://example.com/pricing" },
+          },
+        ],
+      },
+    });
+
+    const cost = parsed.requirements.services?.[0]?.cost;
+    expect(cost?.model).toBe("metered");
+    expect(Object.keys(cost ?? {})).not.toContain("monthlyUsd");
+    expect(cost?.pricingUrl).toBe("https://example.com/pricing");
   });
 
   it("keeps an attestation from outranking what production reported", () => {
@@ -1063,6 +1141,76 @@ describe("pack knowledge", () => {
     ).toThrow();
   });
 
+  it("ages a console path faster than a protocol invariant", () => {
+    const credential = knowledge.integration?.find((entry) => entry.id === "stripe-restricted-key");
+    const doubleCharge = knowledge.failureModes?.find(
+      (entry) => entry.id === "webhook-retry-double-charge",
+    );
+
+    if (credential?.conditions.rot?.basis !== "observed") {
+      throw new Error("Expected a measured rot rate");
+    }
+    expect(credential.conditions.rot.halfLifeDays).toBe(63);
+    expect(credential.conditions.rot.fromInstalls).toBe(27);
+
+    expect(doubleCharge?.conditions.rot?.surface).toBe("protocol-invariant");
+    expect(PACK_SURFACE_HALF_LIFE_DAYS["protocol-invariant"]).toBeNull();
+    expect(PACK_SURFACE_HALF_LIFE_DAYS["console-navigation"]).toBeLessThan(
+      PACK_SURFACE_HALF_LIFE_DAYS["provider-api"] ?? 0,
+    );
+  });
+
+  it("keeps a measured rot rate distinguishable from the default for its surface", () => {
+    const assumed = knowledge.failureModes?.[1]?.conditions.rot;
+
+    expect(assumed?.basis).toBe("assumed");
+    if (assumed?.basis !== "assumed") throw new Error("Expected an assumed rot rate");
+    expect(Object.keys(assumed)).not.toContain("halfLifeDays");
+  });
+
+  it("rejects a rot rate that claims measurement without saying what from", () => {
+    const [first] = knowledge.failureModes ?? [];
+
+    expect(() =>
+      decodeManifest({
+        ...minimalManifest,
+        knowledge: {
+          failureModes: [
+            {
+              ...first,
+              conditions: {
+                observedAt: "2026-06-18T22:40:00.000Z",
+                rot: { basis: "observed", surface: "console-navigation", halfLifeDays: 63 },
+              },
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("answers 'is this still holding?' for a failure mode as well as an instruction", () => {
+    const fixed = knowledge.failureModes?.find(
+      (entry) => entry.id === "webhook-retry-double-charge",
+    );
+    const open = knowledge.failureModes?.find(
+      (entry) => entry.id === "restricted-key-missing-read-scope",
+    );
+
+    expect(fixed?.standing?.state).toBe("holding");
+    expect(fixed?.standing?.recurredInDeployments).toBe(0);
+    expect(open?.standing?.state).toBe("recurring");
+    expect(open?.standing?.recurredInDeployments).toBe(4);
+  });
+
+  it("counts a failure mode's standing in deployments and an instruction's in installs", () => {
+    const failure = knowledge.failureModes?.[0]?.standing;
+    const instruction = knowledge.integration?.[0]?.standing;
+
+    expect(Object.keys(failure ?? {})).not.toContain("confirmedInInstalls");
+    expect(Object.keys(instruction ?? {})).not.toContain("heldInDeployments");
+  });
+
   it("rejects credential knowledge that names no way to reach the console", () => {
     expect(() =>
       decodeManifest({
@@ -1136,6 +1284,84 @@ describe("pack registry projections", () => {
     expect(parsed.interfaceKinds).toEqual(["api", "web"]);
     expect(parsed.installsSucceeded).toBeLessThan(parsed.installsAttempted);
     expect(parsed.openFailureModes).toBe(1);
+  });
+
+  it("dates a release by when it became visible, not by when it was cut", () => {
+    const history = decodeReleaseHistory({
+      packId: PackId.make("pack_01J9Z0C4Q3"),
+      latestVersion: "1.2.0",
+      releases: [
+        {
+          version: "1.2.0",
+          cutAt: "2026-07-29T16:00:00.000Z",
+          publications: [
+            { scope: "workspace", at: "2026-07-30T09:00:00.000Z" },
+            { scope: "public", at: "2026-08-01T10:00:00.000Z" },
+          ],
+          signals: {
+            measuredAt: "2026-08-07T18:00:00.000Z",
+            scope: "release",
+            installsAttempted: 13,
+            installsSucceeded: 12,
+            deploymentsAttempted: 12,
+            deploymentsSurviving: 11,
+            cumulativeServiceDays: 96,
+            breakagesCaught: 0,
+            breakagesFixed: 0,
+          },
+        },
+      ],
+    });
+
+    const release = history.releases[0];
+    expect(release.cutAt).not.toBe(release.publications[0]?.at);
+    expect(release.publications.at(-1)?.scope).toBe("public");
+    expect(release.signals?.scope).toBe("release");
+    expect(PACK_VISIBILITY_WIDTH.public).toBeGreaterThan(PACK_VISIBILITY_WIDTH.workspace);
+  });
+
+  it("keeps a withdrawal in the log rather than erasing the publication", () => {
+    const history = decodeReleaseHistory({
+      packId: PackId.make("pack_01J9Z0C4Q3"),
+      latestVersion: "1.0.0",
+      releases: [
+        {
+          version: "1.0.0",
+          cutAt: "2026-02-01T09:00:00.000Z",
+          publications: [
+            { scope: "public", at: "2026-02-01T10:00:00.000Z" },
+            { scope: "workspace", at: "2026-03-01T10:00:00.000Z" },
+          ],
+        },
+      ],
+    });
+
+    const publications = history.releases[0].publications;
+    expect(publications).toHaveLength(2);
+    expect(
+      PACK_VISIBILITY_WIDTH[publications[1]?.scope ?? "public"] <
+        PACK_VISIBILITY_WIDTH[publications[0]?.scope ?? "workspace"],
+    ).toBe(true);
+  });
+
+  it("treats a release nobody has published as published nowhere rather than as missing", () => {
+    const history = decodeReleaseHistory({
+      packId: PackId.make("pack_01K2NEW7RS"),
+      latestVersion: "0.1.0",
+      releases: [{ version: "0.1.0", cutAt: "2026-08-08T08:40:00.000Z", publications: [] }],
+    });
+
+    expect(history.releases[0].publications).toEqual([]);
+  });
+
+  it("rejects a release history with no releases in it", () => {
+    expect(() =>
+      decodeReleaseHistory({
+        packId: PackId.make("pack_01K2NEW7RS"),
+        latestVersion: "0.1.0",
+        releases: [],
+      }),
+    ).toThrow();
   });
 
   it("reports publish readiness separately from schema validity", () => {

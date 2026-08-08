@@ -444,6 +444,71 @@ export const PackConditionAxis = Schema.Literals([
 export type PackConditionAxis = typeof PackConditionAxis.Type;
 
 /**
+ * The kind of surface a claim describes, which is what decides how fast it goes
+ * out of date. A console path is redesigned without notice; a delivery
+ * guarantee is not. The two cannot share one staleness threshold, and the
+ * surface is something the observing agent already knows — unlike a half-life,
+ * which it would have to estimate.
+ */
+export const PackKnowledgeSurface = Schema.Literals([
+  "console-navigation",
+  "provider-api",
+  "provider-policy",
+  "sdk-surface",
+  "host-codebase",
+  /** At-least-once delivery, idempotency, ordering. These do not rot. */
+  "protocol-invariant",
+]);
+export type PackKnowledgeSurface = typeof PackKnowledgeSurface.Type;
+
+/**
+ * How long a claim about each surface stays half-likely to hold, used until
+ * something has actually been measured. Exported rather than left to each
+ * consumer because a threshold every reader picks alone is the global staleness
+ * constant this design set out to avoid, reproduced once per reader.
+ *
+ * `null` means it does not rot, which is a different statement from a very long
+ * half-life and has to survive as one.
+ */
+export const PACK_SURFACE_HALF_LIFE_DAYS: Record<PackKnowledgeSurface, number | null> = {
+  "console-navigation": 45,
+  "provider-api": 180,
+  "provider-policy": 90,
+  "sdk-surface": 120,
+  "host-codebase": 60,
+  "protocol-invariant": null,
+};
+
+/**
+ * How fast what was true at `observedAt` stops being true.
+ *
+ * `observed` is the variant the format is betting on: a half-life fitted to
+ * contradictions arriving against the entry's age is something the runtime can
+ * compute from installs it already counts, and it needs nobody to guess. Until
+ * enough installs exist to fit one, `assumed` names the surface and lets the
+ * reader apply `PACK_SURFACE_HALF_LIFE_DAYS`. The two are separated rather than
+ * collapsed into one number because "measured across 200 installs" and "the
+ * default for console paths" support very different confidence, and a reader
+ * that cannot tell them apart will trust the second as hard as the first.
+ */
+export const PackKnowledgeRot = Schema.Union([
+  Schema.Struct({
+    basis: Schema.Literal("observed"),
+    surface: PackKnowledgeSurface,
+    /** Days after which half the installs following this entry contradicted it. */
+    halfLifeDays: PositiveInt,
+    /** The installs the fit was drawn from. Three is a guess wearing a number. */
+    fromInstalls: NonNegativeInt,
+    measuredAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    basis: Schema.Literal("assumed"),
+    surface: PackKnowledgeSurface,
+  }),
+]);
+export type PackKnowledgeRot = typeof PackKnowledgeRot.Type;
+
+/**
  * The context one claim held under, attached per claim rather than once per
  * pack. Two entries in the same manifest are routinely verified years and tiers
  * apart, and a single global block would silently relabel the older one as
@@ -478,6 +543,14 @@ export const PackConditions = Schema.Struct({
    */
   observedAcrossDeployments: Schema.optional(NonNegativeInt),
   untestedAxes: Schema.optional(Schema.Array(PackConditionAxis)),
+  /**
+   * How fast this ages. `observedAt` says when it was true and is useless
+   * alone: without a rate beside it every reader applies one threshold to every
+   * claim, and a console path six weeks old and an idempotency rule six months
+   * old are then treated the same way — the first is probably wrong and the
+   * second is probably eternal.
+   */
+  rot: Schema.optional(PackKnowledgeRot),
 });
 export type PackConditions = typeof PackConditions.Type;
 
@@ -658,6 +731,40 @@ export const PackFailureResolution = Schema.Union([
 export type PackFailureResolution = typeof PackFailureResolution.Type;
 
 /**
+ * Whether a failure mode still describes the present — the same question
+ * `PackKnowledgeStanding` asks of an instruction, and deliberately not the same
+ * type.
+ *
+ * The two look alike and their arithmetic is inverted. A confirmation of an
+ * instruction is somebody following it and getting the screen it promised; the
+ * matching event here is somebody being hurt by the failure again. Sharing one
+ * struct would make `confirmedInInstalls` mean "it worked" on one entry and "it
+ * broke" on the next — a field that reads fine and silently inverts any
+ * threshold set on it.
+ *
+ * Counted against the deployments that took the resolution, because that is the
+ * population the question is about: a fix nobody has installed is not holding,
+ * it is untested.
+ */
+export const PackFailureStanding = Schema.Struct({
+  /**
+   * `recurring` — still being hit by deployments that should be covered.
+   * `holding` — the resolution is holding wherever it was taken.
+   * `dormant` — nobody has hit it in a long time and nothing says why, which
+   * covers both "the provider fixed it" and "nobody walks that path any more".
+   * `obsolete` — the surface it described is gone, so it cannot recur; kept
+   * because an older install may still be sitting on the version that has it.
+   */
+  state: Schema.Literals(["recurring", "holding", "dormant", "obsolete"]),
+  /** Deployments carrying the resolution that have not hit it since. */
+  heldInDeployments: NonNegativeInt,
+  /** Took the resolution and hit it anyway: the count that says a fix is not a fix. */
+  recurredInDeployments: NonNegativeInt,
+  lastCheckedAt: Schema.optional(IsoDateTime),
+});
+export type PackFailureStanding = typeof PackFailureStanding.Type;
+
+/**
  * One thing that has actually gone wrong in production — the edge cases, race
  * conditions and provider quirks somebody already paid for.
  *
@@ -686,6 +793,13 @@ export const PackFailureMode = Schema.Struct({
   silent: Schema.optional(Schema.Boolean),
   detection: Schema.optional(PackFailureDetection),
   resolution: PackFailureResolution,
+  /**
+   * Whether the resolution above is still true. `resolution` is what was done
+   * about it and `standing` is whether that worked, which are different facts:
+   * a `fixed` entry whose fix keeps failing in the field is the single most
+   * useful thing this section can say, and without this it says the opposite.
+   */
+  standing: Schema.optional(PackFailureStanding),
   firstSeenAt: IsoDateTime,
   lastSeenAt: Schema.optional(IsoDateTime),
   /** Deployments known to have hit it. Read against the scar record's totals. */
@@ -871,6 +985,43 @@ export const PackEnvRequirement = Schema.Struct({
 });
 export type PackEnvRequirement = typeof PackEnvRequirement.Type;
 
+/**
+ * How a requirement bills. Split from a boolean because "free until 5GB",
+ * "pennies per request" and "there is no plan under $99" rule a pack out for
+ * different readers, and a single `costsMoney` flag collapses all three into
+ * the least useful of them.
+ */
+export const PackCostModel = Schema.Literals([
+  /** Nothing, at the scale this pack uses it. */
+  "free",
+  /** Free until a threshold this pack can cross, which is the trap worth naming. */
+  "free-tier",
+  "metered",
+  "subscription",
+  /** No usable free option at all: the requirement is a bill before line one runs. */
+  "paid-plan",
+]);
+export type PackCostModel = typeof PackCostModel.Type;
+
+/**
+ * What one requirement costs to keep running, attached wherever paying is
+ * actually possible rather than only to third-party accounts.
+ *
+ * Deliberately carries no price. Prices change quarterly, a manifest is frozen
+ * at extraction, and a stale number a consumer budgets against is worse than no
+ * number — so this names the shape of the bill and links to whoever is allowed
+ * to state its size.
+ */
+export const PackRunningCost = Schema.Struct({
+  model: PackCostModel,
+  /** What the meter counts: requests, seats, gigabyte-months. */
+  billedOn: Schema.optional(PackPurposeText),
+  /** Where the free tier stops, which is where the surprise arrives. */
+  freeTierLimit: Schema.optional(PackPurposeText),
+  pricingUrl: Schema.optional(PackUrl),
+});
+export type PackRunningCost = typeof PackRunningCost.Type;
+
 /** A third-party account the consumer has to hold in their own name. */
 export const PackExternalAccount = Schema.Struct({
   service: PackSlug,
@@ -879,8 +1030,13 @@ export const PackExternalAccount = Schema.Struct({
   signupUrl: Schema.optional(PackUrl),
   requiredScopes: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   requiredPlan: Schema.optional(TrimmedNonEmptyString),
-  /** Flags the packs that cost money to run, before install rather than after. */
+  /**
+   * The coarse flag, kept because every existing reader thresholds on it. When
+   * `cost` is also present the two must agree: `costsMoney` is true for every
+   * model except `free`.
+   */
   costsMoney: Schema.optional(Schema.Boolean),
+  cost: Schema.optional(PackRunningCost),
   providesEnvironment: Schema.optional(Schema.Array(PackEnvVarName)),
 });
 export type PackExternalAccount = typeof PackExternalAccount.Type;
@@ -905,6 +1061,14 @@ export const PackServiceDependency = Schema.Struct({
   purpose: PackPurposeText,
   versionRange: Schema.optional(PackVersionRange),
   connectionEnvVar: Schema.optional(PackEnvVarName),
+  /**
+   * A Postgres or an object store is a bill whether it arrives from a provider
+   * or from the consumer's own hosting, so counting cost only on `accounts`
+   * undercounts every pack that needs a database. `model: "free"` here claims
+   * "nothing beyond infrastructure you are already paying for" — a claim about
+   * this pack's usage rather than about the software's licence.
+   */
+  cost: Schema.optional(PackRunningCost),
 });
 export type PackServiceDependency = typeof PackServiceDependency.Type;
 
@@ -943,6 +1107,13 @@ export type PackSetupStep = typeof PackSetupStep.Type;
  * Present even when empty: `{}` is an affirmative claim that the pack needs
  * nothing supplied, which is a different statement from an absent section and
  * one a reviewer can hold the publisher to.
+ *
+ * Cost sits on `accounts` and `services` and nowhere else, because those are
+ * the two kinds that bill. An `environment` value is free — the account behind
+ * it is what charges, and it is declared there. `toolchain` names interpreters
+ * and build tools, and a toolchain that needs paying for is a licence, which is
+ * an account. A dependency in `packs` states its own costs in its own manifest;
+ * restating them here would be a copy that goes stale the next time it reprices.
  */
 export const PackRequirements = Schema.Struct({
   environment: Schema.optional(Schema.Array(PackEnvRequirement)),
@@ -1302,6 +1473,19 @@ export type PackProductionCheck = typeof PackProductionCheck.Type;
 export const PackScarRecord = Schema.Struct({
   /** Everything below is as of this moment; a count with no as-of is unusable. */
   measuredAt: IsoDateTime,
+  /**
+   * Which population these counts describe: every release of this pack, or the
+   * one release the record is attached to. Absent means `lineage`, which is
+   * what `verification.record` has always meant and what every record written
+   * before this field existed was.
+   *
+   * The distinction exists because behaviour is earned per release and
+   * knowledge accumulates per pack. A rewrite between minor versions inherits a
+   * survival record it did not earn, and a per-release record alone makes every
+   * fresh release look untested — so both are carried and neither is hidden
+   * behind the other. See `PackRelease.signals`.
+   */
+  scope: Schema.optional(Schema.Literals(["lineage", "release"])),
   installsAttempted: NonNegativeInt,
   installsSucceeded: NonNegativeInt,
   deploymentsAttempted: NonNegativeInt,
@@ -1402,6 +1586,34 @@ export type PackVerification = typeof PackVerification.Type;
  * `unlisted` exists because "share a link with a client" is not the same
  * request as "put this in the marketplace".
  */
+/**
+ * The five boundaries without their ids, for the places that reason about width
+ * rather than about which workspace: a publication log, a search projection, a
+ * consent dialog.
+ */
+export const PackVisibilityScope = Schema.Literals([
+  "workspace",
+  "tenant",
+  "organization",
+  "unlisted",
+  "public",
+]);
+export type PackVisibilityScope = typeof PackVisibilityScope.Type;
+
+/**
+ * Wider means more people can reach it. Ordered here rather than in each
+ * consumer so that "was this a publication or a withdrawal" has one answer
+ * across the CLI, the registry and the dashboard. `tenant` and `organization`
+ * share a width because they are two different walls of the same height.
+ */
+export const PACK_VISIBILITY_WIDTH: Record<PackVisibilityScope, number> = {
+  workspace: 0,
+  organization: 1,
+  tenant: 1,
+  unlisted: 2,
+  public: 3,
+};
+
 export const PackVisibility = Schema.Union([
   Schema.Struct({
     scope: Schema.Literal("workspace"),
@@ -1620,6 +1832,62 @@ export type PackManifestEnvelope = typeof PackManifestEnvelope.Type;
 
 // ── Registry projections ────────────────────────────────────────────────────
 
+/**
+ * One move of one release across a visibility boundary.
+ *
+ * A log rather than a `publishedAt`, because visibility widens and narrows: a
+ * release that was public for a month and then withdrawn is not the same thing
+ * as one that was never published, and a single timestamp cannot tell the two
+ * apart — nor can it say when a pack became visible to a tenant, which is the
+ * moment the tenant's installers date their trust from. Narrowing is just
+ * another entry, so nothing has to be closed out or back-dated.
+ */
+export const PackPublication = Schema.Struct({
+  /** The scope it moved to. Wider entries imply every narrower audience. */
+  scope: PackVisibilityScope,
+  at: IsoDateTime,
+  by: Schema.optional(PackAuthor),
+});
+export type PackPublication = typeof PackPublication.Type;
+
+/**
+ * One release, as the registry knows it rather than as the manifest describes
+ * it. The distinction is the whole reason this lives out here: `publications`
+ * changes every time somebody clicks publish, and `signals` changes every time
+ * a deployment survives another day, while a manifest is frozen at extraction
+ * and covered by a signature that a later edit would invalidate. A publish time
+ * written inside the artifact would have to be either wrong or unsigned.
+ */
+export const PackRelease = Schema.Struct({
+  version: PackVersion,
+  /** Matches the release's own `provenance.extractedAt`. */
+  cutAt: IsoDateTime,
+  /** Oldest first. Empty means cut and never shown to anybody. */
+  publications: Schema.Array(PackPublication),
+  /**
+   * What this release alone earned, carrying `scope: "release"`. Read beside
+   * `verification.record`, which is the whole line: the pair is what lets a
+   * reader see that a two-day-old release has eleven deployments behind it and
+   * the line behind it has three hundred, instead of being handed one number
+   * that flatters or one that libels.
+   */
+  signals: Schema.optional(PackScarRecord),
+});
+export type PackRelease = typeof PackRelease.Type;
+
+/**
+ * Every release the registry holds, newest first. `latestVersion` is stated
+ * rather than left to be inferred from the ordering, because the reader that
+ * most needs it is one holding an older manifest, and a manifest cannot know
+ * about releases cut after it.
+ */
+export const PackReleaseHistory = Schema.Struct({
+  packId: PackId,
+  latestVersion: PackVersion,
+  releases: Schema.NonEmptyArray(PackRelease),
+});
+export type PackReleaseHistory = typeof PackReleaseHistory.Type;
+
 /** Enough to name one exact release. */
 export const PackRef = Schema.Struct({
   id: PackId,
@@ -1665,7 +1933,7 @@ export const PackSummary = Schema.Struct({
    * visible in a list rather than only after opening the pack. */
   knowledgeOldestObservedAt: Schema.optional(IsoDateTime),
   hasAdvisory: Schema.Boolean,
-  visibilityScope: Schema.Literals(["workspace", "tenant", "organization", "unlisted", "public"]),
+  visibilityScope: PackVisibilityScope,
   license: PackLicense,
   updatedAt: IsoDateTime,
 });
@@ -1685,6 +1953,9 @@ export const PackReadinessCode = Schema.Literals([
   "integration-prompt-thin",
   "license-unspecified",
   "requirements-undeclared",
+  /** An account or service with no `cost`, which a summary can only read as
+   * unknown — and unknown is not free. */
+  "requirement-cost-undeclared",
   "permissions-undeclared",
   "secret-value-in-manifest",
   "elevated-capability-unjustified",

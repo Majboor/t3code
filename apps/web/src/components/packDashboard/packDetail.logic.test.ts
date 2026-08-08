@@ -2,6 +2,7 @@ import type {
   PackFailureMode,
   PackIntegration,
   PackKnowledge,
+  PackRelease,
   PackRequirements,
   PackScarRecord,
 } from "@t3tools/contracts";
@@ -10,15 +11,21 @@ import { describe, expect, it } from "vitest";
 import {
   countKnowledgeIntroducedIn,
   describeConditions,
+  describeFailureStanding,
+  describePublication,
+  describeReleaseLearning,
+  describeReleaseSignals,
   describeRequirements,
   describeScarRecord,
   describeScarRecordBrief,
+  describeStaleness,
   describeVisibilityChange,
   formatObservedMonth,
   listIntegrationTargets,
   orderFailureModes,
   parsePackRouteSearch,
   resolveIntegrationPrompt,
+  summariseRunningCost,
 } from "./packDetail.logic";
 
 const EMPTY_RECORD: PackScarRecord = {
@@ -151,6 +158,21 @@ describe("describeVisibilityChange", () => {
     expect(describeVisibilityChange("workspace", "public", PROVEN_RECORD).warning).toBeNull();
   });
 
+  it("names the moment the release became visible, which the copy is about", () => {
+    const description = describeVisibilityChange("workspace", "public", PROVEN_RECORD, {
+      version: "1.2.0",
+      cutAt: "2026-07-29T16:20:00.000Z",
+      publications: [{ scope: "workspace", at: "2026-07-30T09:00:00.000Z" }],
+    });
+
+    expect(description.sinceLine).toContain("1.2.0: Visible in this workspace since 30 July 2026.");
+    expect(description.sinceLine).toContain("Confirming dates it from this moment");
+  });
+
+  it("says nothing about a date it does not have", () => {
+    expect(describeVisibilityChange("workspace", "public", PROVEN_RECORD).sinceLine).toBeNull();
+  });
+
   it("describes withdrawal as narrowing, and says the running deployments stay", () => {
     const description = describeVisibilityChange("public", "workspace", PROVEN_RECORD);
     expect(description.widening).toBe(false);
@@ -249,7 +271,7 @@ describe("countKnowledgeIntroducedIn", () => {
 });
 
 describe("describeRequirements", () => {
-  it("names the account that costs money, because that is what rules a pack out", () => {
+  it("counts what has to be supplied without pricing it in the same breath", () => {
     const requirements: PackRequirements = {
       environment: [
         { name: "STRIPE_SECRET_KEY", purpose: "Calls.", secret: true, required: true },
@@ -262,12 +284,219 @@ describe("describeRequirements", () => {
     };
 
     expect(describeRequirements(requirements)).toBe(
-      "You supply 1 value, 1 third-party account (Stripe costs money) and 1 service.",
+      "You supply 1 value, 1 third-party account and 1 service.",
     );
   });
 
   it("treats an empty requirements block as the affirmative claim it is", () => {
     expect(describeRequirements({})).toContain("needs nothing supplied");
+  });
+});
+
+describe("summariseRunningCost", () => {
+  it("counts the services, not only the accounts, so the total is not an undercount", () => {
+    const summary = summariseRunningCost({
+      accounts: [
+        {
+          service: "stripe",
+          displayName: "Stripe",
+          purpose: "Payments.",
+          costsMoney: true,
+          cost: { model: "metered", billedOn: "A percentage of every payment." },
+        },
+      ],
+      services: [
+        { kind: "postgres", name: "orders", purpose: "Orders.", cost: { model: "free-tier" } },
+        { kind: "object-storage", name: "receipts", purpose: "Receipts.", cost: { model: "free" } },
+      ],
+    });
+
+    expect(summary.paying).toEqual(["Stripe", "orders"]);
+    expect(summary.free).toEqual(["receipts"]);
+    expect(summary.line).toContain("Stripe and orders cost money to run.");
+  });
+
+  it("treats silence about cost as unknown rather than as free", () => {
+    const summary = summariseRunningCost({
+      services: [{ kind: "postgres", name: "orders", purpose: "Orders." }],
+    });
+
+    expect(summary.paying).toEqual([]);
+    expect(summary.undeclared).toEqual(["orders"]);
+    expect(summary.line).toContain("nothing is not free");
+  });
+
+  it("says plainly when a pack bills nothing at all", () => {
+    expect(summariseRunningCost({}).line).toContain("Nothing here bills");
+  });
+});
+
+describe("describeStaleness", () => {
+  const now = new Date("2026-08-08T00:00:00.000Z");
+
+  it("ages a console path and a protocol invariant differently at the same age", () => {
+    const consolePath = describeStaleness(
+      {
+        observedAt: "2026-05-01T00:00:00.000Z",
+        rot: { basis: "assumed", surface: "console-navigation" },
+      },
+      now,
+    );
+    const invariant = describeStaleness(
+      {
+        observedAt: "2026-05-01T00:00:00.000Z",
+        rot: { basis: "assumed", surface: "protocol-invariant" },
+      },
+      now,
+    );
+
+    expect(consolePath.state).toBe("stale");
+    expect(consolePath.line).toContain("Assume it has moved");
+    expect(invariant.state).toBe("durable");
+    expect(invariant.line).toContain("does not go stale with time");
+  });
+
+  it("says whether the half-life was measured or assumed", () => {
+    const measured = describeStaleness(
+      {
+        observedAt: "2026-07-30T00:00:00.000Z",
+        rot: {
+          basis: "observed",
+          surface: "console-navigation",
+          halfLifeDays: 63,
+          fromInstalls: 27,
+          measuredAt: "2026-08-07T18:00:00.000Z",
+        },
+      },
+      now,
+    );
+
+    expect(measured.state).toBe("fresh");
+    expect(measured.line).toContain("measured across 27 installs");
+  });
+
+  it("admits when nothing says how fast the entry rots", () => {
+    const unrated = describeStaleness({ observedAt: "2026-05-01T00:00:00.000Z" }, now);
+
+    expect(unrated.state).toBe("unrated");
+    expect(unrated.line).toContain("nothing says how fast");
+  });
+});
+
+describe("describeFailureStanding", () => {
+  it("reads a recurrence as a fix that is not holding, not as a confirmation", () => {
+    const recurring = describeFailureStanding({
+      state: "recurring",
+      heldInDeployments: 0,
+      recurredInDeployments: 4,
+    });
+
+    expect(recurring).toContain("Still recurring");
+    expect(recurring).toContain("4 deployments");
+  });
+
+  it("says a resolution is holding in the deployments that took it", () => {
+    expect(
+      describeFailureStanding({
+        state: "holding",
+        heldInDeployments: 26,
+        recurredInDeployments: 0,
+        lastCheckedAt: "2026-08-07T06:00:00.000Z",
+      }),
+    ).toBe("Holding in 26 deployments since, with 0 recurrences. Last checked 7 August 2026.");
+  });
+});
+
+describe("describePublication", () => {
+  const published: PackRelease = {
+    version: "1.1.0",
+    cutAt: "2026-05-02T18:00:00.000Z",
+    publications: [
+      { scope: "workspace", at: "2026-05-03T08:00:00.000Z" },
+      { scope: "tenant", at: "2026-05-20T11:00:00.000Z" },
+      { scope: "workspace", at: "2026-06-21T09:00:00.000Z" },
+    ],
+  };
+
+  it("dates a release from when it became visible, not from when it was cut", () => {
+    const description = describePublication(published);
+
+    expect(description.scope).toBe("workspace");
+    expect(description.since).toBe("2026-06-21T09:00:00.000Z");
+    expect(description.line).toBe("Visible in this workspace since 21 June 2026.");
+  });
+
+  it("keeps a window it was once wider, which one timestamp cannot hold", () => {
+    expect(describePublication(published).narrowed).toBe(
+      "It was visible across this tenant from 20 May 2026 until 21 June 2026. Installs made in that window are still out there.",
+    );
+  });
+
+  it("tells a release nobody published apart from one published the day it was cut", () => {
+    const description = describePublication({
+      version: "0.1.0",
+      cutAt: "2026-08-08T08:40:00.000Z",
+      publications: [],
+    });
+
+    expect(description.scope).toBeNull();
+    expect(description.line).toContain("never published");
+  });
+});
+
+describe("describeReleaseLearning", () => {
+  const knowledge: PackKnowledge = {
+    failureModes: [
+      makeFailureMode("double-charge", {
+        introducedIn: "1.1.0",
+        resolution: { kind: "fixed", inVersion: "1.1.0", change: "Wrote the event id." },
+      }),
+    ],
+    integration: [],
+  };
+
+  it("reads a release by what it closed and what it taught, with no note to write", () => {
+    expect(describeReleaseLearning(knowledge, "1.1.0")).toBe(
+      "Fixed: Something goes wrong. Brought 1 piece of knowledge with it.",
+    );
+  });
+
+  it("says nothing rather than inventing a line for a release that learned nothing", () => {
+    expect(describeReleaseLearning(knowledge, "1.2.0")).toBeNull();
+  });
+});
+
+describe("describeReleaseSignals", () => {
+  it("keeps a release's own behaviour separate from the line's", () => {
+    expect(
+      describeReleaseSignals({
+        measuredAt: "2026-08-08T00:00:00.000Z",
+        scope: "release",
+        installsAttempted: 13,
+        installsSucceeded: 11,
+        deploymentsAttempted: 11,
+        deploymentsSurviving: 8,
+        cumulativeServiceDays: 96,
+        breakagesCaught: 1,
+        breakagesFixed: 0,
+      }),
+    ).toBe("8 of 11 deployments on this release still running · 96 deployment-days");
+  });
+
+  it("says a fresh release has run nowhere instead of borrowing the line's record", () => {
+    expect(
+      describeReleaseSignals({
+        measuredAt: "2026-08-08T00:00:00.000Z",
+        scope: "release",
+        installsAttempted: 0,
+        installsSucceeded: 0,
+        deploymentsAttempted: 0,
+        deploymentsSurviving: 0,
+        cumulativeServiceDays: 0,
+        breakagesCaught: 0,
+        breakagesFixed: 0,
+      }),
+    ).toBe("Nothing has run this release yet.");
   });
 });
 

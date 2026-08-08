@@ -1,6 +1,11 @@
-import type { PackVerification } from "@t3tools/contracts";
+import type { PackRelease, PackVerification } from "@t3tools/contracts";
 
-import { describeConditions, describeScarRecord, formatObservedDate } from "./packDetail.logic";
+import {
+  describeConditions,
+  describeReleaseSignals,
+  describeScarRecord,
+  formatObservedDate,
+} from "./packDetail.logic";
 import { Badge } from "../ui/badge";
 
 function Count({
@@ -30,7 +35,14 @@ function Count({
  * and every collapsed form of them loses the denominator that decides which
  * one you are reading.
  */
-export function PackScarRecordSection({ verification }: { verification: PackVerification }) {
+export function PackScarRecordSection({
+  verification,
+  release,
+}: {
+  verification: PackVerification;
+  /** Carries what this one release earned, which the lineage record does not. */
+  release: PackRelease | undefined;
+}) {
   const record = verification.record;
   const { hasProduction, headline } = describeScarRecord(record);
   const checks = verification.checks ?? [];
@@ -51,6 +63,18 @@ export function PackScarRecordSection({ verification }: { verification: PackVeri
         data-has-production={hasProduction}
       >
         {headline}
+      </p>
+
+      <p
+        className="mt-1 text-[11px] leading-4 text-muted-foreground"
+        data-testid="pack-detail-record-scope"
+      >
+        {record.scope === "release"
+          ? "These counts are this release alone."
+          : "These counts are every release of this pack together, so behaviour earned by an earlier release is in them."}
+        {release?.signals === undefined
+          ? ""
+          : ` This release alone: ${describeReleaseSignals(release.signals)}.`}
       </p>
 
       {hasProduction ? (

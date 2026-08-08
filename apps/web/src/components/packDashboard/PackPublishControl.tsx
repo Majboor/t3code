@@ -1,11 +1,16 @@
 import { GlobeIcon, LockIcon } from "lucide-react";
-import type { PackScarRecord, PackVisibility } from "@t3tools/contracts";
+import type {
+  PackRelease,
+  PackScarRecord,
+  PackVisibility,
+  PackVisibilityScope,
+} from "@t3tools/contracts";
 import { useState } from "react";
 
-import type { PackVisibilityScope } from "./packDetailSource";
 import {
   PACK_VISIBILITY_CHOICES,
   PACK_VISIBILITY_DESCRIPTIONS,
+  describePublication,
   describeVisibilityChange,
 } from "./packDetail.logic";
 import { cn } from "../../lib/utils";
@@ -29,10 +34,13 @@ import { toastManager } from "../ui/toast";
 export function PackPublishControl({
   visibility,
   record,
+  release,
   onChangeVisibility,
 }: {
   visibility: PackVisibility;
   record: PackScarRecord;
+  /** The release being read, so the copy can name the moment it is about. */
+  release: PackRelease | undefined;
   onChangeVisibility: (scope: PackVisibilityScope) => Promise<void>;
 }) {
   const current = visibility.scope;
@@ -40,7 +48,8 @@ export function PackPublishControl({
   const [target, setTarget] = useState<PackVisibilityScope>(current);
   const [busy, setBusy] = useState(false);
 
-  const description = describeVisibilityChange(current, target, record);
+  const description = describeVisibilityChange(current, target, record, release);
+  const publication = describePublication(release);
   const isPrivate = current === "workspace";
 
   return (
@@ -64,6 +73,13 @@ export function PackPublishControl({
             </div>
             <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
               {PACK_VISIBILITY_DESCRIPTIONS[current].detail}
+            </div>
+            <div
+              className="mt-0.5 text-[11px] leading-4 text-muted-foreground"
+              data-testid="pack-detail-visibility-since"
+            >
+              {publication.line}
+              {publication.narrowed === null ? "" : ` ${publication.narrowed}`}
             </div>
           </div>
 
@@ -120,6 +136,14 @@ export function PackPublishControl({
                 className="rounded-md border border-border p-3"
                 data-testid="pack-detail-visibility-consequence"
               >
+                {description.sinceLine === null ? null : (
+                  <div
+                    className="mb-2 text-xs leading-5 text-muted-foreground"
+                    data-testid="pack-detail-visibility-since-line"
+                  >
+                    {description.sinceLine}
+                  </div>
+                )}
                 <div className="text-xs leading-5 text-foreground">{description.consequence}</div>
                 {description.warning === null ? null : (
                   <div

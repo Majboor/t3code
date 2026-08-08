@@ -7,7 +7,14 @@ import type {
   PackKnowledgeOrigin,
 } from "@t3tools/contracts";
 
-import { describeConditions, formatObservedDate, orderFailureModes } from "./packDetail.logic";
+import {
+  describeConditions,
+  describeFailureStanding,
+  describeStaleness,
+  formatObservedDate,
+  orderFailureModes,
+} from "./packDetail.logic";
+import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 
 const SEVERITY_TONE = {
@@ -46,6 +53,7 @@ function describeOrigin(origin: PackKnowledgeOrigin): string {
  */
 function Conditions({ conditions }: { conditions: PackConditions }) {
   const description = describeConditions(conditions);
+  const staleness = describeStaleness(conditions);
   return (
     <div
       className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-[11px] leading-4 text-muted-foreground"
@@ -53,6 +61,13 @@ function Conditions({ conditions }: { conditions: PackConditions }) {
     >
       <div>{description.observed}</div>
       <div className="mt-0.5 text-foreground/80">{description.untested}</div>
+      <div
+        className={cn("mt-0.5", staleness.state === "stale" && "text-destructive-foreground")}
+        data-testid="pack-detail-staleness"
+        data-state={staleness.state}
+      >
+        {staleness.line}
+      </div>
     </div>
   );
 }
@@ -257,6 +272,16 @@ function FailureModeEntry({ failureMode }: { failureMode: PackFailureMode }) {
               : "the pack itself"}
         .
       </div>
+
+      {failureMode.standing === undefined ? null : (
+        <div
+          className="mt-1 text-[11px] leading-4 text-muted-foreground"
+          data-testid="pack-detail-failure-standing"
+          data-state={failureMode.standing.state}
+        >
+          {describeFailureStanding(failureMode.standing)}
+        </div>
+      )}
 
       <Conditions conditions={failureMode.conditions} />
       <div className="mt-1 text-[11px] leading-4 text-muted-foreground">

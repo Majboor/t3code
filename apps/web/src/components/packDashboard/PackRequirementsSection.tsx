@@ -1,7 +1,12 @@
 import { ExternalLinkIcon } from "lucide-react";
 import type { PackRequirements } from "@t3tools/contracts";
 
-import { describeRequirements } from "./packDetail.logic";
+import {
+  describeCostBasis,
+  describeCostModel,
+  describeRequirements,
+  summariseRunningCost,
+} from "./packDetail.logic";
 import { Badge } from "../ui/badge";
 
 function RequirementRow({
@@ -57,6 +62,7 @@ export function PackRequirementsSection({ requirements }: { requirements: PackRe
   const toolchain = requirements.toolchain ?? [];
   const packs = requirements.packs ?? [];
   const setupSteps = requirements.setupSteps ?? [];
+  const cost = summariseRunningCost(requirements);
 
   return (
     <section className="rounded-lg border border-border p-4" data-testid="pack-detail-requirements">
@@ -66,6 +72,15 @@ export function PackRequirementsSection({ requirements }: { requirements: PackRe
         data-testid="pack-detail-requirements-headline"
       >
         {describeRequirements(requirements)}
+      </p>
+
+      <p
+        className="mt-1 text-xs leading-5 text-foreground"
+        data-testid="pack-detail-requirements-cost"
+        data-paying={cost.paying.length}
+        data-undeclared={cost.undeclared.length}
+      >
+        {cost.line}
       </p>
 
       {accounts.length > 0 ? (
@@ -80,11 +95,28 @@ export function PackRequirementsSection({ requirements }: { requirements: PackRe
                 title={account.displayName}
                 detail={account.purpose}
                 badges={
-                  account.costsMoney === true
-                    ? [{ label: "Costs money", tone: "warning" as const }]
-                    : []
+                  account.cost !== undefined
+                    ? [
+                        {
+                          label: describeCostModel(account.cost.model),
+                          tone:
+                            account.cost.model === "free"
+                              ? ("outline" as const)
+                              : ("warning" as const),
+                        },
+                      ]
+                    : account.costsMoney === true
+                      ? [{ label: "Costs money", tone: "warning" as const }]
+                      : account.costsMoney === false
+                        ? [{ label: "Free", tone: "outline" as const }]
+                        : [{ label: "Cost not stated", tone: "warning" as const }]
                 }
               >
+                {account.cost === undefined || describeCostBasis(account.cost) === null ? null : (
+                  <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                    {describeCostBasis(account.cost)}
+                  </div>
+                )}
                 {account.requiredPlan !== undefined ? (
                   <div className="mt-0.5 text-xs text-muted-foreground">
                     Needs the {account.requiredPlan} plan.
@@ -154,7 +186,26 @@ export function PackRequirementsSection({ requirements }: { requirements: PackRe
                   service.versionRange !== undefined ? ` ${service.versionRange}` : ""
                 })`}
                 detail={service.purpose}
-              />
+                badges={
+                  service.cost === undefined
+                    ? [{ label: "Cost not stated", tone: "warning" as const }]
+                    : [
+                        {
+                          label: describeCostModel(service.cost.model),
+                          tone:
+                            service.cost.model === "free"
+                              ? ("outline" as const)
+                              : ("warning" as const),
+                        },
+                      ]
+                }
+              >
+                {service.cost === undefined || describeCostBasis(service.cost) === null ? null : (
+                  <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                    {describeCostBasis(service.cost)}
+                  </div>
+                )}
+              </RequirementRow>
             ))}
           </div>
         </div>
