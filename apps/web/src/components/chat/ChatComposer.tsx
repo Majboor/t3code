@@ -75,6 +75,7 @@ import {
   renderProviderTraitsPicker,
 } from "./composerProviderRegistry";
 import { ContextWindowMeter } from "./ContextWindowMeter";
+import { PackModeControl } from "../packs/PackModeControl";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../vscode-icons";
 import { cn, randomUUID } from "~/lib/utils";
@@ -1941,6 +1942,12 @@ export const ChatComposer = memo(
                         }
                       : {})}
                     onProviderModelChange={onProviderModelSelect}
+                  />
+
+                  <PackModeControl
+                    compact={isComposerFooterCompact}
+                    prompt={prompt}
+                    onInsertPrompt={setPromptFromTraits}
                   />
 
                   {isComposerFooterCompact ? (
