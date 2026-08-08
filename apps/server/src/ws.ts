@@ -49,6 +49,7 @@ import {
   type OrganizationAuditEventKind,
   OrganizationError,
   type OrganizationId,
+  PackError,
   type OrganizationPermission,
   type OrganizationListResult,
   ProviderAccountError,
@@ -124,6 +125,7 @@ import {
 import { respondToAuthError } from "./auth/http.ts";
 import { CollaborationService } from "./collaboration/Services/CollaborationService.ts";
 import { OrganizationService } from "./organizations/Services/OrganizationService.ts";
+import { PackRegistryService } from "./packs/Services/PackRegistryService.ts";
 import { TenancyRepository } from "./persistence/Services/Tenancy.ts";
 import { DeployService } from "./deploy/Services/DeployService.ts";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
@@ -737,6 +739,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const sessions = yield* SessionCredentialService;
       const collaboration = yield* CollaborationService;
       const organizations = yield* OrganizationService;
+      const packRegistry = yield* PackRegistryService;
       const tenancyRepository = yield* TenancyRepository;
       const deployService = yield* DeployService;
       const threadPreferences = yield* ProjectionThreadPreferenceRepository;
@@ -1448,6 +1451,60 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 message: forbiddenMessage(permission),
               }),
           ),
+        );
+
+      const ensureTenantPermissionForPacks = (
+        tenantId: TenantId,
+        permission: TenantPermission,
+      ): Effect.Effect<void, PackError> =>
+        ensureTenantPermission(tenantId, permission).pipe(
+          Effect.mapError(
+            () =>
+              new PackError({
+                code: "visibility-forbidden",
+                message: forbiddenMessage(permission),
+              }),
+          ),
+        );
+
+      /**
+       * Which organizations a pack read may look through. Taken from the
+       * session's own memberships and never from the payload: an organization
+       * id that arrives on the wire is a claim, and a caller free to make it
+       * could read every pack anybody has listed to an organization.
+       */
+      const sessionOrganizationIds = (): Effect.Effect<ReadonlyArray<OrganizationId>, PackError> =>
+        actorMemberships().pipe(
+          Effect.map((memberships) => [
+            ...new Set(
+              memberships
+                .map((membership) => membership.organizationId)
+                .filter(
+                  (organizationId): organizationId is OrganizationId => organizationId !== null,
+                ),
+            ),
+          ]),
+          Effect.mapError(
+            (cause) =>
+              new PackError({
+                code: "visibility-forbidden",
+                message: "Failed to resolve the organizations this session belongs to.",
+                cause,
+              }),
+          ),
+        );
+
+      const resolvePackViewerScope = (scope: {
+        readonly tenantId: TenantId;
+        readonly workspaceId: WorkspaceId;
+      }) =>
+        ensureTenantPermissionForPacks(scope.tenantId, "workspace.view").pipe(
+          Effect.flatMap(() => sessionOrganizationIds()),
+          Effect.map((organizationIds) => ({
+            tenantId: scope.tenantId,
+            workspaceId: scope.workspaceId,
+            organizationIds,
+          })),
         );
 
       const providerAccountError = (
@@ -4180,6 +4237,100 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             {
               "rpc.aggregate": "collaboration",
             },
+          ),
+        [WS_METHODS.packsPublish]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsPublish,
+            withRateLimit(
+              ensureTenantPermissionForPacks(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => packRegistry.publish(actor, input)),
+              ),
+              (message) => new PackError({ code: "visibility-forbidden", message }),
+            ),
+            { "rpc.aggregate": "packs" },
+          ),
+        [WS_METHODS.packsRecordVersion]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsRecordVersion,
+            withRateLimit(
+              ensureTenantPermissionForPacks(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => packRegistry.recordVersion(actor, input)),
+              ),
+              (message) => new PackError({ code: "visibility-forbidden", message }),
+            ),
+            { "rpc.aggregate": "packs" },
+          ),
+        [WS_METHODS.packsSearch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsSearch,
+            withRateLimit(
+              resolvePackViewerScope(input).pipe(
+                Effect.flatMap((viewer) =>
+                  packRegistry.search(viewer, {
+                    ...(input.query === undefined ? {} : { query: input.query }),
+                    ...(input.limit === undefined ? {} : { limit: input.limit }),
+                  }),
+                ),
+              ),
+              (message) => new PackError({ code: "visibility-forbidden", message }),
+            ),
+            { "rpc.aggregate": "packs" },
+          ),
+        [WS_METHODS.packsGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsGet,
+            withRateLimit(
+              resolvePackViewerScope(input).pipe(
+                Effect.flatMap((viewer) =>
+                  packRegistry.get(viewer, {
+                    packId: input.packId,
+                    ...(input.version === undefined ? {} : { version: input.version }),
+                  }),
+                ),
+              ),
+              (message) => new PackError({ code: "visibility-forbidden", message }),
+            ),
+            { "rpc.aggregate": "packs" },
+          ),
+        [WS_METHODS.packsListVersions]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsListVersions,
+            withRateLimit(
+              resolvePackViewerScope(input).pipe(
+                Effect.flatMap((viewer) =>
+                  packRegistry.listVersions(viewer, { packId: input.packId }),
+                ),
+              ),
+              (message) => new PackError({ code: "visibility-forbidden", message }),
+            ),
+            { "rpc.aggregate": "packs" },
+          ),
+        [WS_METHODS.packsSetVisibility]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsSetVisibility,
+            withRateLimit(
+              ensureTenantPermissionForPacks(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => packRegistry.setVisibility(actor, input)),
+              ),
+              (message) => new PackError({ code: "visibility-forbidden", message }),
+            ),
+            { "rpc.aggregate": "packs" },
+          ),
+        [WS_METHODS.subscribePacks]: (input) =>
+          observeRpcStream(
+            WS_METHODS.subscribePacks,
+            withRateLimitedStream(
+              Stream.unwrap(
+                resolvePackViewerScope(input).pipe(
+                  Effect.map((viewer) => packRegistry.stream(viewer)),
+                ),
+              ),
+              (message) => new PackError({ code: "visibility-forbidden", message }),
+            ),
+            { "rpc.aggregate": "packs" },
           ),
         [WS_METHODS.organizationsCreate]: (input) =>
           observeRpcEffect(

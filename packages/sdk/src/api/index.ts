@@ -8,6 +8,7 @@ import { makeCollaborationApi, type T3CollaborationApi } from "./collaboration.t
 import { makeDeploysApi, type T3DeploysApi } from "./deploys.ts";
 import { makeHistoryApi, type T3HistoryApi } from "./history.ts";
 import { makeOrganizationsApi, type T3OrganizationsApi } from "./organizations.ts";
+import { makePacksApi, type T3PacksApi } from "./packs.ts";
 import {
   makeProvidersApi,
   makeServerApi,
@@ -24,6 +25,7 @@ export * from "./collaboration.ts";
 export * from "./deploys.ts";
 export * from "./history.ts";
 export * from "./organizations.ts";
+export * from "./packs.ts";
 export * from "./server.ts";
 export * from "./terminals.ts";
 export * from "./threads.ts";
@@ -40,6 +42,8 @@ export interface T3Api {
   readonly changes: T3ChangesApi;
   /** Presence, invites, members, approvals, claims. */
   readonly collaboration: T3CollaborationApi;
+  /** The pack registry: publishing, versions, search, and who may see them. */
+  readonly packs: T3PacksApi;
   readonly organizations: T3OrganizationsApi;
   readonly deploys: T3DeploysApi;
   readonly terminals: T3TerminalsApi;
@@ -54,6 +58,7 @@ export function createT3Api(transport: T3Transport): T3Api {
     history: makeHistoryApi(transport),
     changes: makeChangesApi(transport),
     collaboration: makeCollaborationApi(transport),
+    packs: makePacksApi(transport),
     organizations: makeOrganizationsApi(transport),
     deploys: makeDeploysApi(transport),
     terminals: makeTerminalsApi(transport),

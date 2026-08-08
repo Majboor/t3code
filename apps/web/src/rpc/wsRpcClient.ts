@@ -152,6 +152,15 @@ export interface WsRpcClient {
     readonly updateConsent: RpcUnaryMethod<typeof WS_METHODS.collaborationConsentUpdate>;
     readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribeCollaboration>;
   };
+  readonly packs: {
+    readonly publish: RpcUnaryMethod<typeof WS_METHODS.packsPublish>;
+    readonly recordVersion: RpcUnaryMethod<typeof WS_METHODS.packsRecordVersion>;
+    readonly search: RpcUnaryMethod<typeof WS_METHODS.packsSearch>;
+    readonly get: RpcUnaryMethod<typeof WS_METHODS.packsGet>;
+    readonly listVersions: RpcUnaryMethod<typeof WS_METHODS.packsListVersions>;
+    readonly setVisibility: RpcUnaryMethod<typeof WS_METHODS.packsSetVisibility>;
+    readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribePacks>;
+  };
   readonly workspaces: {
     readonly create: RpcUnaryMethod<typeof WS_METHODS.workspacesCreate>;
   };
@@ -375,6 +384,23 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       subscribe: (input, listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeCollaboration](input),
+          listener,
+          options,
+        ),
+    },
+    packs: {
+      publish: (input) => transport.request((client) => client[WS_METHODS.packsPublish](input)),
+      recordVersion: (input) =>
+        transport.request((client) => client[WS_METHODS.packsRecordVersion](input)),
+      search: (input) => transport.request((client) => client[WS_METHODS.packsSearch](input)),
+      get: (input) => transport.request((client) => client[WS_METHODS.packsGet](input)),
+      listVersions: (input) =>
+        transport.request((client) => client[WS_METHODS.packsListVersions](input)),
+      setVisibility: (input) =>
+        transport.request((client) => client[WS_METHODS.packsSetVisibility](input)),
+      subscribe: (input, listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribePacks](input),
           listener,
           options,
         ),

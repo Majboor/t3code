@@ -154,6 +154,21 @@ import type {
   ProviderAccountOpenAuthTerminalResult,
 } from "./tenancy.ts";
 import type { EnvironmentId } from "./baseSchemas.ts";
+import type {
+  PackGetInput,
+  PackGetResult,
+  PackPublishInput,
+  PackPublishResult,
+  PackRegistryStreamEvent,
+  PackSearchInput,
+  PackSearchResult,
+  PackStreamInput,
+  PackVersionInput,
+  PackVersionListInput,
+  PackVersionListResult,
+  PackVisibilityInput,
+  PackVisibilityResult,
+} from "./rpc.ts";
 import { EditorId } from "./editor.ts";
 import { ServerSettings, type ClientSettings, type ServerSettingsPatch } from "./settings.ts";
 
@@ -466,6 +481,21 @@ export interface EnvironmentApi {
     subscribe: (
       input: CollaborationStreamInput,
       callback: (event: CollaborationStreamEvent) => void,
+      options?: {
+        onResubscribe?: () => void;
+      },
+    ) => () => void;
+  };
+  packs: {
+    publish: (input: PackPublishInput) => Promise<PackPublishResult>;
+    recordVersion: (input: PackVersionInput) => Promise<PackPublishResult>;
+    search: (input: PackSearchInput) => Promise<PackSearchResult>;
+    get: (input: PackGetInput) => Promise<PackGetResult>;
+    listVersions: (input: PackVersionListInput) => Promise<PackVersionListResult>;
+    setVisibility: (input: PackVisibilityInput) => Promise<PackVisibilityResult>;
+    subscribe: (
+      input: PackStreamInput,
+      callback: (event: PackRegistryStreamEvent) => void,
       options?: {
         onResubscribe?: () => void;
       },

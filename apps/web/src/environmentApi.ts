@@ -84,6 +84,15 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       subscribe: (input, callback, options) =>
         rpcClient.collaboration.subscribe(input, callback, options),
     },
+    packs: {
+      publish: rpcClient.packs.publish,
+      recordVersion: rpcClient.packs.recordVersion,
+      search: rpcClient.packs.search,
+      get: rpcClient.packs.get,
+      listVersions: rpcClient.packs.listVersions,
+      setVisibility: rpcClient.packs.setVisibility,
+      subscribe: (input, callback, options) => rpcClient.packs.subscribe(input, callback, options),
+    },
     organizations: {
       create: rpcClient.organizations.create,
       list: rpcClient.organizations.list,

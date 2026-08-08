@@ -20,6 +20,10 @@ import {
   type OrchestrationEvent,
   ORCHESTRATION_WS_METHODS,
   OrganizationId,
+  PACK_FORMAT_VERSION,
+  PackId,
+  type PackManifest,
+  PackWorkspaceKeyId,
   ProviderAccountId,
   ProviderSessionId,
   ProjectId,
@@ -106,6 +110,8 @@ import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResol
 import { CollaborationServiceLive } from "./collaboration/Layers/CollaborationService.ts";
 import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
+import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
+import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
@@ -302,6 +308,12 @@ const collaborationTestLayer = CollaborationServiceLive.pipe(
 );
 
 const organizationTestLayer = OrganizationServiceLive.pipe(
+  Layer.provide(tenancyRepositoryTestLayer),
+);
+
+const packRegistryTestLayer = PackRegistryServiceLive.pipe(
+  Layer.provide(PackRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(collaborationTestLayer),
   Layer.provide(tenancyRepositoryTestLayer),
 );
 
@@ -661,6 +673,7 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(deployTestLayer),
       Layer.provideMerge(collaborationTestLayer),
       Layer.provideMerge(organizationTestLayer),
+      Layer.provideMerge(packRegistryTestLayer),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(layerConfig),
@@ -1051,6 +1064,68 @@ const reserveTcpPort = async (): Promise<number> => {
     });
   });
 };
+
+/**
+ * A publishable pack. It claims `unlisted` on purpose: what a manifest says
+ * about its own visibility is not what the registry publishes it as.
+ */
+const makePackManifestPayload = (version: string): PackManifest => ({
+  formatVersion: PACK_FORMAT_VERSION,
+  identity: {
+    id: PackId.make("pack_01JWSRPC01"),
+    name: "stripe-checkout",
+    version,
+    displayName: "Stripe Checkout",
+    summary: "Hosted Stripe checkout with webhook reconciliation.",
+    publisher: { type: "user", handle: "waleed", displayName: "Waleed Ajmal" },
+    license: "MIT",
+  },
+  provenance: {
+    workspace: { workspaceKeyId: PackWorkspaceKeyId.make("wsk_7f3a91") },
+    extractedAt: "2026-08-07T09:12:00.000Z",
+    extractedBy: { type: "agent", provider: "claudeAgent" },
+    handover: {
+      path: "handover.md",
+      summary: "Lifted the checkout flow out of the storefront workspace.",
+    },
+  },
+  capability: { does: "Turns a cart total into a paid Stripe order." },
+  knowledge: {},
+  requirements: {},
+  interfaces: [
+    {
+      kind: "library",
+      id: "checkout",
+      title: "Checkout helpers",
+      language: "typescript",
+      exports: [
+        {
+          name: "createCheckoutSession",
+          kind: "function",
+          summary: "Creates a Stripe checkout session for a cart.",
+        },
+      ],
+    },
+  ],
+  runtime: { target: "node", commands: {} },
+  permissions: {},
+  verification: {
+    record: {
+      measuredAt: "2026-08-07T09:12:00.000Z",
+      installsAttempted: 0,
+      installsSucceeded: 0,
+      deploymentsAttempted: 0,
+      deploymentsSurviving: 0,
+      cumulativeServiceDays: 0,
+      breakagesCaught: 0,
+      breakagesFixed: 0,
+    },
+  },
+  visibility: { scope: "unlisted" },
+  integration: {
+    prompt: "Install the stripe-checkout pack and call createCheckoutSession from your cart page.",
+  },
+});
 
 const restoreProcessEnvValue = (name: string, value: string | undefined) => {
   if (value === undefined) {
@@ -2753,6 +2828,97 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assertTrue(result._tag === "Failure");
       assertTrue(result.failure._tag === "CollaborationError");
+      assertInclude(
+        result.failure.message,
+        "Forbidden: authenticated session does not have workspace.view.",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("publishes, searches and lists a pack over websocket rpc", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const workspaceId = WorkspaceId.make("workspace-packs-rpc");
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const organization = yield* client[WS_METHODS.organizationsCreate]({
+              slug: "packs-acme",
+              displayName: "Packs Acme",
+            });
+            const tenantId = organization.tenant.id;
+            const published = yield* client[WS_METHODS.packsPublish]({
+              tenantId,
+              workspaceId,
+              manifest: makePackManifestPayload("0.1.0"),
+            });
+            const packId = published.pack.packId;
+            const searched = yield* client[WS_METHODS.packsSearch]({
+              tenantId,
+              workspaceId,
+              query: "checkout",
+            });
+            const recorded = yield* client[WS_METHODS.packsRecordVersion]({
+              tenantId,
+              workspaceId,
+              packId,
+              manifest: makePackManifestPayload("0.2.0"),
+            });
+            const versions = yield* client[WS_METHODS.packsListVersions]({
+              tenantId,
+              workspaceId,
+              packId,
+            });
+            const listedPublic = yield* client[WS_METHODS.packsSetVisibility]({
+              tenantId,
+              workspaceId,
+              packId,
+              visibility: { scope: "public" },
+            });
+            const fetched = yield* client[WS_METHODS.packsGet]({
+              tenantId,
+              workspaceId,
+              packId,
+              version: "0.1.0",
+            });
+            return { published, searched, recorded, versions, listedPublic, fetched };
+          }),
+        ),
+      );
+
+      // A manifest that arrives claiming to be public does not get to publish
+      // itself that way; listing it is the deliberate second act below.
+      assert.equal(result.published.pack.visibility.scope, "workspace");
+      assert.equal(result.published.pack.latestVersion, "0.1.0");
+      assert.equal(result.searched.packs.length, 1);
+      assert.equal(result.recorded.pack.latestVersion, "0.2.0");
+      assert.equal(result.versions.versions.length, 2);
+      assert.equal(result.listedPublic.pack.visibility.scope, "public");
+      assert.equal(result.fetched.version.version, "0.1.0");
+      assert.equal(result.fetched.manifest.identity.name, "stripe-checkout");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects pack rpc calls for tenants without membership", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.packsSearch]({
+            tenantId: TenantId.make("tenant-forbidden-packs"),
+            workspaceId: WorkspaceId.make("workspace-forbidden-packs"),
+            query: "checkout",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "PackError");
       assertInclude(
         result.failure.message,
         "Forbidden: authenticated session does not have workspace.view.",

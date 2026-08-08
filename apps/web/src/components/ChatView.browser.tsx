@@ -346,6 +346,7 @@ function createMockEnvironmentApi(input: {
         undefined) as EnvironmentApi["orchestration"]["subscribeThread"],
     },
     collaboration: {} as EnvironmentApi["collaboration"],
+    packs: {} as EnvironmentApi["packs"],
     organizations: {
       list: (async () => ({
         organizations: [],

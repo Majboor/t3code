@@ -201,6 +201,23 @@ import {
   ServerUpsertKeybindingResult,
 } from "./server.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
+import {
+  IsoDateTime,
+  TenantId,
+  TrimmedNonEmptyString,
+  UserId,
+  WorkspaceId,
+} from "./baseSchemas.ts";
+import {
+  PackError,
+  PackHandle,
+  PackId,
+  PackManifest,
+  PackName,
+  PackTag,
+  PackVersion,
+  PackVisibility,
+} from "./pack.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -295,6 +312,15 @@ export const WS_METHODS = {
   collaborationConsentGet: "collaboration.consent.get",
   collaborationConsentUpdate: "collaboration.consent.update",
   subscribeCollaboration: "collaboration.subscribe",
+
+  // Pack registry methods
+  packsPublish: "packs.publish",
+  packsRecordVersion: "packs.recordVersion",
+  packsSearch: "packs.search",
+  packsGet: "packs.get",
+  packsListVersions: "packs.listVersions",
+  packsSetVisibility: "packs.setVisibility",
+  subscribePacks: "packs.subscribe",
 
   // Deploy methods
   deployListTargets: "deploy.targets.list",
@@ -836,6 +862,189 @@ export const WsSubscribeCollaborationRpc = Rpc.make(WS_METHODS.subscribeCollabor
   stream: true,
 });
 
+// ── Pack registry ───────────────────────────────────────────────────────────
+
+/**
+ * What one server's registry has recorded about a pack. These projections live
+ * beside the RPC rather than in `pack.ts` because they are not part of the pack
+ * format: a manifest describes a pack, and an entry describes what a particular
+ * registry knows about it — who published it, and who may currently see it.
+ */
+export const PackRegistryEntry = Schema.Struct({
+  packId: PackId,
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  name: PackName,
+  publisherHandle: PackHandle,
+  displayName: TrimmedNonEmptyString,
+  summary: TrimmedNonEmptyString,
+  capabilitySummary: TrimmedNonEmptyString,
+  tags: Schema.Array(PackTag),
+  visibility: PackVisibility,
+  latestVersion: PackVersion,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type PackRegistryEntry = typeof PackRegistryEntry.Type;
+
+/** One immutable release. Nothing here is ever rewritten. */
+export const PackRegistryVersion = Schema.Struct({
+  packId: PackId,
+  version: PackVersion,
+  capabilitySummary: TrimmedNonEmptyString,
+  publishedByUserId: UserId,
+  publishedAt: IsoDateTime,
+});
+export type PackRegistryVersion = typeof PackRegistryVersion.Type;
+
+/**
+ * The workspace a pack request is made from.
+ *
+ * The organizations a caller belongs to are deliberately absent: the server
+ * fills those from the session, because a viewer scope that arrives on the wire
+ * is a claim, and a caller that could name any organization could read every
+ * pack listed to it.
+ */
+const PackWorkspaceScopeFields = {
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+};
+
+export const PackPublishInput = Schema.Struct({
+  ...PackWorkspaceScopeFields,
+  manifest: PackManifest,
+});
+export type PackPublishInput = typeof PackPublishInput.Type;
+
+export const PackVersionInput = Schema.Struct({
+  ...PackWorkspaceScopeFields,
+  packId: PackId,
+  manifest: PackManifest,
+});
+export type PackVersionInput = typeof PackVersionInput.Type;
+
+export const PackSearchInput = Schema.Struct({
+  ...PackWorkspaceScopeFields,
+  /** Matched against name, tags and capability summary at once. */
+  query: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.Int),
+});
+export type PackSearchInput = typeof PackSearchInput.Type;
+
+export const PackGetInput = Schema.Struct({
+  ...PackWorkspaceScopeFields,
+  packId: PackId,
+  /** Omitted means the most recently published version. */
+  version: Schema.optional(PackVersion),
+});
+export type PackGetInput = typeof PackGetInput.Type;
+
+export const PackVersionListInput = Schema.Struct({
+  ...PackWorkspaceScopeFields,
+  packId: PackId,
+});
+export type PackVersionListInput = typeof PackVersionListInput.Type;
+
+export const PackVisibilityInput = Schema.Struct({
+  ...PackWorkspaceScopeFields,
+  packId: PackId,
+  visibility: PackVisibility,
+});
+export type PackVisibilityInput = typeof PackVisibilityInput.Type;
+
+export const PackStreamInput = Schema.Struct(PackWorkspaceScopeFields);
+export type PackStreamInput = typeof PackStreamInput.Type;
+
+export const PackPublishResult = Schema.Struct({
+  pack: PackRegistryEntry,
+  version: PackRegistryVersion,
+});
+export type PackPublishResult = typeof PackPublishResult.Type;
+
+export const PackSearchResult = Schema.Struct({
+  packs: Schema.Array(PackRegistryEntry),
+});
+export type PackSearchResult = typeof PackSearchResult.Type;
+
+export const PackGetResult = Schema.Struct({
+  pack: PackRegistryEntry,
+  version: PackRegistryVersion,
+  manifest: PackManifest,
+});
+export type PackGetResult = typeof PackGetResult.Type;
+
+export const PackVersionListResult = Schema.Struct({
+  pack: PackRegistryEntry,
+  /** Newest first. Pinning one of these is what a rollback is. */
+  versions: Schema.Array(PackRegistryVersion),
+});
+export type PackVersionListResult = typeof PackVersionListResult.Type;
+
+export const PackVisibilityResult = Schema.Struct({
+  pack: PackRegistryEntry,
+});
+export type PackVisibilityResult = typeof PackVisibilityResult.Type;
+
+export const PackRegistryStreamEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("pack-published"),
+    pack: PackRegistryEntry,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("pack-version-recorded"),
+    pack: PackRegistryEntry,
+    version: PackRegistryVersion,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("pack-visibility-changed"),
+    pack: PackRegistryEntry,
+  }),
+]);
+export type PackRegistryStreamEvent = typeof PackRegistryStreamEvent.Type;
+
+export const WsPacksPublishRpc = Rpc.make(WS_METHODS.packsPublish, {
+  payload: PackPublishInput,
+  success: PackPublishResult,
+  error: PackError,
+});
+
+export const WsPacksRecordVersionRpc = Rpc.make(WS_METHODS.packsRecordVersion, {
+  payload: PackVersionInput,
+  success: PackPublishResult,
+  error: PackError,
+});
+
+export const WsPacksSearchRpc = Rpc.make(WS_METHODS.packsSearch, {
+  payload: PackSearchInput,
+  success: PackSearchResult,
+  error: PackError,
+});
+
+export const WsPacksGetRpc = Rpc.make(WS_METHODS.packsGet, {
+  payload: PackGetInput,
+  success: PackGetResult,
+  error: PackError,
+});
+
+export const WsPacksListVersionsRpc = Rpc.make(WS_METHODS.packsListVersions, {
+  payload: PackVersionListInput,
+  success: PackVersionListResult,
+  error: PackError,
+});
+
+export const WsPacksSetVisibilityRpc = Rpc.make(WS_METHODS.packsSetVisibility, {
+  payload: PackVisibilityInput,
+  success: PackVisibilityResult,
+  error: PackError,
+});
+
+export const WsSubscribePacksRpc = Rpc.make(WS_METHODS.subscribePacks, {
+  payload: PackStreamInput,
+  success: PackRegistryStreamEvent,
+  error: PackError,
+  stream: true,
+});
+
 export const WsWorkspacesCreateRpc = Rpc.make(WS_METHODS.workspacesCreate, {
   payload: WorkspaceCreateInput,
   success: WorkspaceCreateResult,
@@ -1016,6 +1225,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsCollaborationConsentGetRpc,
   WsCollaborationConsentUpdateRpc,
   WsSubscribeCollaborationRpc,
+  WsPacksPublishRpc,
+  WsPacksRecordVersionRpc,
+  WsPacksSearchRpc,
+  WsPacksGetRpc,
+  WsPacksListVersionsRpc,
+  WsPacksSetVisibilityRpc,
+  WsSubscribePacksRpc,
   WsWorkspacesCreateRpc,
   WsOrganizationsCreateRpc,
   WsOrganizationsListRpc,

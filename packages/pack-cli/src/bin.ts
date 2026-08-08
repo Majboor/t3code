@@ -13,8 +13,8 @@ import { parseArgs } from "./args.ts";
 import { runCommand, type CommandContext } from "./commands.ts";
 import { toPackCliError } from "./errors.ts";
 import { renderFailure, renderSuccess } from "./output.ts";
-import { makeDirectoryRegistry } from "./registry.ts";
-import { makeNodePackStore, type PackStore } from "./store.ts";
+import { makeDirectoryRegistry, type PackRegistry } from "./registry.ts";
+import { makeNodePackStore } from "./store.ts";
 
 const REGISTRY_DIRECTORY = "packs";
 
@@ -31,19 +31,19 @@ function defaultRegistryRoot(environment: Record<string, string | undefined>): s
  * Only reached when the caller asks for a server, so a local search never opens
  * a websocket. The import is dynamic for the same reason.
  */
-async function connectRemoteStore(input: {
+async function connectRemoteRegistry(input: {
   readonly baseUrl: string;
   readonly token: string | undefined;
-  readonly cwd: string;
-}): Promise<{ readonly store: PackStore; readonly close: () => Promise<void> }> {
+}): Promise<{ readonly registry: PackRegistry; readonly close: () => Promise<void> }> {
   const { connect } = await import("@t3tools/sdk");
-  const { makeSdkPackStore } = await import("./store-sdk.ts");
+  const { makeSdkPackRegistry, resolveSdkPackScope } = await import("./store-sdk.ts");
   const client = await connect({
     baseUrl: input.baseUrl,
     ...(input.token !== undefined ? { token: input.token } : {}),
   });
+  const scope = await resolveSdkPackScope({ client, label: input.baseUrl });
   return {
-    store: makeSdkPackStore({ workspace: client.workspace, cwd: input.cwd }),
+    registry: makeSdkPackRegistry(scope),
     close: () => client.close(),
   };
 }
@@ -61,19 +61,18 @@ async function main(): Promise<void> {
   const root = options.registry ?? defaultRegistryRoot(process.env);
   const remote =
     options.server !== undefined
-      ? await connectRemoteStore({
+      ? await connectRemoteRegistry({
           baseUrl: options.server,
           token: options.token ?? process.env["T3CODE_AUTH_TOKEN"],
-          cwd: root,
         })
       : undefined;
-  const store = remote?.store ?? makeNodePackStore();
+  // The pack being worked on is always on local disk: `--server` says where a
+  // release goes, not where the working copy lives.
+  const store = makeNodePackStore();
 
   const context: CommandContext = {
     store,
-    // A remote store addresses everything relative to the project root it was
-    // opened at, so its registry root is that root itself.
-    registry: makeDirectoryRegistry(store, remote !== undefined ? "" : root),
+    registry: remote?.registry ?? makeDirectoryRegistry(store, root),
     cwd: process.cwd(),
     now: () => new Date(),
     newId: (prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`,

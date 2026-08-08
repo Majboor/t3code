@@ -82,6 +82,8 @@ import {
   orchestrationSnapshotRouteLayer,
 } from "./orchestration/http.ts";
 import { CollaborationServiceLive } from "./collaboration/Layers/CollaborationService.ts";
+import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
+import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
@@ -289,6 +291,19 @@ const OrganizationLayerLive = OrganizationServiceLive.pipe(
   Layer.provide(TenancyRepositoryLayerLive),
 );
 
+const PackRegistryLayerLive = PackRegistryServiceLive.pipe(
+  Layer.provide(PackRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+  Layer.provide(CollaborationLayerLive),
+  Layer.provide(TenancyRepositoryLayerLive),
+);
+
+/** Everything scoped to a tenant's people and what they publish. */
+const TenantServicesLayerLive = Layer.mergeAll(
+  CollaborationLayerLive,
+  OrganizationLayerLive,
+  PackRegistryLayerLive,
+);
+
 const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
@@ -306,8 +321,7 @@ const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(AuthLayerLive),
   Layer.provideMerge(PersistenceServicesLayerLive),
   Layer.provideMerge(TenantRuntimeLifecycleOwnerLayerLive),
-  Layer.provideMerge(CollaborationLayerLive),
-  Layer.provideMerge(OrganizationLayerLive),
+  Layer.provideMerge(TenantServicesLayerLive),
 
   // Misc.
   Layer.provideMerge(AnalyticsServiceLayerLive),
