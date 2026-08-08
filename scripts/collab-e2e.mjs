@@ -31,6 +31,7 @@ const PROJECT_DIR = path.join(existsSync(DESKTOP_DIR) ? DESKTOP_DIR : os.tmpdir(
 const PASSWORD = "CollabE2E!2026";
 const ACCOUNT_A = `collab.a.${RUN_ID}@example.test`;
 const ACCOUNT_B = `collab.b.${RUN_ID}@example.test`;
+const ACCOUNT_C = `collab.c.${RUN_ID}@example.test`;
 const KEEP_WORKSPACE = process.env["T3_E2E_KEEP_WORKSPACE"] === "1";
 // Sharing, live file updates, branches and conflicts all work without a model
 // behind them. Skipping the turns that need one lets CI run most of this suite
@@ -341,6 +342,74 @@ async function sendAgentMessage(page, prompt) {
   return true;
 }
 
+/** Invites an email to the workspace and returns the link, or null. */
+async function createInvite(page, email) {
+  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await sleep(6_000);
+  await page.locator('button:has-text("Invite")').first().click();
+  await sleep(2_000);
+  await page.locator('[data-slot="dialog-panel"] input[type="email"]').first().fill(email);
+  await page.locator('[data-slot="dialog-footer"] button:has-text("Create invite")').first().click();
+  await sleep(5_000);
+  const codes = await page.locator("code").allInnerTexts();
+  const url = codes.find((text) => text.includes("invite=")) ?? null;
+  await page.locator('button:has-text("Close")').first().click().catch(() => undefined);
+  return url;
+}
+
+/** The roster row for one person, opened so its controls are on screen. */
+async function expandMemberRow(page, email) {
+  if (!(await openCollabPanel(page))) return null;
+  const rows = page.locator('[data-testid="collaboration-member-row"]');
+  for (let index = 0; index < (await rows.count()); index += 1) {
+    const row = rows.nth(index);
+    if (((await row.innerText().catch(() => "")) ?? "").includes(email)) {
+      await row.locator("button").first().click().catch(() => undefined);
+      await sleep(1_500);
+      return row;
+    }
+  }
+  return null;
+}
+
+/** Flips one member between watching and prompting, from the lead's browser. */
+async function setMemberReadOnly(page, email, readOnly) {
+  const row = await expandMemberRow(page, email);
+  if (!row) return false;
+  const toggle = row.locator('[data-testid="collaboration-read-only-toggle"]').first();
+  if ((await toggle.count()) === 0) return false;
+  const label = (await toggle.innerText().catch(() => "")) ?? "";
+  const alreadyThere = readOnly ? label.includes("Restore") : label.includes("Make read-only");
+  if (!alreadyThere) {
+    await toggle.click().catch(() => undefined);
+    await sleep(3_000);
+  }
+  await closeCollabPanel(page);
+  return true;
+}
+
+/** Waits for text to show up, and hands back what was on screen either way. */
+async function waitForText(page, pattern, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  let seen = "";
+  while (Date.now() < deadline) {
+    seen = await bodyText(page);
+    if (pattern.test(seen)) return { found: true, seen };
+    await sleep(2_000);
+  }
+  return { found: false, seen };
+}
+
+/** Every avatar's background colour, which is how one person stays recognisable. */
+async function avatarColors(page) {
+  if (!(await openCollabPanel(page))) return [];
+  const colors = await page
+    .locator('[data-testid="collaboration-avatar"]')
+    .evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).backgroundColor));
+  await closeCollabPanel(page);
+  return colors.filter((color) => color && color !== "rgba(0, 0, 0, 0)");
+}
+
 async function waitForFileOnDisk(name, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -383,17 +452,8 @@ try {
     aFiles.join(", "));
 
   phase("Account A: invite a second person to the workspace");
-  await accountA.page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await sleep(6_000);
-  await accountA.page.locator('button:has-text("Invite")').first().click();
-  await sleep(2_000);
-  await accountA.page.locator('[data-slot="dialog-panel"] input[type="email"]').first().fill(ACCOUNT_B);
-  await accountA.page.locator('[data-slot="dialog-footer"] button:has-text("Create invite")').first().click();
-  await sleep(5_000);
-  const codes = await accountA.page.locator("code").allInnerTexts();
-  const inviteUrl = codes.find((text) => text.includes("invite=")) ?? null;
+  const inviteUrl = await createInvite(accountA.page, ACCOUNT_B);
   check("invite link created", Boolean(inviteUrl), inviteUrl ?? "none");
-  await accountA.page.locator('button:has-text("Close")').first().click().catch(() => undefined);
   if (!inviteUrl) throw new Error("no invite link to follow");
 
   phase("Account B: open the invite in a clean session and sign up");
@@ -603,6 +663,79 @@ try {
   }
   await closeCollabPanel(accountB.page);
 
+  phase("The lead takes someone's write access away");
+  check("A can mark B read-only", await setMemberReadOnly(accountA2.page, ACCOUNT_B, true));
+  const deniedFile = `denied-${RUN_ID}.txt`;
+  // A refusal only means something if the prompt was really submitted, so prove
+  // the composer took it before reading anything into what came back.
+  const sentWhileMuted = await sendAgentMessage(
+    accountB.page,
+    `Create a file named ${deniedFile}. Do not ask questions.`,
+  );
+  check("B's composer accepted the prompt", sentWhileMuted);
+  const refusal = await waitForText(accountB.page, /read-only|was not sent/i);
+  check(
+    "B is told the workspace is read-only for them",
+    refusal.found,
+    // Without this the failure says nothing about what B was actually shown.
+    refusal.found ? "" : `saw: ${refusal.seen.replace(/\s+/g, " ").slice(0, 200)}`,
+  );
+  // The refusal is only worth anything if the work really did not happen.
+  check("B's prompt never reached the agent", !(await waitForFileOnDisk(deniedFile, 8_000)));
+
+  phase("The lead gives write access back");
+  check("A can restore B's write access", await setMemberReadOnly(accountA2.page, ACCOUNT_B, false));
+  const restoredRow = await expandMemberRow(accountA2.page, ACCOUNT_B);
+  check(
+    "B is no longer listed as read-only",
+    !((await restoredRow?.innerText().catch(() => "")) ?? "").includes("Read-only"),
+  );
+  await closeCollabPanel(accountA2.page);
+
+  phase("A third person joins from a session that already has an account");
+  const accountC = await openIsolatedSession(browser, "C");
+  check("C signs up on their own", await signUp(accountC, ACCOUNT_C), ACCOUNT_C);
+  const inviteForC = await createInvite(accountA2.page, ACCOUNT_C);
+  check("A invites C", Boolean(inviteForC), inviteForC ?? "none");
+  if (inviteForC) {
+    await accountC.page.goto(inviteForC, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await sleep(7_000);
+    const cInvite = await bodyText(accountC.page);
+    // C is already signed in, so the link must attach to that session rather
+    // than send them back through sign-up.
+    check("C is not asked to authenticate again", !/Sign up now|Create your account/i.test(cInvite));
+    check("C accepts the invite", cInvite.includes("Invite accepted"));
+    await accountC.page.locator('button:has-text("Back to app")').first().click().catch(() => undefined);
+    await sleep(6_000);
+    check("the shared workspace appears for C", await openProject(accountC.page));
+    const cFiles = await visibleFileNames(accountC.page);
+    check("C sees the shared files", cFiles.includes("seed-one.txt"), cFiles.join(", "));
+    check("C hits no permission error", !PERMISSION_ERROR.test(await bodyText(accountC.page)));
+  }
+
+  phase("Three people, three colours");
+  // Inviting C left this browser on the dashboard, and the collaboration panel
+  // only has a workspace to talk about from inside the project.
+  check("A is back in the project", await openProject(accountA2.page));
+  const colors = await avatarColors(accountA2.page);
+  check("the roster shows all three people", colors.length >= 3, `${colors.length} avatars`);
+  check("each person has their own colour",
+    colors.length >= 3 && new Set(colors).size === colors.length,
+    [...new Set(colors)].join(" "));
+  const cRow = await expandMemberRow(accountA2.page, ACCOUNT_C);
+  const swatches = cRow?.locator('[data-testid="collaboration-color-picker"] button');
+  const canRecolour = swatches !== undefined && (await swatches.count()) > 0;
+  if (canRecolour) {
+    await swatches.last().click().catch(() => undefined);
+    await sleep(3_000);
+  }
+  check("the lead can recolour someone", canRecolour);
+  await closeCollabPanel(accountA2.page);
+  const recoloured = await avatarColors(accountA2.page);
+  check("the new colour sticks",
+    recoloured.length >= 3 && new Set(recoloured).size === recoloured.length,
+    [...new Set(recoloured)].join(" "));
+
   phase("Result");
   console.log(`  workspace: ${PROJECT_DIR}`);
   console.log(`  on disk:   ${readdirSync(PROJECT_DIR).join(", ")}`);
@@ -610,6 +743,7 @@ try {
     ["A", accountA.consoleErrors],
     ["B", accountB.consoleErrors],
     ["A2", accountA2.consoleErrors],
+    ["C", accountC.consoleErrors],
   ]) {
     const meaningful = errors.filter((text) => !text.includes("401"));
     if (meaningful.length > 0) console.log(`  console (${label}): ${meaningful.slice(0, 3).join(" | ")}`);

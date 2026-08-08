@@ -1,4 +1,4 @@
-import { CheckIcon, ShieldCheckIcon, UserMinusIcon } from "lucide-react";
+import { CheckIcon, EyeIcon, ShieldCheckIcon, UserMinusIcon } from "lucide-react";
 import type { CollaborationMember, EnvironmentId, TenantId, WorkspaceId } from "@t3tools/contracts";
 import { useCallback, useEffect, useState } from "react";
 
@@ -19,6 +19,14 @@ const MEMBER_COLORS = [
   "hsl(265 65% 62%)",
   "hsl(320 60% 58%)",
 ] as const;
+
+/**
+ * Someone who can watch but not prompt. Mirrors the server's rule rather than
+ * reading a flag, so the roster and the turn check cannot disagree.
+ */
+function isReadOnly(member: Pick<CollaborationMember, "roles">): boolean {
+  return member.roles.length > 0 && member.roles.every((role) => role === "viewer");
+}
 
 /**
  * A person, drawn as their colour and initials. Everything that mentions a
@@ -70,6 +78,7 @@ function MemberRow({
   isViewer,
   onSetColor,
   onToggleApprover,
+  onToggleReadOnly,
   onRemove,
 }: {
   member: CollaborationMember;
@@ -77,9 +86,11 @@ function MemberRow({
   isViewer: boolean;
   onSetColor: (color: string) => void;
   onToggleApprover: () => void;
+  onToggleReadOnly: () => void;
   onRemove: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const readOnly = isReadOnly(member);
 
   return (
     <div className="rounded-md border border-border/70" data-testid="collaboration-member-row">
@@ -92,7 +103,7 @@ function MemberRow({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-xs text-foreground">{member.displayName}</span>
           <span className="block truncate text-[10px] text-muted-foreground">
-            {member.isLead ? "Lead" : member.isApprover ? "Can approve" : "Member"}
+            {member.isLead ? "Lead" : readOnly ? "Read-only" : member.isApprover ? "Can approve" : "Member"}
             {member.email ? ` · ${member.email}` : ""}
           </span>
         </span>
@@ -133,10 +144,19 @@ function MemberRow({
               </div>
 
               {!member.isLead ? (
-                <div className="mt-2 flex gap-1">
+                <div className="mt-2 flex flex-wrap gap-1">
                   <Button size="xs" variant="outline" onClick={onToggleApprover}>
                     <ShieldCheckIcon className="size-3.5" />
                     {member.isApprover ? "Remove approver" : "Make approver"}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    data-testid="collaboration-read-only-toggle"
+                    onClick={onToggleReadOnly}
+                  >
+                    <EyeIcon className="size-3.5" />
+                    {readOnly ? "Restore write access" : "Make read-only"}
                   </Button>
                   {!isViewer ? (
                     <Button size="xs" variant="outline" onClick={onRemove}>
@@ -273,6 +293,16 @@ export function CollaborationPeople({
                   workspaceId,
                   userId: member.userId,
                   isApprover: !member.isApprover,
+                }),
+              );
+            }}
+            onToggleReadOnly={() => {
+              void mutate((api) =>
+                api.collaboration.updateMember({
+                  tenantId,
+                  workspaceId,
+                  userId: member.userId,
+                  readOnly: !isReadOnly(member),
                 }),
               );
             }}

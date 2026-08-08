@@ -372,6 +372,50 @@ it.effect("keeps a viewer-only membership out of the workspace's turns", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
+it.effect("takes a member's write access away and gives it back", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    // Configuring the workspace is what makes this caller the lead, and only a
+    // lead or approver may change anyone's membership.
+    yield* collaboration.updateSettings(lead, { ...scope, approvalMode: "open" });
+
+    const invite = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "member@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    yield* collaboration.acceptInvite(member, { inviteId: invite.invite.id });
+    const before = yield* collaboration.checkWriteAccessForTurn(member, scope);
+    assert.strictEqual(before.mayRun, true);
+
+    yield* collaboration.updateMember(lead, { ...scope, userId: member.userId, readOnly: true });
+    const muted = yield* collaboration.checkWriteAccessForTurn(member, scope);
+    assert.strictEqual(muted.mayRun, false);
+
+    yield* collaboration.updateMember(lead, { ...scope, userId: member.userId, readOnly: false });
+    const restored = yield* collaboration.checkWriteAccessForTurn(member, scope);
+    assert.strictEqual(restored.mayRun, true);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("refuses to make the lead read-only", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    // Configuring the workspace is what makes this caller the lead.
+    yield* collaboration.updateSettings(lead, { ...scope, approvalMode: "blocking" });
+
+    const refused = yield* Effect.flip(
+      collaboration.updateMember(lead, { ...scope, userId: lead.userId, readOnly: true }),
+    );
+
+    assert.strictEqual(refused.code, "invalid-membership-rule");
+    const stillWrites = yield* collaboration.checkWriteAccessForTurn(lead, scope);
+    assert.strictEqual(stillWrites.mayRun, true);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
 it.effect("adds up the tokens a member has spent across their threads", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;

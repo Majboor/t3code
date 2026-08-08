@@ -2974,10 +2974,16 @@ export default function ChatView(props: ChatViewProps) {
           detectTrigger: true,
         });
       }
-      setThreadError(
-        threadIdForSend,
-        err instanceof Error ? err.message : "Failed to send message.",
-      );
+      const failure = err instanceof Error ? err.message : "Failed to send message.";
+      setThreadError(threadIdForSend, failure);
+      // The banner hangs off the thread this prompt was for, which is not
+      // necessarily the one on screen — a refusal would otherwise land nowhere
+      // and the prompt would look like it simply vanished.
+      toastManager.add({
+        type: "error",
+        title: "Your message was not sent",
+        description: failure,
+      });
     });
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {

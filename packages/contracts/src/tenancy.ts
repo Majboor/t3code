@@ -1038,6 +1038,12 @@ export const CollaborationMemberUpdateInput = Schema.Struct({
   color: Schema.optional(TrimmedNonEmptyString),
   displayName: Schema.optional(TrimmedNonEmptyString),
   isApprover: Schema.optional(Schema.Boolean),
+  /**
+   * Watch but do not prompt. A boolean rather than the role array it maps onto,
+   * because handing the collaboration panel arbitrary tenant roles would let an
+   * approver promote someone to `owner` from a member list.
+   */
+  readOnly: Schema.optional(Schema.Boolean),
 });
 export type CollaborationMemberUpdateInput = typeof CollaborationMemberUpdateInput.Type;
 

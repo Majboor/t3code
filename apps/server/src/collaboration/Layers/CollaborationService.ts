@@ -14,6 +14,7 @@ import {
   type CollaborationWorkspaceSettings,
   type TenantInvite,
   type TenantMembership,
+  type TenantRole,
   type UserId,
 } from "@t3tools/contracts";
 import { Effect, Layer, PubSub, Ref, Stream } from "effect";
@@ -28,6 +29,15 @@ import { TenancyRepository } from "../../persistence/Services/Tenancy.ts";
 
 const DEFAULT_ACTIVITY_LIMIT = 100;
 const MAX_ACTIVITY_LIMIT = 500;
+
+/**
+ * Read-only is the absence of any role that grants writing, which is what
+ * `checkWriteAccessForTurn` already tests for. Restoring write access returns
+ * the member to `developer` rather than whatever they held before, because the
+ * roles they came in with are not recorded once they are replaced.
+ */
+const READ_ONLY_ROLES = ["viewer"] as const satisfies ReadonlyArray<TenantRole>;
+const WRITE_ROLES = ["developer"] as const satisfies ReadonlyArray<TenantRole>;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -1118,6 +1128,28 @@ const makeCollaborationService = Effect.gen(function* () {
           tenantId: input.tenantId,
           workspaceId: input.workspaceId,
           approverUserIds: [...approvers],
+        });
+      }
+
+      if (input.readOnly !== undefined) {
+        // The lead is the one person who can undo this, so letting them take
+        // their own write access away would strand the workspace.
+        if (settings.leadUserId === input.userId) {
+          return yield* new CollaborationError({
+            code: "invalid-membership-rule",
+            message: "The workspace lead cannot be made read-only.",
+          });
+        }
+
+        const roles = input.readOnly ? READ_ONLY_ROLES : WRITE_ROLES;
+        yield* Ref.update(stateRef, (state) => {
+          const memberships = new Map(state.memberships);
+          for (const [id, membership] of memberships) {
+            if (membership.tenantId === input.tenantId && membership.userId === input.userId) {
+              memberships.set(id, { ...membership, roles });
+            }
+          }
+          return { ...state, memberships };
         });
       }
 
