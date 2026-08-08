@@ -4,6 +4,17 @@
 
 - All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
+- `bun run test:collab` drives two real accounts through the collaboration flow in a
+  browser: sharing a workspace by invite, seeing each other's file changes live,
+  prompt approval, personal branches, and conflict warnings. It needs a server
+  already running (`bun run dev` with `T3CODE_LOCAL_PASSWORD_AUTH=true`) and a
+  configured provider, so it is not part of the default gate. Run it when you touch
+  workspace files, collaboration, or auth.
+- `T3_E2E_SKIP_AGENT=1` drops the phases that need a model, which is how CI runs it
+  without any provider credentials. Known limitation: the branch comparison and the
+  conflict warning never appear for a member who has not run a turn, so that mode
+  reports them as SKIP rather than asserting them. Fixing that would let CI cover
+  branches and conflicts too.
 
 ## Project Snapshot
 

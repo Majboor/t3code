@@ -74,6 +74,80 @@ jobs:
           test -f apps/desktop/dist-electron/preload.cjs
           grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
 
+  collaboration:
+    name: Collaboration Flow
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Cache Bun and Turbo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.bun/install/cache
+            .turbo
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-${{ hashFiles('turbo.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install browser test runtime
+        run: |
+          cd apps/web
+          bunx playwright install --with-deps chromium
+
+      # Two accounts have to reach the same server, so the suite needs a real one
+      # running rather than a stub.
+      - name: Start the app
+        env:
+          T3CODE_LOCAL_PASSWORD_AUTH: "true"
+          T3CODE_NO_BROWSER: "1"
+        run: |
+          nohup bun run dev > dev-server.log 2>&1 &
+          for _ in $(seq 1 90); do
+            if curl -sf -o /dev/null http://localhost:5733/; then
+              echo "the app is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "the app never came up"
+          cat dev-server.log
+          exit 1
+
+      # No provider credentials here, so the phases that need a model are skipped
+      # and say so in the output. Run the suite locally for full coverage.
+      - name: Collaboration flow
+        env:
+          T3_E2E_SKIP_AGENT: "1"
+        run: bun run test:collab
+
+      - name: Server log
+        if: failure()
+        run: cat dev-server.log
+
   release_smoke:
     name: Release Smoke
     runs-on: blacksmith-8vcpu-ubuntu-2404

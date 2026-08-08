@@ -4,7 +4,10 @@
 // by the agent reach both accounts.
 //
 //   bun run dev                 # in another terminal
-//   node scripts/collab-e2e.mjs
+//   bun run test:collab
+//
+// The server needs local password auth (T3CODE_LOCAL_PASSWORD_AUTH=true) and a
+// configured provider, since two phases drive a real agent turn.
 //
 // Override the target with T3_E2E_BASE_URL. Every account, workspace folder and
 // file name is generated per run, so repeated runs never collide.
@@ -21,11 +24,22 @@ const { chromium } = createRequire(new URL("../apps/web/package.json", import.me
 
 const BASE_URL = process.env["T3_E2E_BASE_URL"] ?? "http://localhost:5733";
 const RUN_ID = String(Date.now());
-const PROJECT_DIR = path.join(os.homedir(), "Desktop", `t3-collab-${RUN_ID}`);
+// The Desktop is where someone would really keep a project, so use it when it
+// exists and fall back to the temp dir on machines that have no such folder.
+const DESKTOP_DIR = path.join(os.homedir(), "Desktop");
+const PROJECT_DIR = path.join(existsSync(DESKTOP_DIR) ? DESKTOP_DIR : os.tmpdir(), `t3-collab-${RUN_ID}`);
 const PASSWORD = "CollabE2E!2026";
 const ACCOUNT_A = `collab.a.${RUN_ID}@example.test`;
 const ACCOUNT_B = `collab.b.${RUN_ID}@example.test`;
 const KEEP_WORKSPACE = process.env["T3_E2E_KEEP_WORKSPACE"] === "1";
+// Sharing, live file updates, branches and conflicts all work without a model
+// behind them. Skipping the turns that need one lets CI run most of this suite
+// with no provider credentials at all.
+const SKIP_AGENT = process.env["T3_E2E_SKIP_AGENT"] === "1";
+// The branch comparison and conflict warning only appear for a member who has
+// already run a turn, so they cannot be asserted with the agent switched off.
+// This is a real limitation of the app, not of the script — see AGENTS.md.
+const BRANCH_UI_NEEDS_A_TURN = "needs a member who has run a turn";
 
 // The agent needs far longer than the UI, and an unresponsive provider should
 // fail the check rather than hang the run.
@@ -59,6 +73,14 @@ function checkLiveTreeUpdate(step, result) {
       ? "only after a reload — the tree did not update live"
       : "";
   check(step, result.found && !result.neededReload, detail);
+}
+
+/**
+ * Prints a check that was deliberately not run. Skips stay on screen and out of
+ * the tally, so a green run never implies coverage it did not have.
+ */
+function skip(step, reason) {
+  console.log(`  [33mSKIP[0m  ${step}  — ${reason}`);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -330,12 +352,21 @@ async function waitForFileOnDisk(name, timeoutMs) {
 
 // ── the run ─────────────────────────────────────────────────────────────────
 
+// Without this the first navigation just times out inside Playwright, which
+// says nothing about the actual problem: nobody started a server.
+const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(() => true, () => false);
+if (!reachable) {
+  console.error(`Nothing is answering at ${BASE_URL}.`);
+  console.error("Start a server with `bun run dev`, or set T3_E2E_BASE_URL.");
+  process.exit(1);
+}
+
 const browser = await chromium.launch();
 const accountA = await openIsolatedSession(browser, "A");
 const accountB = await openIsolatedSession(browser, "B");
 
 try {
-  phase("Setup: a real folder on the Desktop, seeded by python");
+  phase("Setup: a real folder on disk, seeded by python");
   mkdirSync(PROJECT_DIR, { recursive: true });
   writeFileViaPython("seed-one.txt", "seed one\n");
   writeFileViaPython("seed-two.md", "# seed two\n");
@@ -415,39 +446,33 @@ try {
   check("A's file lands on disk", await waitForFileOnDisk(aFile, FILE_APPEAR_TIMEOUT_MS));
   checkLiveTreeUpdate("B sees the file A created", await waitForFileInTree(accountB.page, aFile));
 
-  phase("Both accounts drive the agent");
-  const agentFileA = `agent-a-${RUN_ID}.txt`;
-  check("A sends a message to the agent",
-    await sendAgentMessage(accountA2.page, `Create a file named ${agentFileA} containing the word alpha. Do not ask questions.`));
-  const agentAOnDisk = await waitForFileOnDisk(agentFileA, AGENT_TURN_MS);
-  check("A's agent wrote the file", agentAOnDisk,
-    agentAOnDisk ? readFileSync(path.join(PROJECT_DIR, agentFileA), "utf8").trim() : "not created");
-  const aThread = await bodyText(accountA2.page);
-  check("A's turn reports no provider error",
-    !/Provider turn start failed|Timed out waiting for initialize/.test(aThread),
-    aThread.match(/(Provider turn start failed|Timed out[^\n]*)/)?.[0] ?? "");
-  if (agentAOnDisk) {
-    checkLiveTreeUpdate(
-      "B sees what A's agent wrote",
-      await waitForFileInTree(accountB.page, agentFileA),
-    );
-  }
+  // Both directions of the same check, so it reads once and runs twice.
+  const driveAgent = async (label, sender, watcher, fileName, word) => {
+    check(`${label} sends a message to the agent`,
+      await sendAgentMessage(sender.page, `Create a file named ${fileName} containing the word ${word}. Do not ask questions.`));
+    const onDisk = await waitForFileOnDisk(fileName, AGENT_TURN_MS);
+    check(`${label}'s agent wrote the file`, onDisk,
+      onDisk ? readFileSync(path.join(PROJECT_DIR, fileName), "utf8").trim() : "not created");
+    const thread = await bodyText(sender.page);
+    check(`${label}'s turn reports no provider error`,
+      !/Provider turn start failed|Timed out waiting for initialize/.test(thread),
+      thread.match(/(Provider turn start failed|Timed out[^\n]*)/)?.[0] ?? "");
+    if (onDisk) {
+      checkLiveTreeUpdate(
+        `${watcher.label} sees what ${label}'s agent wrote`,
+        await waitForFileInTree(watcher.page, fileName),
+      );
+    }
+  };
 
-  const agentFileB = `agent-b-${RUN_ID}.txt`;
-  check("B sends a message to the agent",
-    await sendAgentMessage(accountB.page, `Create a file named ${agentFileB} containing the word beta. Do not ask questions.`));
-  const agentBOnDisk = await waitForFileOnDisk(agentFileB, AGENT_TURN_MS);
-  check("B's agent wrote the file", agentBOnDisk,
-    agentBOnDisk ? readFileSync(path.join(PROJECT_DIR, agentFileB), "utf8").trim() : "not created");
-  const bThread = await bodyText(accountB.page);
-  check("B's turn reports no provider error",
-    !/Provider turn start failed|Timed out waiting for initialize/.test(bThread),
-    bThread.match(/(Provider turn start failed|Timed out[^\n]*)/)?.[0] ?? "");
-  if (agentBOnDisk) {
-    checkLiveTreeUpdate(
-      "A sees what B's agent wrote",
-      await waitForFileInTree(accountA2.page, agentFileB),
-    );
+  if (SKIP_AGENT) {
+    phase("Both accounts drive the agent — skipped, T3_E2E_SKIP_AGENT=1");
+  } else {
+    phase("Both accounts drive the agent");
+    await driveAgent("A", accountA2, { label: "B", page: accountB.page },
+      `agent-a-${RUN_ID}.txt`, "alpha");
+    await driveAgent("B", accountB, { label: "A", page: accountA2.page },
+      `agent-b-${RUN_ID}.txt`, "beta");
   }
 
   phase("The lead makes prompts need approval");
@@ -478,13 +503,16 @@ try {
   check("A can approve it", canApprove);
   await closeCollabPanel(accountA2.page);
 
-  // The point of approving is that the work then happens, so re-send it.
-  await sendAgentMessage(accountB.page, blockedPrompt);
-  check(
-    "the approved prompt runs",
-    await waitForFileOnDisk(`blocked-${RUN_ID}.txt`, AGENT_TURN_MS),
-    `blocked-${RUN_ID}.txt`,
-  );
+  // The point of approving is that the work then happens, so re-send it. Only
+  // this last step needs a model; being held and approved does not.
+  if (!SKIP_AGENT) {
+    await sendAgentMessage(accountB.page, blockedPrompt);
+    check(
+      "the approved prompt runs",
+      await waitForFileOnDisk(`blocked-${RUN_ID}.txt`, AGENT_TURN_MS),
+      `blocked-${RUN_ID}.txt`,
+    );
+  }
 
   phase("The lead moves the workspace onto personal branches");
   check(
@@ -503,10 +531,20 @@ try {
   }
   const branchNames = offeredBranch ? git("branch", "--list") : "";
   check("B's branch exists in git", /collab\//.test(branchNames), branchNames.replace(/\s+/g, " "));
-  check(
-    "B sees their branch compared with main",
-    await waitForCollabElement(accountB.page, "collaboration-branch-compare"),
-  );
+  if (SKIP_AGENT) {
+    skip("B sees their branch compared with main", BRANCH_UI_NEEDS_A_TURN);
+  } else {
+    // Claiming the branch can fail after the worktree exists, and the only sign
+    // is a toast. Surface it, or this check says "false" and explains nothing.
+    const claimFailure = /Could not create your branch[^]{0,120}/.exec(
+      await bodyText(accountB.page),
+    );
+    check(
+      "B sees their branch compared with main",
+      await waitForCollabElement(accountB.page, "collaboration-branch-compare"),
+      claimFailure?.[0].replace(/\s+/g, " ") ?? "",
+    );
+  }
 
   phase("Both branches change the same file");
   const contestedFile = "seed-one.txt";
@@ -547,17 +585,22 @@ try {
     check("both branches committed a change to the same file", false, "no branch to work on");
   }
 
-  check(
-    "B is warned the file is contested",
-    await waitForCollabElement(accountB.page, "collaboration-conflict-warning", 30_000),
-  );
-  // Read the warning itself; the file name appears in the tree regardless.
-  const warningText = await accountB.page
-    .locator('[data-testid="collaboration-conflict-warning"]')
-    .first()
-    .innerText()
-    .catch(() => "");
-  check("the warning names the contested file", warningText.includes(contestedFile), warningText.replace(/\s+/g, " ").slice(0, 80));
+  if (SKIP_AGENT) {
+    skip("B is warned the file is contested", BRANCH_UI_NEEDS_A_TURN);
+    skip("the warning names the contested file", BRANCH_UI_NEEDS_A_TURN);
+  } else {
+    check(
+      "B is warned the file is contested",
+      await waitForCollabElement(accountB.page, "collaboration-conflict-warning", 30_000),
+    );
+    // Read the warning itself; the file name appears in the tree regardless.
+    const warningText = await accountB.page
+      .locator('[data-testid="collaboration-conflict-warning"]')
+      .first()
+      .innerText()
+      .catch(() => "");
+    check("the warning names the contested file", warningText.includes(contestedFile), warningText.replace(/\s+/g, " ").slice(0, 80));
+  }
   await closeCollabPanel(accountB.page);
 
   phase("Result");
