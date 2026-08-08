@@ -123,7 +123,7 @@ export function aggregate(
     buckets.push({ group, value, events: numbers.length });
   }
 
-  return buckets.sort((left, right) => right.value - left.value);
+  return buckets.toSorted((left, right) => right.value - left.value);
 }
 
 const makeAnalyticsStore = Effect.gen(function* () {
