@@ -93,6 +93,7 @@ import type {
   CollaborationMemberRemoveResult,
   CollaborationMemberResult,
   CollaborationMemberUpdateInput,
+  CollaborationUsageRecordInput,
   CollaborationSettingsGetInput,
   CollaborationSettingsResult,
   CollaborationSettingsUpdateInput,
@@ -459,6 +460,7 @@ export interface EnvironmentApi {
     removeMember: (
       input: CollaborationMemberRemoveInput,
     ) => Promise<CollaborationMemberRemoveResult>;
+    recordUsage: (input: CollaborationUsageRecordInput) => Promise<CollaborationMemberResult>;
     getConsent: (input: CollaborationConsentGetInput) => Promise<CollaborationConsentResult>;
     updateConsent: (input: CollaborationConsentUpdateInput) => Promise<CollaborationConsentResult>;
     subscribe: (

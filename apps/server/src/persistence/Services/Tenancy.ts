@@ -53,6 +53,16 @@ export interface CollaborationMemberProfileRecord {
   readonly updatedAt: string;
 }
 
+/** The highest token total one member's thread has reached. */
+export interface CollaborationMemberUsageRecord {
+  readonly tenantId: string;
+  readonly workspaceId: string;
+  readonly userId: string;
+  readonly threadId: string;
+  readonly totalTokens: number;
+  readonly updatedAt: string;
+}
+
 export interface CollaborationPersistenceSnapshot {
   readonly presence: ReadonlyArray<CollaborationPresence>;
   readonly invites: ReadonlyArray<TenantInvite>;
@@ -66,6 +76,7 @@ export interface CollaborationPersistenceSnapshot {
   readonly branchClaims?: ReadonlyArray<CollaborationBranchClaim>;
   readonly fileTouches?: ReadonlyArray<CollaborationFileTouch>;
   readonly memberProfiles?: ReadonlyArray<CollaborationMemberProfileRecord>;
+  readonly memberUsage?: ReadonlyArray<CollaborationMemberUsageRecord>;
 }
 
 export interface WorkspacePersistenceSnapshot {

@@ -73,6 +73,7 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { AccountAvatarField } from "./AccountAvatarField";
 import { ProviderAccountsSection } from "./ProviderAccountsSection";
 import {
   SettingResetButton,
@@ -456,8 +457,12 @@ function formatAuthMethod(method: AuthUserProfile["sessionMethod"]): string {
 function AccountProfileSummary({ profile }: { profile: AuthUserProfile }) {
   return (
     <div className="flex items-center gap-3 border-b border-border/60 px-4 py-4 sm:px-5">
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-sm font-semibold text-foreground">
-        {profile.avatarInitials}
+      <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted text-sm font-semibold text-foreground">
+        {profile.avatarDataUrl ? (
+          <img src={profile.avatarDataUrl} alt="" className="size-full object-cover" />
+        ) : (
+          profile.avatarInitials
+        )}
       </div>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold text-foreground">{profile.displayName}</div>
@@ -473,6 +478,7 @@ export function AccountSettingsPanel() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [profileDisplayName, setProfileDisplayName] = useState("");
   const [profileAvatarInitials, setProfileAvatarInitials] = useState("");
+  const [profileAvatarDataUrl, setProfileAvatarDataUrl] = useState<string | undefined>(undefined);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
 
@@ -500,7 +506,11 @@ export function AccountSettingsPanel() {
     setErrorMessage(null);
     setStatusMessage(null);
     try {
-      const nextProfile = await updateUserProfile({ displayName, avatarInitials });
+      const nextProfile = await updateUserProfile({
+        displayName,
+        avatarInitials,
+        ...(profileAvatarDataUrl ? { avatarDataUrl: profileAvatarDataUrl } : {}),
+      });
       setProfile(nextProfile);
       setStatusMessage("Account profile updated.");
     } catch (error) {
@@ -508,7 +518,7 @@ export function AccountSettingsPanel() {
     } finally {
       setIsSavingProfile(false);
     }
-  }, [profileAvatarInitials, profileDisplayName]);
+  }, [profileAvatarDataUrl, profileAvatarInitials, profileDisplayName]);
 
   const canSignOutSupabaseSession =
     profile?.sessionMethod === "bearer-session-token" && Boolean(readSupabaseBrowserAccessToken());
@@ -539,10 +549,12 @@ export function AccountSettingsPanel() {
     if (!profile) {
       setProfileDisplayName("");
       setProfileAvatarInitials("");
+      setProfileAvatarDataUrl(undefined);
       return;
     }
     setProfileDisplayName(profile.displayName);
     setProfileAvatarInitials(profile.avatarInitials);
+    setProfileAvatarDataUrl(profile.avatarDataUrl);
   }, [profile]);
 
   return (
@@ -570,6 +582,13 @@ export function AccountSettingsPanel() {
         >
           {profile ? (
             <div className="space-y-4 border-t border-border/60 pt-3 pb-4">
+              <AccountAvatarField
+                initials={profileAvatarInitials.trim().toUpperCase() || profile.avatarInitials}
+                value={profileAvatarDataUrl}
+                disabled={isSavingProfile}
+                onChange={setProfileAvatarDataUrl}
+                onError={setErrorMessage}
+              />
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
                 <label className="space-y-1 text-xs font-medium text-foreground">
                   <span>Display name</span>
@@ -596,7 +615,8 @@ export function AccountSettingsPanel() {
                     !profileDisplayName.trim() ||
                     !profileAvatarInitials.trim() ||
                     (profileDisplayName.trim() === profile.displayName &&
-                      profileAvatarInitials.trim().toUpperCase() === profile.avatarInitials)
+                      profileAvatarInitials.trim().toUpperCase() === profile.avatarInitials &&
+                      profileAvatarDataUrl === profile.avatarDataUrl)
                   }
                   onClick={() => void saveProfile()}
                 >

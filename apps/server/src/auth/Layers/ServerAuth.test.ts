@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Crypto from "node:crypto";
 import {
+  AUTH_AVATAR_MAX_DECODED_BYTES,
   MembershipId,
   OrganizationId,
   TenantId,
@@ -286,6 +287,71 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
       expect(resolved.displayName).toBe("Ada Lovelace");
       expect(resolved.avatarInitials).toBe("AL");
       expect(loaded.subject).toMatch(/^paired-client:/);
+    }).pipe(Effect.provide(makeServerAuthLayer())),
+  );
+
+  it.effect("stores uploaded avatars and rejects oversized or unsupported images", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+
+      const pairingCredential = yield* serverAuth.issuePairingCredential({
+        label: "Avatar Account",
+      });
+      const exchanged = yield* serverAuth.exchangeBootstrapCredential(
+        pairingCredential.credential,
+        requestMetadata,
+      );
+      const request = makeCookieRequest(exchanged.sessionToken);
+      const profileUpdate = {
+        displayName: "Ada Lovelace",
+        avatarInitials: "AL",
+      };
+      const avatarDataUrl = `data:image/png;base64,${Buffer.from("tiny-avatar-bytes").toString("base64")}`;
+
+      const stored = yield* serverAuth.updateUserProfile(request, {
+        ...profileUpdate,
+        avatarDataUrl,
+      });
+      const loaded = yield* serverAuth.getUserProfile(request);
+
+      expect(stored.avatarDataUrl).toBe(avatarDataUrl);
+      expect(loaded.avatarDataUrl).toBe(avatarDataUrl);
+
+      const oversized = yield* serverAuth
+        .updateUserProfile(request, {
+          ...profileUpdate,
+          avatarDataUrl: `data:image/png;base64,${"A".repeat(4 * Math.ceil((AUTH_AVATAR_MAX_DECODED_BYTES + 1024) / 3))}`,
+        })
+        .pipe(Effect.flip);
+      const unsupportedMediaType = yield* serverAuth
+        .updateUserProfile(request, {
+          ...profileUpdate,
+          avatarDataUrl: `data:image/gif;base64,${Buffer.from("gif-avatar-bytes").toString("base64")}`,
+        })
+        .pipe(Effect.flip);
+      const notADataUrl = yield* serverAuth
+        .updateUserProfile(request, {
+          ...profileUpdate,
+          avatarDataUrl: "https://example.test/avatar.png",
+        })
+        .pipe(Effect.flip);
+
+      expect(oversized.status).toBe(400);
+      expect(oversized.message).toBe("Avatar image must be at most 256KB.");
+      expect(unsupportedMediaType.status).toBe(400);
+      expect(unsupportedMediaType.message).toBe(
+        "Avatar image must be one of image/png, image/jpeg, image/webp.",
+      );
+      expect(notADataUrl.status).toBe(400);
+      expect(notADataUrl.message).toBe("Avatar image must be a base64 data URL.");
+
+      // A rejected update must leave the stored avatar untouched.
+      const reloaded = yield* serverAuth.getUserProfile(request);
+      expect(reloaded.avatarDataUrl).toBe(avatarDataUrl);
+
+      const removed = yield* serverAuth.updateUserProfile(request, profileUpdate);
+      expect(removed.avatarDataUrl).toBeUndefined();
+      expect((yield* serverAuth.getUserProfile(request)).avatarDataUrl).toBeUndefined();
     }).pipe(Effect.provide(makeServerAuthLayer())),
   );
 

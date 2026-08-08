@@ -50,6 +50,15 @@ function scopedKey(tenantId: string, workspaceId: string, suffix: string): strin
   return `${tenantId}:${workspaceId}:${suffix}`;
 }
 
+function usageKey(
+  tenantId: string,
+  workspaceId: string,
+  userId: string,
+  threadId: string,
+): string {
+  return `${tenantId}:${workspaceId}:${userId}:${threadId}`;
+}
+
 const DEFAULT_APPROVAL_MODE = "open" as const;
 
 /**
@@ -213,6 +222,12 @@ const makeCollaborationService = Effect.gen(function* () {
         entry,
       ]),
     ),
+    memberUsage: new Map(
+      (persisted.memberUsage ?? []).map((entry) => [
+        usageKey(entry.tenantId, entry.workspaceId, entry.userId, entry.threadId),
+        entry,
+      ]),
+    ),
   });
 
   /** The workspace owner is the lead, when the workspace is known at all. */
@@ -238,6 +253,7 @@ const makeCollaborationService = Effect.gen(function* () {
         branchClaims: Array.from(state.branchClaims.values()),
         fileTouches: Array.from(state.fileTouches.values()),
         memberProfiles: Array.from(state.memberProfiles.values()),
+        memberUsage: Array.from(state.memberUsage.values()),
       }),
     ),
     Effect.mapError(
@@ -950,6 +966,14 @@ const makeCollaborationService = Effect.gen(function* () {
       promptCounts.set(activity.userId, (promptCounts.get(activity.userId) ?? 0) + 1);
     }
 
+    const tokenTotals = new Map<string, number>();
+    for (const usage of state.memberUsage.values()) {
+      if (usage.tenantId !== input.tenantId || usage.workspaceId !== input.workspaceId) {
+        continue;
+      }
+      tokenTotals.set(usage.userId, (tokenTotals.get(usage.userId) ?? 0) + usage.totalTokens);
+    }
+
     const pendingCounts = new Map<string, number>();
     for (const approval of state.approvals.values()) {
       if (
@@ -965,8 +989,8 @@ const makeCollaborationService = Effect.gen(function* () {
       );
     }
 
-    // Anyone who belongs, plus anyone who has shown up, plus the lead even if
-    // they have never reported presence.
+    // Anyone who belongs, plus anyone who has shown up or spent tokens, plus
+    // the lead even if they have never reported presence.
     const userIds = new Set<string>();
     for (const membership of state.memberships.values()) {
       if (membership.tenantId === input.tenantId && membership.disabledAt === null) {
@@ -974,6 +998,9 @@ const makeCollaborationService = Effect.gen(function* () {
       }
     }
     for (const userId of presenceByUser.keys()) {
+      userIds.add(userId);
+    }
+    for (const userId of tokenTotals.keys()) {
       userIds.add(userId);
     }
     if (settings.leadUserId) {
@@ -1015,9 +1042,29 @@ const makeCollaborationService = Effect.gen(function* () {
         promptCount: sharesUsage || isViewer ? (promptCounts.get(userId) ?? 0) : null,
         pendingApprovalCount:
           sharesUsage || isViewer ? (pendingCounts.get(userId) ?? 0) : null,
+        tokensUsed: sharesUsage || isViewer ? (tokenTotals.get(userId) ?? 0) : null,
       };
     });
   });
+
+  const checkWriteAccessForTurn: CollaborationServiceShape["checkWriteAccessForTurn"] = (
+    actor,
+    input,
+  ) =>
+    Ref.get(stateRef).pipe(
+      Effect.map((state) => {
+        const roles =
+          Array.from(state.memberships.values()).find(
+            (membership) =>
+              membership.tenantId === input.tenantId &&
+              membership.userId === actor.userId &&
+              membership.disabledAt === null,
+          )?.roles ?? [];
+        // Nobody is locked out by having no membership recorded; only an
+        // explicit viewer-and-nothing-else role is read-only.
+        return { mayRun: roles.length === 0 || roles.some((role) => role !== "viewer") };
+      }),
+    );
 
   const listMembers: CollaborationServiceShape["listMembers"] = (actor, input) =>
     Effect.gen(function* () {
@@ -1143,6 +1190,53 @@ const makeCollaborationService = Effect.gen(function* () {
         userId: input.userId,
       });
       return { removed: true };
+    });
+
+  const recordUsage: CollaborationServiceShape["recordUsage"] = (actor, input) =>
+    Effect.gen(function* () {
+      const key = usageKey(input.tenantId, input.workspaceId, actor.userId, input.threadId);
+      const changed = yield* Ref.modify(stateRef, (state) => {
+        const existing = state.memberUsage.get(key);
+        // A thread's total only ever climbs, so a stale or repeated report is
+        // ignored rather than counted twice.
+        if (existing && existing.totalTokens >= input.totalTokens) {
+          return [false, state] as const;
+        }
+        const memberUsage = new Map(state.memberUsage);
+        memberUsage.set(key, {
+          tenantId: input.tenantId,
+          workspaceId: input.workspaceId,
+          userId: actor.userId,
+          threadId: input.threadId,
+          totalTokens: input.totalTokens,
+          updatedAt: nowIso(),
+        });
+        return [true, { ...state, memberUsage }] as const;
+      });
+
+      if (changed) {
+        yield* persist;
+      }
+
+      const members = yield* buildMembers({
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        viewerUserId: actor.userId,
+      });
+      const member = members.find((candidate) => candidate.userId === actor.userId);
+      if (!member) {
+        return yield* new CollaborationError({
+          code: "invalid-membership-rule",
+          message: "Workspace member was not found.",
+        });
+      }
+      if (changed && member.sharesUsage) {
+        // Only broadcast a total the workspace is allowed to see; the caller
+        // still gets their own back either way.
+        yield* PubSub.publish(events, { type: "member-updated", member });
+      }
+
+      return { member };
     });
 
   const getConsent: CollaborationServiceShape["getConsent"] = (actor, input) =>
@@ -1369,6 +1463,7 @@ const makeCollaborationService = Effect.gen(function* () {
     updateSettings,
     submitPromptForApproval,
     consumeApprovalForTurn,
+    checkWriteAccessForTurn,
     listApprovals,
     decideApproval,
     getViewPreferences,
@@ -1381,6 +1476,7 @@ const makeCollaborationService = Effect.gen(function* () {
     listMembers,
     updateMember,
     removeMember,
+    recordUsage,
     getConsent,
     updateConsent,
   } satisfies CollaborationServiceShape;

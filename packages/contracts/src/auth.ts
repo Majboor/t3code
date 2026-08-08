@@ -293,11 +293,21 @@ export const AuthSessionState = Schema.Struct({
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
 
+/**
+ * Uploaded avatars travel inline as `data:` URLs instead of going through blob
+ * storage, so the caps have to be tight enough that a profile row and a profile
+ * response stay cheap to move around.
+ */
+export const AUTH_AVATAR_IMAGE_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+export const AUTH_AVATAR_MAX_DECODED_BYTES = 256 * 1024;
+export const AUTH_AVATAR_MAX_DIMENSION = 128;
+
 export const AuthUserProfile = Schema.Struct({
   userId: UserId,
   subject: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   avatarInitials: TrimmedNonEmptyString,
+  avatarDataUrl: Schema.optional(TrimmedNonEmptyString),
   role: AuthSessionRole,
   sessionId: AuthSessionId,
   sessionMethod: ServerAuthSessionMethod,
@@ -308,9 +318,14 @@ export const AuthUserProfile = Schema.Struct({
 });
 export type AuthUserProfile = typeof AuthUserProfile.Type;
 
+/**
+ * The update is a full replacement of the stored profile, so omitting
+ * `avatarDataUrl` is how a user drops their uploaded image back to initials.
+ */
 export const AuthUpdateUserProfileInput = Schema.Struct({
   displayName: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
   avatarInitials: TrimmedNonEmptyString.check(Schema.isMaxLength(4)),
+  avatarDataUrl: Schema.optional(Schema.String),
 });
 export type AuthUpdateUserProfileInput = typeof AuthUpdateUserProfileInput.Type;
 

@@ -48,6 +48,7 @@ import {
 } from "../Errors.ts";
 import {
   type CollaborationMemberProfileRecord,
+  type CollaborationMemberUsageRecord,
   type CollaborationPersistenceSnapshot,
   type OrganizationPersistenceSnapshot,
   type ProviderIsolationPersistenceSnapshot,
@@ -259,6 +260,7 @@ const makeTenancyRepository = Effect.gen(function* () {
         branchRows,
         touchRows,
         memberProfileRows,
+        memberUsageRows,
       ] = yield* Effect.all([
         sql`SELECT * FROM collaboration_presence`,
         sql`SELECT * FROM tenant_invites WHERE workspace_id IS NOT NULL`,
@@ -270,6 +272,7 @@ const makeTenancyRepository = Effect.gen(function* () {
         sql`SELECT * FROM collaboration_branch_claims`,
         sql`SELECT * FROM collaboration_file_touches`,
         sql`SELECT * FROM collaboration_member_profiles`,
+        sql`SELECT * FROM collaboration_member_usage`,
       ]).pipe(Effect.mapError(toSqlError("TenancyRepository.loadCollaboration:query")));
 
       return {
@@ -411,6 +414,16 @@ const makeTenancyRepository = Effect.gen(function* () {
             shareProfile: row.share_profile === null ? null : row.share_profile !== 0,
             shareUsage: row.share_usage === null ? null : row.share_usage !== 0,
             consentAt: row.consent_at,
+            updatedAt: row.updated_at,
+          }),
+        ),
+        memberUsage: (memberUsageRows as any[]).map(
+          (row): CollaborationMemberUsageRecord => ({
+            tenantId: row.tenant_id,
+            workspaceId: row.workspace_id,
+            userId: row.user_id,
+            threadId: row.thread_id,
+            totalTokens: Number(row.total_tokens),
             updatedAt: row.updated_at,
           }),
         ),
@@ -630,6 +643,19 @@ const makeTenancyRepository = Effect.gen(function* () {
                   ${profile.shareProfile === null ? null : profile.shareProfile ? 1 : 0},
                   ${profile.shareUsage === null ? null : profile.shareUsage ? 1 : 0},
                   ${profile.consentAt}, ${profile.updatedAt}
+                )
+              `;
+            }
+          }
+          if (snapshot.memberUsage) {
+            yield* sql`DELETE FROM collaboration_member_usage`;
+            for (const usage of snapshot.memberUsage) {
+              yield* sql`
+                INSERT INTO collaboration_member_usage (
+                  tenant_id, workspace_id, user_id, thread_id, total_tokens, updated_at
+                ) VALUES (
+                  ${usage.tenantId}, ${usage.workspaceId}, ${usage.userId}, ${usage.threadId},
+                  ${usage.totalTokens}, ${usage.updatedAt}
                 )
               `;
             }

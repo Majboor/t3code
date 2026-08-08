@@ -56,13 +56,17 @@ import type {
   CollaborationSharedPromptRecordResult,
   CollaborationStreamEvent,
   CollaborationStreamInput,
+  CollaborationUsageRecordInput,
   TenantInvite,
   TenantMembership,
   UserId,
 } from "@t3tools/contracts";
 import { Context, type Effect, type Stream } from "effect";
 
-import type { CollaborationMemberProfileRecord } from "../../persistence/Services/Tenancy.ts";
+import type {
+  CollaborationMemberProfileRecord,
+  CollaborationMemberUsageRecord,
+} from "../../persistence/Services/Tenancy.ts";
 
 export interface CollaborationActor {
   readonly userId: UserId;
@@ -143,6 +147,15 @@ export interface CollaborationServiceShape {
     input: CollaborationSettingsGetInput,
   ) => Effect.Effect<{ readonly mayRun: boolean }, CollaborationError>;
 
+  /**
+   * Whether this person may put work into the workspace at all. A membership of
+   * `viewer` and nothing else can watch but not prompt.
+   */
+  readonly checkWriteAccessForTurn: (
+    actor: CollaborationActor,
+    input: CollaborationSettingsGetInput,
+  ) => Effect.Effect<{ readonly mayRun: boolean }, CollaborationError>;
+
   readonly listApprovals: (
     actor: CollaborationActor,
     input: CollaborationApprovalListInput,
@@ -202,6 +215,15 @@ export interface CollaborationServiceShape {
     input: CollaborationMemberRemoveInput,
   ) => Effect.Effect<CollaborationMemberRemoveResult, CollaborationError>;
 
+  /**
+   * Attributes a thread's token total to whoever is running it. Reports carry a
+   * cumulative figure, so re-reporting the same total changes nothing.
+   */
+  readonly recordUsage: (
+    actor: CollaborationActor,
+    input: CollaborationUsageRecordInput,
+  ) => Effect.Effect<CollaborationMemberResult, CollaborationError>;
+
   readonly getConsent: (
     actor: CollaborationActor,
     input: CollaborationConsentGetInput,
@@ -228,6 +250,8 @@ export interface CollaborationState {
   readonly fileTouches: ReadonlyMap<string, CollaborationFileTouch>;
   /** Keyed by `tenantId:workspaceId:userId`. */
   readonly memberProfiles: ReadonlyMap<string, CollaborationMemberProfileRecord>;
+  /** Keyed by `tenantId:workspaceId:userId:threadId`. */
+  readonly memberUsage: ReadonlyMap<string, CollaborationMemberUsageRecord>;
 }
 
 export class CollaborationService extends Context.Service<

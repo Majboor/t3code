@@ -3,6 +3,7 @@ import type { CollaborationMember, EnvironmentId, TenantId, WorkspaceId } from "
 import { useCallback, useEffect, useState } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
+import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
@@ -100,13 +101,14 @@ function MemberRow({
       {expanded ? (
         <div className="border-t border-border/70 px-2 py-2">
           <div className="text-[10px] text-muted-foreground">
-            {member.sharesUsage ? (
-              <>
-                {member.promptCount ?? 0} prompts · {member.pendingApprovalCount ?? 0} waiting
-              </>
-            ) : (
+            {member.tokensUsed === null ? (
               // Not a gap in the data — they simply have not agreed to share it.
               <>Usage not shared</>
+            ) : (
+              <>
+                {member.promptCount ?? 0} prompts · {member.pendingApprovalCount ?? 0} waiting ·{" "}
+                {formatContextWindowTokens(member.tokensUsed)} tokens
+              </>
             )}
           </div>
 

@@ -16,6 +16,7 @@ const tenantId = TenantId.make("tenant-collab");
 const workspaceId = WorkspaceId.make("workspace-collab");
 const scope = { tenantId, workspaceId };
 const threadId = ThreadId.make("thread-collab");
+const otherThreadId = ThreadId.make("thread-collab-other");
 
 const lead = { userId: UserId.make("user-lead"), displayName: "Lead" };
 const member = { userId: UserId.make("user-member"), displayName: "Member" };
@@ -333,6 +334,107 @@ it.effect("tracks one branch claim per person and releases it", () =>
     const remaining = yield* collaboration.listBranchClaims(member, scope);
     assert.strictEqual(remaining.claims.length, 1);
     assert.strictEqual(remaining.mine, null);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("keeps a viewer-only membership out of the workspace's turns", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    // Nobody with a membership on record yet, so nothing is read-only.
+    const unknown = yield* collaboration.checkWriteAccessForTurn(member, scope);
+    assert.strictEqual(unknown.mayRun, true);
+
+    const watchOnly = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "member@example.com",
+      scope: "workspace",
+      roles: ["viewer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    yield* collaboration.acceptInvite(member, { inviteId: watchOnly.invite.id });
+
+    const refused = yield* collaboration.checkWriteAccessForTurn(member, scope);
+    assert.strictEqual(refused.mayRun, false);
+
+    // A second role alongside `viewer` is enough to work again.
+    const alsoDeveloper = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "delegate@example.com",
+      scope: "workspace",
+      roles: ["viewer", "developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    yield* collaboration.acceptInvite(delegate, { inviteId: alsoDeveloper.invite.id });
+
+    const allowed = yield* collaboration.checkWriteAccessForTurn(delegate, scope);
+    assert.strictEqual(allowed.mayRun, true);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("adds up the tokens a member has spent across their threads", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    yield* collaboration.updateConsent(member, {
+      ...scope,
+      shareProfile: true,
+      shareUsage: true,
+    });
+
+    yield* collaboration.recordUsage(member, { ...scope, threadId, totalTokens: 120 });
+    yield* collaboration.recordUsage(member, {
+      ...scope,
+      threadId: otherThreadId,
+      totalTokens: 80,
+    });
+
+    const combined = yield* collaboration.listMembers(lead, scope);
+    assert.strictEqual(
+      combined.members.find((entry) => entry.userId === member.userId)?.tokensUsed,
+      200,
+    );
+
+    // A thread reports a running total, so the same figure twice adds nothing
+    // and a larger one only adds the difference.
+    yield* collaboration.recordUsage(member, { ...scope, threadId, totalTokens: 120 });
+    yield* collaboration.recordUsage(member, { ...scope, threadId, totalTokens: 300 });
+
+    const grown = yield* collaboration.listMembers(lead, scope);
+    assert.strictEqual(
+      grown.members.find((entry) => entry.userId === member.userId)?.tokensUsed,
+      380,
+    );
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("withholds a member's tokens until they agree to share usage", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    const recorded = yield* collaboration.recordUsage(member, {
+      ...scope,
+      threadId,
+      totalTokens: 500,
+    });
+    // Your own usage is never hidden from you.
+    assert.strictEqual(recorded.member.tokensUsed, 500);
+
+    const asLead = yield* collaboration.listMembers(lead, scope);
+    assert.strictEqual(
+      asLead.members.find((entry) => entry.userId === member.userId)?.tokensUsed,
+      null,
+    );
+
+    yield* collaboration.updateConsent(member, {
+      ...scope,
+      shareProfile: false,
+      shareUsage: true,
+    });
+
+    const shared = yield* collaboration.listMembers(lead, scope);
+    assert.strictEqual(
+      shared.members.find((entry) => entry.userId === member.userId)?.tokensUsed,
+      500,
+    );
   }).pipe(Effect.provide(makeLayer())),
 );
 

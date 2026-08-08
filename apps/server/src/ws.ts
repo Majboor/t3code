@@ -24,6 +24,7 @@ import {
   FilesystemBrowseError,
   GitCommandError,
   type GitManagerServiceError,
+  NonNegativeInt,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   OrchestrationDispatchCommandError,
@@ -743,6 +744,9 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         windowStartedAt: Date.now(),
         count: 0,
       });
+      // Token reports reach every watcher of a thread, so only the connection
+      // that asked for the turn is allowed to attribute them to its own user.
+      const turnsStartedHereRef = yield* Ref.make(new Set<string>());
       const collaborationActor = {
         userId:
           session.tenantSessionContext?.userId ??
@@ -2825,6 +2829,22 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         );
       };
 
+      /** The shared workspace a turn answers to, or null when it answers to none. */
+      const resolveTurnStartOwnership = (
+        command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+      ) =>
+        orchestrationEngine.getReadModel().pipe(
+          Effect.map((readModel) => {
+            const projectId =
+              command.bootstrap?.createThread?.projectId ??
+              readModel.threads.find((thread) => thread.id === command.threadId)?.projectId ??
+              null;
+            return projectId
+              ? (readModel.projects.find((project) => project.id === projectId)?.ownership ?? null)
+              : null;
+          }),
+        );
+
       /**
        * Holds a turn back when the workspace reviews prompts and this person is
        * not an approver. The browser asks the same question before dispatching,
@@ -2835,14 +2855,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       ): Effect.Effect<void, OrchestrationDispatchCommandError> =>
         Effect.gen(function* () {
           const mayRun = yield* Effect.gen(function* () {
-            const readModel = yield* orchestrationEngine.getReadModel();
-            const projectId =
-              command.bootstrap?.createThread?.projectId ??
-              readModel.threads.find((thread) => thread.id === command.threadId)?.projectId ??
-              null;
-            const ownership = projectId
-              ? (readModel.projects.find((project) => project.id === projectId)?.ownership ?? null)
-              : null;
+            const ownership = yield* resolveTurnStartOwnership(command);
             // A project outside any shared workspace has nobody to answer to.
             if (!ownership) {
               return true;
@@ -2867,6 +2880,88 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             });
           }
         });
+
+      /**
+       * Refuses a turn from someone the workspace only lets watch. `viewer` is a
+       * role the roster already hands out, so this is what makes it mean
+       * something rather than being a label.
+       */
+      const ensureTurnStartWritable = (
+        command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+      ): Effect.Effect<void, OrchestrationDispatchCommandError> =>
+        Effect.gen(function* () {
+          const mayRun = yield* Effect.gen(function* () {
+            const ownership = yield* resolveTurnStartOwnership(command);
+            if (!ownership) {
+              return true;
+            }
+
+            const actor = yield* resolveCollaborationActor;
+            const decision = yield* collaboration.checkWriteAccessForTurn(actor, {
+              tenantId: ownership.tenantId,
+              workspaceId: ownership.workspaceId,
+            });
+            return decision.mayRun;
+          }).pipe(
+            // As with approvals, a failed read must not stop everyone working.
+            Effect.catchCause(() => Effect.succeed(true)),
+          );
+
+          if (!mayRun) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: "This workspace is read-only for you.",
+            });
+          }
+        });
+
+      /**
+       * Attributes a thread's tokens to whoever asked for the turn. Providers
+       * report a running total many times over, so the collaboration service
+       * keeps the highest figure rather than summing what it is sent.
+       */
+      const recordThreadTokenUsage = (event: OrchestrationEvent): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          if (event.type !== "thread.activity-appended") {
+            return;
+          }
+          const activity = event.payload.activity;
+          if (activity.kind !== "context-window.updated") {
+            return;
+          }
+          const usedTokens = (activity.payload as { readonly usedTokens?: unknown } | null)
+            ?.usedTokens;
+          if (typeof usedTokens !== "number" || usedTokens <= 0) {
+            return;
+          }
+
+          const threadId = event.payload.threadId;
+          const turnsStartedHere = yield* Ref.get(turnsStartedHereRef);
+          if (!turnsStartedHere.has(threadId)) {
+            return;
+          }
+
+          const readModel = yield* orchestrationEngine.getReadModel();
+          const projectId =
+            readModel.threads.find((thread) => thread.id === threadId)?.projectId ?? null;
+          const ownership = projectId
+            ? (readModel.projects.find((project) => project.id === projectId)?.ownership ?? null)
+            : null;
+          if (!ownership) {
+            return;
+          }
+
+          const actor = yield* resolveCollaborationActor;
+          yield* collaboration.recordUsage(actor, {
+            tenantId: ownership.tenantId,
+            workspaceId: ownership.workspaceId,
+            threadId,
+            totalTokens: NonNegativeInt.make(Math.trunc(usedTokens)),
+          });
+        }).pipe(
+          // Bookkeeping must never disturb the stream someone is watching their
+          // own turn on.
+          Effect.catchCause(() => Effect.void),
+        );
 
       const ensureOrchestrationCommandAuthorized = (
         command: OrchestrationCommand,
@@ -2918,6 +3013,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   (message) => new OrchestrationDispatchCommandError({ message }),
                 );
               }),
+              Effect.flatMap(() => ensureTurnStartWritable(command)),
               Effect.flatMap(() => ensureTurnStartApproved(command)),
             );
           case "thread.turn.interrupt":
@@ -3372,6 +3468,12 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                       )
                   : false;
               const result = yield* dispatchNormalizedCommand(sharedCommandForDispatch);
+              if (sharedCommandForDispatch.type === "thread.turn.start") {
+                yield* Ref.update(
+                  turnsStartedHereRef,
+                  (threadIds) => new Set(threadIds).add(sharedCommandForDispatch.threadId),
+                );
+              }
               yield* persistProjectWorkspaceMetadata(sharedCommandForDispatch);
               if (sharedCommandForDispatch.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
@@ -3636,6 +3738,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                     event.aggregateId === input.threadId &&
                     isThreadDetailEvent(event),
                 ),
+                Stream.tap(recordThreadTokenUsage),
                 Stream.map((event) => ({
                   kind: "event" as const,
                   event,
@@ -4022,6 +4125,18 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               ensureTenantPermissionForCollaboration(input.tenantId, "membership.manage").pipe(
                 Effect.flatMap(() => resolveCollaborationActor),
                 Effect.flatMap((actor) => collaboration.removeMember(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationUsageRecord]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationUsageRecord,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.recordUsage(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),

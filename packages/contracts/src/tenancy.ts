@@ -1014,6 +1014,7 @@ export const CollaborationMember = Schema.Struct({
   /** Null when this person has not agreed to share their usage. */
   promptCount: Schema.NullOr(NonNegativeInt),
   pendingApprovalCount: Schema.NullOr(NonNegativeInt),
+  tokensUsed: Schema.NullOr(NonNegativeInt),
 });
 export type CollaborationMember = typeof CollaborationMember.Type;
 
@@ -1056,6 +1057,19 @@ export const CollaborationMemberRemoveResult = Schema.Struct({
   removed: Schema.Boolean,
 });
 export type CollaborationMemberRemoveResult = typeof CollaborationMemberRemoveResult.Type;
+
+export const CollaborationUsageRecordInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  threadId: ThreadId,
+  /**
+   * The thread's running total, not the change since last time. Providers
+   * report a cumulative figure many times per turn, so a member's total is the
+   * sum of the highest figure each of their threads has reached.
+   */
+  totalTokens: NonNegativeInt,
+});
+export type CollaborationUsageRecordInput = typeof CollaborationUsageRecordInput.Type;
 
 /**
  * What a workspace is allowed to see about someone, agreed to when they join.

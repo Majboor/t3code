@@ -22,18 +22,21 @@ const makeAuthUserProfileRepository = Effect.gen(function* () {
           subject,
           display_name,
           avatar_initials,
+          avatar_data_url,
           updated_at
         )
         VALUES (
           ${input.subject},
           ${input.displayName},
           ${input.avatarInitials},
+          ${input.avatarDataUrl},
           ${input.updatedAt}
         )
         ON CONFLICT (subject)
         DO UPDATE SET
           display_name = excluded.display_name,
           avatar_initials = excluded.avatar_initials,
+          avatar_data_url = excluded.avatar_data_url,
           updated_at = excluded.updated_at
       `,
   });
@@ -47,6 +50,7 @@ const makeAuthUserProfileRepository = Effect.gen(function* () {
           subject,
           display_name AS "displayName",
           avatar_initials AS "avatarInitials",
+          avatar_data_url AS "avatarDataUrl",
           updated_at AS "updatedAt"
         FROM auth_user_profiles
         WHERE subject = ${subject}

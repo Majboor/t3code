@@ -7,6 +7,7 @@ export const AuthUserProfileRecord = Schema.Struct({
   subject: Schema.String,
   displayName: Schema.String,
   avatarInitials: Schema.String,
+  avatarDataUrl: Schema.NullOr(Schema.String),
   updatedAt: Schema.DateTimeUtcFromString,
 });
 export type AuthUserProfileRecord = typeof AuthUserProfileRecord.Type;

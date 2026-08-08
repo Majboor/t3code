@@ -20,6 +20,8 @@ import {
   WorkspaceId,
   UserId,
   type AuthWebSocketTokenResult,
+  AUTH_AVATAR_IMAGE_MIME_TYPES,
+  AUTH_AVATAR_MAX_DECODED_BYTES,
 } from "@t3tools/contracts";
 import { randomBytes, scrypt as nodeScrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
@@ -67,6 +69,8 @@ type BootstrapExchangeResult = {
 const LOOPBACK_OWNER_SUBJECT = "loopback-local-owner";
 const UNSAFE_NO_AUTH_OWNER_SUBJECT = "unsafe-no-auth-owner";
 const LOCAL_USER_SUBJECT_PREFIX = "local-user:";
+
+const AVATAR_DATA_URL_PATTERN = /^data:([\w.+-]+\/[\w.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/;
 
 const AUTHORIZATION_PREFIX = "Bearer ";
 const WEBSOCKET_TOKEN_QUERY_PARAM = "wsToken";
@@ -596,28 +600,27 @@ export const makeServerAuth = Effect.gen(function* () {
 
   const updateUserProfile: ServerAuthShape["updateUserProfile"] = (request, input) =>
     authenticateRequest(request).pipe(
-      Effect.flatMap((session) => {
-        const normalizedProfile = normalizeProfileUpdate(input);
-        return DateTime.now.pipe(
-          Effect.flatMap((updatedAt) =>
-            userProfiles
-              .upsert({
-                subject: session.subject,
-                displayName: normalizedProfile.displayName,
-                avatarInitials: normalizedProfile.avatarInitials,
-                updatedAt: DateTime.toUtc(updatedAt),
-              })
-              .pipe(
-                Effect.as(
-                  toAuthUserProfile(session, {
-                    displayName: normalizedProfile.displayName,
-                    avatarInitials: normalizedProfile.avatarInitials,
-                  }),
-                ),
-              ),
-          ),
-        );
-      }),
+      Effect.flatMap((session) =>
+        Effect.gen(function* () {
+          const normalizedProfile = normalizeProfileUpdate(input);
+          const avatarDataUrl = normalizedProfile.avatarDataUrl
+            ? yield* validateAvatarDataUrl(normalizedProfile.avatarDataUrl)
+            : undefined;
+          const updatedAt = yield* DateTime.now;
+          yield* userProfiles.upsert({
+            subject: session.subject,
+            displayName: normalizedProfile.displayName,
+            avatarInitials: normalizedProfile.avatarInitials,
+            avatarDataUrl: avatarDataUrl ?? null,
+            updatedAt: DateTime.toUtc(updatedAt),
+          });
+          return toAuthUserProfile(session, {
+            displayName: normalizedProfile.displayName,
+            avatarInitials: normalizedProfile.avatarInitials,
+            ...(avatarDataUrl ? { avatarDataUrl } : {}),
+          });
+        }),
+      ),
       Effect.mapError((cause) =>
         cause instanceof AuthError
           ? cause
@@ -1019,6 +1022,7 @@ function toAuthUserProfile(
   profile?: {
     readonly displayName: string;
     readonly avatarInitials: string;
+    readonly avatarDataUrl?: string | null;
   },
 ): AuthUserProfile {
   const subject = session.subject.trim() || "authenticated-user";
@@ -1035,6 +1039,7 @@ function toAuthUserProfile(
     subject,
     displayName,
     avatarInitials: profile?.avatarInitials ?? resolveAvatarInitials(displayName),
+    ...(profile?.avatarDataUrl ? { avatarDataUrl: profile.avatarDataUrl } : {}),
     role: session.role,
     sessionId: session.sessionId,
     sessionMethod: session.method,
@@ -1046,10 +1051,53 @@ function toAuthUserProfile(
 }
 
 function normalizeProfileUpdate(input: AuthUpdateUserProfileInput): AuthUpdateUserProfileInput {
+  const avatarDataUrl = input.avatarDataUrl?.trim();
   return {
     displayName: input.displayName.trim(),
     avatarInitials: input.avatarInitials.trim().toUpperCase(),
+    ...(avatarDataUrl ? { avatarDataUrl } : {}),
   };
+}
+
+function decodedBase64ByteLength(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return (base64.length / 4) * 3 - padding;
+}
+
+/**
+ * The browser downscales before uploading, but an avatar can also arrive from a
+ * scripted client, so the media type and the decoded size are re-checked here
+ * rather than trusted from the caller.
+ */
+function validateAvatarDataUrl(value: string): Effect.Effect<string, AuthError> {
+  const match = AVATAR_DATA_URL_PATTERN.exec(value);
+  const mediaType = match?.[1];
+  const base64 = match?.[2];
+  if (mediaType === undefined || base64 === undefined || base64.length % 4 !== 0) {
+    return Effect.fail(
+      new AuthError({
+        message: "Avatar image must be a base64 data URL.",
+        status: 400,
+      }),
+    );
+  }
+  if (!AUTH_AVATAR_IMAGE_MIME_TYPES.some((allowed) => allowed === mediaType)) {
+    return Effect.fail(
+      new AuthError({
+        message: `Avatar image must be one of ${AUTH_AVATAR_IMAGE_MIME_TYPES.join(", ")}.`,
+        status: 400,
+      }),
+    );
+  }
+  if (decodedBase64ByteLength(base64) > AUTH_AVATAR_MAX_DECODED_BYTES) {
+    return Effect.fail(
+      new AuthError({
+        message: `Avatar image must be at most ${Math.floor(AUTH_AVATAR_MAX_DECODED_BYTES / 1024)}KB.`,
+        status: 400,
+      }),
+    );
+  }
+  return Effect.succeed(value);
 }
 
 function normalizeEmail(value: string): string {
