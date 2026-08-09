@@ -1,4 +1,10 @@
 import type {
+  AnalyticsListStreamsInput,
+  AnalyticsListStreamsResult,
+  AnalyticsQueryInput,
+  AnalyticsQueryResult,
+} from "./analytics.ts";
+import type {
   GitAbortMergeInput,
   GitAbortMergeResult,
   GitCheckoutInput,
@@ -485,6 +491,11 @@ export interface EnvironmentApi {
         onResubscribe?: () => void;
       },
     ) => () => void;
+  };
+  /** Reading only; declaring a stream mints an ingest key and stays on the CLI. */
+  analytics: {
+    listStreams: (input: AnalyticsListStreamsInput) => Promise<AnalyticsListStreamsResult>;
+    query: (input: AnalyticsQueryInput) => Promise<AnalyticsQueryResult>;
   };
   packs: {
     publish: (input: PackPublishInput) => Promise<PackPublishResult>;

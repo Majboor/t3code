@@ -106,6 +106,10 @@ const rpcClientMock = {
     listActivity: vi.fn(),
     subscribe: vi.fn(() => () => undefined),
   },
+  analytics: {
+    listStreams: vi.fn(),
+    query: vi.fn(),
+  },
   packs: {
     publish: vi.fn(),
     recordVersion: vi.fn(),

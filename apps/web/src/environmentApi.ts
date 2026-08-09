@@ -84,6 +84,10 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       subscribe: (input, callback, options) =>
         rpcClient.collaboration.subscribe(input, callback, options),
     },
+    analytics: {
+      listStreams: rpcClient.analytics.listStreams,
+      query: rpcClient.analytics.query,
+    },
     packs: {
       publish: rpcClient.packs.publish,
       recordVersion: rpcClient.packs.recordVersion,

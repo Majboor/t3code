@@ -152,6 +152,10 @@ export interface WsRpcClient {
     readonly updateConsent: RpcUnaryMethod<typeof WS_METHODS.collaborationConsentUpdate>;
     readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribeCollaboration>;
   };
+  readonly analytics: {
+    readonly listStreams: RpcUnaryMethod<typeof WS_METHODS.analyticsListStreams>;
+    readonly query: RpcUnaryMethod<typeof WS_METHODS.analyticsQuery>;
+  };
   readonly packs: {
     readonly publish: RpcUnaryMethod<typeof WS_METHODS.packsPublish>;
     readonly recordVersion: RpcUnaryMethod<typeof WS_METHODS.packsRecordVersion>;
@@ -387,6 +391,11 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           listener,
           options,
         ),
+    },
+    analytics: {
+      listStreams: (input) =>
+        transport.request((client) => client[WS_METHODS.analyticsListStreams](input)),
+      query: (input) => transport.request((client) => client[WS_METHODS.analyticsQuery](input)),
     },
     packs: {
       publish: (input) => transport.request((client) => client[WS_METHODS.packsPublish](input)),
