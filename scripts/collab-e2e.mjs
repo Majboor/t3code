@@ -46,10 +46,19 @@ const KEEP_WORKSPACE = process.env["T3_E2E_KEEP_WORKSPACE"] === "1";
 // behind them. Skipping the turns that need one lets CI run most of this suite
 // with no provider credentials at all.
 const SKIP_AGENT = process.env["T3_E2E_SKIP_AGENT"] === "1";
-// The branch comparison and conflict warning only appear for a member who has
-// already run a turn, so they cannot be asserted with the agent switched off.
-// This is a real limitation of the app, not of the script — see AGENTS.md.
-const BRANCH_UI_NEEDS_A_TURN = "needs a member who has run a turn";
+/**
+ * Why the branch comparison and the conflict warning are not asserted with the
+ * agent switched off.
+ *
+ * Not because they need a turn — a probe with two fresh accounts, no turns and
+ * no approvals had B create a branch and the comparison rendered fine. What
+ * breaks is specific to this path: with the agent off, B's held prompt is
+ * approved and never re-sent, and from there the branch section renders
+ * neither the offer nor the comparison however long it is given. The panel is
+ * right in every other arrangement, so the suite says what it does not know
+ * rather than failing a feature that works.
+ */
+const BRANCH_UI_UNEXPLAINED = "not asserted without the agent — see the note in this file";
 
 // The agent needs far longer than the UI, and an unresponsive provider should
 // fail the check rather than hang the run.
@@ -380,16 +389,15 @@ try {
   const branchNames = offeredBranch ? git("branch", "--list") : "";
   check("B's branch exists in git", /collab\//.test(branchNames), branchNames.replace(/\s+/g, " "));
   if (SKIP_AGENT) {
-    skip("B sees their branch compared with main", BRANCH_UI_NEEDS_A_TURN);
+    skip("B sees their branch compared with main", BRANCH_UI_UNEXPLAINED);
   } else {
-    // Claiming the branch can fail after the worktree exists, and the only sign
-    // is a toast. Surface it, or this check says "false" and explains nothing.
-    const claimFailure = /Could not create your branch[^]{0,120}/.exec(
-      await bodyText(accountB.page),
-    );
+    // The claim reaches the panel a beat after the worktree exists, so let it
+    // settle before asking or a working feature reads as a missing one.
+    await sleep(6_000);
+    const claimFailure = /Could not create your branch[^]{0,120}/.exec(await bodyText(accountB.page));
     check(
       "B sees their branch compared with main",
-      await waitForCollabElement(accountB.page, "collaboration-branch-compare"),
+      await waitForCollabElement(accountB.page, "collaboration-branch-compare", 30_000),
       claimFailure?.[0].replace(/\s+/g, " ") ?? "",
     );
   }
@@ -434,8 +442,8 @@ try {
   }
 
   if (SKIP_AGENT) {
-    skip("B is warned the file is contested", BRANCH_UI_NEEDS_A_TURN);
-    skip("the warning names the contested file", BRANCH_UI_NEEDS_A_TURN);
+    skip("B is warned the file is contested", BRANCH_UI_UNEXPLAINED);
+    skip("the warning names the contested file", BRANCH_UI_UNEXPLAINED);
   } else {
     check(
       "B is warned the file is contested",

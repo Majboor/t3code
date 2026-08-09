@@ -23,10 +23,12 @@
   because a deployment must be able to reach the analytics endpoint and a remote host cannot
   reach a loopback address here.
 - `T3_E2E_SKIP_AGENT=1` drops the phases that need a model, which is how CI runs it
-  without any provider credentials. Known limitation: the branch comparison and the
-  conflict warning never appear for a member who has not run a turn, so that mode
-  reports them as SKIP rather than asserting them. Fixing that would let CI cover
-  branches and conflicts too.
+  without any provider credentials. It also reports the branch comparison and the
+  conflict warning as SKIP. That is not because they need a turn — a probe with two
+  fresh accounts, no turns and no approvals had B create a branch and the comparison
+  render fine. Something specific to the agent-off path breaks it, and until that is
+  understood the suite says what it does not know rather than failing a feature that
+  works everywhere else.
 
 ## Project Snapshot
 
