@@ -144,6 +144,11 @@ jobs:
           T3_E2E_SKIP_AGENT: "1"
         run: bun run test:collab
 
+      # Needs no provider and no remote host, so it runs in full rather than in a
+      # reduced mode.
+      - name: Analytics flow
+        run: bun run test:analytics
+
       - name: Server log
         if: failure()
         run: cat dev-server.log

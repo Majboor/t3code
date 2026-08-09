@@ -59,15 +59,19 @@ function postEvent(projectId, ingestKey, properties) {
   return status;
 }
 
-function projectIdFor(workspaceRoot) {
-  const database = path.join(BASE_DIR, "dev", "state.sqlite");
-  if (!existsSync(database)) return null;
-  const row = execFileSync(
-    "sqlite3",
-    [database, `select project_id from projection_projects where workspace_root = '${workspaceRoot}' and deleted_at is null limit 1;`],
-    { encoding: "utf8" },
-  ).trim();
-  return row || null;
+/**
+ * Follows the dashboard's own link to analytics and takes the project id from
+ * where it lands. Reading it out of the database instead would need sqlite on
+ * the machine running this, and would not prove the link works.
+ */
+async function openAnalyticsFromDashboard(page) {
+  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await sleep(7_000);
+  const link = page.locator('[data-testid="dashboard-workspace-analytics-link"]').first();
+  if ((await link.count()) === 0) return null;
+  await link.click();
+  await sleep(8_000);
+  return /\/analytics\/([^/?#]+)/.exec(page.url())?.[1] ?? null;
 }
 
 async function barLabels(page) {
@@ -98,16 +102,12 @@ try {
   ]);
   check("the account signs up", await signUp(account, ACCOUNT), ACCOUNT);
   await addProject(account.page, PROJECT_DIR);
-  const projectId = projectIdFor(PROJECT_DIR);
-  check("the project is registered", Boolean(projectId), projectId ?? "none");
-  if (!projectId) throw new Error("no project to attach a stream to");
 
   phase("Before anything reports");
-  await account.page.goto(`${BASE_URL}/analytics/${projectId}`, {
-    waitUntil: "domcontentloaded",
-    timeout: 60_000,
-  });
-  await sleep(8_000);
+  // The dashboard's own link is how a person gets here, so use it.
+  const projectId = await openAnalyticsFromDashboard(account.page);
+  check("the dashboard links through to analytics", Boolean(projectId), projectId ?? "no link");
+  if (!projectId) throw new Error("no project to attach a stream to");
   const empty = await account.page.locator('[data-testid="analytics-empty"]').count();
   check("the page says nothing is reporting yet", empty === 1, `${empty} empty states`);
   check("and tells you how to start", (await bodyText(account.page)).includes("t3 analytics declare"));
