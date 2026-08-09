@@ -56,6 +56,13 @@ import {
   DeployRunInput,
   DeployRunResult,
 } from "./deploy.ts";
+import {
+  AnalyticsError,
+  AnalyticsListStreamsInput,
+  AnalyticsListStreamsResult,
+  AnalyticsQueryInput,
+  AnalyticsQueryResult,
+} from "./analytics.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
   CollaborationActivityListInput,
@@ -328,6 +335,8 @@ export const WS_METHODS = {
   deployDeleteTarget: "deploy.targets.delete",
   deployRun: "deploy.run",
   deployListRuns: "deploy.runs.list",
+  analyticsListStreams: "analytics.streams.list",
+  analyticsQuery: "analytics.query",
 
   // Workspace / tenancy methods
   workspacesCreate: "workspaces.create",
@@ -528,6 +537,23 @@ export const WsGitCheckoutRpc = Rpc.make(WS_METHODS.gitCheckout, {
 export const WsGitInitRpc = Rpc.make(WS_METHODS.gitInit, {
   payload: GitInitInput,
   error: GitCommandError,
+});
+
+/**
+ * Reading only. Declaring a stream hands back an ingest key, which is write
+ * access to a project's numbers — that stays on the CLI rather than becoming
+ * something a browser session can mint.
+ */
+export const WsAnalyticsListStreamsRpc = Rpc.make(WS_METHODS.analyticsListStreams, {
+  payload: AnalyticsListStreamsInput,
+  success: AnalyticsListStreamsResult,
+  error: AnalyticsError,
+});
+
+export const WsAnalyticsQueryRpc = Rpc.make(WS_METHODS.analyticsQuery, {
+  payload: AnalyticsQueryInput,
+  success: AnalyticsQueryResult,
+  error: AnalyticsError,
 });
 
 export const WsDeployListTargetsRpc = Rpc.make(WS_METHODS.deployListTargets, {
@@ -1187,6 +1213,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeployDeleteTargetRpc,
   WsDeployRunRpc,
   WsDeployListRunsRpc,
+  WsAnalyticsListStreamsRpc,
+  WsAnalyticsQueryRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
   WsTerminalResizeRpc,

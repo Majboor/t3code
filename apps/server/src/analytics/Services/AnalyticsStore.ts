@@ -1,10 +1,10 @@
-import { Context, Data } from "effect";
+import { Context } from "effect";
 import type { Effect } from "effect";
 
+import { AnalyticsError } from "@t3tools/contracts";
 import type {
   AnalyticsDeclareStreamInput,
   AnalyticsDeclareStreamResult,
-  AnalyticsErrorCode,
   AnalyticsListStreamsInput,
   AnalyticsListStreamsResult,
   AnalyticsQueryInput,
@@ -14,11 +14,7 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 
-export class AnalyticsError extends Data.TaggedError("AnalyticsError")<{
-  readonly code: AnalyticsErrorCode;
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
+export { AnalyticsError };
 
 export interface AnalyticsStoreShape {
   /**

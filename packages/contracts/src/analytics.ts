@@ -187,3 +187,9 @@ export const AnalyticsErrorCode = Schema.Literals([
   "storage-failed",
 ]);
 export type AnalyticsErrorCode = typeof AnalyticsErrorCode.Type;
+
+export class AnalyticsError extends Schema.TaggedErrorClass<AnalyticsError>()("AnalyticsError", {
+  code: AnalyticsErrorCode,
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect),
+}) {}

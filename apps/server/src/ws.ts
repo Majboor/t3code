@@ -17,6 +17,7 @@ import {
   AuthSessionId,
   CollaborationError,
   CommandId,
+  AnalyticsError,
   DeployError,
   type DeployTargetId,
   type ProjectId,
@@ -128,6 +129,7 @@ import { OrganizationService } from "./organizations/Services/OrganizationServic
 import { PackRegistryService } from "./packs/Services/PackRegistryService.ts";
 import { TenancyRepository } from "./persistence/Services/Tenancy.ts";
 import { DeployService } from "./deploy/Services/DeployService.ts";
+import { AnalyticsStore } from "./analytics/Services/AnalyticsStore.ts";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
 import { ProjectionThreadPreferenceRepository } from "./persistence/Services/ProjectionThreadPreferences.ts";
 
@@ -742,6 +744,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const packRegistry = yield* PackRegistryService;
       const tenancyRepository = yield* TenancyRepository;
       const deployService = yield* DeployService;
+  const analyticsStore = yield* AnalyticsStore;
       const threadPreferences = yield* ProjectionThreadPreferenceRepository;
       const rateLimitRef = yield* Ref.make({
         windowStartedAt: Date.now(),
@@ -4360,6 +4363,42 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               (message) => new OrganizationError({ code: "invalid-role", message }),
             ),
             { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.analyticsListStreams]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.analyticsListStreams,
+            withRateLimit(
+              (input.projectId === undefined
+                ? Effect.void
+                : ensureDeployProjectAccess(input.projectId, "project.view").pipe(
+                    Effect.mapError(
+                      (error) => new AnalyticsError({ code: "storage-failed", message: error.message }),
+                    ),
+                  )
+              ).pipe(
+                Effect.flatMap(() =>
+                  analyticsStore.listStreams(
+                    input.projectId !== undefined ? { projectId: input.projectId } : {},
+                  ),
+                ),
+              ),
+              (message) => new AnalyticsError({ code: "storage-failed", message }),
+            ),
+            { "rpc.aggregate": "analytics" },
+          ),
+        [WS_METHODS.analyticsQuery]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.analyticsQuery,
+            withRateLimit(
+              ensureDeployProjectAccess(input.projectId, "project.view").pipe(
+                Effect.mapError(
+                  (error) => new AnalyticsError({ code: "storage-failed", message: error.message }),
+                ),
+                Effect.flatMap(() => analyticsStore.query(input)),
+              ),
+              (message) => new AnalyticsError({ code: "storage-failed", message }),
+            ),
+            { "rpc.aggregate": "analytics" },
           ),
         [WS_METHODS.deployListTargets]: (input) =>
           observeRpcEffect(
