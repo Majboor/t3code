@@ -15,6 +15,13 @@
   it over SSH and checks every page it serves. Needs key-based SSH to the host: a
   `command` target never receives the password secret, and the deploy pack refuses to
   put one on a command line. `deploy run` tars the directory it is called from.
+- `bun run test:analytics` is the quick one: a project, a declared stream, events posted with
+  nothing but an ingest key, and the chart a person sees. No agent and no remote host, so it
+  needs no credentials.
+- `bun run test:pdf-pack` renders a PDF, deploys it, has the
+  deployment report how far a reader got, and asks which page held them longest. Runs locally,
+  because a deployment must be able to reach the analytics endpoint and a remote host cannot
+  reach a loopback address here.
 - `T3_E2E_SKIP_AGENT=1` drops the phases that need a model, which is how CI runs it
   without any provider credentials. Known limitation: the branch comparison and the
   conflict warning never appear for a member who has not run a turn, so that mode
