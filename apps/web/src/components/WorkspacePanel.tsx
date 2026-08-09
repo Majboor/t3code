@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 import Editor from "@monaco-editor/react";
+
+import { useLocalMonaco } from "../lib/monacoSetup";
 import { FileDiff } from "@pierre/diffs/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -457,6 +459,8 @@ export default function WorkspacePanel({
   onClose,
   onOpenDiff,
 }: WorkspacePanelProps) {
+  // Before anything can mount an editor.
+  useLocalMonaco();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const settings = useSettings();
