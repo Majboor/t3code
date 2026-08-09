@@ -12,6 +12,7 @@ import {
 import {
   Config,
   Console,
+  Data,
   Duration,
   Effect,
   Exit,
@@ -48,6 +49,9 @@ import { expandHomePath, resolveBaseDir } from "./os-jank.ts";
 import { runServer } from "./server.ts";
 import { DeployService, type DeployServiceShape } from "./deploy/Services/DeployService.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
+import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
+import { AnalyticsStore, type AnalyticsStoreShape } from "./analytics/Services/AnalyticsStore.ts";
+import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { AuthControlPlaneRuntimeLive } from "./auth/Layers/AuthControlPlane.ts";
@@ -1197,6 +1201,7 @@ const formatDeployTarget = (target: DeployTarget): string => {
 
 const deployListCommand = Command.make("list", {
   baseDir: baseDirFlag,
+  devUrl: devUrlFlag,
   project: Flag.string("project").pipe(
     Flag.withDescription("Only list targets for this project id."),
     Flag.optional,
@@ -1223,6 +1228,7 @@ const deployListCommand = Command.make("list", {
 
 const deployAddCommand = Command.make("add", {
   baseDir: baseDirFlag,
+  devUrl: devUrlFlag,
   project: Flag.string("project").pipe(Flag.withDescription("Project id to attach the target to.")),
   name: Flag.string("name").pipe(Flag.withDescription("Human readable target name.")),
   command: Flag.string("command").pipe(Flag.withDescription("Command to execute when deploying.")),
@@ -1286,6 +1292,7 @@ const deployAddCommand = Command.make("add", {
 
 const deployRunCommand = Command.make("run", {
   baseDir: baseDirFlag,
+  devUrl: devUrlFlag,
   target: Argument.string("target").pipe(Argument.withDescription("Deploy target id to run.")),
 }).pipe(
   Command.withDescription("Run a deploy target from the current working directory."),
@@ -1315,6 +1322,7 @@ const deployRunCommand = Command.make("run", {
 
 const deployRunsCommand = Command.make("runs", {
   baseDir: baseDirFlag,
+  devUrl: devUrlFlag,
   target: Flag.string("target").pipe(
     Flag.withDescription("Only show runs for this target id."),
     Flag.optional,
@@ -1344,6 +1352,174 @@ const deployRunsCommand = Command.make("runs", {
         ),
     ),
   ),
+);
+
+const runAnalyticsCommand = Effect.fn("runAnalyticsCommand")(function* (
+  flags: { readonly baseDir: Option.Option<string> },
+  run: (analytics: AnalyticsStoreShape) => Effect.Effect<string, Error>,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  return yield* Effect.gen(function* () {
+    const analytics = yield* AnalyticsStore;
+    const output = yield* run(analytics);
+    yield* Console.log(output);
+  }).pipe(
+    Effect.provide(
+      AnalyticsStoreLive.pipe(
+        Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
+        Layer.provide(Layer.succeed(ServerConfig, config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
+      ),
+    ),
+  );
+});
+
+class AnalyticsPropertiesError extends Data.TaggedError("AnalyticsPropertiesError")<{
+  readonly cause: unknown;
+}> {}
+
+/**
+ * Properties as `name:type:required` triples, so declaring a stream stays one
+ * command. The shape is the point of the contract, so it cannot be optional.
+ */
+function parseAnalyticsProperties(raw: string): ReadonlyArray<{
+  name: string;
+  type: "string" | "number" | "boolean";
+  purpose: string;
+  required: boolean;
+}> {
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      const [name = "", type = "string", required = "false"] = entry.split(":");
+      if (type !== "string" && type !== "number" && type !== "boolean") {
+        throw new Error(`${name} has type ${type}; expected string, number or boolean.`);
+      }
+      return { name, type, purpose: name, required: required === "true" || required === "required" };
+    });
+}
+
+const analyticsDeclareCommand = Command.make("declare", {
+  baseDir: baseDirFlag,
+  devUrl: devUrlFlag,
+  project: Flag.string("project").pipe(Flag.withDescription("Project the stream belongs to.")),
+  name: Flag.string("name").pipe(Flag.withDescription("Stream name, e.g. page.view.")),
+  purpose: Flag.string("purpose").pipe(Flag.withDescription("What the stream is for.")),
+  properties: Flag.string("properties").pipe(
+    Flag.withDescription("Comma separated name:type:required, e.g. path:string:required,seconds:number."),
+  ),
+}).pipe(
+  Command.withDescription("Declare an event stream and print its ingest key once."),
+  Command.withHandler((flags) =>
+    runAnalyticsCommand(flags, (analytics) =>
+      Effect.try({
+        try: () => parseAnalyticsProperties(flags.properties),
+        catch: (cause) => new AnalyticsPropertiesError({ cause }),
+      }).pipe(
+        Effect.mapError((error) => new Error(String(error.cause))),
+        Effect.flatMap((properties) =>
+          analytics
+            .declareStream({
+              projectId: ProjectId.make(flags.project),
+              name: flags.name as never,
+              purpose: flags.purpose,
+              properties: properties as never,
+            })
+            .pipe(
+              Effect.mapError((error) => new Error(error.message)),
+              Effect.map(
+                (result) =>
+                  `Declared ${result.stream.name} (${result.stream.id}).\nIngest key (shown once): ${result.ingestKey}`,
+              ),
+            ),
+        ),
+      ),
+    ),
+  ),
+);
+
+const analyticsListCommand = Command.make("list", {
+  baseDir: baseDirFlag,
+  devUrl: devUrlFlag,
+  project: Flag.string("project").pipe(
+    Flag.withDescription("Only list streams for this project."),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription("List declared event streams."),
+  Command.withHandler((flags) =>
+    runAnalyticsCommand(flags, (analytics) => {
+      const projectId = Option.getOrUndefined(flags.project);
+      return analytics
+        .listStreams(projectId === undefined ? {} : { projectId: ProjectId.make(projectId) })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.map((result) =>
+            result.streams.length === 0
+              ? "No streams declared."
+              : result.streams
+                  .map(
+                    (stream) =>
+                      `${stream.name}  ${stream.properties.map((property) => `${property.name}:${property.type}`).join(",")}`,
+                  )
+                  .join("\n"),
+          ),
+        );
+    }),
+  ),
+);
+
+const analyticsQueryCommand = Command.make("query", {
+  baseDir: baseDirFlag,
+  devUrl: devUrlFlag,
+  project: Flag.string("project").pipe(Flag.withDescription("Project the stream belongs to.")),
+  stream: Flag.string("stream").pipe(Flag.withDescription("Stream to ask about.")),
+  aggregate: Flag.string("aggregate").pipe(
+    Flag.withDescription("count, sum, avg, min or max."),
+    Flag.withDefault("count"),
+  ),
+  value: Flag.string("value").pipe(
+    Flag.withDescription("Numeric property to aggregate. Required for everything but count."),
+    Flag.optional,
+  ),
+  groupBy: Flag.string("group-by").pipe(
+    Flag.withDescription("Property to split the result by."),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription("Ask an aggregate question of a stream."),
+  Command.withHandler((flags) =>
+    runAnalyticsCommand(flags, (analytics) => {
+      const value = Option.getOrUndefined(flags.value);
+      const groupBy = Option.getOrUndefined(flags.groupBy);
+      return analytics
+        .query({
+          projectId: ProjectId.make(flags.project),
+          stream: flags.stream as never,
+          aggregate: flags.aggregate as never,
+          ...(value === undefined ? {} : { valueProperty: value as never }),
+          ...(groupBy === undefined ? {} : { groupBy: groupBy as never }),
+        })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.map((result) =>
+            result.buckets.length === 0
+              ? "No events yet."
+              : result.buckets
+                  .map((bucket) => `${bucket.group ?? "all"}  ${bucket.value}  (${bucket.events} events)`)
+                  .join("\n"),
+          ),
+        );
+    }),
+  ),
+);
+
+const analyticsCommand = Command.make("analytics").pipe(
+  Command.withDescription("Declare event streams and ask questions of them."),
+  Command.withSubcommands([analyticsDeclareCommand, analyticsListCommand, analyticsQueryCommand]),
 );
 
 const deployCommand = Command.make("deploy").pipe(
@@ -1389,5 +1565,12 @@ const serveCommand = Command.make("serve", { ...sharedServerCommandFlags }).pipe
 export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
   Command.withDescription("Run the T3 Code server."),
   Command.withHandler((flags) => runServerCommand(flags)),
-  Command.withSubcommands([startCommand, serveCommand, authCommand, projectCommand, deployCommand]),
+  Command.withSubcommands([
+    startCommand,
+    serveCommand,
+    authCommand,
+    projectCommand,
+    deployCommand,
+    analyticsCommand,
+  ]),
 );
