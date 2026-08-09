@@ -4,6 +4,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArchiveX,
   Building2Icon,
+  ChartNoAxesColumnIcon,
   ClockIcon,
   CopyIcon,
   FolderIcon,
@@ -706,23 +707,39 @@ function WorkspaceRow({
       {entry.projects.length > 0 ? (
         <div className="mt-3 grid gap-2">
           {entry.projects.slice(0, 4).map((projectEntry) => (
-            <button
+            <div
               key={`${projectEntry.project.environmentId}:${projectEntry.project.id}`}
-              type="button"
-              className="group flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-background/70 px-2.5 py-2 text-left text-xs transition-colors hover:bg-accent/70 focus-visible:bg-accent/70 focus-visible:outline-none"
-              data-testid="dashboard-workspace-project-link"
-              onClick={() => onOpenProject(projectEntry)}
+              className="group flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-background/70 pr-1.5 text-xs transition-colors hover:bg-accent/70"
             >
-              <FolderIcon className="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground" />
-              <span className="min-w-0 flex-1 truncate text-foreground">
-                {projectEntry.project.name}
-              </span>
-              <span className="shrink-0 text-muted-foreground">
-                {projectEntry.threadCount > 0
-                  ? formatCount(projectEntry.threadCount, "session")
-                  : "Start session"}
-              </span>
-            </button>
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none"
+                data-testid="dashboard-workspace-project-link"
+                onClick={() => onOpenProject(projectEntry)}
+              >
+                <FolderIcon className="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground" />
+                <span className="min-w-0 flex-1 truncate text-foreground">
+                  {projectEntry.project.name}
+                </span>
+                <span className="shrink-0 text-muted-foreground">
+                  {projectEntry.threadCount > 0
+                    ? formatCount(projectEntry.threadCount, "session")
+                    : "Start session"}
+                </span>
+              </button>
+              {/* Reachable from the project it belongs to, or nobody finds it. */}
+              <Link
+                to="/analytics/$projectId"
+                params={{ projectId: projectEntry.project.id }}
+                aria-label={`Analytics for ${projectEntry.project.name}`}
+                title="Analytics"
+                className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
+                data-testid="dashboard-workspace-analytics-link"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <ChartNoAxesColumnIcon className="size-3.5" />
+              </Link>
+            </div>
           ))}
           {entry.projects.length > 4 ? (
             <div className="px-2.5 text-xs text-muted-foreground">
