@@ -75,6 +75,10 @@
     "./packSigning": {
       "types": "./src/packSigning.ts",
       "import": "./src/packSigning.ts"
+    },
+    "./packSigningNode": {
+      "types": "./src/packSigningNode.ts",
+      "import": "./src/packSigningNode.ts"
     }
   },
   "scripts": {

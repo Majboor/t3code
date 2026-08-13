@@ -25,10 +25,42 @@
  * publisher is attesting to is the pack: what it does, what it has learned,
  * what it needs. Not who is allowed to look.
  */
-import { createHash, generateKeyPairSync, sign, verify } from "node:crypto";
+/**
+ * WebCrypto, which node and every browser both have. Using it rather than
+ * `node:crypto` is what lets a page verify a pack at all: importing the node
+ * module in the browser does not fail at build time, it fails when the page
+ * runs, and the page simply does not appear.
+ */
+const subtle = globalThis.crypto.subtle;
 
 /** The algorithm the format names. Not configurable, so nothing can downgrade it. */
-const ALGORITHM = "ed25519" as const;
+export const ALGORITHM = "ed25519" as const;
+
+/** WebCrypto spells it differently from node. */
+const WEB_ALGORITHM = "Ed25519" as const;
+
+function toHex(bytes: ArrayBuffer): string {
+  return Array.from(new Uint8Array(bytes))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function fromHex(hex: string): ArrayBuffer {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes.buffer;
+}
+
+function fromBase64(value: string): ArrayBuffer {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes.buffer;
+}
 
 /**
  * Serialises with keys in a fixed order at every depth, so the same manifest
@@ -52,59 +84,10 @@ export function canonicalJson(value: unknown): string {
  * legitimately change after signing. Exported because signing and verifying
  * have to agree on it exactly.
  */
-export function manifestDigest(manifest: Record<string, unknown>): string {
+export async function manifestDigest(manifest: Record<string, unknown>): Promise<string> {
   const { signature: _signature, visibility: _visibility, ...rest } = manifest;
-  return createHash("sha256").update(canonicalJson(rest), "utf8").digest("hex");
-}
-
-export interface PackSigningKeyPair {
-  readonly keyId: string;
-  /** PEM, private. Never leaves the machine that signed. */
-  readonly privateKeyPem: string;
-  /** Base64 DER, travels in the manifest so a reader can check the signature. */
-  readonly publicKey: string;
-}
-
-/** A fresh signing identity. The key id is derived from the public key, so it cannot disagree with it. */
-export function generateSigningKey(): PackSigningKeyPair {
-  const { privateKey, publicKey } = generateKeyPairSync(ALGORITHM);
-  const publicDer = publicKey.export({ type: "spki", format: "der" });
-  return {
-    keyId: createHash("sha256").update(publicDer).digest("hex").slice(0, 32),
-    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-    publicKey: publicDer.toString("base64"),
-  };
-}
-
-export interface SignedManifestResult {
-  readonly keyId: string;
-  readonly algorithm: typeof ALGORITHM;
-  readonly publicKey: string;
-  readonly manifestSha256: string;
-  readonly signature: string;
-  readonly signedAt: string;
-}
-
-/**
- * Signs the manifest. `signedAt` is passed in rather than read from the clock
- * so that signing is reproducible and testable.
- */
-export function signManifest(
-  manifest: Record<string, unknown>,
-  key: PackSigningKeyPair,
-  signedAt: string,
-): SignedManifestResult {
-  const manifestSha256 = manifestDigest(manifest);
-  // ed25519 signs the message itself; passing a digest algorithm here is an error.
-  const signature = sign(null, Buffer.from(manifestSha256, "hex"), key.privateKeyPem);
-  return {
-    keyId: key.keyId,
-    algorithm: ALGORITHM,
-    publicKey: key.publicKey,
-    manifestSha256,
-    signature: signature.toString("base64"),
-    signedAt,
-  };
+  const bytes = new TextEncoder().encode(canonicalJson(rest));
+  return toHex(await subtle.digest("SHA-256", bytes.buffer as ArrayBuffer));
 }
 
 export type PackVerification =
@@ -120,7 +103,9 @@ export type PackVerification =
  * separate question this function cannot answer, and callers must not present
  * the two as one thing.
  */
-export function verifyManifest(manifest: Record<string, unknown>): PackVerification {
+export async function verifyManifest(
+  manifest: Record<string, unknown>,
+): Promise<PackVerification> {
   const signature = manifest["signature"];
   if (signature === undefined || signature === null) {
     return { state: "unsigned" };
@@ -146,31 +131,27 @@ export function verifyManifest(manifest: Record<string, unknown>): PackVerificat
 
   // Check the digest first. A signature that verifies against a hash of
   // something else would otherwise pass while describing a different manifest.
-  const actual = manifestDigest(manifest);
+  const actual = await manifestDigest(manifest);
   if (actual !== manifestSha256) {
     return { state: "invalid", why: "the manifest has changed since it was signed" };
   }
 
-  const publicKeyObject = {
-    key: Buffer.from(publicKey, "base64"),
-    format: "der" as const,
-    type: "spki" as const,
-  };
-
-  let ok = false;
   try {
-    ok = verify(
-      null,
-      Buffer.from(manifestSha256, "hex"),
-      publicKeyObject,
-      Buffer.from(signatureValue, "base64"),
+    const key = await subtle.importKey("spki", fromBase64(publicKey), WEB_ALGORITHM, false, [
+      "verify",
+    ]);
+    const ok = await subtle.verify(
+      WEB_ALGORITHM,
+      key,
+      fromBase64(signatureValue),
+      fromHex(manifestSha256),
     );
+    if (!ok) {
+      return { state: "invalid", why: "the signature does not match the key it names" };
+    }
   } catch {
     return { state: "invalid", why: "the signature could not be read" };
   }
 
-  if (!ok) {
-    return { state: "invalid", why: "the signature does not match the key it names" };
-  }
   return { state: "valid", keyId, signedAt: typeof signedAt === "string" ? signedAt : "" };
 }

@@ -11,12 +11,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { verifyManifest } from "@t3tools/shared/packSigning";
 import {
   generateSigningKey,
   type PackSigningKeyPair,
   signManifest,
-  verifyManifest,
-} from "@t3tools/shared/packSigning";
+} from "@t3tools/shared/packSigningNode";
 
 import type { ParsedCommand } from "./args.ts";
 import { PackCliError } from "./errors.ts";
@@ -454,7 +454,7 @@ async function signCommand(
   }
 
   const manifest = pack.manifest as unknown as Record<string, unknown>;
-  const signature = signManifest(manifest, key, context.now().toISOString());
+  const signature = await signManifest(manifest, key, context.now().toISOString());
   const signed = { ...manifest, signature };
   await fs.writeFile(
     path.join(pack.directory, "pack.json"),
@@ -463,7 +463,7 @@ async function signCommand(
   );
 
   // Read it back and check, rather than trusting that writing it worked.
-  const verified = verifyManifest(
+  const verified = await verifyManifest(
     JSON.parse(await fs.readFile(path.join(pack.directory, "pack.json"), "utf8")) as Record<
       string,
       unknown

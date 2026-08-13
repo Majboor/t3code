@@ -5,7 +5,9 @@ import type {
   PackVisibilityScope,
 } from "@t3tools/contracts";
 
+import { createLivePackDetailSource } from "./packDetailSource.live";
 import { stubPackDetailSource } from "./packDetailSource.stub";
+import { readPrimaryEnvironmentDescriptor } from "../../environments/primary/context";
 
 export interface PackDetail {
   readonly manifest: PackManifest;
@@ -41,9 +43,15 @@ export interface PackDetailSource {
 }
 
 /**
- * The seam. There is no pack RPC yet, so this points at the stub; when the
- * served registry exists, this binding is what changes and nothing above it
- * has to. The payload is the manifest itself plus the registry's own release
- * history, so the real call has nothing left to reshape.
+ * The seam. It now points at the served registry rather than the stub, which is
+ * what makes everything on the pack page a statement about a real pack: a
+ * signature badge over stub bytes verifies nothing worth knowing.
+ *
+ * The stub is kept and still exported, because the browser tests render this
+ * page without a server behind it.
  */
-export const packDetailSource: PackDetailSource = stubPackDetailSource;
+export const packDetailSource: PackDetailSource = createLivePackDetailSource(() =>
+  readPrimaryEnvironmentDescriptor()?.environmentId ?? null,
+);
+
+export { stubPackDetailSource };

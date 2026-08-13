@@ -5,6 +5,7 @@ import {
   ArchiveX,
   Building2Icon,
   ChartNoAxesColumnIcon,
+  PackagePlusIcon,
   ClockIcon,
   CopyIcon,
   FolderIcon,
@@ -46,6 +47,7 @@ import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { PublishPackDialog } from "./packDashboard/PublishPackDialog";
 import { readEnvironmentApi } from "../environmentApi";
 import { readEnvironmentConnection } from "../environments/runtime";
 import { cn, newCommandId } from "../lib/utils";
@@ -629,6 +631,10 @@ function WorkspaceRow({
   onOpenProject: (entry: WorkspaceDashboardProject) => void;
 }) {
   const canInvite = entry.workspaceId !== null && entry.tenantId !== null;
+  const navigate = useNavigate();
+  const [publishingProject, setPublishingProject] = useState<WorkspaceDashboardProject | null>(
+    null,
+  );
 
   return (
     <div className="px-4 py-3" data-testid="dashboard-workspace-row">
@@ -704,6 +710,20 @@ function WorkspaceRow({
         </div>
       ) : null}
 
+      {publishingProject ? (
+        <PublishPackDialog
+          environmentId={publishingProject.project.environmentId}
+          projectName={publishingProject.project.name}
+          open
+          onOpenChange={(next) => {
+            if (!next) setPublishingProject(null);
+          }}
+          onPublished={(packId) => {
+            void navigate({ to: "/pack/$packId", params: { packId } });
+          }}
+        />
+      ) : null}
+
       {entry.projects.length > 0 ? (
         <div className="mt-3 grid gap-2">
           {entry.projects.slice(0, 4).map((projectEntry) => (
@@ -726,6 +746,19 @@ function WorkspaceRow({
                     ? formatCount(projectEntry.threadCount, "session")
                     : "Start session"}
                 </span>
+              </button>
+              <button
+                type="button"
+                aria-label={`Publish ${projectEntry.project.name} as a pack`}
+                title="Publish as a pack"
+                className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
+                data-testid="dashboard-workspace-publish-pack"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setPublishingProject(projectEntry);
+                }}
+              >
+                <PackagePlusIcon className="size-3.5" />
               </button>
               {/* Reachable from the project it belongs to, or nobody finds it. */}
               <Link

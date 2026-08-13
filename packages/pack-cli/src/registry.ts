@@ -19,7 +19,8 @@ import {
   type PackManifest,
   type PackRefView,
 } from "./manifest.ts";
-import { manifestDigest, type SignedManifestResult } from "@t3tools/shared/packSigning";
+import { manifestDigest } from "@t3tools/shared/packSigning";
+import type { SignedManifestResult } from "@t3tools/shared/packSigningNode";
 import type { PackStore } from "./store.ts";
 
 const VERSIONS_DIRECTORY = "versions";
@@ -293,7 +294,7 @@ export function makeDirectoryRegistry(store: PackStore, root: string): PackRegis
       }
 
       const manifest = JSON.parse(stored) as Record<string, unknown>;
-      if (manifestDigest(manifest) !== input.signature.manifestSha256) {
+      if ((await manifestDigest(manifest)) !== input.signature.manifestSha256) {
         return {
           attached: false,
           why: "the signature describes a different manifest than the one published",

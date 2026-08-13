@@ -19,6 +19,7 @@ import { PackPublishControl } from "./PackPublishControl";
 import { PackReleaseHistory } from "./PackReleaseHistory";
 import { PackRequirementsSection } from "./PackRequirementsSection";
 import { PackShareControl } from "./PackShareControl";
+import { PackSignatureBadge } from "./PackSignatureBadge";
 import { PackScarRecordSection } from "./PackScarRecordSection";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -201,6 +202,8 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
         visibility={manifest.visibility}
         onChangeVisibility={changeVisibility}
       />
+
+      <PackSignatureBadge manifest={manifest} />
 
       <PackShareControl identity={identity} visibility={manifest.visibility} />
 
