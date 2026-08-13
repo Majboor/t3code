@@ -95,6 +95,9 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       get: rpcClient.packs.get,
       listVersions: rpcClient.packs.listVersions,
       setVisibility: rpcClient.packs.setVisibility,
+      enable: rpcClient.packs.enable,
+      disable: rpcClient.packs.disable,
+      listEnablements: rpcClient.packs.listEnablements,
       subscribe: (input, callback, options) => rpcClient.packs.subscribe(input, callback, options),
     },
     organizations: {

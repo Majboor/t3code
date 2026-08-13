@@ -20,6 +20,7 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAccountRouteImport } from './routes/settings.account'
 import { Route as ChatPackPackIdRouteImport } from './routes/_chat.pack.$packId'
+import { Route as ChatInfraProjectIdRouteImport } from './routes/_chat.infra.$projectId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatAnalyticsProjectIdRouteImport } from './routes/_chat.analytics.$projectId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
@@ -79,6 +80,11 @@ const ChatPackPackIdRoute = ChatPackPackIdRouteImport.update({
   path: '/pack/$packId',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatInfraProjectIdRoute = ChatInfraProjectIdRouteImport.update({
+  id: '/infra/$projectId',
+  path: '/infra/$projectId',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -115,6 +121,7 @@ export interface FileRoutesByFullPath {
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/analytics/$projectId': typeof ChatAnalyticsProjectIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/infra/$projectId': typeof ChatInfraProjectIdRoute
   '/pack/$packId': typeof ChatPackPackIdRoute
   '/project/$environmentId/$projectId': typeof ChatProjectEnvironmentIdProjectIdRoute
 }
@@ -131,6 +138,7 @@ export interface FileRoutesByTo {
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/analytics/$projectId': typeof ChatAnalyticsProjectIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/infra/$projectId': typeof ChatInfraProjectIdRoute
   '/pack/$packId': typeof ChatPackPackIdRoute
   '/project/$environmentId/$projectId': typeof ChatProjectEnvironmentIdProjectIdRoute
 }
@@ -149,6 +157,7 @@ export interface FileRoutesById {
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/analytics/$projectId': typeof ChatAnalyticsProjectIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/_chat/infra/$projectId': typeof ChatInfraProjectIdRoute
   '/_chat/pack/$packId': typeof ChatPackPackIdRoute
   '/_chat/project/$environmentId/$projectId': typeof ChatProjectEnvironmentIdProjectIdRoute
 }
@@ -167,6 +176,7 @@ export interface FileRouteTypes {
     | '/$environmentId/$threadId'
     | '/analytics/$projectId'
     | '/draft/$draftId'
+    | '/infra/$projectId'
     | '/pack/$packId'
     | '/project/$environmentId/$projectId'
   fileRoutesByTo: FileRoutesByTo
@@ -183,6 +193,7 @@ export interface FileRouteTypes {
     | '/$environmentId/$threadId'
     | '/analytics/$projectId'
     | '/draft/$draftId'
+    | '/infra/$projectId'
     | '/pack/$packId'
     | '/project/$environmentId/$projectId'
   id:
@@ -200,6 +211,7 @@ export interface FileRouteTypes {
     | '/_chat/$environmentId/$threadId'
     | '/_chat/analytics/$projectId'
     | '/_chat/draft/$draftId'
+    | '/_chat/infra/$projectId'
     | '/_chat/pack/$packId'
     | '/_chat/project/$environmentId/$projectId'
   fileRoutesById: FileRoutesById
@@ -290,6 +302,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatPackPackIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/infra/$projectId': {
+      id: '/_chat/infra/$projectId'
+      path: '/infra/$projectId'
+      fullPath: '/infra/$projectId'
+      preLoaderRoute: typeof ChatInfraProjectIdRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -326,6 +345,7 @@ interface ChatRouteChildren {
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
   ChatAnalyticsProjectIdRoute: typeof ChatAnalyticsProjectIdRoute
   ChatDraftDraftIdRoute: typeof ChatDraftDraftIdRoute
+  ChatInfraProjectIdRoute: typeof ChatInfraProjectIdRoute
   ChatPackPackIdRoute: typeof ChatPackPackIdRoute
   ChatProjectEnvironmentIdProjectIdRoute: typeof ChatProjectEnvironmentIdProjectIdRoute
 }
@@ -335,6 +355,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
   ChatAnalyticsProjectIdRoute: ChatAnalyticsProjectIdRoute,
   ChatDraftDraftIdRoute: ChatDraftDraftIdRoute,
+  ChatInfraProjectIdRoute: ChatInfraProjectIdRoute,
   ChatPackPackIdRoute: ChatPackPackIdRoute,
   ChatProjectEnvironmentIdProjectIdRoute:
     ChatProjectEnvironmentIdProjectIdRoute,

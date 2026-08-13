@@ -1,4 +1,11 @@
 import type {
+  PackDisableInput,
+  PackEnableInput,
+  PackEnableResult,
+  PackListEnablementsInput,
+  PackListEnablementsResult,
+} from "./packEnablement.ts";
+import type {
   AnalyticsListStreamsInput,
   AnalyticsListStreamsResult,
   AnalyticsQueryInput,
@@ -503,6 +510,9 @@ export interface EnvironmentApi {
     search: (input: PackSearchInput) => Promise<PackSearchResult>;
     get: (input: PackGetInput) => Promise<PackGetResult>;
     listVersions: (input: PackVersionListInput) => Promise<PackVersionListResult>;
+    enable: (input: PackEnableInput) => Promise<PackEnableResult>;
+    disable: (input: PackDisableInput) => Promise<void>;
+    listEnablements: (input: PackListEnablementsInput) => Promise<PackListEnablementsResult>;
     setVisibility: (input: PackVisibilityInput) => Promise<PackVisibilityResult>;
     subscribe: (
       input: PackStreamInput,

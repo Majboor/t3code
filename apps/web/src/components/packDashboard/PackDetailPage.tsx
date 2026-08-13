@@ -13,6 +13,7 @@ import {
   pluralize,
 } from "./packDetail.logic";
 import { PackDeployControl } from "./PackDeployControl";
+import { PackEnableControl } from "./PackEnableControl";
 import { PackIntegrateControl } from "./PackIntegrateControl";
 import { PackKnowledgeSection } from "./PackKnowledgeSection";
 import { PackPublishControl } from "./PackPublishControl";
@@ -204,6 +205,8 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
       />
 
       <PackSignatureBadge manifest={manifest} />
+
+      <PackEnableControl identity={identity} />
 
       <PackShareControl identity={identity} visibility={manifest.visibility} />
 

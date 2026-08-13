@@ -163,6 +163,9 @@ export interface WsRpcClient {
     readonly get: RpcUnaryMethod<typeof WS_METHODS.packsGet>;
     readonly listVersions: RpcUnaryMethod<typeof WS_METHODS.packsListVersions>;
     readonly setVisibility: RpcUnaryMethod<typeof WS_METHODS.packsSetVisibility>;
+    readonly enable: RpcUnaryMethod<typeof WS_METHODS.packsEnable>;
+    readonly disable: RpcUnaryMethod<typeof WS_METHODS.packsDisable>;
+    readonly listEnablements: RpcUnaryMethod<typeof WS_METHODS.packsListEnablements>;
     readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribePacks>;
   };
   readonly workspaces: {
@@ -407,6 +410,10 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.packsListVersions](input)),
       setVisibility: (input) =>
         transport.request((client) => client[WS_METHODS.packsSetVisibility](input)),
+      enable: (input) => transport.request((client) => client[WS_METHODS.packsEnable](input)),
+      disable: (input) => transport.request((client) => client[WS_METHODS.packsDisable](input)),
+      listEnablements: (input) =>
+        transport.request((client) => client[WS_METHODS.packsListEnablements](input)),
       subscribe: (input, listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribePacks](input),

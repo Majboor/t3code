@@ -6,6 +6,7 @@ import {
   Building2Icon,
   ChartNoAxesColumnIcon,
   PackagePlusIcon,
+  ServerIcon,
   ClockIcon,
   CopyIcon,
   FolderIcon,
@@ -760,6 +761,17 @@ function WorkspaceRow({
               >
                 <PackagePlusIcon className="size-3.5" />
               </button>
+              <Link
+                to="/infra/$projectId"
+                params={{ projectId: projectEntry.project.id }}
+                aria-label={`Infrastructure for ${projectEntry.project.name}`}
+                title="Infrastructure"
+                className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
+                data-testid="dashboard-workspace-infra-link"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <ServerIcon className="size-3.5" />
+              </Link>
               {/* Reachable from the project it belongs to, or nobody finds it. */}
               <Link
                 to="/analytics/$projectId"

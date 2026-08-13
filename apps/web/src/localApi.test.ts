@@ -117,6 +117,9 @@ const rpcClientMock = {
     get: vi.fn(),
     listVersions: vi.fn(),
     setVisibility: vi.fn(),
+    enable: vi.fn(),
+    disable: vi.fn(),
+    listEnablements: vi.fn(),
     subscribe: vi.fn(() => () => undefined),
   },
   organizations: {
