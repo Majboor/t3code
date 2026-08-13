@@ -22,7 +22,31 @@ import type { PackManifest } from "@t3tools/contracts";
  */
 export type PublishPackShape = "web" | "tui";
 
+/**
+ * What the pack needs from whoever uses it, one name per line. A name ending in
+ * `!` is a secret, which is the shortest way to say the thing that matters most
+ * about a requirement — a secret is satisfied from the server secret store and
+ * must never be typed where a value would be stored.
+ */
+export function parseRequirements(
+  raw: string,
+): ReadonlyArray<{ name: string; secret: boolean }> {
+  const seen = new Set<string>();
+  const parsed: Array<{ name: string; secret: boolean }> = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    const secret = trimmed.endsWith("!");
+    const name = (secret ? trimmed.slice(0, -1) : trimmed).trim().toUpperCase();
+    if (name.length === 0 || seen.has(name)) continue;
+    seen.add(name);
+    parsed.push({ name, secret });
+  }
+  return parsed;
+}
+
 export interface PublishPackInput {
+  readonly requirements: string;
   readonly shape: PublishPackShape;
   readonly startCommand: string;
   readonly name: string;
@@ -130,7 +154,14 @@ export function buildManifest(input: PublishPackInput): PackManifest {
     },
     capability: { does: input.summary.trim() },
     knowledge: {},
-    requirements: {},
+    requirements: {
+      environment: parseRequirements(input.requirements).map((entry) => ({
+        name: entry.name,
+        purpose: `Required by ${input.name}.`,
+        secret: entry.secret,
+        required: true,
+      })),
+    },
     interfaces: [
       input.shape === "web"
         ? { kind: "web", id: input.name, title: input.name }

@@ -2,7 +2,12 @@ import { Schema } from "effect";
 import { PackManifest } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { buildManifest, findPublishProblems, toHandle } from "./publishPack.logic";
+import {
+  buildManifest,
+  findPublishProblems,
+  parseRequirements,
+  toHandle,
+} from "./publishPack.logic";
 
 const good = {
   name: "payment-flow",
@@ -66,11 +71,33 @@ describe("toHandle", () => {
   });
 });
 
+describe("parseRequirements", () => {
+  it("reads one name per line and normalises it", () => {
+    expect(parseRequirements("host\n  port  \n")).toEqual([
+      { name: "HOST", secret: false },
+      { name: "PORT", secret: false },
+    ]);
+  });
+
+  it("treats a trailing bang as the thing that matters: it is a secret", () => {
+    expect(parseRequirements("TOKEN!")).toEqual([{ name: "TOKEN", secret: true }]);
+  });
+
+  it("keeps the first of a repeated name rather than asking for it twice", () => {
+    expect(parseRequirements("HOST\nhost")).toEqual([{ name: "HOST", secret: false }]);
+  });
+
+  it("has nothing to say about blank input", () => {
+    expect(parseRequirements("\n  \n")).toEqual([]);
+  });
+});
+
 describe("buildManifest", () => {
   const input = {
     ...good,
     shape: "web" as const,
     startCommand: "npm start",
+    requirements: "",
     publisherHandle: "someone",
     workspaceKeyId: "wsk_abc",
     authorName: "Someone",
@@ -125,6 +152,21 @@ describe("buildManifest", () => {
     const [surface] = manifest.interfaces;
     expect(surface?.kind).toBe("tui");
     expect(surface && "command" in surface && surface.command).toBe("./bin/report");
+  });
+
+  it("carries what the pack needs into requirements, secrets marked", () => {
+    const manifest = buildManifest({ ...input, requirements: "HOST\nTOKEN!" });
+    const environment = manifest.requirements.environment ?? [];
+    expect(environment.map((entry) => [entry.name, entry.secret, entry.required])).toEqual([
+      ["HOST", false, true],
+      ["TOKEN", true, true],
+    ]);
+  });
+
+  it("still decodes once it declares requirements", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(PackManifest)(buildManifest({ ...input, requirements: "HOST\nTOKEN!" })),
+    ).not.toThrow();
   });
 
   it("puts the author's own words in the integration prompt", () => {

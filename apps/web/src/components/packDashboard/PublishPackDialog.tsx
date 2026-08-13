@@ -47,6 +47,7 @@ export function PublishPackDialog({
   const [handover, setHandover] = useState("");
   const [shape, setShape] = useState<PublishPackShape>("web");
   const [startCommand, setStartCommand] = useState("");
+  const [requirements, setRequirements] = useState("");
   const [busy, setBusy] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
 
@@ -75,6 +76,7 @@ export function PublishPackDialog({
       const manifest = buildManifest({
         shape,
         startCommand,
+        requirements,
         name,
         summary,
         handover,
@@ -195,6 +197,19 @@ export function PublishPackDialog({
                 value={startCommand}
                 data-testid="publish-pack-start"
                 onChange={(event) => setStartCommand(event.currentTarget.value)}
+              />
+            </label>
+
+            <label className="grid gap-1 text-xs">
+              <span className="text-muted-foreground">
+                What whoever uses it must supply — one name per line, a trailing ! for a secret
+              </span>
+              <Textarea
+                value={requirements}
+                rows={3}
+                placeholder={"DEPLOY_HOST\nDEPLOY_TOKEN!"}
+                data-testid="publish-pack-requirements"
+                onChange={(event) => setRequirements(event.currentTarget.value)}
               />
             </label>
 

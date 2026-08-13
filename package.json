@@ -45,6 +45,7 @@
     "test:pack-deploy": "node scripts/pack-deploy-e2e.mjs",
     "test:pdf-pack": "node scripts/pdf-pack-e2e.mjs",
     "test:analytics": "node scripts/analytics-e2e.mjs",
+    "test:pack-ecosystem": "node scripts/pack-ecosystem-e2e.mjs",
     "fmt": "bun --bun oxfmt",
     "fmt:check": "bun --bun oxfmt --check",
     "build:contracts": "turbo run build --filter=@t3tools/contracts",

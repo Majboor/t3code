@@ -15,6 +15,9 @@
   it over SSH and checks every page it serves. Needs key-based SSH to the host: a
   `command` target never receives the password secret, and the deploy pack refuses to
   put one on a command line. `deploy run` tars the directory it is called from.
+- `bun run test:pack-ecosystem` walks the pack ecosystem through the UI: publish a project as
+  a pack, read it on its page, turn it on for a project, see what it still owes, turn it off.
+  No agent and no remote host.
 - `bun run test:analytics` is the quick one: a project, a declared stream, events posted with
   nothing but an ingest key, and the chart a person sees. No agent and no remote host, so it
   needs no credentials.
