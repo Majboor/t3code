@@ -189,6 +189,16 @@ export function makeSdkPackRegistry(scope: SdkPackRegistryScope): PackRegistry {
       return openEntry(entry.packId, input.version);
     },
 
+    /**
+     * The server-backed registry has no way to attach a signature to a release
+     * it already holds, so this says so rather than reporting a success that
+     * did not happen.
+     */
+    attachSignature: async () => ({
+      attached: false,
+      why: "this registry cannot attach a signature after publication; sign before publishing",
+    }),
+
     record: async (input) => {
       const read = parseManifestJson(input.manifestJson);
       if (!read.ok) {

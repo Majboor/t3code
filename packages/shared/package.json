@@ -71,6 +71,10 @@
     "./tenancy": {
       "types": "./src/tenancy.ts",
       "import": "./src/tenancy.ts"
+    },
+    "./packSigning": {
+      "types": "./src/packSigning.ts",
+      "import": "./src/packSigning.ts"
     }
   },
   "scripts": {

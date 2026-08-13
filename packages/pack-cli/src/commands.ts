@@ -7,6 +7,17 @@
  *
  * @module commands
  */
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import {
+  generateSigningKey,
+  type PackSigningKeyPair,
+  signManifest,
+  verifyManifest,
+} from "@t3tools/shared/packSigning";
+
 import type { ParsedCommand } from "./args.ts";
 import { PackCliError } from "./errors.ts";
 import {
@@ -418,6 +429,80 @@ async function validateCommand(
   };
 }
 
+/**
+ * Signs the manifest in place so a reader can check the release is what this
+ * publisher put out. The key is generated on first use and kept outside the
+ * pack directory — a private key inside a pack would be published with it.
+ */
+async function signCommand(
+  command: Extract<ParsedCommand, { kind: "sign" }>,
+  context: CommandContext,
+): Promise<CommandOutcome> {
+  const pack = await loadLocalPack(context, command.directory);
+  const keyPath =
+    command.key ?? path.join(os.homedir(), ".t3code", "pack-signing-key.json");
+
+  let key: PackSigningKeyPair;
+  let created = false;
+  try {
+    key = JSON.parse(await fs.readFile(keyPath, "utf8")) as PackSigningKeyPair;
+  } catch {
+    key = generateSigningKey();
+    await fs.mkdir(path.dirname(keyPath), { recursive: true });
+    await fs.writeFile(keyPath, JSON.stringify(key, null, 2), { mode: 0o600 });
+    created = true;
+  }
+
+  const manifest = pack.manifest as unknown as Record<string, unknown>;
+  const signature = signManifest(manifest, key, context.now().toISOString());
+  const signed = { ...manifest, signature };
+  await fs.writeFile(
+    path.join(pack.directory, "pack.json"),
+    `${JSON.stringify(signed, null, 2)}\n`,
+    "utf8",
+  );
+
+  // Read it back and check, rather than trusting that writing it worked.
+  const verified = verifyManifest(
+    JSON.parse(await fs.readFile(path.join(pack.directory, "pack.json"), "utf8")) as Record<
+      string,
+      unknown
+    >,
+  );
+
+  // If this version is already published, the stored copy needs the signature
+  // too, or the registry keeps serving something that reads as unsigned.
+  const attached =
+    pack.ref.version === undefined || pack.ref.publisher === undefined
+      ? ({ attached: false, why: "this pack declares no version or publisher" } as const)
+      : await context.registry.attachSignature({
+          name: pack.ref.name,
+          publisher: pack.ref.publisher,
+          version: pack.ref.version,
+          signature,
+        });
+
+  return {
+    result: {
+      ref: pack.ref,
+      keyId: signature.keyId,
+      keyPath,
+      generatedKey: created,
+      manifestSha256: signature.manifestSha256,
+      verified: verified.state,
+      registry: attached,
+    },
+    human: [
+      `Signed ${pack.ref.qualified} with key ${signature.keyId}.`,
+      created ? `Generated a new signing key at ${keyPath}. Keep it; losing it means a new identity.` : `Used the key at ${keyPath}.`,
+      `Verifies: ${verified.state}.`,
+      attached.attached
+        ? "The published copy carries the signature too."
+        : `Not attached to a published copy: ${attached.why}.`,
+    ].join("\n"),
+  };
+}
+
 async function publishCommand(
   command: Extract<ParsedCommand, { kind: "publish" }>,
   context: CommandContext,
@@ -561,6 +646,8 @@ export function runCommand(
       return initCommand(command, context);
     case "validate":
       return validateCommand(command, context);
+    case "sign":
+      return signCommand(command, context);
     case "publish":
       return publishCommand(command, context);
     case "version":

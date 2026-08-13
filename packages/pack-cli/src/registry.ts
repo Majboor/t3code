@@ -19,6 +19,7 @@ import {
   type PackManifest,
   type PackRefView,
 } from "./manifest.ts";
+import { manifestDigest, type SignedManifestResult } from "@t3tools/shared/packSigning";
 import type { PackStore } from "./store.ts";
 
 const VERSIONS_DIRECTORY = "versions";
@@ -61,6 +62,12 @@ export interface PackRegistry {
    * Writes one immutable release. Releases already in the registry are never
    * rewritten: a change is always a new version.
    */
+  readonly attachSignature: (input: {
+    readonly name: string;
+    readonly publisher: string;
+    readonly version: string;
+    readonly signature: SignedManifestResult;
+  }) => Promise<{ readonly attached: boolean; readonly why?: string }>;
   readonly record: (input: {
     readonly name: string;
     readonly publisher: string | undefined;
@@ -267,6 +274,36 @@ export function makeDirectoryRegistry(store: PackStore, root: string): PackRegis
         };
       }
       return undefined;
+    },
+
+    /**
+     * Attaches a signature to a release already in the registry.
+     *
+     * Adding one is not "a change" in the sense the version guard protects: it
+     * asserts nothing new about the pack, it only lets a reader check what is
+     * already there. The digest is compared against the stored bytes first, so
+     * a signature describing some other manifest cannot be smuggled in.
+     */
+    attachSignature: async (input) => {
+      const directory = store.resolve(root, packDirectoryName(input.name, input.publisher));
+      const versionPath = store.resolve(directory, VERSIONS_DIRECTORY, `${input.version}.json`);
+      const stored = await store.read(versionPath);
+      if (stored === undefined) {
+        return { attached: false, why: "that version is not in this registry" };
+      }
+
+      const manifest = JSON.parse(stored) as Record<string, unknown>;
+      if (manifestDigest(manifest) !== input.signature.manifestSha256) {
+        return {
+          attached: false,
+          why: "the signature describes a different manifest than the one published",
+        };
+      }
+
+      const signed = `${JSON.stringify({ ...manifest, signature: input.signature }, null, 2)}\n`;
+      await store.write(versionPath, signed);
+      await store.write(store.resolve(directory, MANIFEST_FILENAME), signed);
+      return { attached: true };
     },
 
     record: async (input) => {

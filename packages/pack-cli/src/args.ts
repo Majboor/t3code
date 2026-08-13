@@ -45,6 +45,12 @@ export type ParsedCommand =
     }
   | { readonly kind: "validate"; readonly directory: string | undefined }
   | {
+      readonly kind: "sign";
+      readonly directory: string | undefined;
+      /** Where the private key lives. Generated on first use if absent. */
+      readonly key: string | undefined;
+    }
+  | {
       readonly kind: "publish";
       readonly directory: string | undefined;
       readonly dryRun: boolean;
@@ -65,7 +71,7 @@ export type ParseOutcome =
   | { readonly ok: true; readonly parsed: ParsedArgs }
   | { readonly ok: false; readonly error: PackCliError };
 
-const COMMAND_NAMES = ["search", "show", "init", "validate", "publish", "version", "help"];
+const COMMAND_NAMES = ["search", "show", "init", "validate", "sign", "publish", "version", "help"];
 
 const BOOLEAN_FLAGS = new Set(["human", "dry-run", "help"]);
 
@@ -262,6 +268,15 @@ export function parseArgs(argv: ReadonlyArray<string>): ParseOutcome {
       return {
         ok: true,
         parsed: { command: { kind: "validate", directory: flags["dir"] }, options },
+      };
+
+    case "sign":
+      return {
+        ok: true,
+        parsed: {
+          command: { kind: "sign", directory: flags["dir"], key: flags["key"] },
+          options,
+        },
       };
 
     case "publish":
