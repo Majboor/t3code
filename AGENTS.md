@@ -15,6 +15,9 @@
   it over SSH and checks every page it serves. Needs key-based SSH to the host: a
   `command` target never receives the password secret, and the deploy pack refuses to
   put one on a command line. `deploy run` tars the directory it is called from.
+- `bun run test:tui-deploy` checks the deploy pack's knowledge actually steers an agent: given a
+  terminal program, it must raise that there is no web surface and offer a front end rather than
+  writing a deploy command. Needs a provider.
 - `bun run test:analytics-agent` hands a pack's own integration prompt to the agent and checks
   the app comes back reporting, then asks the workspace what it recorded. Needs a provider.
 - `bun run test:pack-ecosystem` walks the pack ecosystem through the UI: publish a project as
