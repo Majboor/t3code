@@ -1,5 +1,6 @@
 import { CheckIcon, GitBranchIcon, XIcon } from "lucide-react";
 import type {
+  EnvironmentId,
   CollaborationApprovalMode,
   CollaborationPresence,
   CollaborationPromptApproval,
@@ -8,6 +9,7 @@ import { useState } from "react";
 
 import type { CollaborationGovernance } from "../../hooks/useCollaborationGovernance";
 import { cn } from "../../lib/utils";
+import { readEnvironmentApi } from "../../environmentApi";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
@@ -135,8 +137,13 @@ function ApprovalRow({
  */
 export function CollaborationGovernancePanel({
   governance,
+  environmentId,
+  workspaceRoot,
 }: {
   governance: CollaborationGovernance;
+  environmentId: EnvironmentId | null;
+  /** Needed to merge somebody else's branch; without it the list is read-only. */
+  workspaceRoot: string | null;
 }) {
   const {
     settings,
@@ -151,6 +158,52 @@ export function CollaborationGovernancePanel({
   } = governance;
 
   const showOthers = preferences?.showOthersPrompts ?? true;
+  const [merging, setMerging] = useState<string | null>(null);
+  const [conflicts, setConflicts] = useState<Record<string, ReadonlyArray<string>>>({});
+
+  /**
+   * Lets whoever runs the workspace merge somebody else's branch.
+   *
+   * The list of branches was previously something to look at. A lead who can
+   * see that two people have diverged and cannot do anything about it from
+   * here has to leave and find a terminal, which is where the flow ended.
+   */
+  const mergeClaim = async (branch: string) => {
+    if (!environmentId || !workspaceRoot) return;
+    const api = readEnvironmentApi(environmentId);
+    if (!api) return;
+
+    setMerging(branch);
+    try {
+      const result = await api.git.mergeBranch({ cwd: workspaceRoot, branch });
+      if (result.status === "conflicts") {
+        // Git could not choose and neither can this; name the files instead.
+        setConflicts((current) => ({ ...current, [branch]: result.conflictPaths }));
+        toastManager.add({
+          type: "error",
+          title: "Git could not merge that on its own",
+          description: `${result.conflictPaths.length} file(s) need somebody to decide.`,
+        });
+        return;
+      }
+      setConflicts((current) => {
+        const { [branch]: _removed, ...rest } = current;
+        return rest;
+      });
+      toastManager.add({
+        type: "success",
+        title: result.status === "up-to-date" ? "Already up to date" : `Merged ${branch}`,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not merge",
+        description: error instanceof Error ? error.message : "The request failed.",
+      });
+    } finally {
+      setMerging(null);
+    }
+  };
 
   return (
     <div className="grid gap-3">
@@ -246,9 +299,44 @@ export function CollaborationGovernancePanel({
                 <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-foreground">{claim.branch}</span>
                 <span className="shrink-0 text-muted-foreground">{claim.displayName}</span>
+                {canManage && workspaceRoot ? (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={merging !== null}
+                    data-testid="collaboration-merge-claim"
+                    onClick={() => void mergeClaim(claim.branch)}
+                  >
+                    {merging === claim.branch ? "Merging…" : "Merge"}
+                  </Button>
+                ) : null}
               </div>
             ))}
           </div>
+
+          {Object.entries(conflicts).map(([branch, paths]) => (
+            <div
+              key={branch}
+              className="mt-1.5 rounded border border-destructive/40 bg-destructive/5 p-1.5"
+              data-testid="collaboration-merge-conflict"
+              data-branch={branch}
+            >
+              <div className="text-[11px] font-medium text-destructive">
+                {branch} needs somebody to decide
+              </div>
+              <div className="mt-0.5 text-[10px] text-muted-foreground">
+                Both sides changed the same lines. Open each file, decide what it should say, and
+                commit.
+              </div>
+              <div className="mt-1 grid gap-0.5">
+                {paths.map((path) => (
+                  <div key={path} className="truncate font-mono text-[10px] text-foreground">
+                    {path}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       ) : null}
     </div>

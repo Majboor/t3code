@@ -222,7 +222,11 @@ export function CollaborationPresenceBar({
             />
           </div>
           <div className="mt-3">
-            <CollaborationGovernancePanel governance={governance} />
+            <CollaborationGovernancePanel
+              governance={governance}
+              environmentId={environmentId}
+              workspaceRoot={project?.cwd ?? null}
+            />
           </div>
           <div className="mt-3 border-t border-border pt-3">
             <Textarea

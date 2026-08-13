@@ -459,6 +459,36 @@ try {
   }
   await closeCollabPanel(accountB.page);
 
+  phase("The lead resolves the contested branch");
+  // A warning with no next step is where this used to end, so the point of
+  // these checks is that something can be done about it from the same panel.
+  if (SKIP_AGENT) {
+    skip("A can merge B's branch from the governance panel", BRANCH_UI_UNEXPLAINED);
+    skip("the merge reports the conflict rather than pretending", BRANCH_UI_UNEXPLAINED);
+  } else {
+    const opened = await openCollabPanel(accountA2.page);
+    const claims = accountA2.page.locator('[data-testid="collaboration-branch-claim"]');
+    check("A can see the branches people are on", opened && (await claims.count()) > 0,
+      `${await claims.count()} listed`);
+
+    const mergeButton = accountA2.page.locator('[data-testid="collaboration-merge-claim"]').first();
+    const canMerge = (await mergeButton.count()) > 0;
+    check("A can merge B's branch from the governance panel", canMerge);
+    if (canMerge) {
+      await mergeButton.click();
+      await sleep(8_000);
+      // Both branches changed seed-one.txt, so git cannot choose. Saying so and
+      // naming the file is the honest outcome; claiming success would not be.
+      const conflict = accountA2.page.locator('[data-testid="collaboration-merge-conflict"]').first();
+      const reported = (await conflict.count()) > 0;
+      const text = reported ? await conflict.innerText().catch(() => "") : await bodyText(accountA2.page);
+      check("the merge reports the conflict rather than pretending",
+        reported && text.includes(contestedFile),
+        text.replace(/\s+/g, " ").slice(0, 110));
+    }
+    await closeCollabPanel(accountA2.page);
+  }
+
   phase("The lead takes someone's write access away");
   check("A can mark B read-only", await setMemberReadOnly(accountA2.page, ACCOUNT_B, true));
   const deniedFile = `denied-${RUN_ID}.txt`;
