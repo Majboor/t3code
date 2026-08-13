@@ -19,6 +19,7 @@ import {
   CommandId,
   AnalyticsError,
   DeployError,
+  PackEnablementError,
   type DeployTargetId,
   type ProjectId,
   EventId,
@@ -130,6 +131,7 @@ import { PackRegistryService } from "./packs/Services/PackRegistryService.ts";
 import { TenancyRepository } from "./persistence/Services/Tenancy.ts";
 import { DeployService } from "./deploy/Services/DeployService.ts";
 import { AnalyticsStore } from "./analytics/Services/AnalyticsStore.ts";
+import { PackEnablementService } from "./packEnablement/Services/PackEnablementService.ts";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
 import { ProjectionThreadPreferenceRepository } from "./persistence/Services/ProjectionThreadPreferences.ts";
 
@@ -745,6 +747,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const tenancyRepository = yield* TenancyRepository;
       const deployService = yield* DeployService;
   const analyticsStore = yield* AnalyticsStore;
+  const packEnablement = yield* PackEnablementService;
       const threadPreferences = yield* ProjectionThreadPreferenceRepository;
       const rateLimitRef = yield* Ref.make({
         windowStartedAt: Date.now(),
@@ -4363,6 +4366,51 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               (message) => new OrganizationError({ code: "invalid-role", message }),
             ),
             { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.packsEnable]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsEnable,
+            withRateLimit(
+              ensureDeployProjectAccess(input.projectId, "project.edit").pipe(
+                Effect.mapError(
+                  (error) =>
+                    new PackEnablementError({ code: "storage-failed", message: error.message }),
+                ),
+                Effect.flatMap(() => packEnablement.enable(input)),
+              ),
+              (message) => new PackEnablementError({ code: "storage-failed", message }),
+            ),
+            { "rpc.aggregate": "packs" },
+          ),
+        [WS_METHODS.packsDisable]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsDisable,
+            withRateLimit(
+              ensureDeployProjectAccess(input.projectId, "project.edit").pipe(
+                Effect.mapError(
+                  (error) =>
+                    new PackEnablementError({ code: "storage-failed", message: error.message }),
+                ),
+                Effect.flatMap(() => packEnablement.disable(input)),
+              ),
+              (message) => new PackEnablementError({ code: "storage-failed", message }),
+            ),
+            { "rpc.aggregate": "packs" },
+          ),
+        [WS_METHODS.packsListEnablements]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.packsListEnablements,
+            withRateLimit(
+              ensureDeployProjectAccess(input.projectId, "project.view").pipe(
+                Effect.mapError(
+                  (error) =>
+                    new PackEnablementError({ code: "storage-failed", message: error.message }),
+                ),
+                Effect.flatMap(() => packEnablement.list(input)),
+              ),
+              (message) => new PackEnablementError({ code: "storage-failed", message }),
+            ),
+            { "rpc.aggregate": "packs" },
           ),
         [WS_METHODS.analyticsListStreams]: (input) =>
           observeRpcEffect(

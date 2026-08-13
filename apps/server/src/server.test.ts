@@ -115,6 +115,8 @@ import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
+import { PackEnablementServiceLive } from "./packEnablement/Layers/PackEnablementService.ts";
+import { PackEnablementRepositoryLive } from "./persistence/Layers/PackEnablement.ts";
 import { AnalyticsStore, type AnalyticsStoreShape } from "./analytics/Services/AnalyticsStore.ts";
 import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
@@ -331,6 +333,11 @@ const deployTestLayer = DeployServiceLive.pipe(
 
 const analyticsTestLayer = AnalyticsStoreLive.pipe(
   Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+);
+
+const packEnablementTestLayer = PackEnablementServiceLive.pipe(
+  Layer.provide(PackEnablementRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(packRegistryTestLayer),
 );
 
 const makeBrowserOtlpPayload = (spanName: string) =>
@@ -688,6 +695,7 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(threadPreferenceTestLayer),
       Layer.provideMerge(deployTestLayer),
       Layer.provideMerge(analyticsTestLayer),
+      Layer.provideMerge(packEnablementTestLayer),
       Layer.provideMerge(collaborationTestLayer),
       Layer.provideMerge(organizationTestLayer),
       Layer.provideMerge(packRegistryTestLayer),

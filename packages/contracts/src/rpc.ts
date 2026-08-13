@@ -57,6 +57,14 @@ import {
   DeployRunResult,
 } from "./deploy.ts";
 import {
+  PackDisableInput,
+  PackEnableInput,
+  PackEnableResult,
+  PackEnablementError,
+  PackListEnablementsInput,
+  PackListEnablementsResult,
+} from "./packEnablement.ts";
+import {
   AnalyticsError,
   AnalyticsListStreamsInput,
   AnalyticsListStreamsResult,
@@ -337,6 +345,9 @@ export const WS_METHODS = {
   deployListRuns: "deploy.runs.list",
   analyticsListStreams: "analytics.streams.list",
   analyticsQuery: "analytics.query",
+  packsEnable: "packs.enable",
+  packsDisable: "packs.disable",
+  packsListEnablements: "packs.enablements.list",
 
   // Workspace / tenancy methods
   workspacesCreate: "workspaces.create",
@@ -544,6 +555,23 @@ export const WsGitInitRpc = Rpc.make(WS_METHODS.gitInit, {
  * access to a project's numbers — that stays on the CLI rather than becoming
  * something a browser session can mint.
  */
+export const WsPacksEnableRpc = Rpc.make(WS_METHODS.packsEnable, {
+  payload: PackEnableInput,
+  success: PackEnableResult,
+  error: PackEnablementError,
+});
+
+export const WsPacksDisableRpc = Rpc.make(WS_METHODS.packsDisable, {
+  payload: PackDisableInput,
+  error: PackEnablementError,
+});
+
+export const WsPacksListEnablementsRpc = Rpc.make(WS_METHODS.packsListEnablements, {
+  payload: PackListEnablementsInput,
+  success: PackListEnablementsResult,
+  error: PackEnablementError,
+});
+
 export const WsAnalyticsListStreamsRpc = Rpc.make(WS_METHODS.analyticsListStreams, {
   payload: AnalyticsListStreamsInput,
   success: AnalyticsListStreamsResult,
@@ -1215,6 +1243,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeployListRunsRpc,
   WsAnalyticsListStreamsRpc,
   WsAnalyticsQueryRpc,
+  WsPacksEnableRpc,
+  WsPacksDisableRpc,
+  WsPacksListEnablementsRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
   WsTerminalResizeRpc,

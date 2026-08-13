@@ -90,6 +90,8 @@ import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
+import { PackEnablementServiceLive } from "./packEnablement/Layers/PackEnablementService.ts";
+import { PackEnablementRepositoryLive } from "./persistence/Layers/PackEnablement.ts";
 import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
 import { TenantRuntimeLifecycleOwnerLive } from "./tenancy/Layers/TenantRuntimeLifecycleOwner.ts";
@@ -305,11 +307,17 @@ const PackRegistryLayerLive = PackRegistryServiceLive.pipe(
   Layer.provide(TenancyRepositoryLayerLive),
 );
 
+const PackEnablementLayerLive = PackEnablementServiceLive.pipe(
+  Layer.provide(PackEnablementRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+  Layer.provide(PackRegistryLayerLive),
+);
+
 /** Everything scoped to a tenant's people and what they publish. */
 const TenantServicesLayerLive = Layer.mergeAll(
   CollaborationLayerLive,
   OrganizationLayerLive,
   PackRegistryLayerLive,
+  PackEnablementLayerLive,
 );
 
 const RuntimeDependenciesLive = ReactorLayerLive.pipe(
