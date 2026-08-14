@@ -74,6 +74,31 @@ try {
   await addProject(account.page, PROJECT_DIR);
   await goHome(account.page);
 
+  phase("A fresh account can make a workspace");
+  // Nothing else here creates one — every suite uses the workspace signup
+  // already made — which is how "does not have workspace.edit" reached a user.
+  // The bootstrap tenant does not exist until it is asked for, so nobody can
+  // hold a membership in it, and a check that demanded one refused everybody.
+  const createWorkspace = account.page.locator('button:has-text("Create Workspace")').first();
+  check("the dashboard offers to create one", (await createWorkspace.count()) > 0);
+  await createWorkspace.click();
+  await sleep(2_500);
+  const workspaceName = `eco-ws-${RUN_ID}`;
+  await account.page.locator("[data-base-ui-portal] input").first().fill(workspaceName);
+  await sleep(500);
+  await account.page
+    .locator('[data-slot="dialog-footer"] button:has-text("Create")')
+    .first()
+    .click();
+  await sleep(7_000);
+  const afterCreate = await bodyText(account.page);
+  check(
+    "it is not refused for a permission nobody could hold",
+    !/does not have workspace\.edit/.test(afterCreate),
+    /Forbidden[^]{0,80}/.exec(afterCreate)?.[0]?.replace(/\s+/g, " ") ?? "",
+  );
+  check("the workspace appears on the dashboard", afterCreate.includes(workspaceName));
+
   phase("Before anything is turned on");
   check(
     "the dashboard links to infrastructure",
