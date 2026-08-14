@@ -3847,6 +3847,8 @@ export default function ChatView(props: ChatViewProps) {
               ref={composerRef}
               composerDraftTarget={composerDraftTarget}
               environmentId={environmentId}
+              activeProjectId={activeProject?.id ?? null}
+              activeProjectOwnership={activeProject?.ownership}
               routeKind={routeKind}
               routeThreadRef={routeThreadRef}
               draftId={draftId}

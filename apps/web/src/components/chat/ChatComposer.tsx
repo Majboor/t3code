@@ -2,7 +2,9 @@ import type {
   ApprovalRequestId,
   EnvironmentId,
   ModelSelection,
+  OrchestrationProjectOwnership,
   ProjectEntry,
+  ProjectId,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   ProviderKind,
@@ -15,6 +17,7 @@ import type {
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import {
@@ -59,6 +62,8 @@ import {
   shouldUseCompactComposerFooter,
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
+import { PackSuggestionBar } from "../packSuggestions/PackSuggestionBar";
+import { useWorkspacePacks } from "../packSuggestions/useWorkspacePacks";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
@@ -347,6 +352,9 @@ export interface ChatComposerHandle {
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
+  /** Project context, used to offer packs above the prompt. */
+  activeProjectId?: ProjectId | null;
+  activeProjectOwnership?: OrchestrationProjectOwnership | null | undefined;
   routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
@@ -457,6 +465,8 @@ export const ChatComposer = memo(
     const {
       composerDraftTarget,
       environmentId,
+      activeProjectId = null,
+      activeProjectOwnership,
       routeKind,
       routeThreadRef,
       draftId,
@@ -663,6 +673,15 @@ export const ChatComposer = memo(
     // Refs
     // ------------------------------------------------------------------
     const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
+
+    // Loaded once, matched locally: a request per keystroke would make typing
+    // feel like the network.
+    const workspacePacks = useWorkspacePacks(
+      environmentId,
+      activeProjectOwnership?.tenantId ?? null,
+      activeProjectOwnership?.workspaceId ??
+        (activeProjectId ? WorkspaceId.make(activeProjectId) : null),
+    );
     const composerFormRef = useRef<HTMLFormElement>(null);
     const composerFormHeightRef = useRef(0);
     const composerSelectLockRef = useRef(false);
@@ -1872,6 +1891,19 @@ export const ChatComposer = memo(
                     ))}
                   </div>
                 )}
+
+              <PackSuggestionBar
+                prompt={prompt}
+                packs={workspacePacks}
+                onUsePack={(nextPrompt) => {
+                  // Cursor to the end: the mention is appended, so that is
+                  // where somebody carries on typing.
+                  onPromptChange(nextPrompt, nextPrompt.length, nextPrompt.length, false, []);
+                }}
+                onOpenPack={(packId) => {
+                  window.open(`/packs/${packId}`, "_blank", "noopener");
+                }}
+              />
 
               <ComposerPromptEditor
                 ref={composerEditorRef}
