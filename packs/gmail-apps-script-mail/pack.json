@@ -1,0 +1,269 @@
+{
+  "formatVersion": "2.0",
+  "identity": {
+    "id": "pack_6dc5c7a598d740af99ff",
+    "name": "gmail-apps-script-mail",
+    "version": "0.1.0",
+    "displayName": "gmail-apps-script-mail",
+    "summary": "Send mail and manage Gmail/Calendar through a Google Apps Script web app",
+    "publisher": {
+      "type": "user",
+      "handle": "t3demo",
+      "displayName": "t3demo"
+    },
+    "license": "UNLICENSED",
+    "tags": ["email", "gmail", "calendar", "apps-script"]
+  },
+  "provenance": {
+    "workspace": {
+      "workspaceKeyId": "wsk_fc87ece76e734993bb53"
+    },
+    "extractedAt": "2026-08-08T20:18:21.307Z",
+    "extractedBy": {
+      "type": "user",
+      "displayName": "t3demo"
+    },
+    "handover": {
+      "path": "handover.md",
+      "summary": "Wraps a Google Apps Script web app that fronts Gmail and Calendar. Verified by calling whoami against the live endpoint: it answered as it@aljashtrading.com with 1485 of 1500 daily sends left. What bites: the Apps Script rejects application/json and answers with an HTML page, and each mailbox carries its own daily cap so a batch can die partway while another mailbox is fine. Both are recorded. Left undone: no retry or backoff, no batch send, and the quota check is advisory rather than enforced before a send.",
+      "generatedAt": "2026-08-08T20:18:21.307Z"
+    }
+  },
+  "capability": {
+    "does": "Sends email and manages Gmail threads, labels and Calendar events through a Google Apps Script web app fronted by a local CLI wrapper."
+  },
+  "knowledge": {
+    "failureModes": [
+      {
+        "id": "content-type-must-be-text-plain",
+        "symptom": "The Apps Script returns an HTML error page or a redirect instead of JSON, and the caller fails to parse it.",
+        "trigger": "POSTing with Content-Type: application/json. The Apps Script web app only accepts text/plain and treats anything else as a form post.",
+        "attributedTo": {
+          "kind": "provider",
+          "service": "google-apps-script"
+        },
+        "severity": "high",
+        "detection": {
+          "signal": "log-pattern",
+          "match": "<!DOCTYPE html"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.1.0",
+          "change": "The wrapper always sends Content-Type: text/plain with a JSON body."
+        },
+        "firstSeenAt": "2026-08-08T20:40:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-08T20:40:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "Apps Script web app, /exec deployment"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:40:00.000Z"
+        }
+      },
+      {
+        "id": "per-mailbox-daily-quota",
+        "symptom": "Sends start failing partway through a batch while a different mailbox still works.",
+        "trigger": "Each mailbox has its own daily cap: the agent mailbox allows 1500/day, the personal and techrealm mailboxes 100/day each.",
+        "attributedTo": {
+          "kind": "provider",
+          "service": "gmail"
+        },
+        "severity": "medium",
+        "silent": true,
+        "detection": {
+          "signal": "provider-error-code",
+          "match": "quota"
+        },
+        "resolution": {
+          "kind": "mitigated",
+          "workaround": "Call quota before a batch and pick the mailbox with headroom via _endpoint.",
+          "residualRisk": "A long batch can still exhaust a 100/day mailbox mid-run."
+        },
+        "firstSeenAt": "2026-08-08T20:40:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-08T20:40:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "Apps Script web app, /exec deployment"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:40:00.000Z"
+        }
+      }
+    ],
+    "integration": [
+      {
+        "id": "choose-the-mailbox-explicitly",
+        "title": "Pick the sending mailbox with _endpoint",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Pass \"_endpoint\":\"personal\" or \"techrealm\" to send as those addresses; omit it to use the default agent mailbox.",
+          "rationale": "The default is a shared operational mailbox with a much larger quota, so mail meant to look personal must say so explicitly or it goes out as the agent.",
+          "example": "python3 mailcli.py sendEmail '{\"to\":\"a@b.com\",\"subject\":\"Hi\",\"body\":\"Hello!\",\"_endpoint\":\"personal\"}'"
+        },
+        "conditions": {
+          "observedAt": "2026-08-08T20:40:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "Apps Script web app, /exec deployment"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:40:00.000Z"
+        }
+      },
+      {
+        "id": "single-quoted-json-argument",
+        "title": "Pass the payload as one single-quoted JSON argument",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Every action takes exactly one argument: a JSON object quoted as a single shell arg, with inner quotes escaped.",
+          "rationale": "Splitting the payload across shell words silently drops fields, which looks like the API ignoring them.",
+          "example": "python3 mailcli.py searchThreads '{\"query\":\"from:someone@example.com\"}'"
+        },
+        "conditions": {
+          "observedAt": "2026-08-08T20:40:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "Apps Script web app, /exec deployment"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:40:00.000Z"
+        }
+      }
+    ]
+  },
+  "requirements": {
+    "environment": [
+      {
+        "name": "MAILCLI_PATH",
+        "purpose": "Path to the local wrapper that holds the Apps Script URL and API key.",
+        "secret": false,
+        "required": true,
+        "example": "/Users/you/claude-employee/mailcli.py"
+      },
+      {
+        "name": "MAIL_APPS_SCRIPT_URL",
+        "purpose": "The Apps Script /exec web app URL the wrapper POSTs to.",
+        "secret": true,
+        "required": true
+      },
+      {
+        "name": "MAIL_APPS_SCRIPT_API_KEY",
+        "purpose": "Shared key sent in the POST body as apiKey. Held by the wrapper; never passed on the command line.",
+        "secret": true,
+        "required": true
+      }
+    ],
+    "toolchain": [
+      {
+        "name": "python3",
+        "versionRange": ">=3.9"
+      }
+    ],
+    "preflightCommand": "python3 \"$MAILCLI_PATH\" whoami"
+  },
+  "interfaces": [
+    {
+      "kind": "library",
+      "id": "gmail-apps-script-mail",
+      "title": "gmail-apps-script-mail",
+      "language": "typescript",
+      "exports": [
+        {
+          "name": "install",
+          "kind": "function",
+          "summary": "Replace with what this pack actually exports."
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "target": "python",
+    "commands": {
+      "healthcheck": {
+        "command": "python3 ${MAILCLI_PATH} whoami",
+        "description": "Prints the effective mailbox and remaining daily quota."
+      }
+    }
+  },
+  "permissions": {
+    "network": [
+      {
+        "host": "script.google.com",
+        "purpose": "POST the action payload to the Apps Script web app.",
+        "ports": [443],
+        "required": true
+      }
+    ],
+    "secrets": [
+      {
+        "name": "MAIL_APPS_SCRIPT_URL",
+        "purpose": "Endpoint that accepts mail actions."
+      },
+      {
+        "name": "MAIL_APPS_SCRIPT_API_KEY",
+        "purpose": "Authenticates the caller to the Apps Script."
+      }
+    ]
+  },
+  "verification": {
+    "record": {
+      "measuredAt": "2026-08-08T20:40:00.000Z",
+      "installsAttempted": 1,
+      "installsSucceeded": 1,
+      "deploymentsAttempted": 1,
+      "deploymentsSurviving": 1,
+      "cumulativeServiceDays": 0,
+      "breakagesCaught": 2,
+      "breakagesFixed": 1
+    }
+  },
+  "visibility": {
+    "scope": "workspace",
+    "workspaceKeyId": "wsk_fc87ece76e734993bb53"
+  },
+  "integration": {
+    "prompt": "Send mail or manage Gmail/Calendar through the local wrapper.\n\nOne argument, always: a JSON object as a single quoted shell arg.\n\n  python3 $MAILCLI_PATH sendEmail '{\"to\":\"a@b.com\",\"subject\":\"S\",\"body\":\"B\"}'\n\nMailboxes: omit _endpoint for the default agent mailbox (1500/day); \"_endpoint\":\"personal\" or \"_endpoint\":\"techrealm\" for those addresses (100/day each). Call whoami to see which mailbox you are, and quota before any batch — the small mailboxes run out mid-run and the failure is easy to miss.\n\nOther actions take the same shape: whoami, quota, searchThreads, getThread, replyToThread, label operations, createEvent, findEvents.\n\nThe Apps Script URL and API key live in the wrapper. Do not pass them on the command line and do not copy them into the repository."
+  },
+  "signature": {
+    "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
+    "algorithm": "ed25519",
+    "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
+    "manifestSha256": "91a63bda7ed21e21eb1ff5c0a4545e9ffdc86b99319d5de6918a73092d9bd8f1",
+    "signature": "IcleL+v/jj+0G8R668mc22s+mvJ7scxHuPnxe5iUbJ4iO05+PHGmSJjzE/PRJ08yKeMtiUflnkSHpc80x4jGCw==",
+    "signedAt": "2026-08-14T01:01:40.441Z"
+  }
+}

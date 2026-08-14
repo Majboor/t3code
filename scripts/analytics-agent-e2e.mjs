@@ -58,15 +58,6 @@ const CLI_ENTRY = path.join(
   "src",
   "bin.ts",
 );
-const PACK_CLI = path.join(
-  path.dirname(new URL(import.meta.url).pathname),
-  "..",
-  "packages",
-  "pack-cli",
-  "src",
-  "bin.ts",
-);
-
 function t3(args) {
   return execFileSync("node", [CLI_ENTRY, ...args, "--base-dir", BASE_DIR, "--dev-url", BASE_URL], {
     encoding: "utf8",
@@ -74,13 +65,25 @@ function t3(args) {
   }).trim();
 }
 
-/** The pack's own words, which is the whole point of handing it to an agent. */
+/**
+ * The pack's own words, read from the copy in this repository rather than from
+ * whatever happens to be in the local registry. A suite that depends on a pack
+ * somebody published on one machine is a suite that only runs there.
+ */
 function integrationPrompt() {
-  const shown = execFileSync("node", [PACK_CLI, "show", "t3demo/analytics-core"], {
-    encoding: "utf8",
-    timeout: 120_000,
-  });
-  return JSON.parse(shown).result.integration.prompt;
+  const manifest = JSON.parse(
+    readFileSync(
+      path.join(
+        path.dirname(new URL(import.meta.url).pathname),
+        "..",
+        "packs",
+        "analytics-core",
+        "pack.json",
+      ),
+      "utf8",
+    ),
+  );
+  return manifest.integration.prompt;
 }
 
 function writeFile(relativePath, contents) {

@@ -1,0 +1,321 @@
+{
+  "formatVersion": "2.0",
+  "identity": {
+    "id": "pack_b3fc847f81ad468eb2c9",
+    "name": "analytics-core",
+    "version": "0.1.0",
+    "displayName": "analytics-core",
+    "summary": "Record product events from a deployment and ask questions of them",
+    "publisher": {
+      "type": "user",
+      "handle": "t3demo",
+      "displayName": "t3demo"
+    },
+    "license": "UNLICENSED",
+    "tags": ["analytics", "events", "charts", "telemetry"]
+  },
+  "provenance": {
+    "workspace": {
+      "workspaceKeyId": "wsk_4550fd5cc368462cbf62"
+    },
+    "extractedAt": "2026-08-08T23:57:18.654Z",
+    "extractedBy": {
+      "type": "user",
+      "displayName": "t3demo"
+    },
+    "handover": {
+      "path": "handover.md",
+      "summary": "Wraps the analytics contract this workspace serves: declare a typed stream, post events to it from a deployment with nothing but an ingest key, and ask aggregate questions back. What bit while building it: the key is returned exactly once and what a later read shows is not it, an undeclared property is refused rather than dropped, and a refusal deliberately does not say which of project, stream or key was wrong. All three are recorded. Left undone: no batching, no retry or buffering guidance beyond sending occurredAt, and no chart templates yet — the aggregates are there, the drawing is not.",
+      "generatedAt": "2026-08-08T23:57:18.654Z"
+    }
+  },
+  "capability": {
+    "does": "Declares typed event streams, takes events from a deployment over HTTP, and answers aggregate questions about them."
+  },
+  "knowledge": {
+    "failureModes": [
+      {
+        "id": "ingest-key-is-shown-once",
+        "symptom": "Nobody can make the deployment report anything, and re-reading the stream shows a key that does not work.",
+        "trigger": "The key is returned only when the stream is declared. What a later read returns is not the key, so pasting it produces a 403 on every event.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "high",
+        "detection": {
+          "signal": "provider-error-code",
+          "match": "403 rejected on every post"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.1.0",
+          "change": "Capture the key at declaration and put it straight into the deployment's secret store. Declaring a new stream is the only way to get another."
+        },
+        "firstSeenAt": "2026-08-09T04:20:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-09T04:20:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "analytics contract 1, POST /api/analytics/events"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-09T04:20:00.000Z"
+        }
+      },
+      {
+        "id": "a-property-nobody-declared-is-refused",
+        "symptom": "Events start coming back 422 after a deployment adds a field, and the new field never appears in any chart.",
+        "trigger": "Streams declare their properties. An undeclared one is refused rather than dropped, because silently discarding it makes a chart that is quietly missing data.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "medium",
+        "detection": {
+          "signal": "provider-error-code",
+          "match": "422 with the property named"
+        },
+        "resolution": {
+          "kind": "mitigated",
+          "workaround": "Declare the property before the deployment starts sending it, and roll the two out in that order.",
+          "residualRisk": "A deployment ahead of its declaration loses those events entirely."
+        },
+        "firstSeenAt": "2026-08-09T04:20:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-09T04:20:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "analytics contract 1, POST /api/analytics/events"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-09T04:20:00.000Z"
+        }
+      },
+      {
+        "id": "a-refusal-does-not-say-which-thing-was-wrong",
+        "symptom": "A 403 that gives no clue whether the project, the stream or the key was wrong.",
+        "trigger": "The ingest route is reachable without a session, so a specific error would be a way to search for the project or stream that exists.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "low",
+        "detection": {
+          "signal": "provider-error-code",
+          "match": "403 rejected"
+        },
+        "resolution": {
+          "kind": "open",
+          "currentAdvice": "Check all three against the declaration output. The 422 path does name the offending property, so a 403 means project, stream or key rather than shape."
+        },
+        "firstSeenAt": "2026-08-09T04:20:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-09T04:20:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "analytics contract 1, POST /api/analytics/events"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-09T04:20:00.000Z"
+        }
+      }
+    ],
+    "integration": [
+      {
+        "id": "declare-before-you-send",
+        "title": "Declare the stream before the deployment sends anything",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Declare the stream and its typed properties first, capture the ingest key, then ship the code that posts.",
+          "rationale": "A chart is drawn from the declaration rather than from whatever arrived first, so an undeclared stream has nothing to draw and an undeclared property is refused.",
+          "example": "declare page.view with path:string(required), seconds:number — then post {\"path\":\"/about\",\"seconds\":12}"
+        },
+        "conditions": {
+          "observedAt": "2026-08-09T04:20:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "analytics contract 1, POST /api/analytics/events"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-09T04:20:00.000Z"
+        }
+      },
+      {
+        "id": "post-without-a-session",
+        "title": "Post with the key alone, no session",
+        "detail": {
+          "kind": "wiring",
+          "prompt": "Send each event as POST $T3_ANALYTICS_URL with content-type: application/json and a body of {projectId, stream, ingestKey, properties}. Do not attach cookies or a bearer token — a deployment has no session, and the key is the whole of its authority. Read the key from the environment, never from source. Treat 202 as accepted, 422 as your own shape bug worth logging loudly, and 403 as a misconfigured project, stream or key.",
+          "touches": []
+        },
+        "conditions": {
+          "observedAt": "2026-08-09T04:20:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "analytics contract 1, POST /api/analytics/events"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-09T04:20:00.000Z"
+        }
+      },
+      {
+        "id": "occurred-at-is-yours-to-claim",
+        "title": "Send occurredAt when the event is not the request",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Set occurredAt for anything buffered, retried or replayed; leave it out when the event is the request being served.",
+          "rationale": "The server records when an event arrived as well as when it happened. Without occurredAt a retried batch dates itself to the retry, which quietly bends every time-based chart.",
+          "example": "{\"occurredAt\": \"2026-08-09T01:00:00.000Z\", \"properties\": {...}}"
+        },
+        "conditions": {
+          "observedAt": "2026-08-09T04:20:00.000Z",
+          "other": [
+            {
+              "axis": "api-version",
+              "value": "analytics contract 1, POST /api/analytics/events"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-09T04:20:00.000Z"
+        }
+      }
+    ]
+  },
+  "requirements": {
+    "environment": [
+      {
+        "name": "T3_ANALYTICS_URL",
+        "purpose": "Where events are posted, e.g. http://127.0.0.1:13773/api/analytics/events",
+        "secret": false,
+        "required": true,
+        "example": "http://127.0.0.1:13773/api/analytics/events"
+      },
+      {
+        "name": "T3_ANALYTICS_PROJECT_ID",
+        "purpose": "The project whose streams these events belong to.",
+        "secret": false,
+        "required": true
+      },
+      {
+        "name": "T3_ANALYTICS_STREAM",
+        "purpose": "The declared stream name the deployment writes to.",
+        "secret": false,
+        "required": true,
+        "example": "page.view"
+      },
+      {
+        "name": "T3_ANALYTICS_INGEST_KEY",
+        "purpose": "Proves this deployment may write to that stream. Handed over once when the stream is declared and never retrievable again.",
+        "secret": true,
+        "required": true
+      }
+    ],
+    "toolchain": [
+      {
+        "name": "curl"
+      }
+    ],
+    "preflightCommand": "test -n \"$T3_ANALYTICS_INGEST_KEY\" && curl -fsS -o /dev/null \"$T3_ANALYTICS_URL\" -X POST -H 'content-type: application/json' -d '{}' || true"
+  },
+  "interfaces": [
+    {
+      "kind": "library",
+      "id": "analytics-core",
+      "title": "analytics-core",
+      "language": "typescript",
+      "exports": [
+        {
+          "name": "install",
+          "kind": "function",
+          "summary": "Replace with what this pack actually exports."
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "target": "none",
+    "commands": {
+      "healthcheck": {
+        "command": "curl -fsS -X POST \"$T3_ANALYTICS_URL\" -H 'content-type: application/json' -d '{}' -o /dev/null -w '%{http_code}' | grep -q 400",
+        "description": "A malformed body must come back 400, which proves the endpoint is listening and validating."
+      }
+    }
+  },
+  "permissions": {
+    "acceptsInboundNetwork": false,
+    "secrets": [
+      {
+        "name": "T3_ANALYTICS_INGEST_KEY",
+        "purpose": "Write access to one project's event streams."
+      }
+    ]
+  },
+  "verification": {
+    "record": {
+      "measuredAt": "2026-08-09T04:20:00.000Z",
+      "installsAttempted": 1,
+      "installsSucceeded": 1,
+      "deploymentsAttempted": 1,
+      "deploymentsSurviving": 1,
+      "cumulativeServiceDays": 0,
+      "breakagesCaught": 3,
+      "breakagesFixed": 1
+    }
+  },
+  "visibility": {
+    "scope": "workspace",
+    "workspaceKeyId": "wsk_4550fd5cc368462cbf62"
+  },
+  "integration": {
+    "prompt": "Make this deployment report what it does, so the workspace can chart it.\n\n1. Declare the stream first, with every property typed and named. Nothing undeclared can be sent, and nothing undeclared can be charted.\n2. Capture the ingest key at that moment. It is returned once and is not retrievable afterwards — put it straight into the deployment's secret store as T3_ANALYTICS_INGEST_KEY.\n3. From the deployment, POST to $T3_ANALYTICS_URL with content-type: application/json and a body of {projectId, stream, ingestKey, properties}. No cookie, no bearer token: a deployment has no session.\n4. Handle the three replies. 202 accepted. 422 means the event does not match the declaration and names the property — that is your bug, log it loudly. 403 means the project, stream or key is wrong, and it deliberately will not say which.\n\nSend occurredAt for anything buffered or retried, and leave it out when the event is the request you are serving. Ask questions with an aggregate (count, sum, avg, min, max) and an optional groupBy — both are checked against the declaration, so summing something declared as text is refused rather than answered with a zero."
+  },
+  "signature": {
+    "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
+    "algorithm": "ed25519",
+    "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
+    "manifestSha256": "8edcbfe9c467004cc38f08b33b054926aa71042896a111f40341880dbb22e09e",
+    "signature": "3/waTspFJO461PKUEciiAmKcQJQeHphewZkP8utaR5jrS1j+xTJgvhoMucvQhJkk1Y+biKCzdbVm7QY/udYmDg==",
+    "signedAt": "2026-08-14T01:01:40.043Z"
+  }
+}

@@ -49,22 +49,25 @@ const { signUp, addProject, openProject, sendAgentMessage } = createHarness({
   probeFile: "todo.py",
 });
 
-const PACK_CLI = path.join(
-  path.dirname(new URL(import.meta.url).pathname),
-  "..",
-  "packages",
-  "pack-cli",
-  "src",
-  "bin.ts",
-);
-
-/** The pack's own words. If these do not steer the agent, the pack is decoration. */
+/**
+ * The pack's own words, read from the copy in this repository rather than from
+ * whatever happens to be in the local registry. A suite that depends on a pack
+ * somebody published on one machine is a suite that only runs there.
+ */
 function integrationPrompt() {
-  const shown = execFileSync("node", [PACK_CLI, "show", "t3demo/ssh-deploy"], {
-    encoding: "utf8",
-    timeout: 120_000,
-  });
-  return JSON.parse(shown).result.integration.prompt;
+  const manifest = JSON.parse(
+    readFileSync(
+      path.join(
+        path.dirname(new URL(import.meta.url).pathname),
+        "..",
+        "packs",
+        "ssh-deploy",
+        "pack.json",
+      ),
+      "utf8",
+    ),
+  );
+  return manifest.integration.prompt;
 }
 
 function writeFile(relativePath, contents) {

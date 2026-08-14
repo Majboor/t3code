@@ -1,0 +1,308 @@
+{
+  "formatVersion": "2.0",
+  "identity": {
+    "id": "pack_b90e21cdd3b14c4a8ce4",
+    "name": "pdf-delivery",
+    "version": "0.1.0",
+    "displayName": "pdf-delivery",
+    "summary": "Serve a generated PDF and report how far readers get",
+    "publisher": {
+      "type": "user",
+      "handle": "t3demo",
+      "displayName": "t3demo"
+    },
+    "license": "UNLICENSED",
+    "tags": ["pdf", "documents", "analytics", "reportlab"]
+  },
+  "provenance": {
+    "workspace": {
+      "workspaceKeyId": "wsk_27b69fa942c9442e86ac"
+    },
+    "extractedAt": "2026-08-09T00:15:27.541Z",
+    "extractedBy": {
+      "type": "user",
+      "displayName": "t3demo"
+    },
+    "handover": {
+      "path": "handover.md",
+      "summary": "Renders a multi-page PDF with reportlab, serves it under gunicorn, and posts a page-read event for each page a reader opens. Verified end to end on a local deployment: a four-page document served as a real PDF, five reads reported and all accepted, and the workspace correctly named the page they lingered on (65 seconds across two visits) and how far they got (page 4). Two things bit: the deploy shell resolves python3 differently from an interactive shell and found an interpreter without the dependencies, and a remote deployment cannot reach a loopback analytics URL, which fails silently because reporting must never break serving. Left undone: no real reader tracking inside a PDF viewer (reads come from an endpoint the caller drives), no pagination beyond one canvas page per section, and no auth on the document itself.",
+      "generatedAt": "2026-08-09T00:15:27.541Z"
+    }
+  },
+  "capability": {
+    "does": "Renders a PDF from code, serves it over HTTP, and reports per-page reading time to an analytics stream so the workspace can say which page held a reader longest."
+  },
+  "knowledge": {
+    "failureModes": [
+      {
+        "id": "the-deploy-shell-is-not-your-shell",
+        "symptom": "The deploy fails at the health check with 'No module named gunicorn', or the build fails on an import that works fine when you run it by hand.",
+        "trigger": "`deploy run` executes through `/bin/sh -lc`, whose PATH is not the caller's. python3 resolved to a system interpreter with none of the dependencies, while the same name interactively found the right one.",
+        "attributedTo": {
+          "kind": "host",
+          "detail": "A login shell resolves python3 differently from an interactive session when a version manager is in use."
+        },
+        "severity": "high",
+        "detection": {
+          "signal": "log-pattern",
+          "match": "No module named"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.1.0",
+          "change": "Resolve the interpreter with python3 -c 'import sys; print(sys.executable)' and bake that absolute path into the deploy command."
+        },
+        "firstSeenAt": "2026-08-09T03:15:00.000Z",
+        "lastSeenAt": "2026-08-09T03:15:00.000Z",
+        "deploymentsAffected": 2,
+        "conditions": {
+          "observedAt": "2026-08-09T03:15:00.000Z",
+          "other": [
+            {
+              "axis": "runtime-version",
+              "value": "python 3.11, reportlab 4.4.9, gunicorn 23"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "deployment-telemetry",
+            "signal": "deploy.run.completed"
+          },
+          "recordedAt": "2026-08-09T03:15:00.000Z"
+        }
+      },
+      {
+        "id": "a-remote-deployment-cannot-reach-a-loopback-analytics-url",
+        "symptom": "The document serves perfectly and not a single read is ever recorded.",
+        "trigger": "The analytics endpoint is on a loopback address of the workspace machine. A deployment on another host has no route to it, and the POST fails quietly because reporting must not break serving.",
+        "attributedTo": {
+          "kind": "host",
+          "detail": "127.0.0.1 on the workspace machine is not reachable from a remote deployment."
+        },
+        "severity": "high",
+        "silent": true,
+        "detection": {
+          "signal": "reconciliation-mismatch",
+          "match": "pages served but zero events in the stream"
+        },
+        "resolution": {
+          "kind": "mitigated",
+          "workaround": "Deploy on the same host as the workspace, or put the analytics endpoint on an address the deployment can reach.",
+          "residualRisk": "A remote deployment silently reports nothing, and the absence looks exactly like nobody reading."
+        },
+        "firstSeenAt": "2026-08-09T03:15:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-09T03:15:00.000Z",
+          "other": [
+            {
+              "axis": "runtime-version",
+              "value": "python 3.11, reportlab 4.4.9, gunicorn 23"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "deployment-telemetry",
+            "signal": "deploy.run.completed"
+          },
+          "recordedAt": "2026-08-09T03:15:00.000Z"
+        }
+      }
+    ],
+    "integration": [
+      {
+        "id": "build-before-you-serve",
+        "title": "Render the document before starting the server",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Keep rendering in its own module and run it as the build step, so serving never races a half-written file.",
+          "rationale": "A worker that starts before the PDF exists serves a 500 on the first request, and several gunicorn workers make that intermittent rather than obvious.",
+          "example": "build: $PYTHON build_pdf.py   then   start: gunicorn app:app"
+        },
+        "conditions": {
+          "observedAt": "2026-08-09T03:15:00.000Z",
+          "other": [
+            {
+              "axis": "runtime-version",
+              "value": "python 3.11, reportlab 4.4.9, gunicorn 23"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "deployment-telemetry",
+            "signal": "deploy.run.completed"
+          },
+          "recordedAt": "2026-08-09T03:15:00.000Z"
+        }
+      },
+      {
+        "id": "report-the-page-and-the-dwell",
+        "title": "Report the page number and the dwell separately",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Send page as a number and seconds as a number, with the page title alongside as a string.",
+          "rationale": "Summing seconds grouped by title answers which page held them; the max of page answers how far they got. One event shape answers both, and neither is recoverable if the page is only sent as text.",
+          "example": "{'page': 3, 'title': 'What we changed', 'seconds': 40.0}"
+        },
+        "conditions": {
+          "observedAt": "2026-08-09T03:15:00.000Z",
+          "other": [
+            {
+              "axis": "runtime-version",
+              "value": "python 3.11, reportlab 4.4.9, gunicorn 23"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "deployment-telemetry",
+            "signal": "deploy.run.completed"
+          },
+          "recordedAt": "2026-08-09T03:15:00.000Z"
+        }
+      },
+      {
+        "id": "reporting-must-not-break-serving",
+        "title": "Never let a failed report break the document",
+        "detail": {
+          "kind": "wiring",
+          "prompt": "Wrap the analytics POST so any failure returns a status and never raises. A reader must still get their page when the analytics endpoint is down, restarting or unreachable. Log a 422 loudly, since that is your own event shape being wrong, and treat 403 as configuration.",
+          "touches": []
+        },
+        "conditions": {
+          "observedAt": "2026-08-09T03:15:00.000Z",
+          "other": [
+            {
+              "axis": "runtime-version",
+              "value": "python 3.11, reportlab 4.4.9, gunicorn 23"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "deployment-telemetry",
+            "signal": "deploy.run.completed"
+          },
+          "recordedAt": "2026-08-09T03:15:00.000Z"
+        }
+      }
+    ]
+  },
+  "requirements": {
+    "environment": [
+      {
+        "name": "PYTHON",
+        "purpose": "Absolute path to the interpreter that has reportlab, flask and gunicorn. Not the bare name python3.",
+        "secret": false,
+        "required": true,
+        "example": "/usr/local/bin/python3"
+      },
+      {
+        "name": "PDF_PORT",
+        "purpose": "Loopback port the document is served on.",
+        "secret": false,
+        "required": true,
+        "example": "19500"
+      },
+      {
+        "name": "T3_ANALYTICS_URL",
+        "purpose": "Analytics ingest endpoint the deployment posts reads to.",
+        "secret": false,
+        "required": true
+      },
+      {
+        "name": "T3_ANALYTICS_INGEST_KEY",
+        "purpose": "Write access to the pdf.page_read stream. Handed over once when the stream is declared.",
+        "secret": true,
+        "required": true
+      }
+    ],
+    "toolchain": [
+      {
+        "name": "python3",
+        "versionRange": ">=3.11"
+      },
+      {
+        "name": "gunicorn",
+        "versionRange": ">=21"
+      }
+    ],
+    "preflightCommand": "\"$PYTHON\" -c 'import reportlab, flask, gunicorn' && test -n \"$T3_ANALYTICS_INGEST_KEY\""
+  },
+  "interfaces": [
+    {
+      "kind": "library",
+      "id": "pdf-delivery",
+      "title": "pdf-delivery",
+      "language": "typescript",
+      "exports": [
+        {
+          "name": "install",
+          "kind": "function",
+          "summary": "Replace with what this pack actually exports."
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "target": "python",
+    "commands": {
+      "build": {
+        "command": "$PYTHON build_pdf.py",
+        "description": "Renders the document before anything serves it."
+      },
+      "start": {
+        "command": "$PYTHON -m gunicorn -w 2 -b 127.0.0.1:${PDF_PORT} app:app",
+        "description": "Serves the PDF and the read-reporting endpoint."
+      },
+      "healthcheck": {
+        "command": "curl -fsS http://127.0.0.1:${PDF_PORT}/healthz | grep -q \"$(cat BUILD)\"",
+        "description": "Exits zero only when the build just shipped is the one answering."
+      }
+    }
+  },
+  "permissions": {
+    "acceptsInboundNetwork": true,
+    "secrets": [
+      {
+        "name": "T3_ANALYTICS_INGEST_KEY",
+        "purpose": "Report reads to one project's stream."
+      }
+    ]
+  },
+  "verification": {
+    "record": {
+      "measuredAt": "2026-08-09T03:15:00.000Z",
+      "installsAttempted": 2,
+      "installsSucceeded": 2,
+      "deploymentsAttempted": 2,
+      "deploymentsSurviving": 1,
+      "cumulativeServiceDays": 0,
+      "breakagesCaught": 2,
+      "breakagesFixed": 1
+    }
+  },
+  "visibility": {
+    "scope": "workspace",
+    "workspaceKeyId": "wsk_27b69fa942c9442e86ac"
+  },
+  "integration": {
+    "prompt": "Serve a generated PDF and report how far readers get.\n\n1. Declare a pdf.page_read stream first, with page:number required, title:string and seconds:number. Capture the ingest key — it is shown once.\n2. Keep rendering in its own module and run it as the build step. Serving must never race a half-written file, and with several gunicorn workers that failure is intermittent rather than obvious.\n3. Resolve the interpreter to an absolute path and use that in the deploy command. `deploy run` goes through `/bin/sh -lc`, whose PATH is not yours; the bare name python3 can find an interpreter with none of your dependencies.\n4. Report each read as {page, title, seconds}. Wrap the POST so a failure returns a status and never raises: a reader must still get their page when analytics is down.\n5. Deploy on the same host as the workspace unless the analytics endpoint is on an address the deployment can genuinely reach. A loopback URL from a remote host reports nothing, and silence looks exactly like nobody reading.\n\nThen ask: sum seconds grouped by title for the page that held them longest, and max of page for how far they got."
+  },
+  "signature": {
+    "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
+    "algorithm": "ed25519",
+    "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
+    "manifestSha256": "60999fd2cad62fb09cd1c77b568e7fc1e9c074bb28aec66204f2b58caadc7d89",
+    "signature": "TYEsKM9qM1NYgm1UfuZcbUD3A4Og/mp6JXB751PyRorOyABVmemOGgmOyEeyYk1jmqw3+i8LwVZMjKowLcWwCg==",
+    "signedAt": "2026-08-14T01:01:40.243Z"
+  }
+}

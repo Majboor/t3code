@@ -1,0 +1,539 @@
+{
+  "formatVersion": "2.0",
+  "identity": {
+    "id": "pack_c7f9cb58f6a544e7b16c",
+    "name": "ssh-deploy",
+    "version": "1.0.2",
+    "displayName": "ssh-deploy",
+    "summary": "Deploy a thing to a server over SSH, whatever shape the thing is",
+    "publisher": {
+      "type": "user",
+      "handle": "t3demo",
+      "displayName": "t3demo"
+    },
+    "license": "UNLICENSED",
+    "tags": ["deploy", "ssh", "tui", "web", "documents"]
+  },
+  "provenance": {
+    "workspace": {
+      "workspaceKeyId": "wsk_2fadd5dfb56c40d6bd28"
+    },
+    "extractedAt": "2026-08-08T20:14:09.879Z",
+    "extractedBy": {
+      "type": "user",
+      "displayName": "t3demo"
+    },
+    "handover": {
+      "path": "handover.md",
+      "summary": "Was ssh-flask-deploy; renamed and re-scoped at 1.0.0 because none of what it learned was ever Flask-specific. Ten real deployments to a shared Ubuntu 24.04.2 host, driven by three accounts through the product's own deploy CLI, plus a document service. Five things bit, all recorded: the server dying with the SSH session, a port already taken, macOS tar headers that make GNU tar warn on a good extraction, pkill -f killing the deploy session because the pattern matched its own command line, and a health check answered by the previous deployment so three deploys reported success while shipping nothing. Added at 1.0.0: what to do when the thing is not web-shaped. A terminal program has no port and cannot pass a health check, so the pack tells the agent to stop and agree a front end rather than ship something nobody can reach. Left undone: no TLS, no restart-on-boot unit, no rollback, and the front-end-for-a-TUI path is written down but has not yet been walked end to end.",
+      "generatedAt": "2026-08-08T20:14:09.879Z"
+    }
+  },
+  "capability": {
+    "does": "Ships a project to a host over SSH and keeps it running — a web app, a document, or a terminal program that needs a front end built for it first."
+  },
+  "knowledge": {
+    "failureModes": [
+      {
+        "id": "ssh-exit-kills-the-service",
+        "symptom": "The deploy exits zero and the port answers during the run, then nothing is listening a minute later.",
+        "trigger": "gunicorn is started in the SSH command without detaching it, so it dies with the session that launched it.",
+        "attributedTo": {
+          "kind": "host",
+          "detail": "The SSH server reaps the process group when the session closes."
+        },
+        "severity": "critical",
+        "silent": true,
+        "detection": {
+          "signal": "healthcheck",
+          "match": "connection refused on the deploy port after the deploy reported success"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.1.0",
+          "change": "The start command runs under nohup with its pid written to app.pid, and health is checked from a separate SSH session so a reaped process cannot pass."
+        },
+        "firstSeenAt": "2026-08-08T20:30:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-08T20:30:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:30:00.000Z"
+        }
+      },
+      {
+        "id": "port-already-in-use-on-a-shared-host",
+        "symptom": "gunicorn exits immediately with 'Address already in use' after the files are already on the host.",
+        "trigger": "A host that already runs other services has the chosen port taken; the check has to happen before shipping, not after.",
+        "attributedTo": {
+          "kind": "host",
+          "detail": "Verified on a host already running gunicorn on 18787, garage and several cloudflared tunnels."
+        },
+        "severity": "high",
+        "detection": {
+          "signal": "log-pattern",
+          "match": "Address already in use"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.1.0",
+          "change": "preflightCommand checks the port is free on the host before any file is shipped."
+        },
+        "firstSeenAt": "2026-08-08T20:30:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-08T20:30:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:30:00.000Z"
+        }
+      },
+      {
+        "id": "binding-every-interface-publishes-the-app",
+        "symptom": "The app is reachable from the public internet straight after a deploy nobody meant to expose.",
+        "trigger": "Binding 0.0.0.0 rather than 127.0.0.1 on a host with a public address.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "high",
+        "silent": true,
+        "detection": {
+          "signal": "log-pattern",
+          "match": "Listening at: http://0.0.0.0"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.1.0",
+          "change": "The start command binds 127.0.0.1 explicitly; publishing is left to the tunnel or proxy the host already runs."
+        },
+        "firstSeenAt": "2026-08-08T20:30:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-08T20:30:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:30:00.000Z"
+        }
+      },
+      {
+        "id": "pkill-f-matches-the-deploy-session-itself",
+        "symptom": "The deploy exits 255 with nothing in its output but tar warnings, and the app is never restarted.",
+        "trigger": "Stopping the previous run with `pkill -f` on a pattern naming the start command. The remote shell's own command line contains that command, so the pattern matches the session running the deploy and kills it mid-way.",
+        "attributedTo": {
+          "kind": "host",
+          "detail": "pkill -f matches against the full command line of every process, including the ssh session carrying the deploy."
+        },
+        "severity": "high",
+        "silent": false,
+        "detection": {
+          "signal": "log-pattern",
+          "match": "exit 255 with no command output after the extraction"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.2.0",
+          "change": "Stop the previous run by the pid recorded in app.pid instead of by command-line pattern."
+        },
+        "firstSeenAt": "2026-08-09T00:50:00.000Z",
+        "lastSeenAt": "2026-08-09T00:50:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-09T00:50:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.2.0",
+          "source": {
+            "kind": "deployment-telemetry",
+            "signal": "deploy.run.completed"
+          },
+          "recordedAt": "2026-08-09T00:50:00.000Z"
+        }
+      },
+      {
+        "id": "health-check-answered-by-the-previous-deployment",
+        "symptom": "The deploy reports success and the site keeps serving the version before it. Every check that the new change is live fails, with nothing in the deploy output to explain why.",
+        "trigger": "A process from an earlier deployment still holds the port. The new gunicorn cannot bind and exits, but `curl /healthz` is answered by the old one, so a health check that only asks whether something is listening passes against the wrong process.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "critical",
+        "silent": true,
+        "detection": {
+          "signal": "healthcheck",
+          "match": "health passes but the served build id is not the one just shipped"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.3.0",
+          "change": "Each deploy writes a BUILD file, the app reports that id from /healthz, and the deploy demands the id it just shipped. The port is also freed by whoever holds it (fuser -k PORT/tcp) rather than by matching a command line."
+        },
+        "firstSeenAt": "2026-08-09T01:55:00.000Z",
+        "lastSeenAt": "2026-08-09T01:55:00.000Z",
+        "deploymentsAffected": 3,
+        "conditions": {
+          "observedAt": "2026-08-09T01:55:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.3.0",
+          "source": {
+            "kind": "deployment-telemetry",
+            "signal": "deploy.run.completed"
+          },
+          "recordedAt": "2026-08-09T01:55:00.000Z"
+        }
+      }
+    ],
+    "integration": [
+      {
+        "id": "bind-loopback-and-front-it",
+        "title": "Bind loopback and let a tunnel or proxy publish it",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Bind gunicorn to 127.0.0.1 and expose the app through the tunnel or reverse proxy the host already runs.",
+          "rationale": "The host is shared with other services and has a public address, so a bind to 0.0.0.0 publishes the app the moment it starts.",
+          "example": "gunicorn -w 2 -b 127.0.0.1:18901 app:app"
+        },
+        "conditions": {
+          "observedAt": "2026-08-08T20:30:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:30:00.000Z"
+        }
+      },
+      {
+        "id": "detach-the-process-from-the-ssh-session",
+        "title": "Detach the server from the SSH session",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Start the server with nohup, record its pid to a file, then verify the health endpoint in a second, separate SSH session.",
+          "rationale": "Checking health inside the session that started the process passes even when the process is about to be reaped with that session.",
+          "example": "(nohup gunicorn -w 2 -b 127.0.0.1:$PORT app:app > deploy.log 2>&1 & echo $! > app.pid)"
+        },
+        "conditions": {
+          "observedAt": "2026-08-08T20:30:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:30:00.000Z"
+        }
+      },
+      {
+        "id": "macos-tar-headers-are-not-an-error",
+        "title": "Ignore LIBARCHIVE.xattr warnings when shipping from macOS",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Treat 'Ignoring unknown extended header keyword LIBARCHIVE.xattr.*' from GNU tar as noise, not failure.",
+          "rationale": "BSD tar on macOS writes Apple xattr headers GNU tar does not know; the extraction is complete and correct, but a deploy script that greps stderr will call a good deploy failed.",
+          "example": "tar czf - . | ssh host 'tar xzf - -C /srv/app'"
+        },
+        "conditions": {
+          "observedAt": "2026-08-08T20:30:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-08T20:30:00.000Z"
+        }
+      },
+      {
+        "id": "prove-the-new-build-is-the-one-answering",
+        "title": "Make the health check name the build",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Stamp every build with an id, serve that id from the health endpoint, and have the deploy require the id it just shipped.",
+          "rationale": "\"Something is listening\" is not \"my change is running\". Without an id the two are indistinguishable, and a deploy that shipped nothing looks exactly like one that worked.",
+          "example": "curl -fsS http://127.0.0.1:$PORT/healthz | grep -q \"$(cat BUILD)\""
+        },
+        "conditions": {
+          "observedAt": "2026-08-09T01:55:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.3.0",
+          "source": {
+            "kind": "deployment-telemetry",
+            "signal": "deploy.run.completed"
+          },
+          "recordedAt": "2026-08-09T01:55:00.000Z"
+        }
+      },
+      {
+        "id": "classify-the-thing-before-shipping-it",
+        "title": "Decide what shape the project is before choosing how to deploy it",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Look at what the project actually is before writing a deploy command. It is one of three things: it already serves HTTP, it produces a document, or it is a terminal program with no network surface at all. Each needs a different plan, and guessing produces a deploy that starts nothing.",
+          "rationale": "Every deploy command here ends in a health check against a port. A program that never opens a port cannot pass one, so shipping it unchanged gives a deploy that reports failure without saying why. The shape of the thing decides the work, and it is knowable before any of it starts.",
+          "example": "serves HTTP -> ship and start it | produces a PDF or report -> build it, then serve the file | TUI or CLI -> it has no port; see the next note"
+        },
+        "conditions": {
+          "observedAt": "2026-08-14T09:00:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "1.0.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-14T09:00:00.000Z"
+        }
+      },
+      {
+        "id": "a-terminal-program-needs-a-front-end-and-a-conversation",
+        "title": "A TUI has no web surface, so ask before inventing one",
+        "detail": {
+          "kind": "wiring",
+          "prompt": "When the project is a terminal program, stop before writing any deploy command and talk to the person first. Say plainly: this has no web surface, so deploying it as-is would start something nobody can reach. Offer to build a small web front end over the same functionality, and be specific about what that means — which commands become which screens, what the front end will call underneath, and what does not survive the move (raw keyboard handling, curses redraw, anything that assumes a live terminal). Get agreement on that shape before building it. Then build the front end, give it a /healthz, and deploy that. Do not silently generate a front end and ship it: the person asked to deploy their program, and what they would get is a different program.",
+          "touches": []
+        },
+        "conditions": {
+          "observedAt": "2026-08-14T09:00:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "1.0.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-14T09:00:00.000Z"
+        }
+      },
+      {
+        "id": "the-health-check-is-the-contract",
+        "title": "Whatever you deploy has to answer a health check",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Give every deployment a /healthz that returns the current build id, whatever the thing is underneath.",
+          "rationale": "It is the only way this pack can tell a deploy that worked from one that shipped nothing and left the previous version answering. A document server and a generated front end both need it as much as a web app does.",
+          "example": "a PDF service: /healthz -> {\"status\":\"ok\",\"build\":\"<id>\",\"pages\":4}"
+        },
+        "conditions": {
+          "observedAt": "2026-08-14T09:00:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "1.0.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-14T09:00:00.000Z"
+        }
+      }
+    ]
+  },
+  "requirements": {
+    "environment": [
+      {
+        "name": "DEPLOY_SSH_HOST",
+        "purpose": "Host the app is shipped to.",
+        "secret": false,
+        "required": true,
+        "example": "203.0.113.10"
+      },
+      {
+        "name": "DEPLOY_SSH_USER",
+        "purpose": "SSH user with write access to the remote directory.",
+        "secret": false,
+        "required": true,
+        "example": "root"
+      },
+      {
+        "name": "DEPLOY_SSH_PASSWORD",
+        "purpose": "SSH password, read from the server secret store rather than argv.",
+        "secret": true,
+        "required": true
+      },
+      {
+        "name": "DEPLOY_REMOTE_DIR",
+        "purpose": "Directory on the host the app is unpacked into.",
+        "secret": false,
+        "required": true,
+        "example": "/srv/my-app"
+      },
+      {
+        "name": "DEPLOY_PORT",
+        "purpose": "Loopback port gunicorn binds. Must be free on the host.",
+        "secret": false,
+        "required": true,
+        "example": "18901"
+      },
+      {
+        "name": "DEPLOY_START_COMMAND",
+        "purpose": "The command that starts this project on the host. Comes from the project, not from this pack.",
+        "secret": false,
+        "required": true,
+        "example": "gunicorn -w 2 -b 127.0.0.1:$DEPLOY_PORT app:app"
+      }
+    ],
+    "toolchain": [
+      {
+        "name": "ssh"
+      },
+      {
+        "name": "sshpass"
+      },
+      {
+        "name": "tar"
+      },
+      {
+        "name": "curl"
+      }
+    ],
+    "preflightCommand": "command -v sshpass ssh tar >/dev/null && ssh -o BatchMode=no -o StrictHostKeyChecking=no \"$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST\" \"command -v gunicorn python3 >/dev/null && ! ss -ltn | grep -q ':$DEPLOY_PORT '\""
+  },
+  "interfaces": [
+    {
+      "kind": "library",
+      "id": "ssh-flask-deploy",
+      "title": "ssh-flask-deploy",
+      "language": "typescript",
+      "exports": [
+        {
+          "name": "install",
+          "kind": "function",
+          "summary": "Replace with what this pack actually exports."
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "target": "none",
+    "commands": {
+      "start": {
+        "command": "${DEPLOY_START_COMMAND}",
+        "cwd": ".",
+        "description": "Whatever starts this project, bound to a loopback port."
+      },
+      "healthcheck": {
+        "command": "curl -fsS http://127.0.0.1:${DEPLOY_PORT}/healthz | grep -q \"$(cat BUILD)\"",
+        "description": "Exits zero only when the build just shipped is the one answering."
+      }
+    }
+  },
+  "permissions": {
+    "acceptsInboundNetwork": true,
+    "secrets": [
+      {
+        "name": "DEPLOY_SSH_PASSWORD",
+        "purpose": "Authenticate the SSH session that ships and starts the app."
+      }
+    ]
+  },
+  "verification": {
+    "record": {
+      "measuredAt": "2026-08-14T09:00:00.000Z",
+      "installsAttempted": 4,
+      "installsSucceeded": 4,
+      "deploymentsAttempted": 10,
+      "deploymentsSurviving": 7,
+      "cumulativeServiceDays": 0,
+      "breakagesCaught": 5,
+      "breakagesFixed": 5
+    }
+  },
+  "visibility": {
+    "scope": "workspace",
+    "workspaceKeyId": "wsk_2fadd5dfb56c40d6bd28"
+  },
+  "integration": {
+    "prompt": "Deploy this project to a host over SSH.\n\nFirst work out what it is, because that decides everything after:\n- It already serves HTTP -> ship it and start it.\n- It produces a document -> build the document, then serve the file.\n- It is a terminal program -> it has no port and cannot pass a health check. Stop and talk to the person: offer a small web front end over the same functionality, say which commands become which screens and what will not survive the move, and agree that shape before building it. Do not ship a front end nobody asked for.\n\nThen, whatever the shape:\n1. Preflight before shipping anything: the tools exist locally, the host has what the start command needs, and nothing is already on DEPLOY_PORT.\n2. Stamp a build id, and serve it from /healthz.\n3. Ship the directory and start the process detached, with its pid written down.\n4. Verify from a separate session, and require the build id you just shipped — not merely that something answers, which the previous deployment will happily do.\n\nBind loopback and let the host's existing tunnel or proxy publish it. Read the SSH password from the server secret store, never from a command line."
+  },
+  "signature": {
+    "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
+    "algorithm": "ed25519",
+    "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
+    "manifestSha256": "5d7af938c946e97201b06a6399f5f6823d1026d642928169ba4b8f5d9d62ffcd",
+    "signature": "rJoeqlpHQlHDURPve3WHX1iWqC9N64g/d6gKHci4r0pJZhQcsKw977FYq+A8R0xrqrBhHxPAj0A3RzW8VjoMDw==",
+    "signedAt": "2026-08-13T21:43:21.201Z"
+  }
+}
