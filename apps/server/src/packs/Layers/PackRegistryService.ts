@@ -8,6 +8,8 @@ import {
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, PubSub, Stream } from "effect";
 
+import { listVerifiedPacks } from "../verifiedPacks.ts";
+
 import {
   fromManifestJson,
   indexManifest,
@@ -311,15 +313,55 @@ const makePackRegistryService = Effect.gen(function* () {
     });
 
   const search: PackRegistryServiceShape["search"] = (viewer, input) =>
-    stored(
-      repository.searchEntries({
-        tenantId: viewer.tenantId,
-        workspaceId: viewer.workspaceId,
-        organizationIds: viewer.organizationIds ?? [],
-        ...(input.query === undefined ? {} : { query: input.query }),
-        ...(input.limit === undefined ? {} : { limit: input.limit }),
-      }),
-    ).pipe(Effect.map((packs) => ({ packs })));
+    Effect.gen(function* () {
+      const published = yield* stored(
+        repository.searchEntries({
+          tenantId: viewer.tenantId,
+          workspaceId: viewer.workspaceId,
+          organizationIds: viewer.organizationIds ?? [],
+          ...(input.query === undefined ? {} : { query: input.query }),
+          ...(input.limit === undefined ? {} : { limit: input.limit }),
+        }),
+      );
+
+      // The packs that ship with the product live in the file registry, which
+      // is what the CLI and the agent read. Without this the UI would show a
+      // workspace none of the packs the agent is about to use.
+      const verified = yield* Effect.promise(() =>
+        listVerifiedPacks(viewer.tenantId, viewer.workspaceId),
+      );
+
+      const own = new Set(published.map((entry) => entry.name));
+      const matching = verified.filter(
+        (entry) =>
+          // A workspace's own pack of the same name wins: publishing your own
+          // ssh-deploy is a deliberate act, and it should not be shadowed.
+          !own.has(entry.name) && matchesQuery(entry, input.query),
+      );
+
+      const packs = [...published, ...matching];
+      return { packs: input.limit === undefined ? packs : packs.slice(0, input.limit) };
+    });
+
+  /**
+   * Whether a shipped pack answers the query.
+   *
+   * Deliberately the same shape as the repository's own matching — name, tags
+   * and capability summary — so a caller cannot tell which store an entry came
+   * from by how it responds to a search.
+   */
+  function matchesQuery(entry: PackRegistryEntry, query: string | undefined): boolean {
+    if (query === undefined || query.trim().length === 0) {
+      return true;
+    }
+    const haystack =
+      `${entry.name} ${entry.displayName} ${entry.summary} ${entry.capabilitySummary} ${entry.tags.join(" ")}`.toLowerCase();
+    return query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((term) => term.length > 0)
+      .some((term) => haystack.includes(term));
+  }
 
   const get: PackRegistryServiceShape["get"] = (viewer, input) =>
     Effect.gen(function* () {
