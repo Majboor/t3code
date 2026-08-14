@@ -416,6 +416,39 @@ it.effect("refuses to make the lead read-only", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
+it.effect("remembers that two people touched the same file, not just the last one", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.touchFiles(member, { ...scope, paths: ["app.py"] });
+    yield* collaboration.touchFiles(lead, { ...scope, paths: ["app.py"] });
+
+    const listed = yield* collaboration.listFileTouches(scope);
+    const authors = listed.touches
+      .filter((touch) => touch.path === "app.py")
+      .map((touch) => touch.userId);
+
+    // Keying by path alone overwrote the first author, which made two people in
+    // one file indistinguishable from one person in it twice.
+    assert.strictEqual(authors.length, 2);
+    assert.ok(authors.includes(member.userId));
+    assert.ok(authors.includes(lead.userId));
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("keeps one entry per person per file, however often they touch it", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.touchFiles(member, { ...scope, paths: ["app.py"] });
+    yield* collaboration.touchFiles(member, { ...scope, paths: ["app.py"] });
+    yield* collaboration.touchFiles(member, { ...scope, paths: ["app.py"] });
+
+    const listed = yield* collaboration.listFileTouches(scope);
+    assert.strictEqual(listed.touches.filter((touch) => touch.path === "app.py").length, 1);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
 it.effect("adds up the tokens a member has spent across their threads", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;
@@ -482,7 +515,7 @@ it.effect("withholds a member's tokens until they agree to share usage", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
-it.effect("records the latest person to touch each path", () =>
+it.effect("keeps every author of a path, and the latest is still recoverable", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;
 
@@ -490,10 +523,20 @@ it.effect("records the latest person to touch each path", () =>
     yield* collaboration.touchFiles(lead, { ...scope, paths: ["a.txt"] });
 
     const touches = yield* collaboration.listFileTouches(scope);
-    assert.strictEqual(touches.touches.length, 2);
-    const forA = touches.touches.find((touch) => touch.path === "a.txt");
-    assert.strictEqual(forA?.userId, lead.userId);
-    const forB = touches.touches.find((touch) => touch.path === "b.txt");
-    assert.strictEqual(forB?.userId, member.userId);
+    // This used to keep one entry per path, which read as "the latest author"
+    // and quietly threw away the fact that two people had been in a.txt. The
+    // latest is still derivable; the second author is not recoverable once
+    // dropped, so the list keeps both.
+    const forA = touches.touches.filter((touch) => touch.path === "a.txt");
+    assert.strictEqual(forA.length, 2);
+
+    const latestForA = forA.toSorted((left, right) =>
+      left.touchedAt < right.touchedAt ? 1 : -1,
+    )[0];
+    assert.strictEqual(latestForA?.userId, lead.userId);
+
+    const forB = touches.touches.filter((touch) => touch.path === "b.txt");
+    assert.strictEqual(forB.length, 1);
+    assert.strictEqual(forB[0]?.userId, member.userId);
   }).pipe(Effect.provide(makeLayer())),
 );

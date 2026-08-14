@@ -77,6 +77,7 @@ const {
   visibleFileNames,
   waitForFileInTree,
   createFileViaUi,
+  editFileViaUi,
   openCollabPanel,
   closeCollabPanel,
   setApprovalMode,
@@ -370,6 +371,30 @@ try {
       `blocked-${RUN_ID}.txt`,
     );
   }
+
+  phase("Two people in the same file");
+  // Both accounts write the same path. Nothing stops them — the file is shared
+  // and the last write wins — so the only thing worth checking is that the
+  // workspace says so while they are both still in it.
+  const contendedFile = `contended-${RUN_ID}.txt`;
+  check("B creates the file", await createFileViaUi(accountB.page, contendedFile));
+  check("A edits the same file",
+    (await editFileViaUi(accountA2.page, { file: contendedFile, contents: `a was here ${RUN_ID}\n` })).ok);
+  const contention = await waitForCollabElement(accountA2.page, "collaboration-contention", 30_000);
+  check("the workspace says two people are in one file", contention);
+  if (contention) {
+    const named = await accountA2.page
+      .locator('[data-testid="collaboration-contended-file"]')
+      .first()
+      .innerText()
+      .catch(() => "");
+    check("it names the file and both people", named.includes(contendedFile) && /and/.test(named),
+      named.replace(/\s+/g, " ").slice(0, 100));
+    // The point of saying it: there is something to do about it.
+    check("and suggests a branch keeps the edits apart",
+      (await bodyText(accountA2.page)).includes("own branch"));
+  }
+  await closeCollabPanel(accountA2.page);
 
   phase("The lead moves the workspace onto personal branches");
   check(

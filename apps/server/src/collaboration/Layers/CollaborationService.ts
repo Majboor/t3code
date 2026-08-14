@@ -221,8 +221,10 @@ const makeCollaborationService = Effect.gen(function* () {
       ]),
     ),
     fileTouches: new Map(
+      // Same key as touchFiles writes: per person as well as per path, or
+      // reloading would collapse two authors back down to one.
       (persisted.fileTouches ?? []).map((entry) => [
-        scopedKey(entry.tenantId, entry.workspaceId, entry.path),
+        `${scopedKey(entry.tenantId, entry.workspaceId, entry.path)}:${entry.userId}`,
         entry,
       ]),
     ),
@@ -1460,7 +1462,14 @@ const makeCollaborationService = Effect.gen(function* () {
       yield* Ref.update(stateRef, (state) => {
         const fileTouches = new Map(state.fileTouches);
         for (const touch of touches) {
-          fileTouches.set(scopedKey(touch.tenantId, touch.workspaceId, touch.path), touch);
+          // Keyed by person as well as path. Keying by path alone overwrote the
+          // previous author, so two people working on one file left exactly the
+          // same trace as one person working on it twice — and the fact worth
+          // knowing was gone before anything could ask.
+          fileTouches.set(
+            `${scopedKey(touch.tenantId, touch.workspaceId, touch.path)}:${touch.userId}`,
+            touch,
+          );
         }
         return { ...state, fileTouches };
       });

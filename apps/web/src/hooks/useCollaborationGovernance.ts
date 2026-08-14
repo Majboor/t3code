@@ -35,6 +35,11 @@ export interface CollaborationGovernance {
   }) => Promise<CollaborationBranchClaim>;
   /** Latest author per workspace-relative path. */
   readonly touchesByPath: ReadonlyMap<string, CollaborationFileTouch>;
+  /**
+   * Every touch, unreduced. `touchesByPath` keeps only the latest per path,
+   * which is exactly what throws away the fact that two people touched one.
+   */
+  readonly touches: readonly CollaborationFileTouch[];
   readonly loading: boolean;
   readonly refresh: () => void;
   readonly setApprovalMode: (mode: CollaborationApprovalMode) => Promise<void>;
@@ -168,8 +173,16 @@ export function useCollaborationGovernance(input: {
             break;
           case "files-touched":
             setTouches((current) => {
-              const touchedPaths = new Set(event.touches.map((touch) => touch.path));
-              return [...event.touches, ...current.filter((entry) => !touchedPaths.has(entry.path))];
+              // Replace this person's touch of a path, not everybody's. Keying
+              // on path alone dropped the previous author, so two people in one
+              // file looked exactly like one person in it twice.
+              const replaced = new Set(
+                event.touches.map((touch) => `${touch.path}:${touch.userId}`),
+              );
+              return [
+                ...event.touches,
+                ...current.filter((entry) => !replaced.has(`${entry.path}:${entry.userId}`)),
+              ];
             });
             break;
           default:
@@ -295,6 +308,8 @@ export function useCollaborationGovernance(input: {
     viewerUserId,
     claimBranch,
     touchesByPath,
+    /** Unreduced, so contention between two people is still visible in it. */
+    touches,
     loading,
     refresh,
     setApprovalMode,
