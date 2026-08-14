@@ -28,18 +28,24 @@ import {
 /**
  * A registry entry, reduced to what matching needs.
  *
- * Tags and the capability summary both count as things the pack says about
- * itself, so they feed the capability list rather than the prose one.
+ * Only tags count as declared capabilities. Splitting the capability summary
+ * into words and treating each as one was a mistake with real consequences:
+ * every word of "Renders a PDF from code, serves it over HTTP" — including
+ * "code", "from" and "over" — scored as highly as a tag, so "Create a file
+ * named x" offered the PDF pack. It surfaced as six unrelated collaboration
+ * checks failing, because a bar that should not have been there changed the
+ * layout under them.
+ *
+ * The summary still counts, as prose, which is worth a point rather than
+ * three.
  */
 export function toSuggestablePack(entry: PackRegistryEntry): SuggestablePack {
   return {
     id: entry.packId,
     name: entry.name,
     qualified: `${entry.publisherHandle}/${entry.name}@${entry.latestVersion}`,
-    summary: `${entry.displayName} ${entry.summary}`,
-    capabilities: [...entry.tags, ...entry.capabilitySummary.toLowerCase().split(/[^a-z]+/)].filter(
-      (word) => word.length > 2,
-    ),
+    summary: `${entry.displayName} ${entry.summary} ${entry.capabilitySummary}`,
+    capabilities: entry.tags.filter((tag) => tag.length > 2),
   };
 }
 

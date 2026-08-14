@@ -88,6 +88,19 @@ describe("suggestPacks", () => {
     expect(suggestPacks("use ssh-deploy here", ALL)[0]?.pack.name).toBe("ssh-deploy");
   });
 
+  it("does not offer a pack because its prose happens to share a word", () => {
+    // The regression this caught: capability-summary words were scored as
+    // declared capabilities, so "Create a file named x" offered a PDF pack.
+    const pdf: SuggestablePack = {
+      id: "pack-pdf",
+      name: "pdf-delivery",
+      qualified: "t3demo/pdf-delivery@0.1.0",
+      summary: "Renders a PDF from code, serves it over HTTP, and reports reading time.",
+      capabilities: ["document"],
+    };
+    expect(suggestPacks("Create a file named blocked.txt", [pdf, ...ALL])).toEqual([]);
+  });
+
   it("suggests the mail pack for send-an-email wording", () => {
     expect(suggestPacks("send an email to the team", ALL)[0]?.pack.name).toBe(
       "gmail-apps-script-mail",
