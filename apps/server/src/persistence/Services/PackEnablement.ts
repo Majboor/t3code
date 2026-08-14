@@ -22,9 +22,7 @@ export const FindPackEnablementInput = Schema.Struct({
 export type FindPackEnablementInput = typeof FindPackEnablementInput.Type;
 
 export interface PackEnablementRepositoryShape {
-  readonly upsert: (
-    input: UpsertPackEnablementInput,
-  ) => Effect.Effect<void, PersistenceSqlError>;
+  readonly upsert: (input: UpsertPackEnablementInput) => Effect.Effect<void, PersistenceSqlError>;
   readonly list: (
     input: ListPackEnablementsInput,
   ) => Effect.Effect<ReadonlyArray<PackEnablement>, PersistenceSqlError>;

@@ -467,9 +467,7 @@ export interface EnvironmentApi {
     updateViewPreferences: (
       input: CollaborationViewUpdateInput,
     ) => Promise<CollaborationViewResult>;
-    claimBranch: (
-      input: CollaborationBranchClaimInput,
-    ) => Promise<CollaborationBranchClaimResult>;
+    claimBranch: (input: CollaborationBranchClaimInput) => Promise<CollaborationBranchClaimResult>;
     listBranchClaims: (
       input: CollaborationBranchListInput,
     ) => Promise<CollaborationBranchListResult>;

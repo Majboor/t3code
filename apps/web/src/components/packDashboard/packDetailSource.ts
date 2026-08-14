@@ -50,8 +50,8 @@ export interface PackDetailSource {
  * The stub is kept and still exported, because the browser tests render this
  * page without a server behind it.
  */
-export const packDetailSource: PackDetailSource = createLivePackDetailSource(() =>
-  readPrimaryEnvironmentDescriptor()?.environmentId ?? null,
+export const packDetailSource: PackDetailSource = createLivePackDetailSource(
+  () => readPrimaryEnvironmentDescriptor()?.environmentId ?? null,
 );
 
 export { stubPackDetailSource };

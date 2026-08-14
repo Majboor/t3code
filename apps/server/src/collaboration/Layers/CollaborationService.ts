@@ -60,12 +60,7 @@ function scopedKey(tenantId: string, workspaceId: string, suffix: string): strin
   return `${tenantId}:${workspaceId}:${suffix}`;
 }
 
-function usageKey(
-  tenantId: string,
-  workspaceId: string,
-  userId: string,
-  threadId: string,
-): string {
+function usageKey(tenantId: string, workspaceId: string, userId: string, threadId: string): string {
   return `${tenantId}:${workspaceId}:${userId}:${threadId}`;
 }
 
@@ -247,7 +242,8 @@ const makeCollaborationService = Effect.gen(function* () {
     repository.loadWorkspaces().pipe(
       Effect.map(
         (snapshot) =>
-          snapshot.workspaces.find((workspace) => workspace.id === workspaceId)?.ownerUserId ?? null,
+          snapshot.workspaces.find((workspace) => workspace.id === workspaceId)?.ownerUserId ??
+          null,
       ),
       Effect.catchCause(() => Effect.succeed(null)),
     );
@@ -1052,8 +1048,7 @@ const makeCollaborationService = Effect.gen(function* () {
         sharesProfile,
         sharesUsage,
         promptCount: sharesUsage || isViewer ? (promptCounts.get(userId) ?? 0) : null,
-        pendingApprovalCount:
-          sharesUsage || isViewer ? (pendingCounts.get(userId) ?? 0) : null,
+        pendingApprovalCount: sharesUsage || isViewer ? (pendingCounts.get(userId) ?? 0) : null,
         tokensUsed: sharesUsage || isViewer ? (tokenTotals.get(userId) ?? 0) : null,
       };
     });
@@ -1351,7 +1346,10 @@ const makeCollaborationService = Effect.gen(function* () {
       })),
     );
 
-  const updateViewPreferences: CollaborationServiceShape["updateViewPreferences"] = (actor, input) =>
+  const updateViewPreferences: CollaborationServiceShape["updateViewPreferences"] = (
+    actor,
+    input,
+  ) =>
     Effect.gen(function* () {
       const { preferences: current } = yield* getViewPreferences(actor, {
         tenantId: input.tenantId,
@@ -1366,10 +1364,7 @@ const makeCollaborationService = Effect.gen(function* () {
 
       yield* Ref.update(stateRef, (state) => {
         const viewPreferences = new Map(state.viewPreferences);
-        viewPreferences.set(
-          scopedKey(next.tenantId, next.workspaceId, next.userId),
-          next,
-        );
+        viewPreferences.set(scopedKey(next.tenantId, next.workspaceId, next.userId), next);
         return { ...state, viewPreferences };
       });
       yield* persist;
@@ -1483,8 +1478,7 @@ const makeCollaborationService = Effect.gen(function* () {
     Ref.get(stateRef).pipe(
       Effect.map((state) => ({
         touches: Array.from(state.fileTouches.values()).filter(
-          (touch) =>
-            touch.tenantId === input.tenantId && touch.workspaceId === input.workspaceId,
+          (touch) => touch.tenantId === input.tenantId && touch.workspaceId === input.workspaceId,
         ),
       })),
     );

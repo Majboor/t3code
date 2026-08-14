@@ -28,15 +28,15 @@ The runner lives in `infra/deploy/` and its interface, the isolation guarantees
 and the real evidence for them are in `infra/deploy/README.md` and
 `infra/host/README.md`. The parts that matter to telemetry:
 
-| Property | Value | Why telemetry cares |
-| --- | --- | --- |
-| Identity | `lp-<workspace-id>`, uid < 1000, no shell | Every event is attributable to one workspace without trusting the pack |
-| Filesystem | Read-only host, one writable directory | A deployment can buffer events to disk but cannot forge another's |
-| Network | `IPAddressDeny=any` plus a computed public allow list | `egress.denied` is observable, and a pack cannot quietly ship data to a host service |
-| Supervision | `systemd` `Restart=on-failure`, `MemoryMax`, `TasksMax` | Crashes, OOM kills and restart counts are facts the runtime already holds |
-| Lifecycle | `up`, `stop`, `restart`, `down` | Start, stop and removal are known moments, not inferred from traffic |
-| Manifest | `--pack <dir.pack>`, and a refusal if the host cannot honour it | Every event carries a `packId`, a `contentDigest` and a declared surface |
-| Observation | A per-deployment timer, and a log-only `nftables` rule | A crash, a silence and a denied destination are all observable from outside the deployment |
+| Property    | Value                                                           | Why telemetry cares                                                                        |
+| ----------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Identity    | `lp-<workspace-id>`, uid < 1000, no shell                       | Every event is attributable to one workspace without trusting the pack                     |
+| Filesystem  | Read-only host, one writable directory                          | A deployment can buffer events to disk but cannot forge another's                          |
+| Network     | `IPAddressDeny=any` plus a computed public allow list           | `egress.denied` is observable, and a pack cannot quietly ship data to a host service       |
+| Supervision | `systemd` `Restart=on-failure`, `MemoryMax`, `TasksMax`         | Crashes, OOM kills and restart counts are facts the runtime already holds                  |
+| Lifecycle   | `up`, `stop`, `restart`, `down`                                 | Start, stop and removal are known moments, not inferred from traffic                       |
+| Manifest    | `--pack <dir.pack>`, and a refusal if the host cannot honour it | Every event carries a `packId`, a `contentDigest` and a declared surface                   |
+| Observation | A per-deployment timer, and a log-only `nftables` rule          | A crash, a silence and a denied destination are all observable from outside the deployment |
 
 Everything in Part 2 that is marked **runtime-emitted** is derivable from this
 layer alone, with no cooperation from the pack. That is deliberate and it is the
@@ -55,11 +55,11 @@ schema.
 
 So events are specified in three tiers, by who emits them:
 
-| Tier | Emitter | Cooperation needed | Coverage |
-| --- | --- | --- | --- |
-| **1. Runtime** | The deploy runner and the supervisor | None | Every deployment, always |
+| Tier            | Emitter                                | Cooperation needed      | Coverage                                                         |
+| --------------- | -------------------------------------- | ----------------------- | ---------------------------------------------------------------- |
+| **1. Runtime**  | The deploy runner and the supervisor   | None                    | Every deployment, always                                         |
 | **2. Contract** | The runtime, reading the pack manifest | Manifest is well-formed | Every pack that declares interfaces, setup steps or verification |
-| **3. Pack** | Code inside the pack | Author instruments it | Best signal, worst coverage |
+| **3. Pack**     | Code inside the pack                   | Author instruments it   | Best signal, worst coverage                                      |
 
 **The loop must produce findings from tier 1 alone.** Tier 2 makes findings
 specific. Tier 3 makes them semantic. A design that only works at tier 3 is a
@@ -72,16 +72,24 @@ Every event, every tier, same envelope.
 
 ```jsonc
 {
-  "schemaVersion": "1.0",       // additive-only; consumers ignore unknown fields
-  "eventId": "evt_01JZ...",     // ULID; the idempotency key for at-least-once delivery
+  "schemaVersion": "1.0", // additive-only; consumers ignore unknown fields
+  "eventId": "evt_01JZ...", // ULID; the idempotency key for at-least-once delivery
   "type": "failure.observed",
-  "occurredAt": "2026-08-08T17:26:28.412Z",  // deployment clock
-  "receivedAt": "2026-08-08T17:26:29.004Z",  // control-plane clock
-  "sequence": 148,              // monotonic per deploymentRunId
-  "pack": { /* PackRef */ },
-  "deployment": { /* DeploymentRef */ },
-  "conditions": { /* Conditions */ },
-  "payload": { /* per-type */ }
+  "occurredAt": "2026-08-08T17:26:28.412Z", // deployment clock
+  "receivedAt": "2026-08-08T17:26:29.004Z", // control-plane clock
+  "sequence": 148, // monotonic per deploymentRunId
+  "pack": {
+    /* PackRef */
+  },
+  "deployment": {
+    /* DeploymentRef */
+  },
+  "conditions": {
+    /* Conditions */
+  },
+  "payload": {
+    /* per-type */
+  },
 }
 ```
 
@@ -157,7 +165,7 @@ cheap to record now and impossible to reconstruct later.
 
 ### `Conditions` — the part that is usually missing
 
-Verification catches *changed*. It does not catch *different*. Key-retrieval
+Verification catches _changed_. It does not catch _different_. Key-retrieval
 steps that are correct for a standard-tier US account may be wrong for
 enterprise tier, another region, or an older console — and that path is not in
 the test environment, so it fails silently on the user's screen.
@@ -192,9 +200,9 @@ the test environment, so it fails silently on the user's screen.
 Two rules, both load-bearing:
 
 1. **Every field is present. `"unknown"` is a value, absence is not.** The whole
-   purpose is to let the system say *"verified on standard-tier US — yours may
-   differ"* instead of asserting confidently. That sentence is only constructible
-   if you recorded that it *was* standard-tier US, and the caveat is only honest
+   purpose is to let the system say _"verified on standard-tier US — yours may
+   differ"_ instead of asserting confidently. That sentence is only constructible
+   if you recorded that it _was_ standard-tier US, and the caveat is only honest
    if "we could not determine the tier" is representable and distinguishable
    from "nobody thought to record it".
 2. **Conditions are categories, never identities.** `accountTier: "enterprise"`,
@@ -211,22 +219,22 @@ added later.
 
 #### Lifecycle — tier 1, runtime-emitted
 
-| Type | Payload |
-| --- | --- |
-| `deployment.provisioned` | `uid`, `unit`, `memoryMaxBytes`, `tasksMax`, `egressMode`, `allowedPrefixCount`, `buildSizeBytes` |
-| `deployment.started` | `deploymentRunId`, `startCommandDigest`, `bindAddress`, `port`, `coldStartMs`, `isRedeploy` |
-| `deployment.healthy` | `probePath`, `statusCode`, `timeToHealthyMs`, `attempts` |
-| `deployment.unhealthy` | `probePath`, `lastStatusCode`, `consecutiveFailures`, `unhealthyForMs` |
-| `deployment.stopped` | `reason`: `operator` \| `redeploy` \| `crash` \| `oom` \| `removed`, `exitCode`, `signal`, `uptimeSeconds` |
-| `deployment.removed` | `uptimeTotalSeconds`, `restartsTotal`, `reason` |
-| `deployment.heartbeat` | `uptimeSeconds`, `memoryCurrentBytes`, `tasksCurrent`, `ipIngressBytes`, `ipEgressBytes`, `restartsSinceStart` |
-| `deployment.went_quiet` | **Synthesised by the control plane** after 3 missed heartbeats: `lastHeartbeatAt`, `missedIntervals` |
+| Type                     | Payload                                                                                                        |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `deployment.provisioned` | `uid`, `unit`, `memoryMaxBytes`, `tasksMax`, `egressMode`, `allowedPrefixCount`, `buildSizeBytes`              |
+| `deployment.started`     | `deploymentRunId`, `startCommandDigest`, `bindAddress`, `port`, `coldStartMs`, `isRedeploy`                    |
+| `deployment.healthy`     | `probePath`, `statusCode`, `timeToHealthyMs`, `attempts`                                                       |
+| `deployment.unhealthy`   | `probePath`, `lastStatusCode`, `consecutiveFailures`, `unhealthyForMs`                                         |
+| `deployment.stopped`     | `reason`: `operator` \| `redeploy` \| `crash` \| `oom` \| `removed`, `exitCode`, `signal`, `uptimeSeconds`     |
+| `deployment.removed`     | `uptimeTotalSeconds`, `restartsTotal`, `reason`                                                                |
+| `deployment.heartbeat`   | `uptimeSeconds`, `memoryCurrentBytes`, `tasksCurrent`, `ipIngressBytes`, `ipEgressBytes`, `restartsSinceStart` |
+| `deployment.went_quiet`  | **Synthesised by the control plane** after 3 missed heartbeats: `lastHeartbeatAt`, `missedIntervals`           |
 
 `deployment.healthy` is not a vanity metric. It is the negative control that
 every finding depends on — see "What the maintenance agent needs", point 6.
 
 `deployment.went_quiet` is synthesised, not emitted, because the interesting
-signal is an *absence*. If most deployments go quiet within eight weeks the loop
+signal is an _absence_. If most deployments go quiet within eight weeks the loop
 starves regardless of how good the mechanism is, and that is a risk you can only
 watch if silence is a first-class event.
 
@@ -262,25 +270,25 @@ watch if silence is a first-class event.
 `class` is a closed set, because the class is what decides whether a repair is
 even conceivable:
 
-| Class | Meaning | Repairable by an agent? |
-| --- | --- | --- |
-| `provider-contract` | Third party returned a status, shape or code the pack did not expect | Often |
-| `provider-auth` | Credential rejected, expired, or missing a scope | Rarely — usually a knowledge fix |
-| `provider-deprecation` | Explicit sunset signal: deprecation header, `410`, warning field | Yes, and predictably |
-| `dependency-drift` | An installed version no longer matches what the pack was proven against | Often |
-| `model-deprecation` | A named model or endpoint is gone or renamed | Yes |
-| `integration-contract` | Host app and pack disagree about the declared interface | Sometimes |
-| `config-missing` | A declared requirement was never supplied | No — it is an install defect |
-| `knowledge-stale` | A documented step did not match reality | No code fix; the knowledge is the fix |
-| `runtime-crash` | Unhandled fault inside the pack | Sometimes |
-| `resource-exhausted` | OOM kill, `TasksMax`, disk | Rarely |
-| `egress-denied` | Sandbox blocked a destination | Yes — usually a wrong `permissions.network` declaration |
-| `verification-failed` | A declared check failed outside an install | Depends on the check |
+| Class                  | Meaning                                                                 | Repairable by an agent?                                 |
+| ---------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------- |
+| `provider-contract`    | Third party returned a status, shape or code the pack did not expect    | Often                                                   |
+| `provider-auth`        | Credential rejected, expired, or missing a scope                        | Rarely — usually a knowledge fix                        |
+| `provider-deprecation` | Explicit sunset signal: deprecation header, `410`, warning field        | Yes, and predictably                                    |
+| `dependency-drift`     | An installed version no longer matches what the pack was proven against | Often                                                   |
+| `model-deprecation`    | A named model or endpoint is gone or renamed                            | Yes                                                     |
+| `integration-contract` | Host app and pack disagree about the declared interface                 | Sometimes                                               |
+| `config-missing`       | A declared requirement was never supplied                               | No — it is an install defect                            |
+| `knowledge-stale`      | A documented step did not match reality                                 | No code fix; the knowledge is the fix                   |
+| `runtime-crash`        | Unhandled fault inside the pack                                         | Sometimes                                               |
+| `resource-exhausted`   | OOM kill, `TasksMax`, disk                                              | Rarely                                                  |
+| `egress-denied`        | Sandbox blocked a destination                                           | Yes — usually a wrong `permissions.network` declaration |
+| `verification-failed`  | A declared check failed outside an install                              | Depends on the check                                    |
 
 Three fields do the heavy lifting:
 
 - **`fingerprint`** is a stable hash over `(class, normalizedMessage,
-  stackDigest, provider + status + errorCode, surface)`. It is what collapses
+stackDigest, provider + status + errorCode, surface)`. It is what collapses
   ten thousand occurrences across two hundred deployments into one thing that
   can be reasoned about. Without it you have logs. Logs do not propagate.
 - **`conditionsDelta`** is what turns an observation into a hypothesis. "It
@@ -317,32 +325,32 @@ are how a knowledge base fills with stale warnings.
 }
 ```
 
-Two jobs. It is a security signal, and it is a *requirements* signal: a pack
+Two jobs. It is a security signal, and it is a _requirements_ signal: a pack
 repeatedly denied to a destination it genuinely needs has a wrong
 `permissions.network` block, and that is a proposable repair with an obvious
 diff. `declaredInManifest` is what separates the two readings.
 
 #### Knowledge and verification — tier 2
 
-| Type | Payload |
-| --- | --- |
-| `verification.run` | `trigger`: `install` \| `schedule` \| `pre-repair` \| `post-repair`, `checks[]` of `{ id, outcome: pass\|fail\|waived, durationMs }`, `overall` |
-| `knowledge.checkpoint_failed` | `stepId`, `satisfies[]`, `manual`, `verifyCommandExitCode`, `observed`, `expected` |
-| `install.completed` | `durationMs`, `stepsTotal`, `stepsCompleted`, `manualStepsCompleted`, `assistedBy` |
-| `install.abandoned` | `abandonedAtStepId`, `stepsCompleted`, `stepsTotal`, `idleForMs`, `lastError` |
+| Type                          | Payload                                                                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verification.run`            | `trigger`: `install` \| `schedule` \| `pre-repair` \| `post-repair`, `checks[]` of `{ id, outcome: pass\|fail\|waived, durationMs }`, `overall` |
+| `knowledge.checkpoint_failed` | `stepId`, `satisfies[]`, `manual`, `verifyCommandExitCode`, `observed`, `expected`                                                              |
+| `install.completed`           | `durationMs`, `stepsTotal`, `stepsCompleted`, `manualStepsCompleted`, `assistedBy`                                                              |
+| `install.abandoned`           | `abandonedAtStepId`, `stepsCompleted`, `stepsTotal`, `idleForMs`, `lastError`                                                                   |
 
 `knowledge.checkpoint_failed` is the highest-value event in this document and
 the one least likely to appear by accident.
 
 The motivating case: an agent asked how to get an API key will confidently
-invent a path through the provider's console. The real path — *"Settings → API →
-generate a restricted key with these two scopes"* — is in no repository, often
+invent a path through the provider's console. The real path — _"Settings → API →
+generate a restricted key with these two scopes"_ — is in no repository, often
 not in the docs, and changes without notice. A pack that carries it is carrying
 the thing that does not commoditize. But that knowledge is exactly the kind that
 rots silently, because when it is wrong the user simply cannot find the page and
 gives up. Nothing crashes.
 
-So `requirements.setupSteps` must be *executed and checked* at install, not
+So `requirements.setupSteps` must be _executed and checked_ at install, not
 merely rendered as prose. Each step's `verifyCommand` firing is what converts "a
 human quietly gave up" into a typed event with a condition envelope attached —
 and the condition envelope is what turns it from "this is broken" into "this is
@@ -350,7 +358,7 @@ broken on enterprise tier in the EU". That is the difference between a warning
 that destroys trust and a caveat that preserves it.
 
 `install.abandoned` is the same principle applied to the whole install. The
-silence *is* the test; this makes the silence emit something. And
+silence _is_ the test; this makes the silence emit something. And
 `install.completed.durationMs` is what answers whether the second install of a
 pack was faster than the first, which is the cheapest possible evidence that
 accumulated knowledge is doing anything at all.
@@ -421,18 +429,18 @@ thirds from being broadcast as if they were universal.
 The rule has to be written down, because "wrong knowledge propagates faster than
 right knowledge" is a volume problem and defaults decide it:
 
-| State | Condition | Effect |
-| --- | --- | --- |
-| `local` | Seen in one `workspaceKeyId` | Visible only to that workspace. Default. |
-| `shared` | Seen in ≥2 distinct `workspaceKeyId`s **with a consistent `conditionEnvelope.invariant`** | Attached to the pack; propagates to installs matching the envelope |
-| `universal` | `shared`, and reproduced under ≥2 distinct values for every field in `varying` | Propagates to all installs |
+| State       | Condition                                                                                 | Effect                                                             |
+| ----------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `local`     | Seen in one `workspaceKeyId`                                                              | Visible only to that workspace. Default.                           |
+| `shared`    | Seen in ≥2 distinct `workspaceKeyId`s **with a consistent `conditionEnvelope.invariant`** | Attached to the pack; propagates to installs matching the envelope |
+| `universal` | `shared`, and reproduced under ≥2 distinct values for every field in `varying`            | Propagates to all installs                                         |
 
 A finding never promotes on occurrence count alone. Ten thousand failures in one
 workspace is one workspace's problem — usually its configuration. Two failures
 in two workspaces under the same conditions is a fact about the pack.
 
 `conditionEnvelope.unobserved` is deliberately part of the record. It is what
-lets the system say *"not seen on enterprise tier — we have no data there"*
+lets the system say _"not seen on enterprise tier — we have no data there"_
 rather than implying coverage it does not have.
 
 ### What the maintenance agent needs
@@ -454,14 +462,14 @@ rewrite engine.
 5. **Where it reproduces** — `conditionEnvelope`. Without it, the agent proposes
    a global fix for a regional problem, which is the exact failure mode the
    conditions mechanism exists to prevent.
-6. **A negative control** — deployments on the same digest under *different*
+6. **A negative control** — deployments on the same digest under _different_
    conditions that did **not** fail. This is why `deployment.healthy` and
    passing `verification.run` events are mandatory rather than optional: without
    successes in the corpus every failure looks universal, and the first repair
    the agent proposes breaks everyone it was working for.
 7. **A way to be checked** — `verificationPlan`, drawn from the manifest's
    declared checks. A proposal that cannot be verified cannot be approved by a
-   human either, because there is nothing to approve *against*.
+   human either, because there is nothing to approve _against_.
 8. **A blast radius and an approver** — `blastRadius`, `requiresApprovalFrom`.
    The agent proposes; a human approves. That is a property of the contract, not
    a UI decision, which is why the fields are in the event and not in a form.
@@ -505,7 +513,7 @@ not a wider grant.
 
 ### Relationship to what already exists
 
-- **`docs/pack-format.md` `analytics`** declares what a pack *chooses* to emit —
+- **`docs/pack-format.md` `analytics`** declares what a pack _chooses_ to emit —
   its own named events, metered `operationId`s, ready-made metrics. That is
   tier 3, and it is optional. This document specifies tiers 1 and 2, which are
   not. The two join on `packId`, `version` and `operationId`.
@@ -527,17 +535,17 @@ newline-delimited JSON to `/var/lib/lp-telemetry/<id>/events.ndjson` — root-ow
 and outside the workspace, so a deployment can neither forge its own events nor
 read another's. `infra/deploy/README.md` carries the real captured stream.
 
-| Event | Emitted | By what, and when |
-| --- | --- | --- |
-| `deployment.provisioned` | yes | The runner, once the user, address, port, filter and build exist |
-| `deployment.started` | yes | The runner on deploy and on `start`/`restart`; the timer for a restart nobody asked for |
-| `deployment.healthy` | yes | The runner's first successful probe, and every later recovery from unhealthy |
-| `deployment.unhealthy` | yes | A failed probe, from the runner during `up` and from the timer afterwards |
-| `deployment.stopped` | yes | The runner for `operator`/`redeploy`/`removed`; the timer for `crash` and `oom`, read from `ExecMainCode`/`ExecMainStatus`/`Result` |
-| `deployment.removed` | yes | The runner, during `down`, before anything is deleted |
-| `deployment.heartbeat` | yes | A per-deployment `systemd` timer, from `MemoryCurrent`, `TasksCurrent`, `IPIngressBytes`, `IPEgressBytes` and `NRestarts` |
-| `deployment.went_quiet` | yes | Synthesised by the same timer after three missed intervals |
-| `egress.denied` | yes | A log-only `nftables` rule at the output hook, aggregated per destination per tick |
+| Event                    | Emitted | By what, and when                                                                                                                   |
+| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `deployment.provisioned` | yes     | The runner, once the user, address, port, filter and build exist                                                                    |
+| `deployment.started`     | yes     | The runner on deploy and on `start`/`restart`; the timer for a restart nobody asked for                                             |
+| `deployment.healthy`     | yes     | The runner's first successful probe, and every later recovery from unhealthy                                                        |
+| `deployment.unhealthy`   | yes     | A failed probe, from the runner during `up` and from the timer afterwards                                                           |
+| `deployment.stopped`     | yes     | The runner for `operator`/`redeploy`/`removed`; the timer for `crash` and `oom`, read from `ExecMainCode`/`ExecMainStatus`/`Result` |
+| `deployment.removed`     | yes     | The runner, during `down`, before anything is deleted                                                                               |
+| `deployment.heartbeat`   | yes     | A per-deployment `systemd` timer, from `MemoryCurrent`, `TasksCurrent`, `IPIngressBytes`, `IPEgressBytes` and `NRestarts`           |
+| `deployment.went_quiet`  | yes     | Synthesised by the same timer after three missed intervals                                                                          |
+| `egress.denied`          | yes     | A log-only `nftables` rule at the output hook, aggregated per destination per tick                                                  |
 
 Three of those are worth a note.
 
@@ -550,7 +558,7 @@ side has to notice the gap and write it down. The timer unit is separate from
 the deployment's unit and outlives it, which is the only reason the absence is
 observable at all.
 
-**`egress.denied` was listed here as *not available*,** because the cgroup BPF
+**`egress.denied` was listed here as _not available_,** because the cgroup BPF
 filter discards a denied packet silently. The `netfilter` route named in that
 row works: `NF_INET_LOCAL_OUT` fires before the cgroup egress program, so a
 log-only rule matched on the deployment's uid sees the SYN the filter is about
@@ -579,14 +587,14 @@ clock into it would destroy the exact distinction the pair exists to make.
 Following the rule that `"unknown"` is a value and absence is not, these are
 recorded as `unknown` rather than omitted, and this is why:
 
-| Field | Value | Why |
-| --- | --- | --- |
-| `conditions.providers[]` | one entry per `requirements.accounts[].service`, every axis `"unknown"` | The runner never talks to a provider, so it can record that an account is required and nothing about the account |
-| `conditions.dependencies` | `[]` | No lockfile reader. This is the cheapest remaining win — `conditionsDelta` is what turns an observation into a hypothesis, and dependency drift is its most common content |
-| `conditions.agent` | `role: "installer"`, provider and model `"unknown"` | No agent is involved in a deploy today |
-| `conditions.locale` | `"unknown"` | Not a property of the host worth guessing at |
-| `pack.mutations` | `count: 0` | Nothing applies repairs yet, so zero is true rather than a placeholder |
-| `deployment.sdkVersion` | `null` | `runtimeHost` is `logicpacks-managed`; no SDK is in the path |
+| Field                     | Value                                                                   | Why                                                                                                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conditions.providers[]`  | one entry per `requirements.accounts[].service`, every axis `"unknown"` | The runner never talks to a provider, so it can record that an account is required and nothing about the account                                                           |
+| `conditions.dependencies` | `[]`                                                                    | No lockfile reader. This is the cheapest remaining win — `conditionsDelta` is what turns an observation into a hypothesis, and dependency drift is its most common content |
+| `conditions.agent`        | `role: "installer"`, provider and model `"unknown"`                     | No agent is involved in a deploy today                                                                                                                                     |
+| `conditions.locale`       | `"unknown"`                                                             | Not a property of the host worth guessing at                                                                                                                               |
+| `pack.mutations`          | `count: 0`                                                              | Nothing applies repairs yet, so zero is true rather than a placeholder                                                                                                     |
+| `deployment.sdkVersion`   | `null`                                                                  | `runtimeHost` is `logicpacks-managed`; no SDK is in the path                                                                                                               |
 
 A deployment made the old way — `--from <dir> --command <cmd>`, no manifest —
 still emits every tier-1 event, with `packId`, `version` and `formatVersion`
@@ -595,15 +603,15 @@ the pack is not.
 
 #### What still does not emit
 
-| Event | Why not |
-| --- | --- |
-| `failure.observed` | Needs classification and fingerprinting. The raw material is there — exit codes, signals, `Result=oom-kill`, denied destinations — but a `fingerprint` is a stable hash over a *normalised* message, and there is no normaliser. Emitting unfingerprinted failures would fill the corpus with rows that cannot be collapsed, which is worse than emitting none |
-| `failure.resolved` | Nothing tracks an open failure to close |
-| `verification.run` | The manifest's `verification.checks[]` are read but never executed. This is the next honest step and it is small: the commands are declared, the sandbox can run them, and `runsOn: ["deploy"]` already says when |
-| `knowledge.checkpoint_failed` | `requirements.setupSteps` are not executed at all. This document calls it the highest-value event here; it needs an install flow, and this runner deploys something already installed |
-| `install.completed` / `install.abandoned` | Same reason: there is no install flow to instrument |
-| Everything in tier 3 | The pack's own instrumentation. Nothing in the runtime can produce it |
-| `telemetry.dropped` | There is no transport, so there is no back-pressure to count |
+| Event                                     | Why not                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `failure.observed`                        | Needs classification and fingerprinting. The raw material is there — exit codes, signals, `Result=oom-kill`, denied destinations — but a `fingerprint` is a stable hash over a _normalised_ message, and there is no normaliser. Emitting unfingerprinted failures would fill the corpus with rows that cannot be collapsed, which is worse than emitting none |
+| `failure.resolved`                        | Nothing tracks an open failure to close                                                                                                                                                                                                                                                                                                                        |
+| `verification.run`                        | The manifest's `verification.checks[]` are read but never executed. This is the next honest step and it is small: the commands are declared, the sandbox can run them, and `runsOn: ["deploy"]` already says when                                                                                                                                              |
+| `knowledge.checkpoint_failed`             | `requirements.setupSteps` are not executed at all. This document calls it the highest-value event here; it needs an install flow, and this runner deploys something already installed                                                                                                                                                                          |
+| `install.completed` / `install.abandoned` | Same reason: there is no install flow to instrument                                                                                                                                                                                                                                                                                                            |
+| Everything in tier 3                      | The pack's own instrumentation. Nothing in the runtime can produce it                                                                                                                                                                                                                                                                                          |
+| `telemetry.dropped`                       | There is no transport, so there is no back-pressure to count                                                                                                                                                                                                                                                                                                   |
 
 And the transport itself does not exist. Events are appended to a file; nothing
 collects them, nothing deduplicates on `eventId`, nothing bounds the file's size
@@ -634,7 +642,7 @@ Two enforcement gaps are recorded in the events rather than left to the reader:
   tier 3, which is the tier with the worst coverage.
 - **Conditions are self-reported and mostly `unknown` at the start.** A pack that
   cannot read a provider's console version records `unknown`, and early on that
-  will be most of them. The value comes from the fields that *can* be read
+  will be most of them. The value comes from the fields that _can_ be read
   cheaply — dependency versions, API version headers, runtime versions — and
   grows only as integrations learn to report the rest.
 - **Fingerprints drift.** A provider that rewords an error message splits one

@@ -76,7 +76,10 @@ function toRecord(input: {
   };
 }
 
-function splitName(name: string): { readonly name: string; readonly publisher: string | undefined } {
+function splitName(name: string): {
+  readonly name: string;
+  readonly publisher: string | undefined;
+} {
   const separator = name.indexOf("/");
   return separator === -1
     ? { name, publisher: undefined }

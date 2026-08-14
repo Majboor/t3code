@@ -53,9 +53,9 @@ const TONE_STYLES = {
 export function PackSignatureBadge({ manifest }: { manifest: PackManifest }) {
   // Verification is asynchronous because it runs on WebCrypto, which is what
   // lets this work in a browser at all.
-  const [described, setDescribed] = useState<Awaited<
-    ReturnType<typeof describeSignature>
-  > | null>(null);
+  const [described, setDescribed] = useState<Awaited<ReturnType<typeof describeSignature>> | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;

@@ -4,9 +4,9 @@ Takes a workspace id and a `.pack` directory, and turns them into a running,
 network-restricted service with a reachable local URL — and an event stream that
 says what happened to it.
 
-Sits directly on `infra/host`: that layer decides *who* a workspace is and what
-it may touch, this one decides *what runs*, *where it listens*, *what it may
-talk to* and *what it reports*. Nothing here re-implements the sandbox; the unit
+Sits directly on `infra/host`: that layer decides _who_ a workspace is and what
+it may touch, this one decides _what runs_, _where it listens_, _what it may
+talk to_ and _what it reports_. Nothing here re-implements the sandbox; the unit
 template is inherited, not restated.
 
 What starts it, where it listens and what it may reach come out of the
@@ -14,16 +14,16 @@ manifest's `runtime`, `interfaces` and `permissions` sections. They are not
 restated on the command line, and a manifest this host cannot honour is refused
 rather than deployed weaker than it declares.
 
-| File | Purpose |
-| --- | --- |
-| `lp-deploy.sh` | The runner. All commands. |
-| `lp-deploy-common.sh` | Address/port allocation, allow-list arithmetic, the observation table and the timer units. Sourced. |
-| `lp-pack.sh` | Reads `pack.json`, derives the deploy, and refuses what cannot be honoured. Sourced. |
-| `lp-telemetry.sh` | The event envelope, the ULIDs, the per-deployment event file. Sourced. |
-| `lp-heartbeat.sh` | One telemetry tick: heartbeat, health, run boundaries, denials, silence. |
-| `lp-heartbeat@.service`, `lp-heartbeat@.timer` | Unit templates for the tick. Installed with `@LP_DEPLOY_DIR@` substituted. |
-| `lp-verify-egress.sh` | Deploys a probe and proves the network filter from inside it. |
-| `lp-verify-pack-telemetry.sh` | Deploys a throwaway pack and proves the manifest path and the telemetry end to end. |
+| File                                           | Purpose                                                                                             |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `lp-deploy.sh`                                 | The runner. All commands.                                                                           |
+| `lp-deploy-common.sh`                          | Address/port allocation, allow-list arithmetic, the observation table and the timer units. Sourced. |
+| `lp-pack.sh`                                   | Reads `pack.json`, derives the deploy, and refuses what cannot be honoured. Sourced.                |
+| `lp-telemetry.sh`                              | The event envelope, the ULIDs, the per-deployment event file. Sourced.                              |
+| `lp-heartbeat.sh`                              | One telemetry tick: heartbeat, health, run boundaries, denials, silence.                            |
+| `lp-heartbeat@.service`, `lp-heartbeat@.timer` | Unit templates for the tick. Installed with `@LP_DEPLOY_DIR@` substituted.                          |
+| `lp-verify-egress.sh`                          | Deploys a probe and proves the network filter from inside it.                                       |
+| `lp-verify-pack-telemetry.sh`                  | Deploys a throwaway pack and proves the manifest path and the telemetry end to end.                 |
 
 ## Interface
 
@@ -43,20 +43,20 @@ lp-deploy.sh list
 
 Options for `up`:
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `--pack <dir>` | required | A `.pack` directory. Its `pack.json` decides the rest. |
-| `--from <dir>` `--command <cmd>` | — | The manifest-less alternative: a built directory and an explicit start command |
-| `--env-file <file>` | none | `KEY=VALUE` lines for the service. Every `requirements.environment` entry marked `required` must appear here. |
-| `--environment <env>` | `development` | `production`, `preview` or `development`; travels in every event |
-| `--service <id>` | first | Which `runtime.services` entry owns the address and port |
-| `--health-path <path>` | the service's `healthPath`, else `/` | Overrides what the manifest declared |
-| `--egress <mode>` | `pack` with `--pack`, `public` with `--from` | `pack` (what `permissions.network` declares), `public` (anywhere routable, no loopback/private/host) or `none` |
-| `--port <port>` | allocated, or the manifest's `fixed` port | Pin the TCP port |
-| `--memory-max`, `--tasks-max` | `512M`, `64` | Passed through to provisioning |
-| `--max-size-mb <mb>` | `2048` | Refuse builds larger than this |
-| `--health-timeout <s>` | `30` | Seconds to wait for the first successful probe |
-| `--heartbeat-interval <s>` | `60` | Telemetry cadence, and the unit silence is counted in |
+| Option                           | Default                                      | Meaning                                                                                                        |
+| -------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--pack <dir>`                   | required                                     | A `.pack` directory. Its `pack.json` decides the rest.                                                         |
+| `--from <dir>` `--command <cmd>` | —                                            | The manifest-less alternative: a built directory and an explicit start command                                 |
+| `--env-file <file>`              | none                                         | `KEY=VALUE` lines for the service. Every `requirements.environment` entry marked `required` must appear here.  |
+| `--environment <env>`            | `development`                                | `production`, `preview` or `development`; travels in every event                                               |
+| `--service <id>`                 | first                                        | Which `runtime.services` entry owns the address and port                                                       |
+| `--health-path <path>`           | the service's `healthPath`, else `/`         | Overrides what the manifest declared                                                                           |
+| `--egress <mode>`                | `pack` with `--pack`, `public` with `--from` | `pack` (what `permissions.network` declares), `public` (anywhere routable, no loopback/private/host) or `none` |
+| `--port <port>`                  | allocated, or the manifest's `fixed` port    | Pin the TCP port                                                                                               |
+| `--memory-max`, `--tasks-max`    | `512M`, `64`                                 | Passed through to provisioning                                                                                 |
+| `--max-size-mb <mb>`             | `2048`                                       | Refuse builds larger than this                                                                                 |
+| `--health-timeout <s>`           | `30`                                         | Seconds to wait for the first successful probe                                                                 |
+| `--heartbeat-interval <s>`       | `60`                                         | Telemetry cadence, and the unit silence is counted in                                                          |
 
 `plan` reads a manifest, prints every decision it implies, and changes nothing —
 it does not even require root, because "would this host take this pack" is a
@@ -69,30 +69,30 @@ against an already-removed deployment is a no-op, not an error.
 
 ### What the manifest decides
 
-| Manifest field | What the runner does with it |
-| --- | --- |
-| `runtime.commands.start` | Becomes the generated `run` file's `exec` line. Its `cwd` is the directory that line runs in. |
-| `runtime.target`, `runtime.versionRange` | Checked against the host's interpreter, and recorded in every event's `conditions.runtime` |
-| `runtime.services[].binding` | `environment` sets that variable to the allocated port; `fixed` pins it; `dynamic` is refused |
-| `runtime.services[].healthPath` | The path `up` polls, and the path the timer keeps polling afterwards |
-| `permissions.network[].host` | Resolved to addresses at deploy time; those addresses are the entire allow list |
-| `requirements.environment[].required` | Must be supplied through `--env-file` or the deploy is refused |
-| `identity.id`, `identity.version`, `visibility.scope` | Attribution on every event |
-| every file in the directory | Hashed into `contentDigest`, which is what a finding actually lands on |
+| Manifest field                                        | What the runner does with it                                                                  |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `runtime.commands.start`                              | Becomes the generated `run` file's `exec` line. Its `cwd` is the directory that line runs in. |
+| `runtime.target`, `runtime.versionRange`              | Checked against the host's interpreter, and recorded in every event's `conditions.runtime`    |
+| `runtime.services[].binding`                          | `environment` sets that variable to the allocated port; `fixed` pins it; `dynamic` is refused |
+| `runtime.services[].healthPath`                       | The path `up` polls, and the path the timer keeps polling afterwards                          |
+| `permissions.network[].host`                          | Resolved to addresses at deploy time; those addresses are the entire allow list               |
+| `requirements.environment[].required`                 | Must be supplied through `--env-file` or the deploy is refused                                |
+| `identity.id`, `identity.version`, `visibility.scope` | Attribution on every event                                                                    |
+| every file in the directory                           | Hashed into `contentDigest`, which is what a finding actually lands on                        |
 
 ### What a deployment gets
 
-| Resource | Value |
-| --- | --- |
-| Address | One `/32` inside `127.90.0.0/16`, added to `lo` |
-| Port | One port in `21000-21999` |
-| Build | `/srv/lp-workspaces/lp-<id>/app`, `rsync -a --delete`, owned by the workspace user |
-| Entry point | `/srv/lp-workspaces/lp-<id>/run`, generated, `exec`s the manifest's start command |
-| Environment | `LP_WORKSPACE_ID`, `LP_BIND_ADDRESS`, `LP_PORT`, `HOST`, `PORT`, the manifest's port variable, and `--env-file` |
-| Network drop-in | `lp-workspace@<id>.service.d/20-network.conf` |
-| Telemetry | `/var/lib/lp-telemetry/<id>/events.ndjson`, root-owned `0600`, outside the workspace |
-| Timer | `lp-heartbeat@<id>.timer`, with the cadence in a generated drop-in |
-| Observation table | `nft` table `inet lp_egress_<id>`, log-only, matched on the workspace's uid |
+| Resource          | Value                                                                                                           |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| Address           | One `/32` inside `127.90.0.0/16`, added to `lo`                                                                 |
+| Port              | One port in `21000-21999`                                                                                       |
+| Build             | `/srv/lp-workspaces/lp-<id>/app`, `rsync -a --delete`, owned by the workspace user                              |
+| Entry point       | `/srv/lp-workspaces/lp-<id>/run`, generated, `exec`s the manifest's start command                               |
+| Environment       | `LP_WORKSPACE_ID`, `LP_BIND_ADDRESS`, `LP_PORT`, `HOST`, `PORT`, the manifest's port variable, and `--env-file` |
+| Network drop-in   | `lp-workspace@<id>.service.d/20-network.conf`                                                                   |
+| Telemetry         | `/var/lib/lp-telemetry/<id>/events.ndjson`, root-owned `0600`, outside the workspace                            |
+| Timer             | `lp-heartbeat@<id>.timer`, with the cadence in a generated drop-in                                              |
+| Observation table | `nft` table `inet lp_egress_<id>`, log-only, matched on the workspace's uid                                     |
 
 The pack cannot read or write its own event file. That is deliberate: an event
 attributed to a pack digest is worth nothing if the pack could have written it.
@@ -104,7 +104,7 @@ public address a wildcard bind is a public service.
 There is no allocation database. The drop-in carries `# lp-address=`,
 `# lp-port=`, `# lp-egress=`, `# lp-health-path=`, `# lp-egress-hosts=`,
 `# lp-pack-id=`, `# lp-content-digest=` and `# lp-start-digest=` header comments
-and *is* the record, so an operator reading `/etc/systemd/system` sees exactly
+and _is_ the record, so an operator reading `/etc/systemd/system` sees exactly
 what the scripts see and a stale registry cannot disagree with a running
 service. The timer reads the same header rather than keeping its own copy, which
 is why a deployment torn down underneath it produces silence and not a wrong
@@ -121,7 +121,7 @@ everything else on this host" stop being the same firewall rule.
 The `/32` alias on `lo` is what makes it work in both directions. Without the
 alias the kernel routes `127.90.0.1` through the generic `127.0.0.0/8` local
 route, whose preferred source is `127.0.0.1` — so an inbound request would
-arrive *from* `127.0.0.1` and accepting it would mean allowing all of loopback.
+arrive _from_ `127.0.0.1` and accepting it would mean allowing all of loopback.
 With the alias the route's own source becomes the alias:
 
 ```
@@ -171,7 +171,7 @@ curl: (28) Connection timed out after 4002 milliseconds
 ```
 
 So "allow everything except X" is not expressible by denying X. X has to be
-*absent* from the allow list, which means the allowed space must be enumerated.
+_absent_ from the allow list, which means the allowed space must be enumerated.
 `lp_deploy_public_allow_prefixes` computes exactly that: the IPv4 space minus
 
 ```
@@ -230,21 +230,21 @@ host cannot honour would run it with weaker guarantees than it claims, and then
 attribute its telemetry to a configuration nobody chose. So these fail the
 deploy, all of them reported at once with the field named:
 
-| Declaration | Why it cannot be honoured |
-| --- | --- |
-| `runtime.target: container` | The sandbox is a systemd unit, not a container runtime |
-| `runtime.target` with a missing interpreter | Nothing would start |
-| `runtime.versionRange` unsatisfied by the host | Only the `>=X.Y` form is actually checked; anything else is reported as unverified |
-| `runtime.services[].binding: dynamic` | The port has to be known to probe it and to hand out a URL |
-| Two or more `runtime.services` and no `--service` | One deployment gets one address and one port |
-| `permissions.network` with a `*.` wildcard | The filter matches addresses; a wildcard cannot be enumerated. `--egress public` is the deliberate override. |
-| A declared host that does not resolve | No allow entry can be written for it |
-| `permissions.elevated` (any entry) | Empty capability bounding set, `NoNewPrivileges`, seccomp, no docker socket |
-| `permissions.filesystem` rooted at `home`, `workspace` or `absolute` | `ProtectHome=yes` and a read-only host |
-| A required `requirements.environment` entry not supplied | A missing requirement is an install defect, and the contract classes it as unrepairable |
-| `requirements.services` whose `connectionEnvVar` is unset | This runner provisions no databases or queues |
-| `requirements.packs` | It deploys one pack and resolves no pack graph |
-| `requirements.toolchain` not on the host | It would fail later, less clearly |
+| Declaration                                                          | Why it cannot be honoured                                                                                    |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `runtime.target: container`                                          | The sandbox is a systemd unit, not a container runtime                                                       |
+| `runtime.target` with a missing interpreter                          | Nothing would start                                                                                          |
+| `runtime.versionRange` unsatisfied by the host                       | Only the `>=X.Y` form is actually checked; anything else is reported as unverified                           |
+| `runtime.services[].binding: dynamic`                                | The port has to be known to probe it and to hand out a URL                                                   |
+| Two or more `runtime.services` and no `--service`                    | One deployment gets one address and one port                                                                 |
+| `permissions.network` with a `*.` wildcard                           | The filter matches addresses; a wildcard cannot be enumerated. `--egress public` is the deliberate override. |
+| A declared host that does not resolve                                | No allow entry can be written for it                                                                         |
+| `permissions.elevated` (any entry)                                   | Empty capability bounding set, `NoNewPrivileges`, seccomp, no docker socket                                  |
+| `permissions.filesystem` rooted at `home`, `workspace` or `absolute` | `ProtectHome=yes` and a read-only host                                                                       |
+| A required `requirements.environment` entry not supplied             | A missing requirement is an install defect, and the contract classes it as unrepairable                      |
+| `requirements.services` whose `connectionEnvVar` is unset            | This runner provisions no databases or queues                                                                |
+| `requirements.packs`                                                 | It deploys one pack and resolves no pack graph                                                               |
+| `requirements.toolchain` not on the host                             | It would fail later, less clearly                                                                            |
 
 One thing is **warned about rather than refused**: `permissions.network[].ports`.
 systemd's IP filter matches addresses only, so a declared host is reachable on
@@ -265,17 +265,17 @@ and the timer both write. There is no network sink and no server endpoint —
 the contract says a deployment buffers to disk and replays, and disk is the half
 that has to exist before a collector can.
 
-| Event | Emitted by | When |
-| --- | --- | --- |
-| `deployment.provisioned` | runner | Once the user, address, port, filter and build exist |
-| `deployment.started` | runner, and the timer for a restart nobody asked for | Every process start; a new `deploymentRunId` each time |
-| `deployment.healthy` | runner, then the timer | First successful probe, and every recovery from unhealthy |
-| `deployment.unhealthy` | runner, then the timer | A failed probe, with `consecutiveFailures` and `unhealthyForMs` |
-| `deployment.stopped` | runner for `stop`/`restart`/`down`, timer for a crash or an OOM kill | `reason` is `operator`, `redeploy`, `crash`, `oom` or `removed` |
-| `deployment.removed` | runner | `down`, before the deployment's resources go |
-| `deployment.heartbeat` | timer | Every interval while active |
-| `deployment.went_quiet` | timer | Three missed intervals |
-| `egress.denied` | timer | Aggregated per destination since the last tick |
+| Event                    | Emitted by                                                           | When                                                            |
+| ------------------------ | -------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `deployment.provisioned` | runner                                                               | Once the user, address, port, filter and build exist            |
+| `deployment.started`     | runner, and the timer for a restart nobody asked for                 | Every process start; a new `deploymentRunId` each time          |
+| `deployment.healthy`     | runner, then the timer                                               | First successful probe, and every recovery from unhealthy       |
+| `deployment.unhealthy`   | runner, then the timer                                               | A failed probe, with `consecutiveFailures` and `unhealthyForMs` |
+| `deployment.stopped`     | runner for `stop`/`restart`/`down`, timer for a crash or an OOM kill | `reason` is `operator`, `redeploy`, `crash`, `oom` or `removed` |
+| `deployment.removed`     | runner                                                               | `down`, before the deployment's resources go                    |
+| `deployment.heartbeat`   | timer                                                                | Every interval while active                                     |
+| `deployment.went_quiet`  | timer                                                                | Three missed intervals                                          |
+| `egress.denied`          | timer                                                                | Aggregated per destination since the last tick                  |
 
 Attribution is by `contentDigest` — a SHA-256 over every file in the pack — on
 every event, exactly as the contract requires and for the reason it gives:
@@ -321,7 +321,7 @@ table inet lp_egress_<id> {
 
 Four properties worth stating:
 
-- The allowed sets are fed the *same* prefix list that goes into
+- The allowed sets are fed the _same_ prefix list that goes into
   `IPAddressAllow=`, so the set that decides what is reported as denied and the
   set that decides what is permitted cannot drift apart.
 - The chain's policy is `accept` and it contains no verdict beyond `return`. It
@@ -488,21 +488,50 @@ deployment.unhealthy   {"probePath":"/healthz","lastStatusCode":null,"consecutiv
 One full line, to show the envelope every event carries:
 
 ```jsonc
-{"schemaVersion":"1.0","eventId":"evt_01KZH95221E8Y8PQY9WPGQ370H","type":"deployment.healthy",
- "occurredAt":"2026-08-08T18:11:21.803Z","receivedAt":null,"sequence":3,
- "pack":{"packId":"pack_lp_packprobe","version":"0.1.0",
-         "contentDigest":"sha256:30b6a027616d0b4adccd99cd6e753361168407dc2d23a5df23a33fb204ab2542",
-         "formatVersion":"2.0","derivedFrom":null,"installId":"inst_f71d0e731c31",
-         "mutations":{"count":0,"digest":null,"lastAppliedAt":null}},
- "deployment":{"deploymentId":"dep_01KZH95139846JA1YYW0DYTMSG","deploymentRunId":"run_01KZH951PJPKVC82FW78D0HMWX",
-               "workspaceKeyId":"wsk_cec3ec133da6","environment":"development","visibility":"workspace",
-               "runtimeHost":"logicpacks-managed","sdkVersion":null,
-               "firstSeenAt":"2026-08-08T18:11:20.000Z","ageDays":0},
- "conditions":{"providers":[],
-               "runtime":{"language":"node","languageVersion":"22.22.1","os":"linux","arch":"x64","containerized":false},
-               "dependencies":[],"agent":{"role":"installer","provider":"unknown","model":"unknown"},
-               "surface":"logicpacks","locale":"unknown","timezone":"Europe/Berlin"},
- "payload":{"probePath":"/healthz","statusCode":200,"timeToHealthyMs":329,"attempts":1}}
+{
+  "schemaVersion": "1.0",
+  "eventId": "evt_01KZH95221E8Y8PQY9WPGQ370H",
+  "type": "deployment.healthy",
+  "occurredAt": "2026-08-08T18:11:21.803Z",
+  "receivedAt": null,
+  "sequence": 3,
+  "pack": {
+    "packId": "pack_lp_packprobe",
+    "version": "0.1.0",
+    "contentDigest": "sha256:30b6a027616d0b4adccd99cd6e753361168407dc2d23a5df23a33fb204ab2542",
+    "formatVersion": "2.0",
+    "derivedFrom": null,
+    "installId": "inst_f71d0e731c31",
+    "mutations": { "count": 0, "digest": null, "lastAppliedAt": null },
+  },
+  "deployment": {
+    "deploymentId": "dep_01KZH95139846JA1YYW0DYTMSG",
+    "deploymentRunId": "run_01KZH951PJPKVC82FW78D0HMWX",
+    "workspaceKeyId": "wsk_cec3ec133da6",
+    "environment": "development",
+    "visibility": "workspace",
+    "runtimeHost": "logicpacks-managed",
+    "sdkVersion": null,
+    "firstSeenAt": "2026-08-08T18:11:20.000Z",
+    "ageDays": 0,
+  },
+  "conditions": {
+    "providers": [],
+    "runtime": {
+      "language": "node",
+      "languageVersion": "22.22.1",
+      "os": "linux",
+      "arch": "x64",
+      "containerized": false,
+    },
+    "dependencies": [],
+    "agent": { "role": "installer", "provider": "unknown", "model": "unknown" },
+    "surface": "logicpacks",
+    "locale": "unknown",
+    "timezone": "Europe/Berlin",
+  },
+  "payload": { "probePath": "/healthz", "statusCode": 200, "timeToHealthyMs": 329, "attempts": 1 },
+}
 ```
 
 ### The manifest-less path still works
@@ -673,7 +702,7 @@ timer drop-in, the observation table and the telemetry directory:
 
 The shared timer templates and `/var/lib/lp-telemetry` itself are removed once
 no deployment is left that could use them, so a host with nothing deployed
-carries none of this. `--keep-data` keeps the workspace directory *and* the
+carries none of this. `--keep-data` keeps the workspace directory _and_ the
 event file — the events are the deployment's record, and deleting them by
 default while keeping the build would be the wrong half to save.
 
@@ -781,7 +810,7 @@ The three units in `systemctl --failed` (`days-tracker-api`, `run-u175258`,
   starvation, disk quota, journal flooding, or a malicious `run` file. See
   `infra/host/README.md`.
 - **The host's own exposure.** `t3code.service` still runs as root, and the
-  services on `0.0.0.0` are still on `0.0.0.0`. This work stops *deployments*
+  services on `0.0.0.0` are still on `0.0.0.0`. This work stops _deployments_
   reaching them; it does not fix them.
 - **Public exposure of a deployment.** The reported URL is loopback-only. Putting
   a deployment behind the existing `apache2`/`cloudflared` is deliberately out of

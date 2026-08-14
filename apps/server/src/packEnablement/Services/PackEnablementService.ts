@@ -19,9 +19,7 @@ export interface PackEnablementServiceShape {
    * asked for and whether the project has it, which is the only honest thing
    * this can produce without running anything.
    */
-  readonly enable: (
-    input: PackEnableInput,
-  ) => Effect.Effect<PackEnableResult, PackEnablementError>;
+  readonly enable: (input: PackEnableInput) => Effect.Effect<PackEnableResult, PackEnablementError>;
 
   readonly disable: (input: PackDisableInput) => Effect.Effect<void, PackEnablementError>;
 

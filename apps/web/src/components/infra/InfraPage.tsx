@@ -118,9 +118,8 @@ export function InfraPage({ projectId }: { projectId: ProjectId }) {
         <div className="rounded-lg border border-border p-4" data-testid="infra-empty">
           <div className="text-sm font-medium text-foreground">No packs turned on</div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Turning a pack on records that this project uses it and lists what it needs. It does
-            not install anything, set anything up, or check whether you have — that part is
-            still yours.
+            Turning a pack on records that this project uses it and lists what it needs. It does not
+            install anything, set anything up, or check whether you have — that part is still yours.
           </p>
         </div>
       ) : (

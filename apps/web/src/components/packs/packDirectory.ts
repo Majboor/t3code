@@ -92,9 +92,7 @@ function toPack(entry: PackRegistryEntry, manifest: PackManifest): Pack {
   const requiredEnvironment = (manifest.requirements.environment ?? [])
     .filter((variable) => variable.required)
     .map((variable) => variable.purpose);
-  const requiredAccounts = (manifest.requirements.accounts ?? []).map(
-    (account) => account.purpose,
-  );
+  const requiredAccounts = (manifest.requirements.accounts ?? []).map((account) => account.purpose);
 
   return {
     id: entry.packId,

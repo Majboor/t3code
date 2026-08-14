@@ -51,8 +51,9 @@ export function useLocalMonaco(): void {
   }
   configured = true;
 
-  (globalThis as { MonacoEnvironment?: { getWorker: (id: string, label: string) => Worker } }).MonacoEnvironment =
-    { getWorker: (_id, label) => workerFor(label) };
+  (
+    globalThis as { MonacoEnvironment?: { getWorker: (id: string, label: string) => Worker } }
+  ).MonacoEnvironment = { getWorker: (_id, label) => workerFor(label) };
 
   loader.config({ monaco });
 }

@@ -24,7 +24,10 @@ export function findContention(
   options: { readonly now: number; readonly windowMs?: number },
 ): ReadonlyArray<FileContention> {
   const windowMs = options.windowMs ?? CONTENTION_WINDOW_MS;
-  const byPath = new Map<string, Map<string, { userId: string; displayName: string; touchedAt: string }>>();
+  const byPath = new Map<
+    string,
+    Map<string, { userId: string; displayName: string; touchedAt: string }>
+  >();
 
   for (const touch of touches) {
     const touchedAt = Date.parse(touch.touchedAt);

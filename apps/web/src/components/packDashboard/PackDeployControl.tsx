@@ -104,8 +104,8 @@ export function PackDeployControl({
       </div>
 
       <p className="mt-1 text-xs leading-5 text-muted-foreground">
-        What this pack says it takes to run. The host and its credentials are yours to supply —
-        the pack declares what it needs, not where it goes.
+        What this pack says it takes to run. The host and its credentials are yours to supply — the
+        pack declares what it needs, not where it goes.
       </p>
 
       {required.length === 0 ? null : (
@@ -122,7 +122,8 @@ export function PackDeployControl({
                 <span className="min-w-0">
                   <code className="text-foreground">{entry.name}</code>
                   <span className="text-muted-foreground">
-                    {entry.secret ? " (secret — keep it off the command line)" : ""} — {entry.purpose}
+                    {entry.secret ? " (secret — keep it off the command line)" : ""} —{" "}
+                    {entry.purpose}
                   </span>
                 </span>
               </li>

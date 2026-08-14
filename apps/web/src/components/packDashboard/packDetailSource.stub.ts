@@ -11,11 +11,7 @@ import {
   type PackVisibility,
 } from "@t3tools/contracts";
 
-import type {
-  PackPublication,
-  PackReleaseHistory,
-  PackVisibilityScope,
-} from "@t3tools/contracts";
+import type { PackPublication, PackReleaseHistory, PackVisibilityScope } from "@t3tools/contracts";
 
 import type {
   PackDetail,

@@ -28,9 +28,7 @@ export type PublishPackShape = "web" | "tui";
  * about a requirement — a secret is satisfied from the server secret store and
  * must never be typed where a value would be stored.
  */
-export function parseRequirements(
-  raw: string,
-): ReadonlyArray<{ name: string; secret: boolean }> {
+export function parseRequirements(raw: string): ReadonlyArray<{ name: string; secret: boolean }> {
   const seen = new Set<string>();
   const parsed: Array<{ name: string; secret: boolean }> = [];
   for (const line of raw.split("\n")) {
@@ -107,7 +105,10 @@ export function findPublishProblems(
     });
   }
   if (input.summary.trim().length < SUMMARY_MINIMUM) {
-    problems.push({ field: "summary", why: "Say what it does in a line somebody could search for." });
+    problems.push({
+      field: "summary",
+      why: "Say what it does in a line somebody could search for.",
+    });
   }
   if (input.handover.trim().length < HANDOVER_MINIMUM) {
     problems.push({
@@ -174,9 +175,7 @@ export function buildManifest(input: PublishPackInput): PackManifest {
     ],
     runtime: {
       target: "none",
-      commands: input.startCommand.trim()
-        ? { start: { command: input.startCommand.trim() } }
-        : {},
+      commands: input.startCommand.trim() ? { start: { command: input.startCommand.trim() } } : {},
     },
     permissions: {},
     verification: {

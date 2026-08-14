@@ -18,9 +18,17 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
-import { bodyText, createHarness, createReporter, openIsolatedSession, sleep } from "./lib/e2e-harness.mjs";
+import {
+  bodyText,
+  createHarness,
+  createReporter,
+  openIsolatedSession,
+  sleep,
+} from "./lib/e2e-harness.mjs";
 
-const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))("playwright");
+const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))(
+  "playwright",
+);
 
 const BASE_URL = process.env["T3_E2E_BASE_URL"] ?? "http://localhost:5733";
 const ANALYTICS_URL =
@@ -43,10 +51,20 @@ const { signUp, addProject, openProject, sendAgentMessage } = createHarness({
 });
 
 const CLI_ENTRY = path.join(
-  path.dirname(new URL(import.meta.url).pathname), "..", "apps", "server", "src", "bin.ts",
+  path.dirname(new URL(import.meta.url).pathname),
+  "..",
+  "apps",
+  "server",
+  "src",
+  "bin.ts",
 );
 const PACK_CLI = path.join(
-  path.dirname(new URL(import.meta.url).pathname), "..", "packages", "pack-cli", "src", "bin.ts",
+  path.dirname(new URL(import.meta.url).pathname),
+  "..",
+  "packages",
+  "pack-cli",
+  "src",
+  "bin.ts",
 );
 
 function t3(args) {
@@ -85,7 +103,10 @@ function projectIdFor() {
   return (
     execFileSync(
       "sqlite3",
-      [database, `select project_id from projection_projects where workspace_root = '${APP_DIR}' and deleted_at is null limit 1;`],
+      [
+        database,
+        `select project_id from projection_projects where workspace_root = '${APP_DIR}' and deleted_at is null limit 1;`,
+      ],
       { encoding: "utf8" },
     ).trim() || null
   );
@@ -93,7 +114,10 @@ function projectIdFor() {
 
 // ── the run ─────────────────────────────────────────────────────────────────
 
-const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(() => true, () => false);
+const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(
+  () => true,
+  () => false,
+);
 if (!reachable) {
   console.error(`Nothing is answering at ${BASE_URL}. Start one with \`bun run dev\`.`);
   process.exit(1);
@@ -119,7 +143,10 @@ try {
       "",
     ].join("\n"),
   );
-  check("the app exists and reports nothing", !readFileSync(path.join(APP_DIR, "app.py"), "utf8").includes("analytics"));
+  check(
+    "the app exists and reports nothing",
+    !readFileSync(path.join(APP_DIR, "app.py"), "utf8").includes("analytics"),
+  );
 
   phase("The project, and a stream for it to report to");
   check("the account signs up", await signUp(account, ACCOUNT), ACCOUNT);
@@ -130,9 +157,16 @@ try {
 
   // Step one of the pack's own instructions: declare before anything sends.
   const declared = t3([
-    "analytics", "declare", "--project", projectId, "--name", STREAM,
-    "--purpose", "Which pages get read",
-    "--properties", "path:string:required,seconds:number",
+    "analytics",
+    "declare",
+    "--project",
+    projectId,
+    "--name",
+    STREAM,
+    "--purpose",
+    "Which pages get read",
+    "--properties",
+    "path:string:required,seconds:number",
   ]);
   const ingestKey = /Ingest key \(shown once\): (\S+)/.exec(declared)?.[1] ?? null;
   check("the stream is declared and hands back a key", Boolean(ingestKey));
@@ -140,7 +174,11 @@ try {
 
   phase("Hand the pack's integration prompt to the agent");
   const prompt = integrationPrompt();
-  check("the pack has an integration prompt to hand over", prompt.length > 200, `${prompt.length} characters`);
+  check(
+    "the pack has an integration prompt to hand over",
+    prompt.length > 200,
+    `${prompt.length} characters`,
+  );
   check("A opens the project", await openProject(account.page));
 
   const instruction = [
@@ -168,20 +206,31 @@ try {
     reports = source.includes(ANALYTICS_URL) && source.includes(ingestKey);
     if (!reports) await sleep(6_000);
   }
-  check("app.py is still there when the turn ends", existsSync(appPath),
-    existsSync(appPath) ? "" : `directory holds: ${readdirSync(APP_DIR).join(", ")}`);
+  check(
+    "app.py is still there when the turn ends",
+    existsSync(appPath),
+    existsSync(appPath) ? "" : `directory holds: ${readdirSync(APP_DIR).join(", ")}`,
+  );
   // A turn that never ran and a turn that ran badly look the same on disk, so
   // say which before reporting the file as unchanged.
   const thread = await bodyText(account.page);
-  const providerTrouble = /Provider turn start failed|Timed out waiting for initialize|read-only|waiting for the workspace lead/.exec(thread);
+  const providerTrouble =
+    /Provider turn start failed|Timed out waiting for initialize|read-only|waiting for the workspace lead/.exec(
+      thread,
+    );
   check("the turn reached a provider", providerTrouble === null, providerTrouble?.[0] ?? "");
-  check("the app now posts to the analytics endpoint", reports,
-    reports ? "" : `still: ${source.replace(/\s+/g, " ").slice(0, 120)}`);
+  check(
+    "the app now posts to the analytics endpoint",
+    reports,
+    reports ? "" : `still: ${source.replace(/\s+/g, " ").slice(0, 120)}`,
+  );
   check("it sends the declared properties", /path/.test(source) && /seconds/.test(source));
   // The pack says reporting must never break serving; check it was heeded.
-  check("it wrapped the report so a failure cannot break the page",
+  check(
+    "it wrapped the report so a failure cannot break the page",
     /try\s*:/.test(source) && /except/.test(source),
-    /try\s*:/.test(source) ? "" : "no try/except around the post");
+    /try\s*:/.test(source) ? "" : "no try/except around the post",
+  );
 
   phase("Run it and read a few pages");
   const python = execFileSync("python3", ["-c", "import sys; print(sys.executable)"], {
@@ -208,17 +257,36 @@ try {
   const runLog = existsSync(path.join(APP_DIR, "run.log"))
     ? readFileSync(path.join(APP_DIR, "run.log"), "utf8")
     : "";
-  check("the app still serves its pages", served === 4,
-    served === 4 ? "" : `${served}/4 — ${runLog.replace(/\s+/g, " ").slice(-140)}`);
+  check(
+    "the app still serves its pages",
+    served === 4,
+    served === 4 ? "" : `${served}/4 — ${runLog.replace(/\s+/g, " ").slice(-140)}`,
+  );
   await sleep(4_000);
 
   phase("Ask the workspace what happened");
   const counted = t3([
-    "analytics", "query", "--project", projectId, "--stream", STREAM,
-    "--aggregate", "count", "--group-by", "path",
+    "analytics",
+    "query",
+    "--project",
+    projectId,
+    "--stream",
+    STREAM,
+    "--aggregate",
+    "count",
+    "--group-by",
+    "path",
   ]);
-  check("the reads reached the workspace", /middle/.test(counted), counted.replace(/\n/g, " | ").slice(0, 120));
-  check("the page read twice is counted twice", /middle\s+2/.test(counted), counted.replace(/\n/g, " | ").slice(0, 120));
+  check(
+    "the reads reached the workspace",
+    /middle/.test(counted),
+    counted.replace(/\n/g, " | ").slice(0, 120),
+  );
+  check(
+    "the page read twice is counted twice",
+    /middle\s+2/.test(counted),
+    counted.replace(/\n/g, " | ").slice(0, 120),
+  );
 
   phase("Result");
   console.log(`  workspace: ${APP_DIR}`);

@@ -2452,11 +2452,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
           "--count",
           range,
         ]),
-        executeGit("GitCore.compareBranches.numstat", cwd, [
-          "diff",
-          "--numstat",
-          range,
-        ]),
+        executeGit("GitCore.compareBranches.numstat", cwd, ["diff", "--numstat", range]),
       ]);
 
       const [behindRaw, aheadRaw] = counts.stdout.trim().split(/\s+/);

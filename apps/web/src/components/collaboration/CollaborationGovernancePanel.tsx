@@ -1,5 +1,4 @@
-import {
-  UsersRoundIcon, CheckIcon, GitBranchIcon, XIcon } from "lucide-react";
+import { UsersRoundIcon, CheckIcon, GitBranchIcon, XIcon } from "lucide-react";
 import type {
   EnvironmentId,
   CollaborationApprovalMode,
@@ -282,9 +281,7 @@ export function CollaborationGovernancePanel({
                 approval={approval}
                 canDecide={canDecide}
                 onDecide={(decision) => {
-                  decide(approval.id, decision).catch(
-                    reportFailure("Could not decide the prompt"),
-                  );
+                  decide(approval.id, decision).catch(reportFailure("Could not decide the prompt"));
                 }}
               />
             ))
@@ -302,7 +299,11 @@ export function CollaborationGovernancePanel({
           </div>
           <div className="grid gap-1">
             {contested.slice(0, 4).map((entry) => (
-              <div key={entry.path} className="text-[11px]" data-testid="collaboration-contended-file">
+              <div
+                key={entry.path}
+                className="text-[11px]"
+                data-testid="collaboration-contended-file"
+              >
                 <span className="font-mono text-foreground">{entry.path}</span>
                 <span className="text-muted-foreground">
                   {" — "}

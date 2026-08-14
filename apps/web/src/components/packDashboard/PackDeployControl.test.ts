@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildDeployTargetCommand, listDeployInputs } from "./PackDeployControl";
 
-const runtime = (commands: Record<string, unknown>) =>
-  ({ target: "python", commands }) as never;
+const runtime = (commands: Record<string, unknown>) => ({ target: "python", commands }) as never;
 
 describe("buildDeployTargetCommand", () => {
   it("is null when the pack declares nothing to start", () => {
@@ -25,7 +24,9 @@ describe("buildDeployTargetCommand", () => {
   });
 
   it("leaves a cwd of . out, since that is where the command already runs", () => {
-    const command = buildDeployTargetCommand(runtime({ start: { command: "npm start", cwd: "." } }));
+    const command = buildDeployTargetCommand(
+      runtime({ start: { command: "npm start", cwd: "." } }),
+    );
     expect(command).toContain('"npm start"');
     expect(command).not.toContain("cd .");
   });

@@ -64,8 +64,7 @@ const makeService = Effect.gen(function* () {
         )
         .pipe(
           Effect.mapError(
-            (error) =>
-              new PackEnablementError({ code: "pack-not-found", message: error.message }),
+            (error) => new PackEnablementError({ code: "pack-not-found", message: error.message }),
           ),
         );
 

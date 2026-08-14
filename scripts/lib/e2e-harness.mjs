@@ -26,7 +26,9 @@ export function createReporter() {
     },
     check(step, ok, detail = "") {
       results.push({ phase: currentPhase, step, ok });
-      console.log(`  ${ok ? "[32mPASS[0m" : "[31mFAIL[0m"}  ${step}${detail ? `  — ${detail}` : ""}`);
+      console.log(
+        `  ${ok ? "[32mPASS[0m" : "[31mFAIL[0m"}  ${step}${detail ? `  — ${detail}` : ""}`,
+      );
       return ok;
     },
     skip(step, reason) {
@@ -55,7 +57,12 @@ export async function openIsolatedSession(browser, label) {
 }
 
 export async function bodyText(page) {
-  return (await page.locator("body").innerText().catch(() => "")) ?? "";
+  return (
+    (await page
+      .locator("body")
+      .innerText()
+      .catch(() => "")) ?? ""
+  );
 }
 
 export function createHarness({
@@ -170,17 +177,15 @@ export function createHarness({
 
   async function visibleFileNames(page) {
     await ensureWorkspacePanelOpen(page);
-    return page
-      .locator("button")
-      .evaluateAll((nodes) =>
-        nodes
-          .map((node) => (node.textContent ?? "").trim())
-          // A row in a git repository carries a status badge and diff counts
-          // after the name ("notes.txtU"), so match the name as a prefix rather
-          // than expecting the whole label to be a file name.
-          .map((text) => /^[\w.-]+\.(?:txt|md|json|js|ts|py|html)/.exec(text)?.[0] ?? "")
-          .filter(Boolean),
-      );
+    return page.locator("button").evaluateAll((nodes) =>
+      nodes
+        .map((node) => (node.textContent ?? "").trim())
+        // A row in a git repository carries a status badge and diff counts
+        // after the name ("notes.txtU"), so match the name as a prefix rather
+        // than expecting the whole label to be a file name.
+        .map((text) => /^[\w.-]+\.(?:txt|md|json|js|ts|py|html)/.exec(text)?.[0] ?? "")
+        .filter(Boolean),
+    );
   }
 
   /**
@@ -229,7 +234,10 @@ export function createHarness({
       name,
     );
     if (index < 0) return false;
-    await buttons.nth(index).click().catch(() => undefined);
+    await buttons
+      .nth(index)
+      .click()
+      .catch(() => undefined);
     await sleep(2_500);
     return true;
   }
@@ -240,7 +248,8 @@ export function createHarness({
    * the tree only lists a folder's children once it is expanded.
    */
   async function editFileViaUi(page, { directory = null, file, contents }) {
-    if (!(await ensureWorkspacePanelOpen(page))) return { ok: false, why: "workspace panel never opened" };
+    if (!(await ensureWorkspacePanelOpen(page)))
+      return { ok: false, why: "workspace panel never opened" };
     if (directory && !(await clickTreeEntry(page, directory))) {
       return { ok: false, why: `no tree row named ${directory}` };
     }
@@ -352,7 +361,11 @@ export function createHarness({
     await sleep(5_000);
     const codes = await page.locator("code").allInnerTexts();
     const url = codes.find((text) => text.includes("invite=")) ?? null;
-    await page.locator('button:has-text("Close")').first().click().catch(() => undefined);
+    await page
+      .locator('button:has-text("Close")')
+      .first()
+      .click()
+      .catch(() => undefined);
     return url;
   }
 

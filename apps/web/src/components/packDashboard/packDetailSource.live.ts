@@ -85,13 +85,16 @@ export function createLivePackDetailSource(
         const history = {
           packId: detail.pack.packId,
           latestVersion: releases[0]?.version ?? detail.manifest.identity.version,
-          releases: releases.length > 0 ? releases : [
-            {
-              version: detail.manifest.identity.version,
-              cutAt: detail.manifest.provenance.extractedAt,
-              publications: [],
-            },
-          ],
+          releases:
+            releases.length > 0
+              ? releases
+              : [
+                  {
+                    version: detail.manifest.identity.version,
+                    cutAt: detail.manifest.provenance.extractedAt,
+                    publications: [],
+                  },
+                ],
         } as unknown as PackReleaseHistory;
 
         return { manifest: detail.manifest, history };

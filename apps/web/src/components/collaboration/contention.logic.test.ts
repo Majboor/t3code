@@ -10,10 +10,9 @@ const touch = (path: string, userId: string, minutesAgo: number) =>
 
 describe("findContention", () => {
   it("finds a file two people are both working on", () => {
-    const contested = findContention(
-      [touch("app.py", "ana", 2), touch("app.py", "bo", 1)],
-      { now: NOW },
-    );
+    const contested = findContention([touch("app.py", "ana", 2), touch("app.py", "bo", 1)], {
+      now: NOW,
+    });
     expect(contested).toHaveLength(1);
     expect(contested[0]?.path).toBe("app.py");
     expect(contested[0]?.people.map((person) => person.userId)).toEqual(["bo", "ana"]);
@@ -29,18 +28,16 @@ describe("findContention", () => {
 
   it("forgets what happened yesterday", () => {
     // The information is only worth having while both are still working.
-    const contested = findContention(
-      [touch("app.py", "ana", 60 * 24), touch("app.py", "bo", 1)],
-      { now: NOW },
-    );
+    const contested = findContention([touch("app.py", "ana", 60 * 24), touch("app.py", "bo", 1)], {
+      now: NOW,
+    });
     expect(contested).toEqual([]);
   });
 
   it("keeps files apart", () => {
-    const contested = findContention(
-      [touch("a.py", "ana", 1), touch("b.py", "bo", 1)],
-      { now: NOW },
-    );
+    const contested = findContention([touch("a.py", "ana", 1), touch("b.py", "bo", 1)], {
+      now: NOW,
+    });
     expect(contested).toEqual([]);
   });
 
@@ -59,8 +56,10 @@ describe("findContention", () => {
 
   it("ignores a timestamp it cannot read rather than treating it as now", () => {
     const contested = findContention(
-      [{ path: "a.py", userId: "ana", displayName: "ana", touchedAt: "not a date" } as never,
-       touch("a.py", "bo", 1)],
+      [
+        { path: "a.py", userId: "ana", displayName: "ana", touchedAt: "not a date" } as never,
+        touch("a.py", "bo", 1),
+      ],
       { now: NOW },
     );
     expect(contested).toEqual([]);

@@ -4,17 +4,17 @@ Groundwork for deploying packs onto a shared test host. Each workspace gets a
 dedicated unprivileged Linux user, a directory only that user can enter, and a
 hardened systemd unit that confines its service. This is the substrate the
 later "deploy a pack" work sits on; it deliberately stops short of deciding
-*what* runs or *when*.
+_what_ runs or _when_.
 
 ## Contents
 
-| File | Purpose |
-| --- | --- |
-| `lp-common.sh` | Shared constants, id validation, disk guard. Sourced, not executed. |
-| `lp-provision-workspace.sh` | Creates the user, directory, unit template and limits drop-in. |
-| `lp-workspace@.service` | Hardened systemd template, instantiated per workspace. |
-| `lp-verify-isolation.sh` | Runs the isolation proofs from inside a live workspace service. |
-| `lp-teardown-workspace.sh` | Removes exactly what provisioning created. |
+| File                        | Purpose                                                             |
+| --------------------------- | ------------------------------------------------------------------- |
+| `lp-common.sh`              | Shared constants, id validation, disk guard. Sourced, not executed. |
+| `lp-provision-workspace.sh` | Creates the user, directory, unit template and limits drop-in.      |
+| `lp-workspace@.service`     | Hardened systemd template, instantiated per workspace.              |
+| `lp-verify-isolation.sh`    | Runs the isolation proofs from inside a live workspace service.     |
+| `lp-teardown-workspace.sh`  | Removes exactly what provisioning created.                          |
 
 Everything created on a host carries the `lp-` prefix so an operator with no
 knowledge of this project can identify and remove it.
@@ -40,14 +40,14 @@ if the derived username would exceed the 32-character limit `useradd` enforces.
 
 ## What provisioning creates
 
-| Resource | Value | Notes |
-| --- | --- | --- |
-| User | `lp-<id>` | System account (uid < 1000), `/usr/sbin/nologin`, password locked. Cannot SSH in. |
-| Group | `lp-<id>` | Primary group, no other members. |
-| Directory | `/srv/lp-workspaces/lp-<id>` | Mode `0700`, owned by the workspace user. |
-| Parent | `/srv/lp-workspaces` | Root-owned `0755`. Traversable, not writable by workspaces. |
-| Unit template | `/etc/systemd/system/lp-workspace@.service` | Shared by all workspaces. |
-| Limits drop-in | `lp-workspace@<id>.service.d/10-limits.conf` | Per-workspace `MemoryHigh`/`MemoryMax`/`TasksMax`. |
+| Resource       | Value                                        | Notes                                                                             |
+| -------------- | -------------------------------------------- | --------------------------------------------------------------------------------- |
+| User           | `lp-<id>`                                    | System account (uid < 1000), `/usr/sbin/nologin`, password locked. Cannot SSH in. |
+| Group          | `lp-<id>`                                    | Primary group, no other members.                                                  |
+| Directory      | `/srv/lp-workspaces/lp-<id>`                 | Mode `0700`, owned by the workspace user.                                         |
+| Parent         | `/srv/lp-workspaces`                         | Root-owned `0755`. Traversable, not writable by workspaces.                       |
+| Unit template  | `/etc/systemd/system/lp-workspace@.service`  | Shared by all workspaces.                                                         |
+| Limits drop-in | `lp-workspace@<id>.service.d/10-limits.conf` | Per-workspace `MemoryHigh`/`MemoryMax`/`TasksMax`.                                |
 
 Workspaces live under `/srv`, not `/home`, because the unit sets
 `ProtectHome=yes` — a home-directory workspace would be invisible to its own
@@ -204,12 +204,12 @@ teardown cycle.
 
 The cause is worth stating plainly, because it drives the recommendation below:
 
-| Consumer | Size |
-| --- | --- |
-| Docker images (23) | 107.8 GB |
-| Docker build cache (159 entries) | 83.4 GB |
-| Docker volumes | 1.2 GB |
-| **Docker total** | **~192 GB** |
+| Consumer                         | Size        |
+| -------------------------------- | ----------- |
+| Docker images (23)               | 107.8 GB    |
+| Docker build cache (159 entries) | 83.4 GB     |
+| Docker volumes                   | 1.2 GB      |
+| **Docker total**                 | **~192 GB** |
 
 Roughly **70% of the used disk is Docker**, dominated by ~15GB GPU worker
 images (`camera-gpu-worker` v1–v6, `splat-gpu-worker` v2–v13). Of that, ~12.9GB
@@ -290,7 +290,7 @@ The honest comparison, given Docker is already installed:
 A default `docker run` shares the kernel exactly as systemd services do, and
 runs as root inside the container unless configured otherwise. The hardened
 unit above already has zero capabilities, seccomp filtering, a read-only
-filesystem, PID hiding and a locked cgroup — a default container has *fewer* of
+filesystem, PID hiding and a locked cgroup — a default container has _fewer_ of
 those, not more. Docker's genuine advantages are filesystem namespacing (a
 workspace sees only its own root, no host paths at all) and easy per-container
 network isolation, which was the gap identified above and has since been
@@ -318,9 +318,9 @@ genuinely better dependency isolation — under systemd every workspace shares
 the host's Node, Python and system libraries, which becomes painful the moment
 two packs need different runtime versions.
 
-**The deciding trade-off.** Containers are the better answer *in general*, and
+**The deciding trade-off.** Containers are the better answer _in general_, and
 if this host had 200G free I would recommend them without much hesitation —
-chiefly for network isolation and dependency independence. On *this* host, with
+chiefly for network isolation and dependency independence. On _this_ host, with
 17G free and Docker already the reason it is full, provisioning a container per
 workspace is the wrong tool. The systemd path delivers most of the isolation
 value at essentially zero disk cost, and its two real gaps (network, disk quota)

@@ -74,14 +74,21 @@ describe("aggregate", () => {
 
   it("splits by the grouping property, largest first", () => {
     const buckets = aggregate(events, { aggregate: "count", groupBy: "path" });
-    assert.deepStrictEqual(buckets.map((bucket) => [bucket.group, bucket.value]), [
-      ["/a", 2],
-      ["/b", 1],
-    ]);
+    assert.deepStrictEqual(
+      buckets.map((bucket) => [bucket.group, bucket.value]),
+      [
+        ["/a", 2],
+        ["/b", 1],
+      ],
+    );
   });
 
   it("sums and averages the value property per group", () => {
-    const summed = aggregate(events, { aggregate: "sum", valueProperty: "seconds", groupBy: "path" });
+    const summed = aggregate(events, {
+      aggregate: "sum",
+      valueProperty: "seconds",
+      groupBy: "path",
+    });
     assert.strictEqual(summed.find((bucket) => bucket.group === "/a")?.value, 30);
 
     const averaged = aggregate(events, {

@@ -622,8 +622,7 @@ export const CollaborationActivityVisibilityInput = Schema.Struct({
   activityId: CollaborationActivityId,
   hidden: Schema.Boolean,
 });
-export type CollaborationActivityVisibilityInput =
-  typeof CollaborationActivityVisibilityInput.Type;
+export type CollaborationActivityVisibilityInput = typeof CollaborationActivityVisibilityInput.Type;
 
 export const CollaborationActivityVisibilityResult = Schema.Struct({
   activity: CollaborationActivity,

@@ -22,14 +22,11 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  createHarness,
-  createReporter,
-  openIsolatedSession,
-  sleep,
-} from "./lib/e2e-harness.mjs";
+import { createHarness, createReporter, openIsolatedSession, sleep } from "./lib/e2e-harness.mjs";
 
-const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))("playwright");
+const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))(
+  "playwright",
+);
 
 const BASE_URL = process.env["T3_E2E_BASE_URL"] ?? "http://localhost:5733";
 const RUN_ID = String(Date.now());
@@ -208,7 +205,6 @@ function buildDeployCommand() {
   return `tar czf - --exclude .git . | ssh -o BatchMode=yes -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} ${JSON.stringify(remote)}`;
 }
 
-
 /**
  * The route carries the project id once a project is open. The projection is
  * the fallback: the deploy CLI needs the id, and a link that has not rendered
@@ -221,7 +217,10 @@ async function readProjectId(page) {
   if (!existsSync(database)) return null;
   const row = execFileSync(
     "sqlite3",
-    [database, `select project_id from projection_projects where workspace_root = '${APP_DIR}' and deleted_at is null limit 1;`],
+    [
+      database,
+      `select project_id from projection_projects where workspace_root = '${APP_DIR}' and deleted_at is null limit 1;`,
+    ],
     { encoding: "utf8" },
   ).trim();
   return row || null;
@@ -239,7 +238,11 @@ function deploy(targetId) {
     t3(["deploy", "run", targetId]);
     return { ok: true, build, output: "" };
   } catch (error) {
-    return { ok: false, build, output: `${error?.stdout ?? ""}${error?.stderr ?? ""}`.slice(0, 300) };
+    return {
+      ok: false,
+      build,
+      output: `${error?.stdout ?? ""}${error?.stderr ?? ""}`.slice(0, 300),
+    };
   }
 }
 
@@ -247,8 +250,11 @@ function deploy(targetId) {
 function checkDeployed(label, result) {
   check(`${label} deploy succeeds`, result.ok, result.ok ? "" : result.output);
   const live = liveBuild();
-  check(`${label} deployment serves the build just shipped`, live === result.build,
-    live === result.build ? "" : `serving ${live || "nothing"}, shipped ${result.build}`);
+  check(
+    `${label} deployment serves the build just shipped`,
+    live === result.build,
+    live === result.build ? "" : `serving ${live || "nothing"}, shipped ${result.build}`,
+  );
   return result.ok && live === result.build;
 }
 
@@ -289,12 +295,14 @@ if (!SSH_HOST) {
   process.exit(1);
 }
 
-const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(() => true, () => false);
+const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(
+  () => true,
+  () => false,
+);
 if (!reachable) {
   console.error(`Nothing is answering at ${BASE_URL}. Start one with \`bun run dev\`.`);
   process.exit(1);
 }
-
 
 const browser = await chromium.launch();
 const accountA = await openIsolatedSession(browser, "A");
@@ -320,13 +328,28 @@ try {
   if (!projectId) throw new Error("no project id to attach a deploy target to");
 
   phase("Preflight, the way the pack asks for it");
-  const remoteTools = ssh("command -v python3 gunicorn >/dev/null && echo tools-ok || echo tools-missing");
+  const remoteTools = ssh(
+    "command -v python3 gunicorn >/dev/null && echo tools-ok || echo tools-missing",
+  );
   check("the host has python3 and gunicorn", remoteTools.includes("tools-ok"), remoteTools);
   const portFree = ssh(`ss -ltn | grep -q ':${PORT} ' && echo busy || echo free`);
-  check("the deploy port is free before shipping", portFree.includes("free"), `port ${PORT}: ${portFree}`);
+  check(
+    "the deploy port is free before shipping",
+    portFree.includes("free"),
+    `port ${PORT}: ${portFree}`,
+  );
 
   phase("A: register the deploy target and deploy");
-  const added = t3(["deploy", "add", "--project", projectId, "--name", `VPS ${RUN_ID}`, "--command", buildDeployCommand()]);
+  const added = t3([
+    "deploy",
+    "add",
+    "--project",
+    projectId,
+    "--name",
+    `VPS ${RUN_ID}`,
+    "--command",
+    buildDeployCommand(),
+  ]);
   const targetId = /target (\S+)/.exec(added)?.[1] ?? null;
   check("a deploy target is registered", Boolean(targetId), targetId ?? added);
   if (!targetId) throw new Error("no deploy target to run");
@@ -337,8 +360,14 @@ try {
     check(`${route} answers 200`, pageStatus(route) === "200", pageStatus(route));
   }
   const home = fetchPage("/");
-  check("jinja2 rendered the page, not the template", home.includes('data-page="home"') && !home.includes("{%"));
-  check("the loop rendered its items", ["first", "second", "third"].every((item) => fetchPage("/items").includes(item)));
+  check(
+    "jinja2 rendered the page, not the template",
+    home.includes('data-page="home"') && !home.includes("{%"),
+  );
+  check(
+    "the loop rendered its items",
+    ["first", "second", "third"].every((item) => fetchPage("/items").includes(item)),
+  );
 
   phase("It is still up after the session that started it closed");
   await sleep(3_000);
@@ -365,15 +394,19 @@ try {
     contents: `{% extends "base.html" %}{% block body %}<h1 data-page="home">${bHeading}</h1>{% endblock %}\n`,
   });
   check("B edits the template in the editor", bEdited.ok, bEdited.why);
-  check("B's edit reached the disk",
-    readFileSync(path.join(APP_DIR, "templates/index.html"), "utf8").includes(bHeading));
+  check(
+    "B's edit reached the disk",
+    readFileSync(path.join(APP_DIR, "templates/index.html"), "utf8").includes(bHeading),
+  );
   checkDeployed("B's re", deploy(targetId));
   check("B's change is live on the deployment", fetchPage("/").includes(bHeading));
 
   phase("B works on their own branch and merges it back");
   check("A is back in the project", await openProject(accountA.page));
-  check("A puts the workspace on personal branches",
-    await setApprovalMode(accountA.page, "Own branch"));
+  check(
+    "A puts the workspace on personal branches",
+    await setApprovalMode(accountA.page, "Own branch"),
+  );
   const branch = `collab/pack-b-${RUN_ID}`;
   gitInWorkspace("checkout", "-b", branch);
   const branchHeading = `from-branch-${RUN_ID}`;
@@ -384,11 +417,15 @@ try {
   gitInWorkspace("commit", "-am", "B edits about on their branch");
   check("the branch holds B's change", gitInWorkspace("branch", "--list").includes(branch));
   gitInWorkspace("checkout", "main");
-  check("main does not have it yet",
-    !readFileSync(path.join(APP_DIR, "templates/about.html"), "utf8").includes(branchHeading));
+  check(
+    "main does not have it yet",
+    !readFileSync(path.join(APP_DIR, "templates/about.html"), "utf8").includes(branchHeading),
+  );
   gitInWorkspace("merge", "--no-ff", "-m", "merge B's branch", branch);
-  check("the merge brings it to main",
-    readFileSync(path.join(APP_DIR, "templates/about.html"), "utf8").includes(branchHeading));
+  check(
+    "the merge brings it to main",
+    readFileSync(path.join(APP_DIR, "templates/about.html"), "utf8").includes(branchHeading),
+  );
   checkDeployed("the merged branch's", deploy(targetId));
   check("the merged change is live", fetchPage("/about").includes(branchHeading));
 
@@ -405,17 +442,26 @@ try {
 
     const cHeading = `from-c-${RUN_ID}`;
     const cFile = "templates/items.html";
-    check("C sends a prompt to the agent",
-      await sendAgentMessage(accountC.page,
-        `Edit ${cFile} so the h1 text is exactly ${cHeading}. Keep the extends and block tags. Do not ask questions.`));
+    check(
+      "C sends a prompt to the agent",
+      await sendAgentMessage(
+        accountC.page,
+        `Edit ${cFile} so the h1 text is exactly ${cHeading}. Keep the extends and block tags. Do not ask questions.`,
+      ),
+    );
     const deadline = Date.now() + AGENT_TURN_MS;
     let applied = false;
     while (Date.now() < deadline && !applied) {
       applied = readFileSync(path.join(APP_DIR, cFile), "utf8").includes(cHeading);
       if (!applied) await sleep(5_000);
     }
-    check("the agent made C's change on disk", applied,
-      applied ? "" : readFileSync(path.join(APP_DIR, cFile), "utf8").replace(/\s+/g, " ").slice(0, 120));
+    check(
+      "the agent made C's change on disk",
+      applied,
+      applied
+        ? ""
+        : readFileSync(path.join(APP_DIR, cFile), "utf8").replace(/\s+/g, " ").slice(0, 120),
+    );
     if (applied) {
       checkDeployed("C's", deploy(targetId));
       check("C's change is live", fetchPage("/items").includes(cHeading));
@@ -427,8 +473,11 @@ try {
     check(`${route} still answers 200`, pageStatus(route) === "200");
   }
   const runs = t3(["deploy", "runs", "--target", targetId]);
-  check("every deploy is recorded", (runs.match(/succeeded/g) ?? []).length >= 3,
-    `${(runs.match(/succeeded/g) ?? []).length} succeeded`);
+  check(
+    "every deploy is recorded",
+    (runs.match(/succeeded/g) ?? []).length >= 3,
+    `${(runs.match(/succeeded/g) ?? []).length} succeeded`,
+  );
 
   phase("Result");
   console.log(`  workspace: ${APP_DIR}`);

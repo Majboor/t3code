@@ -21,9 +21,17 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
-import { bodyText, createHarness, createReporter, openIsolatedSession, sleep } from "./lib/e2e-harness.mjs";
+import {
+  bodyText,
+  createHarness,
+  createReporter,
+  openIsolatedSession,
+  sleep,
+} from "./lib/e2e-harness.mjs";
 
-const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))("playwright");
+const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))(
+  "playwright",
+);
 
 const BASE_URL = process.env["T3_E2E_BASE_URL"] ?? "http://localhost:5733";
 const RUN_ID = String(Date.now());
@@ -42,7 +50,12 @@ const { signUp, addProject, openProject, sendAgentMessage } = createHarness({
 });
 
 const PACK_CLI = path.join(
-  path.dirname(new URL(import.meta.url).pathname), "..", "packages", "pack-cli", "src", "bin.ts",
+  path.dirname(new URL(import.meta.url).pathname),
+  "..",
+  "packages",
+  "pack-cli",
+  "src",
+  "bin.ts",
 );
 
 /** The pack's own words. If these do not steer the agent, the pack is decoration. */
@@ -82,7 +95,10 @@ async function waitForReply(page, matches, timeoutMs) {
 
 // ── the run ─────────────────────────────────────────────────────────────────
 
-const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(() => true, () => false);
+const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(
+  () => true,
+  () => false,
+);
 if (!reachable) {
   console.error(`Nothing is answering at ${BASE_URL}. Start one with \`bun run dev\`.`);
   process.exit(1);
@@ -113,11 +129,11 @@ try {
       "def main():",
       "    while True:",
       "        render()",
-      '        key = sys.stdin.readline().strip()',
+      "        key = sys.stdin.readline().strip()",
       '        if key == "q":',
       "            return",
       '        if key == "a":',
-      '            TASKS.append(sys.stdin.readline().strip())',
+      "            TASKS.append(sys.stdin.readline().strip())",
       '        elif key == "d" and TASKS:',
       "            TASKS.pop(0)",
       "",
@@ -131,10 +147,12 @@ try {
   // Look for the constructs that would open a socket, not for the words. The
   // docstring says "opens no port", and matching prose failed this check
   // against a file that is exactly what it claims to be.
-  check("and it opens no socket",
+  check(
+    "and it opens no socket",
     !/\b(import (flask|http\.server|socket)|from flask|app\.run|listen\()/i.test(
       readFileSync(path.join(APP_DIR, "todo.py"), "utf8"),
-    ));
+    ),
+  );
 
   phase("Ask the agent to deploy it, with the pack in hand");
   check("the account signs up", await signUp(account, ACCOUNT), ACCOUNT);
@@ -142,7 +160,11 @@ try {
   check("A opens the project", await openProject(account.page));
 
   const prompt = integrationPrompt();
-  check("the deploy pack has an integration prompt", prompt.length > 200, `${prompt.length} characters`);
+  check(
+    "the deploy pack has an integration prompt",
+    prompt.length > 200,
+    `${prompt.length} characters`,
+  );
   check(
     "the pack itself raises the terminal-program case",
     /terminal program/i.test(prompt),
@@ -165,18 +187,28 @@ try {
     /no web surface|no port|cannot be reached|nobody (can|could) reach|health check|front end|frontend|web interface/i,
     AGENT_TURN_MS,
   );
-  check("the agent raises the problem rather than writing a deploy command", raised.found,
-    raised.found ? "" : `saw: ${raised.seen.replace(/\s+/g, " ").slice(-160)}`);
+  check(
+    "the agent raises the problem rather than writing a deploy command",
+    raised.found,
+    raised.found ? "" : `saw: ${raised.seen.replace(/\s+/g, " ").slice(-160)}`,
+  );
 
-  const proposes = /front ?end|web (interface|ui|version|surface)|http interface/i.test(raised.seen);
-  check("and offers to build a front end over the same functionality", proposes,
-    proposes ? "" : raised.seen.replace(/\s+/g, " ").slice(-160));
+  const proposes = /front ?end|web (interface|ui|version|surface)|http interface/i.test(
+    raised.seen,
+  );
+  check(
+    "and offers to build a front end over the same functionality",
+    proposes,
+    proposes ? "" : raised.seen.replace(/\s+/g, " ").slice(-160),
+  );
 
   // Shipping the TUI unchanged is exactly the failure the pack exists to stop.
   const filesNow = readdirSync(APP_DIR);
-  check("nothing was deployed behind the question",
+  check(
+    "nothing was deployed behind the question",
     !filesNow.includes("BUILD") && !filesNow.includes("app.pid"),
-    filesNow.join(", "));
+    filesNow.join(", "),
+  );
 
   phase("Agree the front end, and let it build");
   check(
@@ -198,8 +230,11 @@ try {
     web = existsSync(target) ? readFileSync(target, "utf8") : "";
     if (!web.includes("healthz")) await sleep(6_000);
   }
-  check("a web front end now exists", web.length > 0,
-    web.length > 0 ? "" : `directory holds: ${readdirSync(APP_DIR).join(", ")}`);
+  check(
+    "a web front end now exists",
+    web.length > 0,
+    web.length > 0 ? "" : `directory holds: ${readdirSync(APP_DIR).join(", ")}`,
+  );
   check("it answers a health check, which is what makes it deployable", web.includes("healthz"));
   check("the original program is left alone", existsSync(path.join(APP_DIR, "todo.py")));
 

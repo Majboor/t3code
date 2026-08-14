@@ -103,9 +103,7 @@ export type PackVerification =
  * separate question this function cannot answer, and callers must not present
  * the two as one thing.
  */
-export async function verifyManifest(
-  manifest: Record<string, unknown>,
-): Promise<PackVerification> {
+export async function verifyManifest(manifest: Record<string, unknown>): Promise<PackVerification> {
   const signature = manifest["signature"];
   if (signature === undefined || signature === null) {
     return { state: "unsigned" };
@@ -115,10 +113,20 @@ export async function verifyManifest(
   }
 
   const entry = signature as Record<string, unknown>;
-  const { algorithm, publicKey, manifestSha256, signature: signatureValue, keyId, signedAt } = entry;
+  const {
+    algorithm,
+    publicKey,
+    manifestSha256,
+    signature: signatureValue,
+    keyId,
+    signedAt,
+  } = entry;
 
   if (algorithm !== ALGORITHM) {
-    return { state: "invalid", why: `signed with ${String(algorithm)}, which this does not accept` };
+    return {
+      state: "invalid",
+      why: `signed with ${String(algorithm)}, which this does not accept`,
+    };
   }
   if (
     typeof publicKey !== "string" ||

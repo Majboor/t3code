@@ -286,9 +286,7 @@ export function CollaborationBranchSection({
                   {myBranchClaim.baseBranch} already has everything on this branch.
                 </span>
               ) : (
-                <span className="text-foreground">
-                  Merged into {myBranchClaim.baseBranch}.
-                </span>
+                <span className="text-foreground">Merged into {myBranchClaim.baseBranch}.</span>
               )}
             </div>
           ) : null}

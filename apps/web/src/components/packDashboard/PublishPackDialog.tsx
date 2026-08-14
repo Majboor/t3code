@@ -42,7 +42,12 @@ export function PublishPackDialog({
   onOpenChange: (open: boolean) => void;
   onPublished?: (packId: string) => void;
 }) {
-  const [name, setName] = useState(() => projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""));
+  const [name, setName] = useState(() =>
+    projectName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, ""),
+  );
   const [summary, setSummary] = useState("");
   const [handover, setHandover] = useState("");
   const [shape, setShape] = useState<PublishPackShape>("web");
@@ -214,14 +219,19 @@ export function PublishPackDialog({
             </label>
 
             <p className="text-[11px] leading-5 text-muted-foreground">
-              It starts private to this workspace, with an empty record — nothing has been
-              installed or deployed from it yet, and saying so is the point.
+              It starts private to this workspace, with an empty record — nothing has been installed
+              or deployed from it yet, and saying so is the point.
             </p>
           </div>
 
           <DialogFooter>
             <DialogClose render={<Button variant="ghost" size="sm" />}>Cancel</DialogClose>
-            <Button size="sm" disabled={busy} data-testid="publish-pack-confirm" onClick={() => void publish()}>
+            <Button
+              size="sm"
+              disabled={busy}
+              data-testid="publish-pack-confirm"
+              onClick={() => void publish()}
+            >
               <PackagePlusIcon />
               {busy ? "Publishing…" : "Publish"}
             </Button>

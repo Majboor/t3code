@@ -746,8 +746,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const packRegistry = yield* PackRegistryService;
       const tenancyRepository = yield* TenancyRepository;
       const deployService = yield* DeployService;
-  const analyticsStore = yield* AnalyticsStore;
-  const packEnablement = yield* PackEnablementService;
+      const analyticsStore = yield* AnalyticsStore;
+      const packEnablement = yield* PackEnablementService;
       const threadPreferences = yield* ProjectionThreadPreferenceRepository;
       const rateLimitRef = yield* Ref.make({
         windowStartedAt: Date.now(),
@@ -3532,9 +3532,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   : false;
               const result = yield* dispatchNormalizedCommand(sharedCommandForDispatch);
               if (sharedCommandForDispatch.type === "thread.turn.start") {
-                yield* Ref.update(
-                  turnsStartedHereRef,
-                  (threadIds) => new Set(threadIds).add(sharedCommandForDispatch.threadId),
+                yield* Ref.update(turnsStartedHereRef, (threadIds) =>
+                  new Set(threadIds).add(sharedCommandForDispatch.threadId),
                 );
               }
               yield* persistProjectWorkspaceMetadata(sharedCommandForDispatch);
@@ -4420,7 +4419,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 ? Effect.void
                 : ensureDeployProjectAccess(input.projectId, "project.view").pipe(
                     Effect.mapError(
-                      (error) => new AnalyticsError({ code: "storage-failed", message: error.message }),
+                      (error) =>
+                        new AnalyticsError({ code: "storage-failed", message: error.message }),
                     ),
                   )
               ).pipe(

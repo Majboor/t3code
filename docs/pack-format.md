@@ -14,7 +14,7 @@ That makes the format the keystone: a mistake here is a mistake in four products
 
 ## The interface is the carrier; the knowledge is the product
 
-The sections that describe *shape* — identity, requirements, interfaces, runtime,
+The sections that describe _shape_ — identity, requirements, interfaces, runtime,
 permissions — say what the pack is and what it needs. They matter, and they are
 not what anyone is buying. A model can already write a billing integration. What
 it cannot write is what broke in the last four hundred billing integrations,
@@ -129,7 +129,7 @@ a decode failure rather than a warning.
 ### `1.0` → `2.0`
 
 The current version is `2.0`. The bump was forced by `verification`, which
-changed *meaning* rather than shape: in `1.0` it was a reviewer's decision
+changed _meaning_ rather than shape: in `1.0` it was a reviewer's decision
 (`unverified` / `pending` / `verified` / `rejected` / `revoked`), and in `2.0` it
 is a record of what the pack has survived in production. A `1.0` reader handed a
 `2.0` manifest would read a statement about production behaviour as a statement
@@ -140,14 +140,14 @@ consumer.
 
 A `1.0` manifest maps forward mechanically:
 
-| `1.0` | `2.0` |
-| --- | --- |
-| everything except `verification` | unchanged |
-| *(absent)* | `knowledge: {}` — a `1.0` pack carried no knowledge, and saying so is more honest than inventing some |
-| `verification.status: "unverified"` / `"pending"` | `verification.record` with every count `0` and `measuredAt` set to the migration time |
-| `verification.status: "verified"` | `verification.record` zeroed, plus one `attestations` entry: `attestedBy` from `verifier`, `attestedAt` from `verifiedAt`, and `did` derived from the passing checks (`permissions-reviewed` → `reviewed-permissions`, `secret-scan` → `scanned-secrets`, `runtime-smoke-test` → `ran-checks`, …) |
-| `verification.status: "rejected"` / `"revoked"` | an `advisories` entry with `severity: "revoked"` for a revocation and `"critical"` for a rejection, carrying the original `reason` and timestamp |
-| `checks[].outcome: "waived"` | dropped — a waiver was a property of the review process, and there is no review to waive against |
+| `1.0`                                             | `2.0`                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| everything except `verification`                  | unchanged                                                                                                                                                                                                                                                                                         |
+| _(absent)_                                        | `knowledge: {}` — a `1.0` pack carried no knowledge, and saying so is more honest than inventing some                                                                                                                                                                                             |
+| `verification.status: "unverified"` / `"pending"` | `verification.record` with every count `0` and `measuredAt` set to the migration time                                                                                                                                                                                                             |
+| `verification.status: "verified"`                 | `verification.record` zeroed, plus one `attestations` entry: `attestedBy` from `verifier`, `attestedAt` from `verifiedAt`, and `did` derived from the passing checks (`permissions-reviewed` → `reviewed-permissions`, `secret-scan` → `scanned-secrets`, `runtime-smoke-test` → `ran-checks`, …) |
+| `verification.status: "rejected"` / `"revoked"`   | an `advisories` entry with `severity: "revoked"` for a revocation and `"critical"` for a rejection, carrying the original `reason` and timestamp                                                                                                                                                  |
+| `checks[].outcome: "waived"`                      | dropped — a waiver was a property of the review process, and there is no review to waive against                                                                                                                                                                                                  |
 
 The migration deliberately **loses the verified badge**. A `1.0` `verified` pack
 becomes a pack with one attestation and no production behind it, which is what it
@@ -163,7 +163,7 @@ came closest is `record.scope`: it names a meaning `verification.record` already
 had, and its absence is defined as `lineage`, which is what every record written
 before it existed was. A `2.0` reader that has never heard of it keeps reading
 those records correctly. Release history and publication times were added
-*outside* the manifest for the reasons in "Releases and publication", so they
+_outside_ the manifest for the reasons in "Releases and publication", so they
 change nothing a manifest reader parses.
 
 ## Manifest anatomy
@@ -171,21 +171,21 @@ change nothing a manifest reader parses.
 Sections are grouped by the question they answer, in the order a consumer asks
 them.
 
-| Section | Question |
-| --- | --- |
-| `identity` | Who made this, what is it called, which version, under what licence |
-| `provenance` | Where did it come from, when, and what did the agent say about it |
-| `capability` | What does it actually do |
-| `knowledge` | What does it know that I do not |
-| `requirements` | What must I supply before it will run |
-| `interfaces` | How do I touch it |
-| `runtime` | How does it start and what does it listen on |
-| `permissions` | What will it reach for |
-| `verification` | What has production said about it |
-| `visibility` | Who is allowed to see it |
-| `integration` | How do I get another agent to use it |
-| `analytics` | What will it report once it is running |
-| `contents`, `signature` | Which bytes are these, and who says so |
+| Section                 | Question                                                            |
+| ----------------------- | ------------------------------------------------------------------- |
+| `identity`              | Who made this, what is it called, which version, under what licence |
+| `provenance`            | Where did it come from, when, and what did the agent say about it   |
+| `capability`            | What does it actually do                                            |
+| `knowledge`             | What does it know that I do not                                     |
+| `requirements`          | What must I supply before it will run                               |
+| `interfaces`            | How do I touch it                                                   |
+| `runtime`               | How does it start and what does it listen on                        |
+| `permissions`           | What will it reach for                                              |
+| `verification`          | What has production said about it                                   |
+| `visibility`            | Who is allowed to see it                                            |
+| `integration`           | How do I get another agent to use it                                |
+| `analytics`             | What will it report once it is running                              |
+| `contents`, `signature` | Which bytes are these, and who says so                              |
 
 ### Identity
 
@@ -196,7 +196,7 @@ Names are unique per publisher, not globally, so `acme/stripe-checkout` and
 `waleed/stripe-checkout` can coexist — the alternative is a global namespace
 land-grab on day one.
 
-`version` is strict semver. Version *ranges* are a separate type used only by
+`version` is strict semver. Version _ranges_ are a separate type used only by
 dependencies, because a release is always one exact point.
 
 `summary` is capped at 200 characters and is not optional. It is what a search
@@ -213,14 +213,14 @@ Two different key concepts, doing two different jobs:
 - **Publisher signing key** (`identity.publisher.signingKeyId` / `publicKey`,
   and the top-level `signature`). A long-lived Ed25519 keypair owned by the user
   or organisation. The private half never leaves them; the public half is
-  registered once with the marketplace. It answers *did this release really come
-  from this account*, which is the question a marketplace cannot answer with an
+  registered once with the marketplace. It answers _did this release really come
+  from this account_, which is the question a marketplace cannot answer with an
   account password alone once packs can be mirrored or side-loaded. The
   signature covers the canonical manifest with the `signature` block removed,
   plus `contents.archiveSha256`, so metadata and payload cannot be swapped
   independently.
 - **Workspace key** (`PackWorkspaceKeyId`). A stable, non-reversible handle for
-  the workspace a pack came from. It travels *instead of* the workspace id so a
+  the workspace a pack came from. It travels _instead of_ the workspace id so a
   public pack can prove two releases share an origin without leaking tenancy,
   and so a workspace-private pack can be pinned to its home: an installer
   presented with `visibility.scope === "workspace"` checks the key id it holds
@@ -251,7 +251,7 @@ names the parent pack when this one is a fork, so credit survives a rename.
 
 `does` is one imperative sentence and is the first thing a searching agent
 reads. `nonGoals` is the sleeper feature: listing what a pack deliberately does
-*not* do is cheap for the author and is the fastest way for a consumer to rule a
+_not_ do is cheap for the author and is the fastest way for a consumer to rule a
 candidate out. `inputs` and `outputs` are deliberately coarse — enough to judge
 fit before reading code, with `schemaPath` for the cases worth pinning down.
 They do not try to replace the interface definitions further down.
@@ -277,7 +277,7 @@ somebody already paid for.
 - `symptom` is what it looks like from outside, because that is all a consumer
   matching against its own incident has. `trigger` is the mechanism, and
   `triggerKinds` is a closed set (`retry`, `idempotency`, `race-condition`,
-  `provider-deprecation`, `clock-skew`, …) chosen to describe *mechanism* rather
+  `provider-deprecation`, `clock-skew`, …) chosen to describe _mechanism_ rather
   than component: "webhook retries are not idempotent" generalises across
   providers and "Stripe broke" does not.
 - `attributedTo` is a union — `provider`, `dependency`, `host`, `pack` — because
@@ -299,7 +299,7 @@ somebody already paid for.
   only victories is a marketing asset, not a scar record.
 - `firstSeenAt`, `lastSeenAt` and `deploymentsAffected` are the volume behind the
   claim, read against the totals in `verification.record`.
-- `standing` answers *is this still true?* — the same question integration
+- `standing` answers _is this still true?_ — the same question integration
   knowledge has always been able to answer and a failure mode could not, which
   left "is this credential step still right" answerable and "is this fix still
   holding" not.
@@ -309,7 +309,7 @@ somebody already paid for.
   a confirmation of an instruction is somebody following it and getting the
   screen it promised, and the matching event for a failure mode is somebody
   being hurt by it again. Sharing one struct would make `confirmedInInstalls`
-  mean *it worked* on one entry and *it broke* on the next — a field that reads
+  mean _it worked_ on one entry and _it broke_ on the next — a field that reads
   fine and silently inverts any threshold set on it. `PackFailureStanding`
   therefore counts `heldInDeployments` against `recurredInDeployments`, in
   deployments rather than installs, because the population the question is about
@@ -331,9 +331,9 @@ envelope — `id`, `title`, `conditions`, `origin`, `standing`, `commonMistake`,
 exists so a marketplace ranking a thousand packs can read a date and a condition
 without opening four different shapes.
 
-- **`credential-retrieval`** — the canonical case, and the demo. *"Go to the
+- **`credential-retrieval`** — the canonical case, and the demo. _"Go to the
   console, Developers → API keys, create a restricted key with Checkout Sessions
-  set to Write and Payment Intents to Read"* is in no repository, is frequently
+  set to Write and Payment Intents to Read"_ is in no repository, is frequently
   not in the provider's own documentation, changes without notice, and is
   hallucinated confidently by every model asked. It exists only in the aftermath
   of somebody doing it. The variant carries the `environmentVariable` it fills
@@ -349,13 +349,13 @@ without opening four different shapes.
 - **`boundary`** — the decisions that are safe to customise versus the ones that
   must not be touched, each with a `latitude` of `safe-to-change`,
   `change-with-care` or `frozen`. A `frozen` decision links the `failureModeId`
-  that froze it wherever one exists: *"do not touch this"* is an assertion, and
-  *"do not touch this, here is what happened the last time somebody did"* is
+  that froze it wherever one exists: _"do not touch this"_ is an assertion, and
+  _"do not touch this, here is what happened the last time somebody did"_ is
   knowledge — and only the second survives an agent with a good reason of its own.
 
 Two envelope fields carry more weight than their size suggests.
 `commonMistake` records what a model produces instead when it has to guess,
-because the failure being prevented is a *confident wrong answer* rather than a
+because the failure being prevented is a _confident wrong answer_ rather than a
 missing one, and an agent shown the wrong answer can recognise itself about to
 give it. `standing` counts `confirmedInInstalls` against
 `contradictedInInstalls`, so a console redesign shows up as contradictions
@@ -373,8 +373,8 @@ advisory.
 Key-retrieval steps correct for a standard-tier US account may be wrong for an
 enterprise tier, another region, or an older console — and that path is not in
 anyone's test environment, so it fails silently on the user's screen. "Verified
-packs get re-checked" catches knowledge that *changed*; it does nothing about
-knowledge that is *different somewhere else*. At install volume, wrong knowledge
+packs get re-checked" catches knowledge that _changed_; it does nothing about
+knowledge that is _different somewhere else_. At install volume, wrong knowledge
 propagates faster than right knowledge.
 
 `PackConditions` is therefore attached to **every failure mode and every
@@ -393,8 +393,8 @@ conditions.
   is looking at.
 - `untestedAxes` is the honest half. An absent axis means "not recorded"; naming
   an axis here means "recorded, and we know we never varied it". That is the
-  difference between an agent that asserts and one that can say *"verified on
-  standard-tier US in July — yours may differ"*, which converts a trust-destroying
+  difference between an agent that asserts and one that can say _"verified on
+  standard-tier US in July — yours may differ"_, which converts a trust-destroying
   failure into a mild caveat.
 - `rot` is how fast what was true at `observedAt` stops being true.
 
@@ -420,20 +420,20 @@ information:
   agent already knows: it just walked a console, or read an API response, or
   edited the host codebase.
 
-| `surface` | half-life | why |
-| --- | --- | --- |
-| `console-navigation` | 45 days | redesigned without notice and without a version number |
-| `provider-api` | 180 days | versioned, with deprecation windows |
-| `provider-policy` | 90 days | plans, limits and pricing move on their own schedule |
-| `sdk-surface` | 120 days | versioned, but the pack may not be pinned |
-| `host-codebase` | 60 days | the codebase it was installed into keeps being edited |
-| `protocol-invariant` | *never* | at-least-once delivery will not be redesigned next quarter |
+| `surface`            | half-life | why                                                        |
+| -------------------- | --------- | ---------------------------------------------------------- |
+| `console-navigation` | 45 days   | redesigned without notice and without a version number     |
+| `provider-api`       | 180 days  | versioned, with deprecation windows                        |
+| `provider-policy`    | 90 days   | plans, limits and pricing move on their own schedule       |
+| `sdk-surface`        | 120 days  | versioned, but the pack may not be pinned                  |
+| `host-codebase`      | 60 days   | the codebase it was installed into keeps being edited      |
+| `protocol-invariant` | _never_   | at-least-once delivery will not be redesigned next quarter |
 
 `protocol-invariant` maps to `null` rather than to a very large number, because
 "does not rot" and "rots slowly" are different claims and a reader thresholding
 on a number cannot tell them apart. Keeping the two variants distinct matters
-for the same reason: *measured across 200 installs* and *the default for console
-paths* support very different confidence, and a reader handed one number would
+for the same reason: _measured across 200 installs_ and _the default for console
+paths_ support very different confidence, and a reader handed one number would
 trust the second as hard as the first.
 
 This is what makes `knowledge-conditions-stale` computable. The rule is
@@ -453,8 +453,8 @@ that stays empty.
 A failure caught in one deployment is versioned into the pack and inherited by
 everyone: the maintenance agent appends the entry with `introducedIn` set to the
 release carrying it, and an installer diffing the version it runs against the
-version it is offered can answer *"what did the last four hundred deployments
-learn that I do not know yet"* without reading either manifest in full. The
+version it is offered can answer _"what did the last four hundred deployments
+learn that I do not know yet"_ without reading either manifest in full. The
 `inherited` source variant does the same across pack boundaries — a dependency's
 scar is the dependant's scar, and it points back at the pack, version and entry
 id it came from. `origin.supersedes` replaces an earlier entry rather than sitting
@@ -481,14 +481,14 @@ This is the part the whole format exists for. A pack that works perfectly in its
 author's workspace and cannot tell you it needs a Stripe key is not reusable; it
 is a bug report waiting to happen.
 
-- `environment` — every variable, with `secret` and `required` as *separate*
+- `environment` — every variable, with `secret` and `required` as _separate_
   required booleans. A publishable Stripe key is required and not secret; a
   webhook signing secret is both. `secret` drives storage and redaction, so
   collapsing them would either over-protect config or under-protect keys.
   `obtainUrl` is the difference between a pack that installs and one that stalls
   on the first missing value, and `pattern` lets an installer reject an
   obviously-wrong paste before anything runs.
-- `accounts` — third-party accounts the consumer must hold *in their own name*,
+- `accounts` — third-party accounts the consumer must hold _in their own name_,
   with signup URL, required scopes and a cost. `providesEnvironment` links an
   account to the variables it hands out.
 - `services` — infrastructure the consumer must run (Postgres, Redis, SMTP),
@@ -517,13 +517,13 @@ exactly the infrastructure the pack cannot run without.
 `PackRunningCost` is therefore attached to **every requirement kind that can
 actually bill**, which after going through them one at a time is two of them:
 
-| kind | carries cost | why |
-| --- | --- | --- |
-| `accounts` | yes | the original case; `costsMoney` is kept beside it so existing readers keep working, and the two must agree |
-| `services` | yes | a database or an object store is a bill whether it comes from a provider or from the consumer's own hosting |
-| `environment` | no | a value is free; the account that issues it is what charges, and that is declared on the account |
-| `toolchain` | no | interpreters and build tools; a toolchain that must be paid for is a licence, and a licence is an account |
-| `packs` | no | a dependency states its own costs in its own manifest, and a copy here goes stale the next time it reprices |
+| kind          | carries cost | why                                                                                                         |
+| ------------- | ------------ | ----------------------------------------------------------------------------------------------------------- |
+| `accounts`    | yes          | the original case; `costsMoney` is kept beside it so existing readers keep working, and the two must agree  |
+| `services`    | yes          | a database or an object store is a bill whether it comes from a provider or from the consumer's own hosting |
+| `environment` | no           | a value is free; the account that issues it is what charges, and that is declared on the account            |
+| `toolchain`   | no           | interpreters and build tools; a toolchain that must be paid for is a licence, and a licence is an account   |
+| `packs`       | no           | a dependency states its own costs in its own manifest, and a copy here goes stale the next time it reprices |
 
 `model` is `free`, `free-tier`, `metered`, `subscription` or `paid-plan` —
 because "free until 5GB", "pennies per request" and "there is no plan under $99"
@@ -536,8 +536,8 @@ at extraction, and a stale number a consumer budgets against is worse than no
 number, so the format names the shape of the bill and links to whoever is
 allowed to state its size.
 
-On a service, `model: "free"` claims *nothing beyond infrastructure you are
-already paying for* — a claim about this pack's usage, not about the software's
+On a service, `model: "free"` claims _nothing beyond infrastructure you are
+already paying for_ — a claim about this pack's usage, not about the software's
 licence. An absent `cost` is not that claim: it is unknown, and unknown is not
 free, which is why `requirement-cost-undeclared` exists as a readiness warning
 and why any summary built on this has to count the silences separately.
@@ -618,7 +618,7 @@ passing across deployments, install success rate, breakages caught, time in
 service.
 
 **`record`** — the scar record, required on every manifest and zeroed on a pack
-that has never run. A clean record has to be *visibly* clean rather than absent,
+that has never run. A clean record has to be _visibly_ clean rather than absent,
 because "no breakages" and "no deployments" are the two ends of the judgement
 this section supports and an omitted block reads like the good one.
 
@@ -651,8 +651,8 @@ registry's release history.
 **`verification.record` stays the lineage total**, now saying so explicitly via
 `record.scope` (absent means `lineage`, which is what it has always meant, so no
 existing manifest changes meaning). Both numbers are published and neither is
-hidden behind the other: the dashboard reads *"29 of 37 deployments still
-running across every release; 8 of 11 on this one"*.
+hidden behind the other: the dashboard reads _"29 of 37 deployments still
+running across every release; 8 of 11 on this one"_.
 
 The decision is to show both rather than to pick, and it is worth being explicit
 about what that gets wrong:
@@ -690,7 +690,7 @@ coverage in the field. Counts rather than a pass/fail badge, because a check tha
 ran four hundred times and failed twice, a check that has never run, and a check
 that passed once on the author's laptop are three different facts.
 `guardsFailureModeId` is what turns a check into evidence: a check that exists
-*because something broke*, still passing across four hundred deployments, says
+_because something broke_, still passing across four hundred deployments, says
 more about this pack than any review of its source.
 
 **`attestations`** — the surviving way to say "we ran it", kept deliberately
@@ -712,8 +712,8 @@ Ownership: the runtime writes `record` and `checks`, the registry writes
 `advisories`, and the publisher may write `attestations` and nothing that ranks.
 
 `PackSummary` carries the same signals flattened, so pack mode can lead with
-*"there's a pack for this, it's running in 29 deployments and it handles the
-webhook idempotency case that breaks most implementations"* — a warning about
+_"there's a pack for this, it's running in 29 deployments and it handles the
+webhook idempotency case that breaks most implementations"_ — a warning about
 what the agent is about to get wrong — rather than with a badge.
 
 ### Visibility
@@ -727,7 +727,7 @@ to choose between over-sharing and not sharing.
 
 `PackVisibilityScope` names the five without their ids, for the places that
 reason about width rather than about which workspace, and
-`PACK_VISIBILITY_WIDTH` orders them so that *publication* and *withdrawal* have
+`PACK_VISIBILITY_WIDTH` orders them so that _publication_ and _withdrawal_ have
 one definition across the CLI, the registry and the dashboard. `tenant` and
 `organization` share a width: two different walls of the same height.
 
@@ -759,7 +759,7 @@ Each `PackRelease` carries:
 - `publications`, the visibility log;
 - `signals`, what that release alone earned — see the verification section.
 
-Nothing here is a release *note*. What a release is worth reading for is already
+Nothing here is a release _note_. What a release is worth reading for is already
 in the format: the failure modes it closed (`resolution.inVersion`) and the
 knowledge it introduced (`origin.introducedIn`). A prose note would be a fourth
 place to say it and the only one nobody updates.
@@ -768,16 +768,16 @@ place to say it and the only one nobody updates.
 
 `provenance.extractedAt` is when the pack was cut. It is routinely days away
 from when anyone could see it, and it is the wrong date for every sentence that
-begins *"published"*.
+begins _"published"_.
 
 The log is ordered oldest first, and each entry says the release moved to a
 scope at an instant. Widening and narrowing are the same kind of entry, so
 nothing has to be closed out or back-dated, and the two questions a reader
 actually asks both stay answerable:
 
-- *When did this become visible to me?* — the earliest entry whose scope is at
+- _When did this become visible to me?_ — the earliest entry whose scope is at
   least as wide as the reader's.
-- *Where does it stand now?* — the last entry.
+- _Where does it stand now?_ — the last entry.
 
 A single timestamp can answer neither once a pack has been withdrawn. A release
 that was public for a month and then pulled back is not the same object as one
@@ -826,7 +826,7 @@ Two tiers, deliberately.
 
 **Schema validity** is what `PackManifest` decodes. It is kept permissive enough
 that a half-finished pack still opens — a pack with no `start` command, no
-signature and an empty integration prompt is a *valid* manifest, because tooling
+signature and an empty integration prompt is a _valid_ manifest, because tooling
 must be able to load it in order to tell its author what is missing. A schema
 that refused to parse work-in-progress would make the authoring experience
 hostile.
@@ -1001,7 +1001,10 @@ produced and no reader could have got from the source.
         "triggerKinds": ["permission-denied", "misconfiguration"],
         "attributedTo": { "kind": "provider", "service": "stripe" },
         "severity": "medium",
-        "detection": { "signal": "provider-error-code", "match": "resource_missing|permission_error" },
+        "detection": {
+          "signal": "provider-error-code",
+          "match": "resource_missing|permission_error"
+        },
         "resolution": {
           "kind": "open",
           "currentAdvice": "Run `checkout reconcile --since 1h` immediately after install so a missing scope fails while the console is still open."
@@ -1141,7 +1144,11 @@ produced and no reader could have got from the source.
         "conditions": { "observedAt": "2026-07-30T09:00:00.000Z" },
         "origin": {
           "introducedIn": "1.1.0",
-          "source": { "kind": "maintenance-agent", "provider": "claudeAgent", "model": "claude-opus-5" },
+          "source": {
+            "kind": "maintenance-agent",
+            "provider": "claudeAgent",
+            "model": "claude-opus-5"
+          },
           "recordedAt": "2026-05-03T08:00:00.000Z"
         }
       },
@@ -1310,7 +1317,10 @@ produced and no reader could have got from the source.
     "commands": {
       "install": { "command": "npm ci" },
       "build": { "command": "npm run build" },
-      "start": { "command": "node dist/server.js", "description": "Serves the API and return page." },
+      "start": {
+        "command": "node dist/server.js",
+        "description": "Serves the API and return page."
+      },
       "dev": { "command": "npm run dev" },
       "test": { "command": "npm test" },
       "migrate": { "command": "npm run db:migrate" },
@@ -1493,7 +1503,7 @@ what a human once worked out in a console and twenty-six installs have since
 confirmed. Neither is derivable from the source, both carry the conditions they
 held under, and both name the release that introduced them so an installer can
 tell what it inherits by upgrading. The `frozen` boundary decision points back at
-the failure mode that froze it, so the pack can tell an agent *why* not to
+the failure mode that froze it, so the pack can tell an agent _why_ not to
 refactor the thing it is about to refactor.
 
 The minimal end of the range is much shorter — identity, provenance with a

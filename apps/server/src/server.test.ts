@@ -1798,14 +1798,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         seedAnalytics: (store) =>
-          store
-            .query({ projectId, stream: "page.view" as never, aggregate: "count" })
-            .pipe(
-              Effect.map((result) => {
-                countAfter = result.buckets[0]?.value ?? 0;
-              }),
-              Effect.orDie,
-            ),
+          store.query({ projectId, stream: "page.view" as never, aggregate: "count" }).pipe(
+            Effect.map((result) => {
+              countAfter = result.buckets[0]?.value ?? 0;
+            }),
+            Effect.orDie,
+          ),
       });
       // Only the event with the right key and a declared shape was kept.
       assert.equal(countAfter, 1);

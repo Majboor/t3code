@@ -18,12 +18,7 @@
  */
 import { Schema } from "effect";
 
-import {
-  IsoDateTime,
-  NonNegativeInt,
-  ProjectId,
-  TrimmedNonEmptyString,
-} from "./baseSchemas.ts";
+import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const AnalyticsStreamId = Schema.String.pipe(Schema.brand("AnalyticsStreamId"));
 export type AnalyticsStreamId = typeof AnalyticsStreamId.Type;

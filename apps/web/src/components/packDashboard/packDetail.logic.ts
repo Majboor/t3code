@@ -574,10 +574,7 @@ export function countKnowledgeEntries(knowledge: PackKnowledge): number {
  * the format, and they are the two things a reader deciding whether to upgrade
  * is actually asking about.
  */
-export function describeReleaseLearning(
-  knowledge: PackKnowledge,
-  version: string,
-): string | null {
+export function describeReleaseLearning(knowledge: PackKnowledge, version: string): string | null {
   const fixed = (knowledge.failureModes ?? [])
     .filter((entry) => entry.resolution.kind === "fixed" && entry.resolution.inVersion === version)
     .map((entry) => entry.symptom);

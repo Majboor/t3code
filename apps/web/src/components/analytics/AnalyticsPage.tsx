@@ -69,8 +69,14 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
   const result = useQuery({
     enabled: selected !== null && environmentId !== null,
     queryKey: [
-      "analytics", "query", environmentId, projectId,
-      selected?.name, aggregate, valueProperty, groupBy,
+      "analytics",
+      "query",
+      environmentId,
+      projectId,
+      selected?.name,
+      aggregate,
+      valueProperty,
+      groupBy,
     ],
     queryFn: async () => {
       const api = environmentId === null ? undefined : readEnvironmentApi(environmentId);
@@ -234,7 +240,10 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
                   </span>
                 </div>
                 <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-primary" style={{ width: `${bar.percent}%` }} />
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${bar.percent}%` }}
+                  />
                 </div>
               </div>
             ))}

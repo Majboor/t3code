@@ -41,7 +41,8 @@ export function CollaborationAvatar({
   size?: "xs" | "sm" | "md";
   showStatus?: boolean;
 }) {
-  const dimension = size === "xs" ? "size-5 text-[9px]" : size === "md" ? "size-8 text-xs" : "size-6 text-[10px]";
+  const dimension =
+    size === "xs" ? "size-5 text-[9px]" : size === "md" ? "size-8 text-xs" : "size-6 text-[10px]";
 
   return (
     <span className="relative inline-flex shrink-0" title={member.displayName}>
@@ -103,7 +104,13 @@ function MemberRow({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-xs text-foreground">{member.displayName}</span>
           <span className="block truncate text-[10px] text-muted-foreground">
-            {member.isLead ? "Lead" : readOnly ? "Read-only" : member.isApprover ? "Can approve" : "Member"}
+            {member.isLead
+              ? "Lead"
+              : readOnly
+                ? "Read-only"
+                : member.isApprover
+                  ? "Can approve"
+                  : "Member"}
             {member.email ? ` · ${member.email}` : ""}
           </span>
         </span>

@@ -110,21 +110,28 @@ export function useCollaborationGovernance(input: {
       api.collaboration.listMembers(scope),
     ])
       .then(
-        ([settingsResult, approvalsResult, viewResult, claimsResult, touchesResult, membersResult]) => {
-        if (sequence !== requestSequenceRef.current) {
-          return;
-        }
-        setSettings(settingsResult.settings);
-        setCanManage(settingsResult.canManage);
-        setApprovals(approvalsResult.approvals);
-        setCanDecide(approvalsResult.canDecide);
-        setPreferences(viewResult.preferences);
-        setBranchClaims(claimsResult.claims);
-        setMyBranchClaim(claimsResult.mine);
-        setViewerDisplayName(claimsResult.viewerDisplayName);
-        setTouches(touchesResult.touches);
-        setViewerUserId(membersResult.viewerUserId);
-      },
+        ([
+          settingsResult,
+          approvalsResult,
+          viewResult,
+          claimsResult,
+          touchesResult,
+          membersResult,
+        ]) => {
+          if (sequence !== requestSequenceRef.current) {
+            return;
+          }
+          setSettings(settingsResult.settings);
+          setCanManage(settingsResult.canManage);
+          setApprovals(approvalsResult.approvals);
+          setCanDecide(approvalsResult.canDecide);
+          setPreferences(viewResult.preferences);
+          setBranchClaims(claimsResult.claims);
+          setMyBranchClaim(claimsResult.mine);
+          setViewerDisplayName(claimsResult.viewerDisplayName);
+          setTouches(touchesResult.touches);
+          setViewerUserId(membersResult.viewerUserId);
+        },
       )
       .catch(() => undefined)
       .finally(() => {
@@ -239,10 +246,7 @@ export function useCollaborationGovernance(input: {
   );
 
   const decide = useCallback(
-    async (
-      approvalId: CollaborationPromptApproval["id"],
-      decision: "approved" | "rejected",
-    ) => {
+    async (approvalId: CollaborationPromptApproval["id"], decision: "approved" | "rejected") => {
       if (!environmentId || !scope) {
         return;
       }

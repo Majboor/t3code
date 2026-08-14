@@ -439,8 +439,7 @@ async function signCommand(
   context: CommandContext,
 ): Promise<CommandOutcome> {
   const pack = await loadLocalPack(context, command.directory);
-  const keyPath =
-    command.key ?? path.join(os.homedir(), ".t3code", "pack-signing-key.json");
+  const keyPath = command.key ?? path.join(os.homedir(), ".t3code", "pack-signing-key.json");
 
   let key: PackSigningKeyPair;
   let created = false;
@@ -494,7 +493,9 @@ async function signCommand(
     },
     human: [
       `Signed ${pack.ref.qualified} with key ${signature.keyId}.`,
-      created ? `Generated a new signing key at ${keyPath}. Keep it; losing it means a new identity.` : `Used the key at ${keyPath}.`,
+      created
+        ? `Generated a new signing key at ${keyPath}. Keep it; losing it means a new identity.`
+        : `Used the key at ${keyPath}.`,
       `Verifies: ${verified.state}.`,
       attached.attached
         ? "The published copy carries the signature too."

@@ -522,9 +522,10 @@ export default function WorkspacePanel({
   });
   // "Collaboration off" is a personal filter, so other people's marks simply
   // stop being drawn for this viewer.
-  const workspaceAuthorByPath = collaborationGovernance.preferences?.showOthersFiles === false
-    ? EMPTY_WORKSPACE_AUTHORS
-    : collaborationGovernance.touchesByPath;
+  const workspaceAuthorByPath =
+    collaborationGovernance.preferences?.showOthersFiles === false
+      ? EMPTY_WORKSPACE_AUTHORS
+      : collaborationGovernance.touchesByPath;
   const workspaceLabel = activeWorkspaceRoot ? basenameOfPath(activeWorkspaceRoot) : "Workspace";
   const workspaceScopeLabel = activeThread?.worktreePath ? "Thread workspace" : "Project workspace";
   const activeRunningTurnId =
@@ -2595,9 +2596,7 @@ export default function WorkspacePanel({
             changed={visibleDiffState !== null}
             diffStat={visibleDiffState?.stat ?? null}
             status={status}
-            author={
-              entry.kind === "file" ? (workspaceAuthorByPath.get(entryPath) ?? null) : null
-            }
+            author={entry.kind === "file" ? (workspaceAuthorByPath.get(entryPath) ?? null) : null}
             onToggleDirectory={toggleDirectory}
             onOpenFile={openFile}
             onSelectEntry={setSelectedEntry}

@@ -49,11 +49,11 @@ const CLI_ENTRY = path.join(
 
 /** The CLI, always pointed at the store the running dev server uses. */
 function t3(args, options = {}) {
-  return execFileSync(
-    "node",
-    [CLI_ENTRY, ...args, "--base-dir", BASE_DIR, "--dev-url", DEV_URL],
-    { cwd: options.cwd ?? APP_DIR, encoding: "utf8", timeout: 180_000 },
-  ).trim();
+  return execFileSync("node", [CLI_ENTRY, ...args, "--base-dir", BASE_DIR, "--dev-url", DEV_URL], {
+    cwd: options.cwd ?? APP_DIR,
+    encoding: "utf8",
+    timeout: 180_000,
+  }).trim();
 }
 
 function writeFile(relativePath, contents) {
@@ -199,7 +199,10 @@ function getBytes(route) {
 
 // ── the run ─────────────────────────────────────────────────────────────────
 
-const reachable = await fetch(DEV_URL, { redirect: "manual" }).then(() => true, () => false);
+const reachable = await fetch(DEV_URL, { redirect: "manual" }).then(
+  () => true,
+  () => false,
+);
 if (!reachable) {
   console.error(`Nothing is answering at ${DEV_URL}. Start one with \`bun run dev\`.`);
   process.exit(1);
@@ -210,32 +213,51 @@ try {
   phase("Declare what the document will report");
   mkdirSync(APP_DIR, { recursive: true });
   const declared = t3([
-    "analytics", "declare",
-    "--project", PROJECT_ID,
-    "--name", STREAM,
-    "--purpose", "How far into the document a reader got",
-    "--properties", "page:number:required,title:string,seconds:number",
+    "analytics",
+    "declare",
+    "--project",
+    PROJECT_ID,
+    "--name",
+    STREAM,
+    "--purpose",
+    "How far into the document a reader got",
+    "--properties",
+    "page:number:required,title:string,seconds:number",
   ]);
   const ingestKey = /Ingest key \(shown once\): (\S+)/.exec(declared)?.[1] ?? null;
   check("the stream is declared", Boolean(ingestKey), ingestKey ? "key captured" : declared);
   if (!ingestKey) throw new Error("no ingest key to give the deployment");
 
   const listed = t3(["analytics", "list", "--project", PROJECT_ID]);
-  check("the declaration names its properties", listed.includes("page:number"), listed.split("\n")[0]);
+  check(
+    "the declaration names its properties",
+    listed.includes("page:number"),
+    listed.split("\n")[0],
+  );
 
   phase("A service that builds the PDF and reports how it is read");
   buildPdfService(ingestKey);
   writeFile("BUILD", `${RUN_ID}-1\n`);
-  check("the renderer and the service are written", existsSync(path.join(APP_DIR, "app.py")), APP_DIR);
-  check("the ingest key is in the deployment, not the repository",
-    readFileSync(path.join(APP_DIR, "app.py"), "utf8").includes(ingestKey));
+  check(
+    "the renderer and the service are written",
+    existsSync(path.join(APP_DIR, "app.py")),
+    APP_DIR,
+  );
+  check(
+    "the ingest key is in the deployment, not the repository",
+    readFileSync(path.join(APP_DIR, "app.py"), "utf8").includes(ingestKey),
+  );
 
   phase("Deploy it");
   const added = t3([
-    "deploy", "add",
-    "--project", PROJECT_ID,
-    "--name", `PDF ${RUN_ID}`,
-    "--command", buildDeployCommand(),
+    "deploy",
+    "add",
+    "--project",
+    PROJECT_ID,
+    "--name",
+    `PDF ${RUN_ID}`,
+    "--command",
+    buildDeployCommand(),
   ]);
   const targetId = /target (\S+)/.exec(added)?.[1] ?? null;
   check("a deploy target is registered", Boolean(targetId), targetId ?? added);
@@ -246,16 +268,26 @@ try {
     t3(["deploy", "run", targetId]);
     started = true;
   } catch (error) {
-    deployFailure = `${error?.stdout ?? ""}${error?.stderr ?? ""}`.replace(/\s+/g, " ").slice(0, 250);
+    deployFailure = `${error?.stdout ?? ""}${error?.stderr ?? ""}`
+      .replace(/\s+/g, " ")
+      .slice(0, 250);
   }
   check("the deploy succeeds", deployFailure === null, deployFailure ?? "");
   if (deployFailure !== null) throw new Error("nothing to read");
 
   phase("The document itself");
   const health = JSON.parse(get("/healthz"));
-  check("the service reports the build it is serving", health.build === `${RUN_ID}-1`, String(health.build));
+  check(
+    "the service reports the build it is serving",
+    health.build === `${RUN_ID}-1`,
+    String(health.build),
+  );
   const pdf = getBytes("/doc.pdf");
-  check("what it serves is a real PDF", pdf.subarray(0, 5).toString() === "%PDF-", pdf.subarray(0, 8).toString());
+  check(
+    "what it serves is a real PDF",
+    pdf.subarray(0, 5).toString() === "%PDF-",
+    pdf.subarray(0, 8).toString(),
+  );
   const pageCount = (pdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) ?? []).length;
   check(`the PDF has all ${PAGES.length} pages`, pageCount === PAGES.length, `${pageCount} pages`);
 
@@ -273,27 +305,64 @@ try {
     const answer = JSON.parse(get(`/read/${page}/${seconds}`));
     if (answer.reported === 202) reported += 1;
   }
-  check("the deployment reported every read", reported === reading.length, `${reported}/${reading.length} accepted`);
+  check(
+    "the deployment reported every read",
+    reported === reading.length,
+    `${reported}/${reading.length} accepted`,
+  );
 
   phase("Ask the workspace what happened");
   const byPage = t3([
-    "analytics", "query",
-    "--project", PROJECT_ID, "--stream", STREAM,
-    "--aggregate", "sum", "--value", "seconds", "--group-by", "title",
+    "analytics",
+    "query",
+    "--project",
+    PROJECT_ID,
+    "--stream",
+    STREAM,
+    "--aggregate",
+    "sum",
+    "--value",
+    "seconds",
+    "--group-by",
+    "title",
   ]);
   const longest = byPage.split("\n")[0] ?? "";
-  check("the most-read page is the one they lingered on", longest.startsWith("What we changed"), longest);
+  check(
+    "the most-read page is the one they lingered on",
+    longest.startsWith("What we changed"),
+    longest,
+  );
   check("its total is both visits added up", longest.includes("65"), longest);
 
   const reads = t3([
-    "analytics", "query",
-    "--project", PROJECT_ID, "--stream", STREAM, "--aggregate", "count", "--group-by", "title",
+    "analytics",
+    "query",
+    "--project",
+    PROJECT_ID,
+    "--stream",
+    STREAM,
+    "--aggregate",
+    "count",
+    "--group-by",
+    "title",
   ]);
-  check("every page that was opened is counted", reads.split("\n").length === 4, reads.replace(/\n/g, " | "));
+  check(
+    "every page that was opened is counted",
+    reads.split("\n").length === 4,
+    reads.replace(/\n/g, " | "),
+  );
 
   const furthest = t3([
-    "analytics", "query",
-    "--project", PROJECT_ID, "--stream", STREAM, "--aggregate", "max", "--value", "page",
+    "analytics",
+    "query",
+    "--project",
+    PROJECT_ID,
+    "--stream",
+    STREAM,
+    "--aggregate",
+    "max",
+    "--value",
+    "page",
   ]);
   check("it knows how far they got", furthest.includes(String(PAGES.length)), furthest);
 

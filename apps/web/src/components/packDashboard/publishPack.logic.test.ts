@@ -165,7 +165,9 @@ describe("buildManifest", () => {
 
   it("still decodes once it declares requirements", () => {
     expect(() =>
-      Schema.decodeUnknownSync(PackManifest)(buildManifest({ ...input, requirements: "HOST\nTOKEN!" })),
+      Schema.decodeUnknownSync(PackManifest)(
+        buildManifest({ ...input, requirements: "HOST\nTOKEN!" }),
+      ),
     ).not.toThrow();
   });
 

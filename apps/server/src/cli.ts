@@ -1398,7 +1398,12 @@ function parseAnalyticsProperties(raw: string): ReadonlyArray<{
       if (type !== "string" && type !== "number" && type !== "boolean") {
         throw new Error(`${name} has type ${type}; expected string, number or boolean.`);
       }
-      return { name, type, purpose: name, required: required === "true" || required === "required" };
+      return {
+        name,
+        type,
+        purpose: name,
+        required: required === "true" || required === "required",
+      };
     });
 }
 
@@ -1409,7 +1414,9 @@ const analyticsDeclareCommand = Command.make("declare", {
   name: Flag.string("name").pipe(Flag.withDescription("Stream name, e.g. page.view.")),
   purpose: Flag.string("purpose").pipe(Flag.withDescription("What the stream is for.")),
   properties: Flag.string("properties").pipe(
-    Flag.withDescription("Comma separated name:type:required, e.g. path:string:required,seconds:number."),
+    Flag.withDescription(
+      "Comma separated name:type:required, e.g. path:string:required,seconds:number.",
+    ),
   ),
 }).pipe(
   Command.withDescription("Declare an event stream and print its ingest key once."),
@@ -1509,7 +1516,10 @@ const analyticsQueryCommand = Command.make("query", {
             result.buckets.length === 0
               ? "No events yet."
               : result.buckets
-                  .map((bucket) => `${bucket.group ?? "all"}  ${bucket.value}  (${bucket.events} events)`)
+                  .map(
+                    (bucket) =>
+                      `${bucket.group ?? "all"}  ${bucket.value}  (${bucket.events} events)`,
+                  )
                   .join("\n"),
           ),
         );

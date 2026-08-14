@@ -10,7 +10,11 @@ import {
   type AnalyticsValue,
 } from "@t3tools/contracts";
 
-import { AnalyticsError, AnalyticsStore, type AnalyticsStoreShape } from "../Services/AnalyticsStore.ts";
+import {
+  AnalyticsError,
+  AnalyticsStore,
+  type AnalyticsStoreShape,
+} from "../Services/AnalyticsStore.ts";
 import { AnalyticsRepository } from "../../persistence/Services/Analytics.ts";
 
 /** Long enough that guessing is not a strategy, short enough to paste. */
@@ -91,7 +95,8 @@ export function aggregate(
     if (options.aggregate === "count") {
       numbers.push(1);
     } else {
-      const raw = options.valueProperty === undefined ? undefined : event.properties[options.valueProperty];
+      const raw =
+        options.valueProperty === undefined ? undefined : event.properties[options.valueProperty];
       // A row missing the value simply does not contribute; it is still counted
       // as an event, which is why `events` and `value` are reported separately.
       if (typeof raw === "number") numbers.push(raw);

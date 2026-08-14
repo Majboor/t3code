@@ -29,14 +29,19 @@ import {
 
 // Playwright is installed for the web app's browser tests; borrow that copy
 // rather than adding a second one just for this script.
-const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))("playwright");
+const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))(
+  "playwright",
+);
 
 const BASE_URL = process.env["T3_E2E_BASE_URL"] ?? "http://localhost:5733";
 const RUN_ID = String(Date.now());
 // The Desktop is where someone would really keep a project, so use it when it
 // exists and fall back to the temp dir on machines that have no such folder.
 const DESKTOP_DIR = path.join(os.homedir(), "Desktop");
-const PROJECT_DIR = path.join(existsSync(DESKTOP_DIR) ? DESKTOP_DIR : os.tmpdir(), `t3-collab-${RUN_ID}`);
+const PROJECT_DIR = path.join(
+  existsSync(DESKTOP_DIR) ? DESKTOP_DIR : os.tmpdir(),
+  `t3-collab-${RUN_ID}`,
+);
 const PASSWORD = "CollabE2E!2026";
 const ACCOUNT_A = `collab.a.${RUN_ID}@example.test`;
 const ACCOUNT_B = `collab.b.${RUN_ID}@example.test`;
@@ -154,7 +159,11 @@ async function expandMemberRow(page, email) {
   for (let index = 0; index < (await rows.count()); index += 1) {
     const row = rows.nth(index);
     if (((await row.innerText().catch(() => "")) ?? "").includes(email)) {
-      await row.locator("button").first().click().catch(() => undefined);
+      await row
+        .locator("button")
+        .first()
+        .click()
+        .catch(() => undefined);
       await sleep(1_500);
       return row;
     }
@@ -221,7 +230,10 @@ async function waitForFileOnDisk(name, timeoutMs) {
 
 // Without this the first navigation just times out inside Playwright, which
 // says nothing about the actual problem: nobody started a server.
-const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(() => true, () => false);
+const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(
+  () => true,
+  () => false,
+);
 if (!reachable) {
   console.error(`Nothing is answering at ${BASE_URL}.`);
   console.error("Start a server with `bun run dev`, or set T3_E2E_BASE_URL.");
@@ -246,8 +258,11 @@ try {
   await addProject(accountA.page, PROJECT_DIR);
   const aFiles = await visibleFileNames(accountA.page);
   check("A sees the project", (await bodyText(accountA.page)).includes(path.basename(PROJECT_DIR)));
-  check("A sees the seeded files", aFiles.includes("seed-one.txt") && aFiles.includes("seed-two.md"),
-    aFiles.join(", "));
+  check(
+    "A sees the seeded files",
+    aFiles.includes("seed-one.txt") && aFiles.includes("seed-two.md"),
+    aFiles.join(", "),
+  );
 
   phase("Account A: invite a second person to the workspace");
   const inviteUrl = await createInvite(accountA.page, ACCOUNT_B);
@@ -263,17 +278,27 @@ try {
   await accountB.page.goto(inviteUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await sleep(7_000);
   check("B accepts the invite", (await bodyText(accountB.page)).includes("Invite accepted"));
-  await accountB.page.locator('button:has-text("Back to app")').first().click().catch(() => undefined);
+  await accountB.page
+    .locator('button:has-text("Back to app")')
+    .first()
+    .click()
+    .catch(() => undefined);
   await sleep(6_000);
 
   phase("Account B: reach the shared folder");
   check("B opens the shared project", await openProject(accountB.page));
   const bDashboard = await bodyText(accountB.page);
-  check("B hits no permission error", !PERMISSION_ERROR.test(bDashboard),
-    bDashboard.match(PERMISSION_ERROR)?.[0] ?? "");
+  check(
+    "B hits no permission error",
+    !PERMISSION_ERROR.test(bDashboard),
+    bDashboard.match(PERMISSION_ERROR)?.[0] ?? "",
+  );
   const bFiles = await visibleFileNames(accountB.page);
-  check("B sees the seeded files", bFiles.includes("seed-one.txt") && bFiles.includes("seed-two.md"),
-    bFiles.join(", "));
+  check(
+    "B sees the seeded files",
+    bFiles.includes("seed-one.txt") && bFiles.includes("seed-two.md"),
+    bFiles.join(", "),
+  );
 
   phase("A file written on disk by python");
   const pythonFile = `python-made-${RUN_ID}.txt`;
@@ -286,8 +311,11 @@ try {
   phase("Account B creates a file in the app");
   const bFile = `from-b-${RUN_ID}.txt`;
   check("B uses New file", await createFileViaUi(accountB.page, bFile));
-  check("B's file lands on disk", await waitForFileOnDisk(bFile, FILE_APPEAR_TIMEOUT_MS),
-    path.join(PROJECT_DIR, bFile));
+  check(
+    "B's file lands on disk",
+    await waitForFileOnDisk(bFile, FILE_APPEAR_TIMEOUT_MS),
+    path.join(PROJECT_DIR, bFile),
+  );
 
   phase("Account A signs back in and looks for B's work");
   const accountA2 = await openIsolatedSession(browser, "A2");
@@ -306,15 +334,25 @@ try {
 
   // Both directions of the same check, so it reads once and runs twice.
   const driveAgent = async (label, sender, watcher, fileName, word) => {
-    check(`${label} sends a message to the agent`,
-      await sendAgentMessage(sender.page, `Create a file named ${fileName} containing the word ${word}. Do not ask questions.`));
+    check(
+      `${label} sends a message to the agent`,
+      await sendAgentMessage(
+        sender.page,
+        `Create a file named ${fileName} containing the word ${word}. Do not ask questions.`,
+      ),
+    );
     const onDisk = await waitForFileOnDisk(fileName, AGENT_TURN_MS);
-    check(`${label}'s agent wrote the file`, onDisk,
-      onDisk ? readFileSync(path.join(PROJECT_DIR, fileName), "utf8").trim() : "not created");
+    check(
+      `${label}'s agent wrote the file`,
+      onDisk,
+      onDisk ? readFileSync(path.join(PROJECT_DIR, fileName), "utf8").trim() : "not created",
+    );
     const thread = await bodyText(sender.page);
-    check(`${label}'s turn reports no provider error`,
+    check(
+      `${label}'s turn reports no provider error`,
       !/Provider turn start failed|Timed out waiting for initialize/.test(thread),
-      thread.match(/(Provider turn start failed|Timed out[^\n]*)/)?.[0] ?? "");
+      thread.match(/(Provider turn start failed|Timed out[^\n]*)/)?.[0] ?? "",
+    );
     if (onDisk) {
       checkLiveTreeUpdate(
         `${watcher.label} sees what ${label}'s agent wrote`,
@@ -327,10 +365,20 @@ try {
     phase("Both accounts drive the agent — skipped, T3_E2E_SKIP_AGENT=1");
   } else {
     phase("Both accounts drive the agent");
-    await driveAgent("A", accountA2, { label: "B", page: accountB.page },
-      `agent-a-${RUN_ID}.txt`, "alpha");
-    await driveAgent("B", accountB, { label: "A", page: accountA2.page },
-      `agent-b-${RUN_ID}.txt`, "beta");
+    await driveAgent(
+      "A",
+      accountA2,
+      { label: "B", page: accountB.page },
+      `agent-a-${RUN_ID}.txt`,
+      "alpha",
+    );
+    await driveAgent(
+      "B",
+      accountB,
+      { label: "A", page: accountA2.page },
+      `agent-b-${RUN_ID}.txt`,
+      "beta",
+    );
   }
 
   phase("The lead makes prompts need approval");
@@ -378,8 +426,15 @@ try {
   // workspace says so while they are both still in it.
   const contendedFile = `contended-${RUN_ID}.txt`;
   check("B creates the file", await createFileViaUi(accountB.page, contendedFile));
-  check("A edits the same file",
-    (await editFileViaUi(accountA2.page, { file: contendedFile, contents: `a was here ${RUN_ID}\n` })).ok);
+  check(
+    "A edits the same file",
+    (
+      await editFileViaUi(accountA2.page, {
+        file: contendedFile,
+        contents: `a was here ${RUN_ID}\n`,
+      })
+    ).ok,
+  );
   const contention = await waitForCollabElement(accountA2.page, "collaboration-contention", 30_000);
   check("the workspace says two people are in one file", contention);
   if (contention) {
@@ -388,11 +443,16 @@ try {
       .first()
       .innerText()
       .catch(() => "");
-    check("it names the file and both people", named.includes(contendedFile) && /and/.test(named),
-      named.replace(/\s+/g, " ").slice(0, 100));
+    check(
+      "it names the file and both people",
+      named.includes(contendedFile) && /and/.test(named),
+      named.replace(/\s+/g, " ").slice(0, 100),
+    );
     // The point of saying it: there is something to do about it.
-    check("and suggests a branch keeps the edits apart",
-      (await bodyText(accountA2.page)).includes("own branch"));
+    check(
+      "and suggests a branch keeps the edits apart",
+      (await bodyText(accountA2.page)).includes("own branch"),
+    );
   }
   await closeCollabPanel(accountA2.page);
 
@@ -419,7 +479,9 @@ try {
     // The claim reaches the panel a beat after the worktree exists, so let it
     // settle before asking or a working feature reads as a missing one.
     await sleep(6_000);
-    const claimFailure = /Could not create your branch[^]{0,120}/.exec(await bodyText(accountB.page));
+    const claimFailure = /Could not create your branch[^]{0,120}/.exec(
+      await bodyText(accountB.page),
+    );
     check(
       "B sees their branch compared with main",
       await waitForCollabElement(accountB.page, "collaboration-branch-compare", 30_000),
@@ -480,7 +542,11 @@ try {
       .first()
       .innerText()
       .catch(() => "");
-    check("the warning names the contested file", warningText.includes(contestedFile), warningText.replace(/\s+/g, " ").slice(0, 80));
+    check(
+      "the warning names the contested file",
+      warningText.includes(contestedFile),
+      warningText.replace(/\s+/g, " ").slice(0, 80),
+    );
   }
   await closeCollabPanel(accountB.page);
 
@@ -493,8 +559,11 @@ try {
   } else {
     const opened = await openCollabPanel(accountA2.page);
     const claims = accountA2.page.locator('[data-testid="collaboration-branch-claim"]');
-    check("A can see the branches people are on", opened && (await claims.count()) > 0,
-      `${await claims.count()} listed`);
+    check(
+      "A can see the branches people are on",
+      opened && (await claims.count()) > 0,
+      `${await claims.count()} listed`,
+    );
 
     const mergeButton = accountA2.page.locator('[data-testid="collaboration-merge-claim"]').first();
     const canMerge = (await mergeButton.count()) > 0;
@@ -504,12 +573,18 @@ try {
       await sleep(8_000);
       // Both branches changed seed-one.txt, so git cannot choose. Saying so and
       // naming the file is the honest outcome; claiming success would not be.
-      const conflict = accountA2.page.locator('[data-testid="collaboration-merge-conflict"]').first();
+      const conflict = accountA2.page
+        .locator('[data-testid="collaboration-merge-conflict"]')
+        .first();
       const reported = (await conflict.count()) > 0;
-      const text = reported ? await conflict.innerText().catch(() => "") : await bodyText(accountA2.page);
-      check("the merge reports the conflict rather than pretending",
+      const text = reported
+        ? await conflict.innerText().catch(() => "")
+        : await bodyText(accountA2.page);
+      check(
+        "the merge reports the conflict rather than pretending",
         reported && text.includes(contestedFile),
-        text.replace(/\s+/g, " ").slice(0, 110));
+        text.replace(/\s+/g, " ").slice(0, 110),
+      );
     }
     await closeCollabPanel(accountA2.page);
   }
@@ -535,7 +610,10 @@ try {
   check("B's prompt never reached the agent", !(await waitForFileOnDisk(deniedFile, 8_000)));
 
   phase("The lead gives write access back");
-  check("A can restore B's write access", await setMemberReadOnly(accountA2.page, ACCOUNT_B, false));
+  check(
+    "A can restore B's write access",
+    await setMemberReadOnly(accountA2.page, ACCOUNT_B, false),
+  );
   const restoredRow = await expandMemberRow(accountA2.page, ACCOUNT_B);
   check(
     "B is no longer listed as read-only",
@@ -554,9 +632,16 @@ try {
     const cInvite = await bodyText(accountC.page);
     // C is already signed in, so the link must attach to that session rather
     // than send them back through sign-up.
-    check("C is not asked to authenticate again", !/Sign up now|Create your account/i.test(cInvite));
+    check(
+      "C is not asked to authenticate again",
+      !/Sign up now|Create your account/i.test(cInvite),
+    );
     check("C accepts the invite", cInvite.includes("Invite accepted"));
-    await accountC.page.locator('button:has-text("Back to app")').first().click().catch(() => undefined);
+    await accountC.page
+      .locator('button:has-text("Back to app")')
+      .first()
+      .click()
+      .catch(() => undefined);
     await sleep(6_000);
     check("the shared workspace appears for C", await openProject(accountC.page));
     const cFiles = await visibleFileNames(accountC.page);
@@ -570,34 +655,46 @@ try {
   check("A is back in the project", await openProject(accountA2.page));
   const colors = await avatarColors(accountA2.page);
   check("the roster shows all three people", colors.length >= 3, `${colors.length} avatars`);
-  check("each person has their own colour",
+  check(
+    "each person has their own colour",
     colors.length >= 3 && new Set(colors).size === colors.length,
-    [...new Set(colors)].join(" "));
+    [...new Set(colors)].join(" "),
+  );
   const cRow = await expandMemberRow(accountA2.page, ACCOUNT_C);
   const swatches = cRow?.locator('[data-testid="collaboration-color-picker"] button');
   const canRecolour = swatches !== undefined && (await swatches.count()) > 0;
   if (canRecolour) {
-    await swatches.last().click().catch(() => undefined);
+    await swatches
+      .last()
+      .click()
+      .catch(() => undefined);
     await sleep(3_000);
   }
   check("the lead can recolour someone", canRecolour);
   await closeCollabPanel(accountA2.page);
   const recoloured = await avatarColors(accountA2.page);
-  check("the new colour sticks",
+  check(
+    "the new colour sticks",
     recoloured.length >= 3 && new Set(recoloured).size === recoloured.length,
-    [...new Set(recoloured)].join(" "));
+    [...new Set(recoloured)].join(" "),
+  );
 
   phase("Who is here and who touched what");
   const pills = await presencePills(accountA2.page);
   check("the collaboration panel lists who is present", pills.length >= 2, pills.join(" · "));
-  check("each pill carries a status", pills.every((pill) => /\|(active|idle|away)$/.test(pill)),
-    pills.join(" · "));
+  check(
+    "each pill carries a status",
+    pills.every((pill) => /\|(active|idle|away)$/.test(pill)),
+    pills.join(" · "),
+  );
   const authors = await fileAuthors(accountA2.page);
   // B created a file earlier in this run, so somebody's mark has to be on it.
   check("the tree marks who last changed a file", authors.length > 0, authors.join(", "));
-  check("the mark names a real member",
+  check(
+    "the mark names a real member",
     authors.some((name) => name.length > 0 && (name.includes("collab.") || name.includes("@"))),
-    authors.join(", "));
+    authors.join(", "),
+  );
 
   phase("Result");
   console.log(`  workspace: ${PROJECT_DIR}`);
@@ -609,7 +706,8 @@ try {
     ["C", accountC.consoleErrors],
   ]) {
     const meaningful = errors.filter((text) => !text.includes("401"));
-    if (meaningful.length > 0) console.log(`  console (${label}): ${meaningful.slice(0, 3).join(" | ")}`);
+    if (meaningful.length > 0)
+      console.log(`  console (${label}): ${meaningful.slice(0, 3).join(" | ")}`);
   }
 } finally {
   await browser.close();
