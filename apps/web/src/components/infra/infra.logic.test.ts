@@ -9,7 +9,7 @@ const enablement = (packName: string, settings: ReadonlyArray<[string, boolean]>
   }) as never;
 
 describe("describeReadiness", () => {
-  it("counts what is still to set, not what is done", () => {
+  it("counts what the pack asked for and the project must supply", () => {
     const readiness = describeReadiness(
       enablement("deploy", [
         ["HOST", true],
@@ -19,7 +19,8 @@ describe("describeReadiness", () => {
     );
     expect(readiness.ready).toBe(false);
     expect(readiness.missing).toEqual(["TOKEN", "PORT"]);
-    expect(readiness.summary).toBe("2 of 3 still to set");
+    // Not "still to set": nothing here can see whether they are set.
+    expect(readiness.summary).toBe("Needs 2 things you have to supply");
   });
 
   it("is ready only when nothing is outstanding", () => {

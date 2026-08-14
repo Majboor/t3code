@@ -38,11 +38,13 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * What this project has turned on, and what each of those still needs.
+ * What this project has turned on, and what each of those asks for.
  *
- * The readiness line is the point of the page. Enabling a pack supplies
- * nothing, so a list of enabled packs without the gap beside each one would
- * read as a list of working things and be wrong about every one of them.
+ * The line beside each pack is the point of the page. Enabling supplies
+ * nothing, so a bare list of enabled packs would read as a list of working
+ * things and be wrong about every one. It says what a pack needs rather than
+ * what is missing, because nothing here can see whether an environment
+ * variable is set on the machine that will run it.
  */
 export function InfraPage({ projectId }: { projectId: ProjectId }) {
   const environmentId = usePrimaryEnvironmentId();
@@ -116,8 +118,9 @@ export function InfraPage({ projectId }: { projectId: ProjectId }) {
         <div className="rounded-lg border border-border p-4" data-testid="infra-empty">
           <div className="text-sm font-medium text-foreground">No packs turned on</div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Turning a pack on records that this project uses it and shows what it needs. It does
-            not install anything or set anything up — that part is still yours.
+            Turning a pack on records that this project uses it and lists what it needs. It does
+            not install anything, set anything up, or check whether you have — that part is
+            still yours.
           </p>
         </div>
       ) : (
@@ -179,7 +182,7 @@ export function InfraPage({ projectId }: { projectId: ProjectId }) {
                   <ul className="mt-1.5 grid gap-0.5" data-testid="infra-missing">
                     {readiness.missing.map((name) => (
                       <li key={name} className="text-[11px] text-muted-foreground">
-                        <code className="text-foreground">{name}</code> — not set yet
+                        <code className="text-foreground">{name}</code> — yours to supply
                       </li>
                     ))}
                   </ul>

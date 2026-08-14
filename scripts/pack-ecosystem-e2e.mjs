@@ -124,7 +124,7 @@ try {
     (await enablements.first().getAttribute("data-ready")) === "false",
     (await enablements.first().getAttribute("data-ready")) ?? "none");
   const readiness = await account.page.locator('[data-testid="infra-readiness"]').first().innerText();
-  check("it counts what is still to set", readiness.includes("2 of 2"), readiness);
+  check("it counts what the project must supply", readiness.includes("Needs 2 things"), readiness);
   const missing = await account.page.locator('[data-testid="infra-missing"]').first().innerText();
   check("and names both, including the secret",
     missing.includes("DEPLOY_HOST") && missing.includes("DEPLOY_TOKEN"),

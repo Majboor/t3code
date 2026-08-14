@@ -1,12 +1,17 @@
 import type { PackEnablement } from "@t3tools/contracts";
 
 /**
- * What a project still has to do before an enabled pack could run.
+ * What an enabled pack says it needs.
  *
- * Enabling records intent and supplies nothing, so this is the difference
- * between the two — and it is the only number on the page worth anything. A
- * page that showed enabled packs without it would read as a list of working
- * things.
+ * Deliberately not "what is still missing". Nothing here can see whether an
+ * environment variable is set on the machine that will run the pack, so
+ * reporting one as "not set" would be a claim this cannot check — the same
+ * mistake as a button that appears to install something. What it can say is
+ * what the pack asked for, which is true and is the part a reader has to act
+ * on anyway.
+ *
+ * `provided` exists for the case that is checkable — a secret the server holds
+ * — and stays false until something actually looks.
  */
 export function describeReadiness(enablement: PackEnablement): {
   readonly missing: ReadonlyArray<string>;
@@ -21,12 +26,12 @@ export function describeReadiness(enablement: PackEnablement): {
     return { missing: [], ready: true, summary: "Asks for nothing" };
   }
   if (missing.length === 0) {
-    return { missing: [], ready: true, summary: "Everything it asks for is set" };
+    return { missing: [], ready: true, summary: "Everything it asks for is accounted for" };
   }
   return {
     missing,
     ready: false,
-    summary: `${missing.length} of ${enablement.settings.length} still to set`,
+    summary: `Needs ${missing.length} thing${missing.length === 1 ? "" : "s"} you have to supply`,
   };
 }
 
