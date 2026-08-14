@@ -3,7 +3,7 @@
   "identity": {
     "id": "pack_c7f9cb58f6a544e7b16c",
     "name": "ssh-deploy",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "displayName": "ssh-deploy",
     "summary": "Deploy a thing to a server over SSH, whatever shape the thing is",
     "publisher": {
@@ -229,12 +229,12 @@
     "integration": [
       {
         "id": "classify-the-thing-before-shipping-it",
-        "title": "Decide what shape the project is before choosing how to deploy it",
+        "title": "Work out whether the project serves anything before choosing how to deploy it",
         "detail": {
           "kind": "pattern",
-          "rule": "Look at what the project actually is before writing a deploy command. It is one of three things: it already serves HTTP, it produces a document, or it is a terminal program with no network surface at all. Each needs a different plan, and guessing produces a deploy that starts nothing.",
-          "rationale": "Every deploy command here ends in a health check against a port. A program that never opens a port cannot pass one, so shipping it unchanged gives a deploy that reports failure without saying why. The shape of the thing decides the work, and it is knowable before any of it starts.",
-          "example": "serves HTTP -> ship and start it | produces a PDF or report -> build it, then serve the file | TUI or CLI -> it has no port; see the next note"
+          "rule": "Before writing a deploy command, answer one question: when this runs, does anything listen on a port? If yes, ship it and start it. If no, deploying it unchanged starts something nobody can reach. A terminal program is the obvious case, but it is not the only one — a CLI, a library, a batch job, a data pipeline, a scraper, a training script and a cron task all have no web surface either. Do not go looking for the word TUI; look for whether anything opens a socket.",
+          "rationale": "Every deploy command here ends in a health check against a port, so a program that never opens one cannot pass. The question is not what kind of program it is, which invites arguing about labels, but whether anything answers when something connects — which is knowable by reading the code before any of the work starts.",
+          "example": "serves HTTP (flask, express, a static server) -> ship and start it | produces a file (PDF, report, dataset) -> build it, then serve the file | nothing listens (CLI, TUI, batch job, pipeline, library, cron task) -> it has no port; see the next note"
         },
         "conditions": {
           "observedAt": "2026-08-14T09:00:00.000Z",
@@ -255,10 +255,10 @@
       },
       {
         "id": "a-terminal-program-needs-a-front-end-and-a-conversation",
-        "title": "A TUI has no web surface, so ask before inventing one",
+        "title": "Nothing to reach it with, so ask before inventing one",
         "detail": {
           "kind": "wiring",
-          "prompt": "Do this before writing any deploy command, and before deciding the task is routine. The most common way this pack is wasted is being read after the plan is already made.\n\nWhen the project is a terminal program, stop before writing any deploy command and talk to the person first. Say plainly: this has no web surface, so deploying it as-is would start something nobody can reach. Offer to build a small web front end over the same functionality, and be specific about what that means — which commands become which screens, what the front end will call underneath, and what does not survive the move (raw keyboard handling, curses redraw, anything that assumes a live terminal). Get agreement on that shape before building it. Then build the front end, give it a /healthz, and deploy that. Do not silently generate a front end and ship it: the person asked to deploy their program, and what they would get is a different program.",
+          "prompt": "Do this before writing any deploy command, and before deciding the task is routine. The most common way this pack is wasted is being read after the plan is already made.\n\nWhen nothing in the project listens on a port — a terminal program, a CLI, a batch job, a pipeline, a library, a scheduled task — stop and talk to the person first. Say plainly: this has no web surface, so deploying it as-is would start something nobody can reach. Then offer what fits what it actually does. A program somebody drives interactively usually wants a small web front end over the same functionality: say which commands become which screens, what the front end will call underneath, and what does not survive the move (raw keyboard handling, curses redraw, anything assuming a live terminal). Something that runs to completion and produces output usually wants scheduling plus a page showing the last run and its result, not a front end at all. A library usually should not be deployed. Say which you think it is and why, get agreement on that shape before building it, then build it, give it a /healthz, and deploy that. Do not silently generate a front end and ship it: the person asked to deploy their program, and what they would get is a different program.",
           "touches": []
         },
         "conditions": {
@@ -532,8 +532,8 @@
     "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
     "algorithm": "ed25519",
     "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
-    "manifestSha256": "ddb5d834ae896504b6f42fa3bf6f3a2318285ad8609bd3abefb2d7c16107cf5b",
-    "signature": "DqQM3buBYD8uQ/+S/KzqOdKrkivTYZ0zXYgHhZuCCZidShOxog0N+bMl5J9sQEfcIsvZZXgDFsWsdEGh8gzqCg==",
-    "signedAt": "2026-08-14T17:50:32.806Z"
+    "manifestSha256": "73499936d85d5a2872a5bbf25a93861e5b5af41e5e5b07fdb90bd11e61974505",
+    "signature": "jzH98f7vPoSalIPYXkjfJ89NB39B9Kb0UdRKFsbx8gRKUeKQWhgIvZ0ZgRSqouqV9Kigd4C1jpnhq3OwlyIdBg==",
+    "signedAt": "2026-08-14T18:44:19.454Z"
   }
 }

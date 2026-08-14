@@ -59,11 +59,72 @@ const SHIM_CANDIDATES = [
 
 const findShim = () => SHIM_CANDIDATES.find((candidate) => existsSync(candidate));
 
+/**
+ * Two programs that both fail the same way, for opposite-looking reasons.
+ *
+ * The pack's rule is "does anything listen on a port", not "is it a TUI" —
+ * so it has to fire on a batch job as readily as on a terminal UI. Running
+ * only the TUI would let a rule that pattern-matched the word "terminal" pass
+ * for years. T3_DISCOVERY_SHAPE=batch picks the other one.
+ */
+const PROGRAMS = {
+  tui: {
+    label: "A terminal program",
+    file: "todo.py",
+    source: [
+      '"""A task list that runs in the terminal."""',
+      "",
+      "import sys",
+      "",
+      "TASKS = []",
+      "",
+      "",
+      "def main():",
+      "    while True:",
+      '        sys.stdout.write("> ")',
+      "        sys.stdout.flush()",
+      "        line = sys.stdin.readline()",
+      "        if not line:",
+      "            return",
+      '        if line.strip() == "quit":',
+      "            return",
+      "        TASKS.append(line.strip())",
+      "",
+      "",
+      'if __name__ == "__main__":',
+      "    main()",
+      "",
+    ].join("\n"),
+  },
+  batch: {
+    label: "A batch job nobody drives",
+    file: "report.py",
+    source: [
+      '"""Builds the weekly numbers and writes them to a CSV."""',
+      "",
+      "import csv",
+      "",
+      "",
+      "def main():",
+      '    rows = [("week", "total"), ("1", "42")]',
+      '    with open("weekly.csv", "w", newline="") as handle:',
+      "        csv.writer(handle).writerows(rows)",
+      "",
+      "",
+      'if __name__ == "__main__":',
+      "    main()",
+      "",
+    ].join("\n"),
+  },
+};
+
+const PROGRAM = PROGRAMS[process.env["T3_DISCOVERY_SHAPE"] ?? "tui"] ?? PROGRAMS.tui;
+
 const { phase, check, skip, finish } = createReporter();
 const { signUp, addProject, openProject, sendAgentMessage } = createHarness({
   baseUrl: BASE_URL,
   password: PASSWORD,
-  probeFile: "todo.py",
+  probeFile: PROGRAM.file,
 });
 
 // Every snapshot is kept, not just the last one. bodyText returns what is
@@ -98,40 +159,14 @@ const browser = await chromium.launch();
 const account = await openIsolatedSession(browser, "A");
 
 try {
-  phase("A terminal program, and no mention of packs anywhere");
+  phase(`${PROGRAM.label}, and no mention of packs anywhere`);
   mkdirSync(APP_DIR, { recursive: true });
-  writeFileSync(
-    path.join(APP_DIR, "todo.py"),
-    [
-      '"""A task list that runs in the terminal."""',
-      "",
-      "import sys",
-      "",
-      "TASKS = []",
-      "",
-      "",
-      "def main():",
-      "    while True:",
-      '        sys.stdout.write("> ")',
-      "        sys.stdout.flush()",
-      "        line = sys.stdin.readline()",
-      "        if not line:",
-      "            return",
-      '        if line.strip() == "quit":',
-      "            return",
-      "        TASKS.append(line.strip())",
-      "",
-      "",
-      'if __name__ == "__main__":',
-      "    main()",
-      "",
-    ].join("\n"),
-  );
-  check("the program exists", existsSync(path.join(APP_DIR, "todo.py")), APP_DIR);
+  writeFileSync(path.join(APP_DIR, PROGRAM.file), PROGRAM.source);
+  check("the program exists", existsSync(path.join(APP_DIR, PROGRAM.file)), APP_DIR);
   check(
     "and it opens no socket",
     !/\b(import (flask|http\.server|socket)|from flask|app\.run|listen\()/i.test(
-      readFileSync(path.join(APP_DIR, "todo.py"), "utf8"),
+      readFileSync(path.join(APP_DIR, PROGRAM.file), "utf8"),
     ),
   );
 
@@ -149,7 +184,7 @@ try {
   await addProject(account.page, APP_DIR);
   check("A opens the project", await openProject(account.page));
 
-  const prompt = "Deploy todo.py from this workspace to a server.";
+  const prompt = `Deploy ${PROGRAM.file} from this workspace to a server.`;
   check(
     "the prompt mentions no pack, no CLI, and no front end",
     !/pack|t3 pack|front ?end|web/i.test(prompt),
@@ -210,7 +245,9 @@ try {
   );
 
   // Nothing in the prompt says this program has no web surface. If the agent
-  // raises it, it read it out of the pack.
+  // raises it, it read it out of the pack. Kept shape-agnostic on purpose: the
+  // pack's rule is "does anything listen on a port", so it has to fire on a
+  // batch job as readily as on a terminal UI.
   const raised = await waitForAny(
     account.page,
     // "front-end" with a hyphen is how it gets written about half the time, and
@@ -220,7 +257,7 @@ try {
     AGENT_TURN_MS,
   );
   check(
-    "and arrives at the terminal-program problem it was never told about",
+    "and arrives at the nothing-listens problem it was never told about",
     raised.found,
     raised.found ? "" : `saw: ${raised.seen.replace(/\s+/g, " ").slice(-200)}`,
   );
