@@ -11,12 +11,13 @@
  * pack's own words: a paraphrase of "the deploy reports success and serves the
  * old version" is how that knowledge stops being actionable.
  */
-import { AlertTriangleIcon, CheckIcon, LoaderIcon, XIcon } from "lucide-react";
+import { AlertTriangleIcon, CheckIcon, LoaderIcon, RocketIcon, XIcon } from "lucide-react";
 import type { EnvironmentId, PackManifest, ProjectId, TenantId } from "@t3tools/contracts";
 import type { WorkspaceId } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
+import { buildDeployPrompt } from "../packDashboard/packDetail.logic";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 
@@ -66,11 +67,14 @@ export function PackQuickView({
   packName,
   scope,
   onClose,
+  onUsePrompt,
 }: {
   readonly packId: string;
   readonly packName: string;
   readonly scope: QuickViewScope;
   readonly onClose: () => void;
+  /** Writes into the composer this quick view is sitting in. */
+  readonly onUsePrompt: (prompt: string) => void;
 }) {
   const [manifest, setManifest] = useState<PackManifest | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -149,6 +153,15 @@ export function PackQuickView({
   }
 
   const failureModes = manifest ? failureModesOf(manifest) : [];
+  // Null for a library, and for a pack still loading — either way there is
+  // nothing honest to put in the prompt yet.
+  const deployPrompt = manifest
+    ? buildDeployPrompt({
+        qualifiedName: `${manifest.identity.publisher.handle}/${manifest.identity.name}`,
+        runtime: manifest.runtime,
+        requirements: manifest.requirements,
+      })
+    : null;
 
   return (
     <div
@@ -231,6 +244,26 @@ export function PackQuickView({
               </span>
             </div>
           ) : null}
+
+          {deployPrompt === null ? null : (
+            <div className="mt-2 flex items-center gap-2">
+              <Button
+                size="xs"
+                variant="outline"
+                data-testid="pack-quick-view-deploy"
+                onClick={() => {
+                  onUsePrompt(deployPrompt);
+                  onClose();
+                }}
+              >
+                <RocketIcon className="size-3" />
+                Deploy it
+              </Button>
+              <span className="text-[10px] text-muted-foreground">
+                Writes what this takes to run into the prompt, for you to read before sending.
+              </span>
+            </div>
+          )}
         </>
       )}
     </div>

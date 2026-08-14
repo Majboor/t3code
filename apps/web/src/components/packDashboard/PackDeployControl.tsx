@@ -1,6 +1,7 @@
 import { CopyIcon, RocketIcon, TriangleAlertIcon } from "lucide-react";
 import type { PackRequirements, PackRuntime } from "@t3tools/contracts";
 
+import { buildDeployPrompt } from "./packDetail.logic";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
@@ -34,28 +35,18 @@ export function listDeployInputs(requirements: PackRequirements): {
   };
 }
 
-/**
- * Turns the manifest into the command that registers this pack as a deploy
- * target. It is a starting point rather than a one-click deploy: the host and
- * its credentials are things the pack declares it needs and cannot know.
- */
-export function buildDeployTargetCommand(runtime: PackRuntime): string | null {
-  const start = runtime.commands.start;
-  if (!start) return null;
-  const cwd = start.cwd && start.cwd !== "." ? `cd ${start.cwd} && ` : "";
-  return `t3 deploy add --project <projectId> --name "<target name>" --command ${JSON.stringify(
-    `${cwd}${start.command}`,
-  )}`;
-}
-
 export function PackDeployControl({
+  qualifiedName,
   runtime,
   requirements,
 }: {
+  qualifiedName: string;
   runtime: PackRuntime;
   requirements: PackRequirements;
 }) {
-  const command = buildDeployTargetCommand(runtime);
+  // The same words the composer's quick view writes into the prompt bar, so a
+  // pack does not describe its own deploy two different ways.
+  const deployPrompt = buildDeployPrompt({ qualifiedName, runtime, requirements });
   const { required } = listDeployInputs(requirements);
   const steps = DEPLOY_STEPS.flatMap(([key, label]) => {
     const step = runtime.commands[key];
@@ -67,7 +58,7 @@ export function PackDeployControl({
       toastManager.add({
         type: "success",
         title: `${label} copied`,
-        description: "Fill in the project and target name before running it.",
+        description: "Paste it to the agent working on the project you want this deployed from.",
       });
     },
     onError: (error) => {
@@ -91,14 +82,14 @@ export function PackDeployControl({
     <section className="rounded-lg border border-border p-4" data-testid="pack-detail-deploy">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-medium text-foreground">Deploy</h2>
-        {command === null ? null : (
+        {deployPrompt === null ? null : (
           <Button
             size="sm"
             data-testid="pack-detail-deploy-copy"
-            onClick={() => copyToClipboard(command, "Deploy target command")}
+            onClick={() => copyToClipboard(deployPrompt, "Deploy prompt")}
           >
             <CopyIcon />
-            Copy deploy command
+            Copy deploy prompt
           </Button>
         )}
       </div>

@@ -1,36 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { buildDeployTargetCommand, listDeployInputs } from "./PackDeployControl";
+import { listDeployInputs } from "./PackDeployControl";
 
-const runtime = (commands: Record<string, unknown>) => ({ target: "python", commands }) as never;
-
-describe("buildDeployTargetCommand", () => {
-  it("is null when the pack declares nothing to start", () => {
-    expect(buildDeployTargetCommand(runtime({}))).toBeNull();
-  });
-
-  it("quotes the start command so a shell cannot split it", () => {
-    const command = buildDeployTargetCommand(
-      runtime({ start: { command: 'gunicorn -b 127.0.0.1:8000 "app:app"' } }),
-    );
-    expect(command).toContain('--command "gunicorn -b 127.0.0.1:8000 \\"app:app\\""');
-  });
-
-  it("carries the declared working directory into the command", () => {
-    const command = buildDeployTargetCommand(
-      runtime({ start: { command: "npm start", cwd: "server" } }),
-    );
-    expect(command).toContain('"cd server && npm start"');
-  });
-
-  it("leaves a cwd of . out, since that is where the command already runs", () => {
-    const command = buildDeployTargetCommand(
-      runtime({ start: { command: "npm start", cwd: "." } }),
-    );
-    expect(command).toContain('"npm start"');
-    expect(command).not.toContain("cd .");
-  });
-});
+// The `t3 deploy add` template this file used to build is gone: it carried
+// <projectId> and <target name> for a reader to fill in, which is not something
+// an agent can run. What the deploy surface offers now is a prompt, built and
+// tested in packDetail.logic.
 
 describe("listDeployInputs", () => {
   it("keeps only what the pack says is required, and remembers which are secret", () => {

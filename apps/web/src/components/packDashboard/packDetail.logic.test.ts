@@ -4,6 +4,7 @@ import type {
   PackKnowledge,
   PackRelease,
   PackRequirements,
+  PackRuntime,
   PackScarRecord,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
@@ -18,6 +19,7 @@ import {
   describeRequirements,
   describeScarRecord,
   describeScarRecordBrief,
+  buildDeployPrompt,
   describeStaleness,
   describeVisibilityChange,
   formatObservedMonth,
@@ -505,5 +507,66 @@ describe("parsePackRouteSearch", () => {
     expect(parsePackRouteSearch({ version: " 1.1.0 ", other: "x" })).toEqual({ version: "1.1.0" });
     expect(parsePackRouteSearch({ version: "  " })).toEqual({});
     expect(parsePackRouteSearch({ version: 3 })).toEqual({});
+  });
+});
+
+describe("buildDeployPrompt", () => {
+  const runtime = {
+    target: "node",
+    commands: {
+      install: { command: "bun install" },
+      build: { command: "bun run build" },
+      start: { command: "bun run start", cwd: "./server" },
+    },
+  } as unknown as PackRuntime;
+
+  const requirements = {
+    environment: [
+      { name: "DEPLOY_HOST", purpose: "where it goes", secret: false, required: true },
+      { name: "DEPLOY_TOKEN", purpose: "auth", secret: true, required: true },
+      { name: "DEBUG", purpose: "noise", secret: false, required: false },
+    ],
+  } as unknown as PackRequirements;
+
+  it("describes how the pack starts and what it needs", () => {
+    const prompt = buildDeployPrompt({ qualifiedName: "acme/checkout", runtime, requirements });
+    expect(prompt).toContain("Set up a deploy target for the acme/checkout pack.");
+    expect(prompt).toContain("It starts with `bun run start` from ./server.");
+    expect(prompt).toContain("install with `bun install`, then build with `bun run build`");
+    expect(prompt).toContain("DEPLOY_HOST, DEPLOY_TOKEN (secret)");
+  });
+
+  it("asks for the host and credentials rather than inventing them", () => {
+    const prompt = buildDeployPrompt({ qualifiedName: "acme/checkout", runtime, requirements });
+    expect(prompt).toContain("Ask me for the host and credentials before running anything.");
+  });
+
+  it("leaves out optional variables, which are not what blocks a deploy", () => {
+    const prompt = buildDeployPrompt({ qualifiedName: "acme/checkout", runtime, requirements });
+    expect(prompt).not.toContain("DEBUG");
+  });
+
+  it("carries no placeholder for the reader to fill in", () => {
+    const prompt = buildDeployPrompt({ qualifiedName: "acme/checkout", runtime, requirements });
+    expect(prompt).not.toContain("<");
+  });
+
+  it("says so when the pack never declares what starts it", () => {
+    const prompt = buildDeployPrompt({
+      qualifiedName: "acme/checkout",
+      runtime: { target: "node", commands: { build: { command: "bun run build" } } } as never,
+      requirements: {} as never,
+    });
+    expect(prompt).toContain("declares no start command");
+  });
+
+  it("is null for a library, which has nothing to start", () => {
+    expect(
+      buildDeployPrompt({
+        qualifiedName: "acme/parser",
+        runtime: { target: "node", commands: {} } as never,
+        requirements: {} as never,
+      }),
+    ).toBeNull();
   });
 });

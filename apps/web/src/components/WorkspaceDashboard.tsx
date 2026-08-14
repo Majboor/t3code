@@ -748,11 +748,14 @@ function WorkspaceRow({
                     : "Start session"}
                 </span>
               </button>
+              {/* Labelled rather than an icon alone: publishing was reachable
+                  only from this row, by a 14px glyph whose sole label was a
+                  tooltip, and nobody found it. */}
               <button
                 type="button"
                 aria-label={`Publish ${projectEntry.project.name} as a pack`}
                 title="Publish as a pack"
-                className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
+                className="flex shrink-0 items-center gap-1 rounded-sm border border-border/70 px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground focus-visible:outline-none"
                 data-testid="dashboard-workspace-publish-pack"
                 onClick={(event) => {
                   event.stopPropagation();
@@ -760,6 +763,7 @@ function WorkspaceRow({
                 }}
               >
                 <PackagePlusIcon className="size-3.5" />
+                Publish
               </button>
               <Link
                 to="/infra/$projectId"

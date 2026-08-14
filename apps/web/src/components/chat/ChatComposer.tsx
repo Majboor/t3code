@@ -1906,6 +1906,14 @@ export const ChatComposer = memo(
                     projectId: activeProjectId,
                   }}
                   onClose={() => setQuickViewPack(null)}
+                  onUsePrompt={(nextPrompt) => {
+                    // Appended, like a pack mention, so it never eats what
+                    // somebody had already started typing.
+                    const trimmed = prompt.trimEnd();
+                    const merged =
+                      trimmed.length === 0 ? nextPrompt : `${trimmed}\n\n${nextPrompt}`;
+                    onPromptChange(merged, merged.length, merged.length, false, []);
+                  }}
                 />
               ) : null}
 

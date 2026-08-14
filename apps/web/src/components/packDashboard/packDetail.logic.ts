@@ -9,6 +9,7 @@ import type {
   PackRelease,
   PackRequirements,
   PackRunningCost,
+  PackRuntime,
   PackScarRecord,
   PackVisibilityScope,
 } from "@t3tools/contracts";
@@ -504,6 +505,66 @@ export function listIntegrationTargets(
     declared.push(variant.target);
   }
   return ["generic", ...declared];
+}
+
+/** The lifecycle steps that run before `start`, in the order they run. */
+const DEPLOY_PREPARATION_STEPS = ["install", "build", "migrate"] as const;
+
+/**
+ * What to ask an agent for when somebody wants this pack deployed.
+ *
+ * It describes the goal and lets the agent work out the command, rather than
+ * handing over a `t3 deploy add` line with `<projectId>` still in it. A
+ * template with holes in it is not something an agent can run, and pasting one
+ * into a prompt bar only moves the job of filling them in.
+ *
+ * It ends by asking for the host and credentials first. The pack declares what
+ * it needs and cannot know where it goes, so the alternative is an agent
+ * inventing a hostname.
+ *
+ * Null when the pack declares no runtime commands at all — that is a library,
+ * and there is nothing to start.
+ */
+export function buildDeployPrompt(input: {
+  readonly qualifiedName: string;
+  readonly runtime: PackRuntime;
+  readonly requirements: PackRequirements;
+}): string | null {
+  const { commands } = input.runtime;
+  const start = commands.start;
+  const preparation = DEPLOY_PREPARATION_STEPS.flatMap((key) => {
+    const step = commands[key];
+    return step === undefined ? [] : [`${key} with \`${step.command}\``];
+  });
+  if (start === undefined && preparation.length === 0) {
+    return null;
+  }
+
+  const lines = [`Set up a deploy target for the ${input.qualifiedName} pack.`, ""];
+
+  if (start === undefined) {
+    lines.push(
+      "The pack declares no start command, so tell me what starts it before registering anything.",
+    );
+  } else {
+    const from = start.cwd && start.cwd !== "." ? ` from ${start.cwd}` : "";
+    lines.push(`It starts with \`${start.command}\`${from}.`);
+  }
+  if (preparation.length > 0) {
+    lines.push(`Before that it needs to ${preparation.join(", then ")}.`);
+  }
+
+  const required = (input.requirements.environment ?? []).filter((entry) => entry.required);
+  if (required.length > 0) {
+    const named = required.map((entry) => `${entry.name}${entry.secret ? " (secret)" : ""}`);
+    lines.push(`It needs ${named.join(", ")} before it can run.`);
+  }
+
+  lines.push(
+    "",
+    "Use `t3 deploy add` to register it. Ask me for the host and credentials before running anything.",
+  );
+  return lines.join("\n");
 }
 
 export function resolveIntegrationPrompt(
