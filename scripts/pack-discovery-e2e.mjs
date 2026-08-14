@@ -193,7 +193,10 @@ try {
   // raises it, it read it out of the pack.
   const raised = await waitForAny(
     account.page,
-    /no web surface|no port|cannot be reached|nobody (can|could) reach|front ?end|web interface/i,
+    // "front-end" with a hyphen is how it gets written about half the time, and
+    // `front ?end` does not match it — a run was recorded as a failure for
+    // spelling rather than behaviour.
+    /no web surface|no port|cannot be reached|nobody (can|could) reach|front[\s-]?end|web (interface|ui)|http interface/i,
     AGENT_TURN_MS,
   );
   check(
