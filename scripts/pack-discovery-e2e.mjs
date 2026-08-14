@@ -66,15 +66,23 @@ const { signUp, addProject, openProject, sendAgentMessage } = createHarness({
   probeFile: "todo.py",
 });
 
+// Every snapshot is kept, not just the last one. bodyText returns what is
+// rendered now, and the transcript scrolls — so a message the agent sent
+// early can be gone from view by the time a later check looks, and the check
+// fails for something that did happen. Accumulating the snapshots is the
+// difference between "the agent never said it" and "it is no longer on
+// screen", which are not the same finding.
+const transcript = [];
+
 async function waitForAny(page, matches, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  let seen = "";
   while (Date.now() < deadline) {
-    seen = await bodyText(page);
-    if (matches.test(seen)) return { found: true, seen };
+    const snapshot = await bodyText(page);
+    transcript.push(snapshot);
+    if (matches.test(snapshot)) return { found: true, seen: snapshot };
     await sleep(6_000);
   }
-  return { found: false, seen };
+  return { found: false, seen: transcript.join("\n") };
 }
 
 const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(
@@ -224,4 +232,10 @@ try {
   }
 }
 
-process.exit(finish());
+const exitCode = finish();
+if (exitCode !== 0) {
+  const dump = path.join(os.tmpdir(), `t3-discovery-transcript-${RUN_ID}.txt`);
+  writeFileSync(dump, transcript.join("\n\n───\n\n"));
+  console.log(`\nFull transcript written to ${dump}`);
+}
+process.exit(exitCode);
