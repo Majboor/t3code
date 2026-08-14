@@ -1,3 +1,12 @@
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+
+// Deep imports on purpose: the package barrel also re-exports the store SDK,
+// which would pull the whole client transport into this program for two
+// functions.
+import { runCommand as runPackCliCommand } from "@t3tools/pack-cli/commands";
+import { makeDirectoryRegistry } from "@t3tools/pack-cli/registry";
+import { makeNodePackStore } from "@t3tools/pack-cli/store";
 import { NetService } from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import {
@@ -1555,6 +1564,94 @@ const runServerCommand = (
     return yield* runServer.pipe(Effect.provideService(ServerConfig, config));
   });
 
+/**
+ * Finding and reading packs from the CLI the workspace already runs.
+ *
+ * A pack is only useful if whoever is doing the work can go and get it. The
+ * agent has a shell and this binary, so `t3 pack search` / `t3 pack show` is
+ * the whole mechanism: it looks for a pack when it needs one and reads the
+ * knowledge out, rather than having every pack pushed into its context whether
+ * relevant or not. `t3-pack` can do this too, but it is not on PATH inside
+ * somebody's project — this binary is.
+ *
+ * The work is pack-cli's; this only builds the context it needs and prints the
+ * answer, so the two CLIs cannot drift apart.
+ */
+function packRegistryRoot(explicit: string | undefined): string {
+  const fromEnvironment = process.env["T3CODE_PACK_REGISTRY"];
+  if (explicit !== undefined && explicit.length > 0) return explicit;
+  if (fromEnvironment !== undefined && fromEnvironment.length > 0) return fromEnvironment;
+  const home = process.env["T3CODE_HOME"];
+  return `${home !== undefined && home.length > 0 ? home : `${homedir()}/.t3code`}/packs`;
+}
+
+class PackCommandError extends Data.TaggedError("PackCommandError")<{
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
+
+function runPackCommand(
+  command: Parameters<typeof runPackCliCommand>[0],
+  registryRoot: string | undefined,
+): Effect.Effect<string, PackCommandError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const store = makeNodePackStore();
+      const outcome = await runPackCliCommand(command, {
+        store,
+        registry: makeDirectoryRegistry(store, packRegistryRoot(registryRoot)),
+        cwd: process.cwd(),
+        now: () => new Date(),
+        newId: (prefix: string) => `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
+      });
+      return outcome.human;
+    },
+    catch: (cause) =>
+      new PackCommandError({
+        message: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }),
+  });
+}
+
+const packRegistryFlag = Flag.string("registry").pipe(
+  Flag.withDescription("Registry directory to read packs from."),
+  Flag.optional,
+);
+
+const packSearchCommand = Command.make("search", {
+  registry: packRegistryFlag,
+  query: Argument.string("query").pipe(
+    Argument.withDescription('What the pack should help with, e.g. "deploy".'),
+  ),
+}).pipe(
+  Command.withDescription("Find a pack that covers a capability."),
+  Command.withHandler((flags) =>
+    runPackCommand(
+      { kind: "search", query: flags.query, limit: 10, category: undefined, tag: undefined },
+      Option.getOrUndefined(flags.registry),
+    ).pipe(Effect.flatMap((text) => Console.log(text))),
+  ),
+);
+
+const packShowCommand = Command.make("show", {
+  registry: packRegistryFlag,
+  pack: Argument.string("pack").pipe(Argument.withDescription("Pack name to read.")),
+}).pipe(
+  Command.withDescription("Read a pack: what it does, what it needs, and how to use it."),
+  Command.withHandler((flags) =>
+    runPackCommand(
+      { kind: "show", pack: flags.pack, version: undefined },
+      Option.getOrUndefined(flags.registry),
+    ).pipe(Effect.flatMap((text) => Console.log(text))),
+  ),
+);
+
+const packCommand = Command.make("pack").pipe(
+  Command.withDescription("Find and read packs: reusable knowledge for a task."),
+  Command.withSubcommands([packSearchCommand, packShowCommand]),
+);
+
 const startCommand = Command.make("start", { ...sharedServerCommandFlags }).pipe(
   Command.withDescription("Run the T3 Code server."),
   Command.withHandler((flags) => runServerCommand(flags)),
@@ -1582,5 +1679,6 @@ export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     projectCommand,
     deployCommand,
     analyticsCommand,
+    packCommand,
   ]),
 );
