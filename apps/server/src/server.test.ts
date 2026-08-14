@@ -2923,8 +2923,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ).pipe(Effect.result),
       );
 
-      assertTrue(result._tag === "Failure");
-      assertTrue(result.failure._tag === "CollaborationError");
+      // Spelled out rather than three bare tag checks. This test has failed
+      // once in a turbo run and passed alone and on five clean full runs
+      // afterwards, so the next occurrence needs to say what came back instead
+      // — a connection error and a wrong permission look identical through
+      // assertTrue(result._tag === "Failure").
+      assertTrue(
+        result._tag === "Failure",
+        `expected the call to be refused, got ${JSON.stringify(result)}`,
+      );
+      assertTrue(
+        result.failure._tag === "CollaborationError",
+        `expected a CollaborationError, got ${JSON.stringify(result.failure)}`,
+      );
       assertInclude(
         result.failure.message,
         "Forbidden: authenticated session does not have workspace.view.",
