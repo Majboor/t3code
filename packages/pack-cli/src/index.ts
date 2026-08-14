@@ -5,6 +5,7 @@ export * from "./manifest.ts";
 export * from "./output.ts";
 export * from "./readiness.ts";
 export * from "./registry.ts";
+export * from "./registryRoot.ts";
 export * from "./store.ts";
 export * from "./store-sdk.ts";
 export * from "./suggest.ts";

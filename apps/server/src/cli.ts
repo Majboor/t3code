@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 
 // Deep imports on purpose: the package barrel also re-exports the store SDK,
 // which would pull the whole client transport into this program for two
 // functions.
 import { runCommand as runPackCliCommand } from "@t3tools/pack-cli/commands";
 import { makeDirectoryRegistry } from "@t3tools/pack-cli/registry";
+import { resolveRegistryRoot } from "@t3tools/pack-cli/registryRoot";
 import { makeNodePackStore } from "@t3tools/pack-cli/store";
 import { NetService } from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
@@ -1578,30 +1577,6 @@ const runServerCommand = (
  * The work is pack-cli's; this only builds the context it needs and prints the
  * answer, so the two CLIs cannot drift apart.
  */
-export function packRegistryRoot(
-  explicit: string | undefined,
-  environment: Record<string, string | undefined> = process.env,
-  exists: (path: string) => boolean = existsSync,
-): string {
-  if (explicit !== undefined && explicit.length > 0) return explicit;
-
-  const configured = environment["T3CODE_PACK_REGISTRY"];
-  if (configured !== undefined && configured.length > 0) return configured;
-
-  // T3CODE_HOME moves the server's state, and a server run against a scratch
-  // home has no packs in it — but the packs are still installed under the
-  // default home, because that is where installing puts them. Preferring a
-  // home that has no registry is how an agent gets told "no pack matches" in a
-  // workspace that has five, which reads as packs being useless rather than as
-  // it having looked in an empty directory.
-  const fallback = `${homedir()}/.t3code/packs`;
-  const home = environment["T3CODE_HOME"];
-  if (home === undefined || home.length === 0) return fallback;
-
-  const fromHome = `${home}/packs`;
-  return exists(fromHome) || !exists(fallback) ? fromHome : fallback;
-}
-
 class PackCommandError extends Data.TaggedError("PackCommandError")<{
   readonly message: string;
   readonly cause: unknown;
@@ -1616,7 +1591,7 @@ function runPackCommand(
       const store = makeNodePackStore();
       const outcome = await runPackCliCommand(command, {
         store,
-        registry: makeDirectoryRegistry(store, packRegistryRoot(registryRoot)),
+        registry: makeDirectoryRegistry(store, resolveRegistryRoot(registryRoot)),
         cwd: process.cwd(),
         now: () => new Date(),
         newId: (prefix: string) => `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 20)}`,

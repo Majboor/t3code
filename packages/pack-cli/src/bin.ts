@@ -7,25 +7,14 @@
  *
  * @module bin
  */
-import { homedir } from "node:os";
 
 import { parseArgs } from "./args.ts";
 import { runCommand, type CommandContext } from "./commands.ts";
+import { resolveRegistryRoot } from "./registryRoot.ts";
 import { toPackCliError } from "./errors.ts";
 import { renderFailure, renderSuccess } from "./output.ts";
 import { makeDirectoryRegistry, type PackRegistry } from "./registry.ts";
 import { makeNodePackStore } from "./store.ts";
-
-const REGISTRY_DIRECTORY = "packs";
-
-function defaultRegistryRoot(environment: Record<string, string | undefined>): string {
-  const explicit = environment["T3CODE_PACK_REGISTRY"];
-  if (explicit !== undefined && explicit.length > 0) {
-    return explicit;
-  }
-  const home = environment["T3CODE_HOME"];
-  return `${home !== undefined && home.length > 0 ? home : `${homedir()}/.t3code`}/${REGISTRY_DIRECTORY}`;
-}
 
 /**
  * Only reached when the caller asks for a server, so a local search never opens
@@ -58,7 +47,7 @@ async function main(): Promise<void> {
   }
 
   const { command, options } = parsed.parsed;
-  const root = options.registry ?? defaultRegistryRoot(process.env);
+  const root = resolveRegistryRoot(options.registry);
   const remote =
     options.server !== undefined
       ? await connectRemoteRegistry({
