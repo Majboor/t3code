@@ -55,13 +55,16 @@ const SKIP_AGENT = process.env["T3_E2E_SKIP_AGENT"] === "1";
  * Why the branch comparison and the conflict warning are not asserted with the
  * agent switched off.
  *
- * Not because they need a turn — a probe with two fresh accounts, no turns and
- * no approvals had B create a branch and the comparison rendered fine. What
- * breaks is specific to this path: with the agent off, B's held prompt is
- * approved and never re-sent, and from there the branch section renders
- * neither the offer nor the comparison however long it is given. The panel is
- * right in every other arrangement, so the suite says what it does not know
- * rather than failing a feature that works.
+ * Two hypotheses have been tried and both are wrong. It is not that the feature
+ * needs a turn: a probe with two fresh accounts, no turns and no approvals had B
+ * create a branch and the comparison rendered fine. It is not the approval path
+ * either: a probe replicating exactly that — approvals on, B's prompt held and
+ * approved and never re-sent, then Own branch — also rendered it fine.
+ *
+ * Enabling the check in this mode and running the whole suite still fails it, so
+ * the difference is somewhere in the accumulated state of a full agent-off run
+ * and is not yet identified. The suite says what it does not know rather than
+ * failing a feature that works everywhere it has been isolated.
  */
 const BRANCH_UI_UNEXPLAINED = "not asserted without the agent — see the note in this file";
 

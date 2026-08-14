@@ -32,11 +32,11 @@
   reach a loopback address here.
 - `T3_E2E_SKIP_AGENT=1` drops the phases that need a model, which is how CI runs it
   without any provider credentials. It also reports the branch comparison and the
-  conflict warning as SKIP. That is not because they need a turn — a probe with two
-  fresh accounts, no turns and no approvals had B create a branch and the comparison
-  render fine. Something specific to the agent-off path breaks it, and until that is
-  understood the suite says what it does not know rather than failing a feature that
-  works everywhere else.
+  conflict warning as SKIP, and two hypotheses for why have been tried and
+  disproven: it is not that they need a turn, and it is not the held-and-approved
+  prompt — probes of both render the comparison fine. Enabling the check and running
+  the whole suite in that mode still fails it, so the cause is somewhere in the
+  accumulated state of a full agent-off run and is not yet identified.
 
 ## Project Snapshot
 
