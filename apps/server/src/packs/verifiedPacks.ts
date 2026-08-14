@@ -16,7 +16,7 @@
  * installed or upgraded, not while it is running, and re-reading a directory
  * on every keystroke of somebody's prompt would be a strange thing to do.
  */
-import type { PackRegistryEntry, TenantId, WorkspaceId } from "@t3tools/contracts";
+import type { PackManifest, PackRegistryEntry, TenantId, WorkspaceId } from "@t3tools/contracts";
 import { PackId } from "@t3tools/contracts";
 import { makeDirectoryRegistry } from "@t3tools/pack-cli/registry";
 import { resolveRegistryRoot } from "@t3tools/pack-cli/registryRoot";
@@ -104,6 +104,40 @@ export async function listVerifiedPacks(
     }
   }
   return cached.map((entry) => ({ ...entry, tenantId, workspaceId }));
+}
+
+/**
+ * One shipped pack, with its manifest.
+ *
+ * Search and read have to agree about what exists. Offering a pack in a list
+ * and then failing to open it is worse than not offering it, because the
+ * person has already decided they want it.
+ */
+export async function getVerifiedPack(
+  packId: string,
+): Promise<{ manifest: PackManifest; version: string } | undefined> {
+  if (!isVerifiedPackId(packId)) {
+    return undefined;
+  }
+  const root = verifiedPackRoot();
+  if (root === undefined) {
+    return undefined;
+  }
+  const name = packId.slice(VERIFIED_PACK_ID_PREFIX.length);
+  try {
+    const record = await makeDirectoryRegistry(makeNodePackStore(), root).get({ name });
+    if (record === undefined) {
+      return undefined;
+    }
+    return {
+      manifest: record.manifest,
+      // A record without a version would be a registry that cannot say which
+      // release it just handed over, which is not something to paper over.
+      version: record.ref.version ?? record.manifest.identity.version,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Only for tests, which need a registry other than the one on this machine. */

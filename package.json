@@ -63,7 +63,8 @@
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .turbo apps/*/.turbo packages/*/.turbo",
     "sync:vscode-icons": "node scripts/sync-vscode-icons.mjs",
     "clean:e2e": "node scripts/clean-e2e-artifacts.mjs",
-    "test:pack-discovery": "node scripts/pack-discovery-e2e.mjs"
+    "test:pack-discovery": "node scripts/pack-discovery-e2e.mjs",
+    "test:pack-suggestions": "node scripts/pack-suggestions-e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "catalog:",

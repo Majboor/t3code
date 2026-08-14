@@ -3,12 +3,13 @@ import { createHash } from "node:crypto";
 import {
   PackError,
   PackWorkspaceKeyId,
+  UserId,
   type PackManifest,
   type PackVisibility,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, PubSub, Stream } from "effect";
 
-import { listVerifiedPacks } from "../verifiedPacks.ts";
+import { getVerifiedPack, listVerifiedPacks } from "../verifiedPacks.ts";
 
 import {
   fromManifestJson,
@@ -365,6 +366,33 @@ const makePackRegistryService = Effect.gen(function* () {
 
   const get: PackRegistryServiceShape["get"] = (viewer, input) =>
     Effect.gen(function* () {
+      // Search offers shipped packs, so read has to serve them too. Listing a
+      // pack and then failing to open it is worse than never listing it: the
+      // person has already decided they want it.
+      const shipped = yield* Effect.promise(() => getVerifiedPack(input.packId));
+      if (shipped !== undefined) {
+        const entries = yield* Effect.promise(() =>
+          listVerifiedPacks(viewer.tenantId, viewer.workspaceId),
+        );
+        const pack = entries.find((entry) => entry.packId === input.packId);
+        if (pack !== undefined) {
+          return {
+            pack,
+            version: {
+              packId: pack.packId,
+              version: pack.latestVersion,
+              capabilitySummary: pack.capabilitySummary,
+              // Nobody in this workspace published it — it came with the
+              // product. Naming the publisher handle is truthful and keeps the
+              // field meaning "who put this here".
+              publishedByUserId: UserId.make(`pack-publisher:${pack.publisherHandle}`),
+              publishedAt: pack.createdAt,
+            },
+            manifest: shipped.manifest,
+          };
+        }
+      }
+
       const pack = yield* loadVisibleEntry(viewer, input.packId);
       const wanted = input.version ?? pack.latestVersion;
       const found = yield* stored(repository.findVersion({ packId: pack.packId, version: wanted }));

@@ -62,7 +62,9 @@ import {
   shouldUseCompactComposerFooter,
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
+import { PackQuickView } from "../packSuggestions/PackQuickView";
 import { PackSuggestionBar } from "../packSuggestions/PackSuggestionBar";
+import { usePackSuggestionSettings } from "../packSuggestions/usePackSuggestionSettings";
 import { useWorkspacePacks } from "../packSuggestions/useWorkspacePacks";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
@@ -676,12 +678,13 @@ export const ChatComposer = memo(
 
     // Loaded once, matched locally: a request per keystroke would make typing
     // feel like the network.
-    const workspacePacks = useWorkspacePacks(
-      environmentId,
-      activeProjectOwnership?.tenantId ?? null,
+    const packTenantId = activeProjectOwnership?.tenantId ?? null;
+    const packWorkspaceId =
       activeProjectOwnership?.workspaceId ??
-        (activeProjectId ? WorkspaceId.make(activeProjectId) : null),
-    );
+      (activeProjectId ? WorkspaceId.make(activeProjectId) : null);
+    const workspacePacks = useWorkspacePacks(environmentId, packTenantId, packWorkspaceId);
+    const { settings: packSettings, update: updatePackSettings } = usePackSuggestionSettings();
+    const [quickViewPack, setQuickViewPack] = useState<{ id: string; name: string } | null>(null);
     const composerFormRef = useRef<HTMLFormElement>(null);
     const composerFormHeightRef = useRef(0);
     const composerSelectLockRef = useRef(false);
@@ -1892,16 +1895,35 @@ export const ChatComposer = memo(
                   </div>
                 )}
 
+              {quickViewPack && packTenantId && packWorkspaceId ? (
+                <PackQuickView
+                  packId={quickViewPack.id}
+                  packName={quickViewPack.name}
+                  scope={{
+                    environmentId,
+                    tenantId: packTenantId,
+                    workspaceId: packWorkspaceId,
+                    projectId: activeProjectId,
+                  }}
+                  onClose={() => setQuickViewPack(null)}
+                />
+              ) : null}
+
               <PackSuggestionBar
                 prompt={prompt}
                 packs={workspacePacks}
+                enabled={packSettings.enabled}
+                layout={packSettings.layout}
+                onChangeSettings={updatePackSettings}
                 onUsePack={(nextPrompt) => {
                   // Cursor to the end: the mention is appended, so that is
                   // where somebody carries on typing.
                   onPromptChange(nextPrompt, nextPrompt.length, nextPrompt.length, false, []);
                 }}
-                onOpenPack={(packId) => {
-                  window.open(`/packs/${packId}`, "_blank", "noopener");
+                onOpenPack={(packId, packName) => {
+                  setQuickViewPack((current) =>
+                    current?.id === packId ? null : { id: packId, name: packName },
+                  );
                 }}
               />
 
