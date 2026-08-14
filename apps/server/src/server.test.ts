@@ -2932,6 +2932,36 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("lets a session with no tenant of its own create the bootstrap workspace", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      // The dashboard synthesises this tenant id when a session can see no
+      // tenants, and the tenant does not exist until somebody asks for it — so
+      // nobody can hold a membership in it, and requiring one refused
+      // everybody. A UI check cannot reach this: a fresh signup gets its own
+      // personal tenant and the dashboard sends that id instead, so the branch
+      // is never taken there.
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspacesCreate]({
+            tenantId: TenantId.make("tenant-local-personal"),
+            title: "Bootstrap Workspace",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(
+        result._tag === "Success",
+        result._tag === "Failure" ? JSON.stringify(result.failure) : "",
+      );
+      assertTrue(
+        result._tag === "Success" && result.success.workspace.title === "Bootstrap Workspace",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("publishes, searches and lists a pack over websocket rpc", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

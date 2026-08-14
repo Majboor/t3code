@@ -76,12 +76,16 @@ try {
   await goHome(account.page);
 
   phase("A fresh account can make a workspace");
-  // On its own session, having done nothing else. That matters: adding a
-  // project bootstraps a tenant, and with a tenant in hand the permission
-  // check passes for an ordinary reason and proves nothing. The bug reached a
-  // user precisely because a brand-new account has no tenant yet — the
-  // bootstrap tenant does not exist until it is asked for, so nobody can hold
-  // a membership in it, and a check demanding one refused everybody.
+  // On its own session, having done nothing else, so nothing another phase set
+  // up can carry it.
+  //
+  // What this does NOT cover, having been measured rather than assumed: a
+  // fresh signup is given its own personal tenant, and the dashboard sends
+  // that id — so this never reaches the bootstrap branch that produced
+  // "does not have workspace.edit" for a session that could see no tenants at
+  // all. That branch is covered by a server test, which fails when it is
+  // removed; this one does not. It is still worth running, as creating a
+  // workspace is the first thing anybody does.
   const fresh = await openIsolatedSession(browser, "fresh");
   try {
     const freshAccount = `eco.fresh.${RUN_ID}@example.test`;
