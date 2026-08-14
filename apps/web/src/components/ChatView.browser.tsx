@@ -381,6 +381,7 @@ function createUserMessage(options: {
   return {
     id: options.id,
     role: "user" as const,
+    authorUserId: null,
     text: options.text,
     ...(options.attachments ? { attachments: options.attachments } : {}),
     turnId: null,
@@ -394,6 +395,7 @@ function createAssistantMessage(options: { id: MessageId; text: string; offsetSe
   return {
     id: options.id,
     role: "assistant" as const,
+    authorUserId: null,
     text: options.text,
     turnId: null,
     streaming: false,

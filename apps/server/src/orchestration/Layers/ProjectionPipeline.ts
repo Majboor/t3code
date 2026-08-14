@@ -793,6 +793,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
             role: event.payload.role,
+            // Only the first event of a streamed message carries the author;
+            // the repository's COALESCE keeps it across the rest.
+            authorUserId: event.payload.authorUserId ?? previousMessage?.authorUserId ?? null,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             isStreaming: event.payload.streaming,

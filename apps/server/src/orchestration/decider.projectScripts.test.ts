@@ -226,6 +226,7 @@ describe("decider project scripts", () => {
           message: {
             messageId: asMessageId("message-user-1"),
             role: "user",
+            authorUserId: null,
             text: "hello",
             attachments: [],
           },

@@ -16,6 +16,7 @@ import type {
   CheckpointRef,
   ProviderInteractionMode,
   RuntimeMode,
+  UserId,
 } from "@t3tools/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
@@ -46,6 +47,12 @@ export type ChatAttachment = ChatImageAttachment;
 export interface ChatMessage {
   id: MessageId;
   role: "user" | "assistant" | "system";
+  /**
+   * Who sent it, when the server recorded one. Null for the assistant, for
+   * messages predating the author column, and for a message this browser has
+   * optimistically added but not yet had echoed back.
+   */
+  authorUserId?: UserId | null;
   text: string;
   attachments?: ChatAttachment[];
   turnId?: TurnId | null;

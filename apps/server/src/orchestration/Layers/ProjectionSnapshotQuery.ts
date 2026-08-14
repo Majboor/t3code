@@ -291,6 +291,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           turn_id AS "turnId",
           role,
+          author_user_id AS "authorUserId",
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
@@ -549,6 +550,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           turn_id AS "turnId",
           role,
+          author_user_id AS "authorUserId",
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
@@ -787,6 +789,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 threadMessages.push({
                   id: row.messageId,
                   role: row.role,
+                  authorUserId: row.authorUserId,
                   text: row.text,
                   ...(row.attachments !== null ? { attachments: row.attachments } : {}),
                   turnId: row.turnId,
@@ -1372,6 +1375,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           const message = {
             id: row.messageId,
             role: row.role,
+            authorUserId: row.authorUserId,
             text: row.text,
             turnId: row.turnId,
             streaming: row.isStreaming === 1,

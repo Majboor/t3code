@@ -664,6 +664,7 @@ describe("CheckpointReactor", () => {
         message: {
           messageId: MessageId.make("message-user-1"),
           role: "user",
+          authorUserId: null,
           text: "start turn",
           attachments: [],
         },

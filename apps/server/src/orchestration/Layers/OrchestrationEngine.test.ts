@@ -230,6 +230,7 @@ describe("OrchestrationEngine", () => {
         message: {
           messageId: asMessageId("msg-1"),
           role: "user",
+          authorUserId: null,
           text: "hello",
           attachments: [],
         },
@@ -779,6 +780,7 @@ describe("OrchestrationEngine", () => {
       message: {
         messageId: asMessageId("msg-atomic-1"),
         role: "user" as const,
+        authorUserId: null,
         text: "hello",
         attachments: [],
       },
@@ -949,6 +951,7 @@ describe("OrchestrationEngine", () => {
           message: {
             messageId: asMessageId("msg-missing"),
             role: "user",
+            authorUserId: null,
             text: "hello",
             attachments: [],
           },

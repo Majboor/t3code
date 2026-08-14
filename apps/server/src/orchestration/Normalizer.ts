@@ -136,6 +136,9 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       ...command,
       message: {
         ...command.message,
+        // Unknown until the socket stamps it from the session. Anonymous is the
+        // right thing to fail to, so this never inherits a client's claim.
+        authorUserId: null,
         attachments: normalizedAttachments,
       },
     } satisfies OrchestrationCommand;

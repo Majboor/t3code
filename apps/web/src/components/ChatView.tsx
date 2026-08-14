@@ -93,6 +93,7 @@ import {
   type Thread,
   type TurnDiffSummary,
 } from "../types";
+import { useCollaborationMembers } from "../hooks/useCollaborationMembers";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useCommandPaletteStore } from "../commandPaletteStore";
@@ -874,6 +875,14 @@ export default function ChatView(props: ChatViewProps) {
   const activeProject = useStore(
     useMemo(() => createProjectSelectorByRef(activeProjectRef), [activeProjectRef]),
   );
+
+  // Who wrote what. In an unshared project there is no ownership and the roster
+  // is empty, so every message renders exactly as it always has.
+  const collaborationMembers = useCollaborationMembers({
+    environmentId: activeThread?.environmentId ?? null,
+    tenantId: activeProject?.ownership?.tenantId ?? null,
+    workspaceId: activeProject?.ownership?.workspaceId ?? null,
+  });
 
   useEffect(() => {
     if (routeKind !== "server") {
@@ -3823,6 +3832,7 @@ export default function ChatView(props: ChatViewProps) {
               resolvedTheme={resolvedTheme}
               timestampFormat={timestampFormat}
               workspaceRoot={activeWorkspaceRoot}
+              collaborationMembers={collaborationMembers}
               onIsAtEndChange={onIsAtEndChange}
             />
 

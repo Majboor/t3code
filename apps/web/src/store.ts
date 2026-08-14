@@ -170,6 +170,7 @@ function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage)
   return {
     id: message.id,
     role: message.role,
+    authorUserId: message.authorUserId,
     text: message.text,
     turnId: message.turnId,
     createdAt: message.createdAt,
@@ -1367,6 +1368,7 @@ function applyEnvironmentOrchestrationEvent(
         const message = mapMessage(thread.environmentId, {
           id: event.payload.messageId,
           role: event.payload.role,
+          authorUserId: event.payload.authorUserId,
           text: event.payload.text,
           ...(event.payload.attachments !== undefined
             ? { attachments: event.payload.attachments }
@@ -1389,6 +1391,9 @@ function applyEnvironmentOrchestrationEvent(
                         ? message.text
                         : entry.text,
                     streaming: message.streaming,
+                    // Only the opening event of a streamed message names its
+                    // author; the later chunks carry null and must not erase it.
+                    ...(message.authorUserId ? { authorUserId: message.authorUserId } : {}),
                     ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
                     ...(message.streaming
                       ? entry.completedAt !== undefined

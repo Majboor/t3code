@@ -185,6 +185,12 @@ export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
+  /**
+   * Who wrote this, when the server knew. Null for the assistant, and for the
+   * human messages recorded before anybody was recording an author — a
+   * transcript that admits it does not know beats one that guesses.
+   */
+  authorUserId: Schema.NullOr(UserId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
@@ -544,6 +550,13 @@ export const ThreadTurnStartCommand = Schema.Struct({
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
+    /**
+     * Who is sending this. The socket fills this in from the authenticated
+     * session and overwrites whatever arrived, which is why the client command
+     * below has no such field: a client that could assert its own author would
+     * be able to put words in a colleague's mouth.
+     */
+    authorUserId: Schema.NullOr(UserId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
   }),
@@ -858,6 +871,8 @@ export const ThreadMessageSentPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   role: OrchestrationMessageRole,
+  /** Stamped by the server from the sender's session; never taken from a client. */
+  authorUserId: Schema.NullOr(UserId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),

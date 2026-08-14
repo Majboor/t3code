@@ -881,6 +881,7 @@ describe("ProviderRuntimeIngestion", () => {
         message: {
           messageId: asMessageId("msg-plan-target"),
           role: "user",
+          authorUserId: null,
           text: "PLEASE IMPLEMENT THIS PLAN:\n# Source plan",
           attachments: [],
         },
@@ -1050,6 +1051,7 @@ describe("ProviderRuntimeIngestion", () => {
         message: {
           messageId: asMessageId("msg-plan-target-guarded"),
           role: "user",
+          authorUserId: null,
           text: "PLEASE IMPLEMENT THIS PLAN:\n# Source plan",
           attachments: [],
         },
@@ -1212,6 +1214,7 @@ describe("ProviderRuntimeIngestion", () => {
         message: {
           messageId: asMessageId("msg-plan-target-unrelated"),
           role: "user",
+          authorUserId: null,
           text: "PLEASE IMPLEMENT THIS PLAN:\n# Source plan",
           attachments: [],
         },
@@ -1404,6 +1407,7 @@ describe("ProviderRuntimeIngestion", () => {
         message: {
           messageId: asMessageId("message-streaming-mode"),
           role: "user",
+          authorUserId: null,
           text: "stream please",
           attachments: [],
         },

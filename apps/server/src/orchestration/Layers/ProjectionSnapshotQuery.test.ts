@@ -325,6 +325,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             {
               id: asMessageId("message-1"),
               role: "assistant",
+              authorUserId: null,
               text: "hello from projection",
               turnId: asTurnId("turn-1"),
               streaming: false,

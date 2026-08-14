@@ -41,9 +41,12 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveMessageAuthor,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
 } from "./MessagesTimeline.logic";
+import { CollaborationAvatar } from "../collaboration/CollaborationPeople";
+import { type CollaborationMembers } from "../../hooks/useCollaborationMembers";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -81,6 +84,7 @@ interface TimelineRowSharedState {
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
   activeThreadEnvironmentId: EnvironmentId;
+  collaborationMembers: CollaborationMembers;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -113,6 +117,7 @@ interface MessagesTimelineProps {
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
+  collaborationMembers: CollaborationMembers;
   onIsAtEndChange: (isAtEnd: boolean) => void;
 }
 
@@ -141,6 +146,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   resolvedTheme,
   timestampFormat,
   workspaceRoot,
+  collaborationMembers,
   onIsAtEndChange,
 }: MessagesTimelineProps) {
   const rawRows = useMemo(
@@ -204,6 +210,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       workspaceRoot,
       activeThreadEnvironmentId,
+      collaborationMembers,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -220,6 +227,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       workspaceRoot,
       activeThreadEnvironmentId,
+      collaborationMembers,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -304,9 +312,23 @@ function TimelineRowContent({ row }: { row: TimelineRow }) {
           const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
           const terminalContexts = displayedUserMessage.contexts;
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
+          const author = resolveMessageAuthor(row.message, ctx.collaborationMembers);
           return (
             <div className="flex justify-end">
               <div className="group relative max-w-[80%] rounded-2xl rounded-br-sm border border-border bg-secondary px-4 py-3">
+                {author ? (
+                  <div
+                    className="mb-1.5 flex items-center gap-1.5"
+                    data-testid="message-author"
+                    data-author-user-id={author.userId}
+                    data-author-name={author.displayName}
+                  >
+                    <CollaborationAvatar member={author} size="xs" />
+                    <span className="truncate text-[11px] font-medium text-muted-foreground">
+                      {author.displayName}
+                    </span>
+                  </div>
+                ) : null}
                 {userImages.length > 0 && (
                   <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
                     {userImages.map(

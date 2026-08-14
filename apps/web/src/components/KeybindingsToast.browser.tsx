@@ -144,6 +144,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
           {
             id: "msg-1" as MessageId,
             role: "user",
+            authorUserId: null,
             text: "hello",
             turnId: null,
             streaming: false,

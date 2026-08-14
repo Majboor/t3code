@@ -389,6 +389,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-1"),
           role: "user",
+          authorUserId: null,
           text: "hello reactor",
           attachments: [],
         },
@@ -459,6 +460,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-env"),
           role: "user",
+          authorUserId: null,
           text: "hello isolated provider",
           attachments: [],
         },
@@ -508,6 +510,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-title"),
           role: "user",
+          authorUserId: null,
           text: "Please investigate reconnect failures after restarting the session.",
           attachments: [],
         },
@@ -557,6 +560,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-title-preserve"),
           role: "user",
+          authorUserId: null,
           text: "Please investigate reconnect failures after restarting the session.",
           attachments: [],
         },
@@ -602,6 +606,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-title-formatted"),
           role: "user",
+          authorUserId: null,
           text: "[effort:high]\\n\\nFix reconnect spinner on resume",
           attachments: [],
         },
@@ -663,6 +668,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-branch-model"),
           role: "user",
+          authorUserId: null,
           text: "Add a safer reconnect backoff.",
           attachments: [],
         },
@@ -692,6 +698,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-fast"),
           role: "user",
+          authorUserId: null,
           text: "hello fast mode",
           attachments: [],
         },
@@ -748,6 +755,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-claude-effort"),
           role: "user",
+          authorUserId: null,
           text: "hello with effort",
           attachments: [],
         },
@@ -801,6 +809,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-claude-fast-mode"),
           role: "user",
+          authorUserId: null,
           text: "hello with fast mode",
           attachments: [],
         },
@@ -862,6 +871,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-plan"),
           role: "user",
+          authorUserId: null,
           text: "plan this change",
           attachments: [],
         },
@@ -892,6 +902,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-first"),
           role: "user",
+          authorUserId: null,
           text: "hello claude",
           attachments: [],
         },
@@ -942,6 +953,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-unsupported-1"),
           role: "user",
+          authorUserId: null,
           text: "first",
           attachments: [],
         },
@@ -961,6 +973,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-unsupported-2"),
           role: "user",
+          authorUserId: null,
           text: "second",
           attachments: [],
         },
@@ -993,6 +1006,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-unchanged-1"),
           role: "user",
+          authorUserId: null,
           text: "first",
           attachments: [],
         },
@@ -1013,6 +1027,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-unchanged-2"),
           role: "user",
+          authorUserId: null,
           text: "second",
           attachments: [],
         },
@@ -1041,6 +1056,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-claude-effort-1"),
           role: "user",
+          authorUserId: null,
           text: "first claude turn",
           attachments: [],
         },
@@ -1068,6 +1084,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-claude-effort-2"),
           role: "user",
+          authorUserId: null,
           text: "second claude turn",
           attachments: [],
         },
@@ -1120,6 +1137,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-runtime-mode-1"),
           role: "user",
+          authorUserId: null,
           text: "first",
           attachments: [],
         },
@@ -1156,6 +1174,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-runtime-mode-2"),
           role: "user",
+          authorUserId: null,
           text: "second",
           attachments: [],
         },
@@ -1240,6 +1259,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-switch-1"),
           role: "user",
+          authorUserId: null,
           text: "first",
           attachments: [],
         },
@@ -1260,6 +1280,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-switch-2"),
           role: "user",
+          authorUserId: null,
           text: "second",
           attachments: [],
         },
@@ -1322,6 +1343,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-restart-failure-1"),
           role: "user",
+          authorUserId: null,
           text: "first",
           attachments: [],
         },
@@ -1433,6 +1455,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-stale"),
           role: "user",
+          authorUserId: null,
           text: "resume codex",
           attachments: [],
         },

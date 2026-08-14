@@ -154,6 +154,7 @@ const startTurn = (input: {
     message: {
       messageId: asMessageId(input.messageId),
       role: "user",
+      authorUserId: null,
       text: input.text,
       attachments: [],
     },
@@ -295,6 +296,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
           message: {
             messageId: asMessageId("msg-real-codex-1"),
             role: "user",
+            authorUserId: null,
             text: "Reply with exactly ALPHA.",
             attachments: [],
           },
@@ -322,6 +324,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
           message: {
             messageId: asMessageId("msg-real-codex-2"),
             role: "user",
+            authorUserId: null,
             text: "Reply with exactly BETA.",
             attachments: [],
           },

@@ -355,6 +355,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.message.messageId,
           role: "user",
+          authorUserId: command.message.authorUserId,
           text: command.message.text,
           attachments: command.message.attachments,
           turnId: null,
@@ -545,6 +546,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           role: "assistant",
+          // The assistant is not a person in the roster; it has no author.
+          authorUserId: null,
           text: command.delta,
           turnId: command.turnId ?? null,
           streaming: true,
@@ -572,6 +575,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           role: "assistant",
+          // The assistant is not a person in the roster; it has no author.
+          authorUserId: null,
           text: "",
           turnId: command.turnId ?? null,
           streaming: false,

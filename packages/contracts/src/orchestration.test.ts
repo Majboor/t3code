@@ -5,6 +5,7 @@ import { Effect, Schema } from "effect";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  ClientOrchestrationCommand,
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationGetTurnDiffInput,
@@ -624,5 +625,50 @@ it.effect("preserves proposed plan implementation metadata when present", () =>
     });
     assert.strictEqual(parsed.implementedAt, "2026-01-02T00:00:00.000Z");
     assert.strictEqual(parsed.implementationThreadId, "thread-2");
+  }),
+);
+
+it.effect("gives a turn-start message no author until the server stamps one", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-unattributed",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-unattributed",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.message.authorUserId, null);
+  }),
+);
+
+it.effect("does not let a client name itself as somebody else on the wire", () =>
+  Effect.gen(function* () {
+    // The socket stamps the author from the session, but a claim must not even
+    // survive decoding: the client command has no field for one, and an
+    // author a sender can assert is worth less than no author at all.
+    const parsed = yield* Schema.decodeUnknownEffect(ClientOrchestrationCommand)({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-spoof",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-spoof",
+        role: "user",
+        text: "I am somebody else",
+        attachments: [],
+        authorUserId: "user-ada",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(
+      (parsed as { message: { authorUserId?: unknown } }).message.authorUserId,
+      undefined,
+    );
   }),
 );

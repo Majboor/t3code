@@ -212,11 +212,19 @@ async function setMemberReadOnly(page, email, readOnly) {
   return true;
 }
 
-/** Every avatar's colour, which is how one person stays recognisable. */
+/**
+ * One colour per person in the roster, which is how one person stays
+ * recognisable.
+ *
+ * Scoped to the member rows rather than every avatar on the page. The same
+ * avatar is drawn wherever somebody is named — including on their messages in
+ * the transcript — so an unscoped query returns one person's colour twice and
+ * reads it as two people sharing a colour.
+ */
 async function avatarColors(page) {
   if (!(await openCollabPanel(page))) return [];
   const colors = await page
-    .locator('[data-testid="collaboration-avatar"]')
+    .locator('[data-testid="collaboration-member-row"] [data-testid="collaboration-avatar"]')
     .evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).backgroundColor));
   await closeCollabPanel(page);
   return colors.filter((color) => color && color !== "rgba(0, 0, 0, 0)");
@@ -232,6 +240,30 @@ async function presencePills(page) {
     );
   await closeCollabPanel(page);
   return pills;
+}
+
+/**
+ * Every human message in the open thread, with the author the UI puts on it.
+ *
+ * `author` is null for a message the transcript does not attribute — which is
+ * what every message looked like before there was an author to attribute, and
+ * is still correct for the reader's own messages.
+ */
+async function userMessages(page) {
+  return page
+    .locator('[data-timeline-row-kind="message"][data-message-role="user"]')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const label = node.querySelector('[data-testid="message-author"]');
+        return {
+          text: (node.textContent ?? "").trim(),
+          author: label?.getAttribute("data-author-user-id") ?? null,
+          // From the attribute, not the text: the label draws the avatar's
+          // initials next to the name, so its textContent reads "ALAda Lovelace".
+          authorName: label?.getAttribute("data-author-name") ?? null,
+        };
+      }),
+    );
 }
 
 /** Who the file tree says last changed each file. */
@@ -405,6 +437,77 @@ try {
       "beta",
     );
   }
+
+  // The suite proved for a long time that two people CAN both send messages,
+  // and never once that you could tell afterwards which of them had. Both
+  // bubbles rendered identically and every check stayed green.
+  phase("The transcript says who sent each message");
+  const markerFromA = `marker from A ${RUN_ID}`;
+  const markerFromB = `marker from B ${RUN_ID}`;
+  check("A writes into the shared thread", await sendAgentMessage(accountA2.page, markerFromA));
+  await sleep(UI_SETTLE_MS);
+  check("B reaches the shared project", await openProject(accountB.page));
+  // Asserted, not assumed. Two people opening one project could land in two
+  // different threads, and a transcript holding one message would prove nothing
+  // about telling authors apart.
+  check(
+    "both people are in the same thread",
+    accountB.page.url() === accountA2.page.url(),
+    `A on ${accountA2.page.url()}, B on ${accountB.page.url()}`,
+  );
+  check("B writes into the same thread", await sendAgentMessage(accountB.page, markerFromB));
+  await sleep(UI_SETTLE_MS);
+
+  // Walk back in through the dashboard so this is the transcript the server
+  // stored rather than what either browser optimistically drew for itself. A
+  // bare reload of a thread route lands on a placeholder instead.
+  await openProject(accountA2.page);
+  await sleep(UI_SETTLE_MS);
+  const asARereads = await userMessages(accountA2.page);
+  const aOwnMessage = asARereads.find((message) => message.text.includes(markerFromA)) ?? null;
+  const bMessageAsASeesIt = asARereads.find((message) => message.text.includes(markerFromB)) ?? null;
+
+  // The precondition, asserted rather than assumed: without both messages in
+  // one transcript the attribution check below could pass on an empty room.
+  check(
+    "both people's messages are in one transcript",
+    Boolean(aOwnMessage) && Boolean(bMessageAsASeesIt),
+    `A's own: ${aOwnMessage ? "present" : "missing"}, B's: ${
+      bMessageAsASeesIt ? "present" : "missing"
+    } — ${asARereads.length} user message(s) in the thread`,
+  );
+
+  if (aOwnMessage && bMessageAsASeesIt) {
+    check(
+      "A can tell B's message apart from their own",
+      bMessageAsASeesIt.author !== null && bMessageAsASeesIt.author !== aOwnMessage.author,
+      `B's message is attributed to ${bMessageAsASeesIt.author ?? "nobody"}, A's own to ${
+        aOwnMessage.author ?? "nobody"
+      }`,
+    );
+    check(
+      "B's message carries B's name",
+      bMessageAsASeesIt.authorName === displayNameFor(ACCOUNT_B),
+      `labelled ${bMessageAsASeesIt.authorName ?? "nothing"}, expected ${displayNameFor(
+        ACCOUNT_B,
+      )}`,
+    );
+  } else {
+    check("A can tell B's message apart from their own", false, "no transcript to read");
+    check("B's message carries B's name", false, "no transcript to read");
+  }
+
+  // And the same from the other side, because an author stamped from the
+  // sender's own session would look right in exactly one of the two browsers.
+  await openProject(accountB.page);
+  await sleep(UI_SETTLE_MS);
+  const asBRereads = await userMessages(accountB.page);
+  const aMessageAsBSeesIt = asBRereads.find((message) => message.text.includes(markerFromA)) ?? null;
+  check(
+    "B sees A's message attributed to A",
+    aMessageAsBSeesIt?.authorName === displayNameFor(ACCOUNT_A),
+    `labelled ${aMessageAsBSeesIt?.authorName ?? "nothing"}, expected ${displayNameFor(ACCOUNT_A)}`,
+  );
 
   phase("The lead makes prompts need approval");
   check(

@@ -1,8 +1,30 @@
 import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
-import { type MessageId } from "@t3tools/contracts";
+import { type CollaborationMembers } from "../../hooks/useCollaborationMembers";
+import { type CollaborationMember, type MessageId } from "@t3tools/contracts";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
+
+/**
+ * The collaborator to label a message with, or null to leave it as it was.
+ *
+ * A label is only worth drawing for somebody else: the reader's own messages
+ * are already unmistakable by position, and naming them adds noise to every
+ * single-person thread. Anything the server did not attribute — the assistant,
+ * a message from before authors were recorded, one this browser has added
+ * optimistically — stays unlabelled rather than being guessed at, and an author
+ * who has since left the workspace has no roster entry to draw.
+ */
+export function resolveMessageAuthor(
+  message: Pick<ChatMessage, "authorUserId">,
+  members: CollaborationMembers,
+): CollaborationMember | null {
+  const authorUserId = message.authorUserId;
+  if (!authorUserId || authorUserId === members.viewerUserId) {
+    return null;
+  }
+  return members.byUserId.get(authorUserId) ?? null;
+}
 
 export interface TimelineDurationMessage {
   id: string;

@@ -28,6 +28,7 @@ function toProjectionThreadMessage(
     threadId: row.threadId,
     turnId: row.turnId,
     role: row.role,
+    authorUserId: row.authorUserId,
     text: row.text,
     isStreaming: row.isStreaming === 1,
     createdAt: row.createdAt,
@@ -50,6 +51,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           thread_id,
           turn_id,
           role,
+          author_user_id,
           text,
           attachments_json,
           is_streaming,
@@ -61,6 +63,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           ${row.threadId},
           ${row.turnId},
           ${row.role},
+          ${row.authorUserId},
           ${row.text},
           COALESCE(
             ${nextAttachmentsJson},
@@ -79,6 +82,13 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           thread_id = excluded.thread_id,
           turn_id = excluded.turn_id,
           role = excluded.role,
+          -- This upsert runs again for every chunk of a streaming message, and
+          -- only the first one carries the author. A plain assignment would
+          -- blank out who wrote it the moment they started typing.
+          author_user_id = COALESCE(
+            excluded.author_user_id,
+            projection_thread_messages.author_user_id
+          ),
           text = excluded.text,
           attachments_json = COALESCE(
             excluded.attachments_json,
@@ -101,6 +111,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           turn_id AS "turnId",
           role,
+          author_user_id AS "authorUserId",
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
@@ -122,6 +133,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           turn_id AS "turnId",
           role,
+          author_user_id AS "authorUserId",
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",

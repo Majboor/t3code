@@ -68,7 +68,6 @@ import {
   type TenantRole,
   TerminalCwdError,
   ThreadId,
-  UserId,
   WorkspaceId,
   type TerminalEvent,
   WS_METHODS,
@@ -115,7 +114,12 @@ import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePat
 import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptRunner.ts";
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
-import { AuthError, type AuthenticatedSession, ServerAuth } from "./auth/Services/ServerAuth.ts";
+import {
+  AuthError,
+  type AuthenticatedSession,
+  resolveAuthenticatedUserId,
+  ServerAuth,
+} from "./auth/Services/ServerAuth.ts";
 import {
   BootstrapCredentialService,
   type BootstrapCredentialChange,
@@ -187,14 +191,6 @@ function normalizeRemoteAddress(value: string | undefined): string {
     return "unknown";
   }
   return trimmed.startsWith("::ffff:") ? trimmed.slice("::ffff:".length) : trimmed;
-}
-
-function resolveAuthenticatedUserId(session: AuthenticatedSession): UserId {
-  return (
-    session.tenantSessionContext?.userId ??
-    session.userId ??
-    UserId.make(`auth:${session.subject.trim() || session.sessionId}`)
-  );
 }
 
 function isImplicitLocalOwnerSession(session: AuthenticatedSession): boolean {
@@ -757,10 +753,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       // that asked for the turn is allowed to attribute them to its own user.
       const turnsStartedHereRef = yield* Ref.make(new Set<string>());
       const collaborationActor = {
-        userId:
-          session.tenantSessionContext?.userId ??
-          session.userId ??
-          UserId.make(`auth:${session.subject.trim() || currentSessionId}`),
+        userId: resolveAuthenticatedUserId(session),
         displayName: resolveCollaborationDisplayName(session),
       };
       const resolveCollaborationActor = serverAuth.resolveUserProfile(session).pipe(
@@ -960,6 +953,28 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 },
           ),
         );
+      };
+
+      /**
+       * Signs a message with the identity of the connection that sent it.
+       *
+       * This is the only place an author is decided. The value comes from the
+       * authenticated session and replaces whatever the command arrived with,
+       * so a client cannot claim to be a colleague — attribution that a sender
+       * can choose is worth less than none, because the transcript would then
+       * read as authoritative while being forgeable.
+       */
+      const attachMessageAuthor = (command: OrchestrationCommand): OrchestrationCommand => {
+        if (command.type !== "thread.turn.start") {
+          return command;
+        }
+        return {
+          ...command,
+          message: {
+            ...command.message,
+            authorUserId: collaborationActor.userId,
+          },
+        };
       };
 
       const persistProjectWorkspaceMetadata = (
@@ -3511,7 +3526,9 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 command,
                 (message) => new OrchestrationDispatchCommandError({ message }),
               );
-              const normalizedCommand = yield* normalizeDispatchCommand(command);
+              const normalizedCommand = attachMessageAuthor(
+                yield* normalizeDispatchCommand(command),
+              );
               const commandForDispatch = yield* attachProjectOwnership(normalizedCommand);
               yield* ensureOrchestrationCommandAuthorized(commandForDispatch);
               if (commandForDispatch.type === "thread.meta.update") {

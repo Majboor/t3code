@@ -13,6 +13,7 @@ import {
   ThreadId,
   TurnId,
   IsoDateTime,
+  UserId,
 } from "@t3tools/contracts";
 import { Schema, Context } from "effect";
 import type { Option } from "effect";
@@ -25,6 +26,8 @@ export const ProjectionThreadMessage = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.NullOr(TurnId),
   role: OrchestrationMessageRole,
+  /** Who wrote it. Null for the assistant, and for rows written before 048. */
+  authorUserId: Schema.NullOr(UserId),
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   isStreaming: Schema.Boolean,

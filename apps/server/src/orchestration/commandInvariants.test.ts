@@ -108,6 +108,7 @@ const messageSendCommand: OrchestrationCommand = {
   message: {
     messageId: MessageId.make("msg-1"),
     role: "user",
+    authorUserId: null,
     text: "hello",
     attachments: [],
   },

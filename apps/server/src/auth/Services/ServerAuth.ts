@@ -15,8 +15,8 @@ import type {
   ServerAuthSessionMethod,
   AuthWebSocketTokenResult,
   TenantSessionContext,
-  UserId,
 } from "@t3tools/contracts";
+import { UserId } from "@t3tools/contracts";
 import { Data, DateTime, Context } from "effect";
 import type { Effect } from "effect";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -32,6 +32,20 @@ export interface AuthenticatedSession {
   readonly userId?: UserId;
   readonly expiresAt?: DateTime.DateTime;
   readonly tenantSessionContext?: TenantSessionContext;
+}
+
+/**
+ * The one rule for which user a session belongs to.
+ *
+ * Every entry point that records who did something has to reach the same
+ * answer, or the same person is two people depending on how they connected.
+ */
+export function resolveAuthenticatedUserId(session: AuthenticatedSession): UserId {
+  return (
+    session.tenantSessionContext?.userId ??
+    session.userId ??
+    UserId.make(`auth:${session.subject.trim() || session.sessionId}`)
+  );
 }
 
 export class AuthError extends Data.TaggedError("AuthError")<{

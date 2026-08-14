@@ -5,7 +5,9 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveMessageAuthor,
 } from "./MessagesTimeline.logic";
+import { UserId, type CollaborationMember } from "@t3tools/contracts";
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -431,5 +433,37 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
+  });
+});
+
+describe("resolveMessageAuthor", () => {
+  const ada = {
+    userId: UserId.make("user-ada"),
+    displayName: "Ada Lovelace",
+    avatarInitials: "AL",
+    color: "hsl(215 80% 58%)",
+    status: "active",
+  } as unknown as CollaborationMember;
+
+  const members = {
+    byUserId: new Map([["user-ada", ada]]),
+    viewerUserId: "user-grace",
+  };
+
+  it("names the colleague who sent a message", () => {
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-ada") }, members)).toBe(ada);
+  });
+
+  it("leaves the reader's own messages unlabelled", () => {
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, members)).toBeNull();
+  });
+
+  it("leaves an unattributed message alone rather than guessing", () => {
+    expect(resolveMessageAuthor({ authorUserId: null }, members)).toBeNull();
+    expect(resolveMessageAuthor({}, members)).toBeNull();
+  });
+
+  it("draws nothing for an author who is no longer in the roster", () => {
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-departed") }, members)).toBeNull();
   });
 });
