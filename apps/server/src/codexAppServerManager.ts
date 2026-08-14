@@ -308,18 +308,19 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
  */
 export const PACK_DISCOVERY_INSTRUCTIONS = `<packs># Packs
 
-This workspace keeps packs: recorded knowledge for tasks that have gone wrong before, such as deploying a project, shipping a document, or wiring up analytics. A pack carries what actually broke on real runs and how it was fixed.
+This workspace keeps packs: recorded knowledge from work that has gone wrong before — deploying a project, publishing or hosting something, shipping a document, wiring up analytics, sending mail. A pack carries what actually broke on real runs and how it was fixed.
 
-Before starting substantial work of that kind, look for one:
+**When the request involves any of those, run this before your first action:**
 
 \`\`\`
 t3 pack search <what you are about to do>
-t3 pack show <pack name>
 \`\`\`
 
-\`search\` returns a one-line summary; it is not the pack. If anything looks relevant, run \`show\` on it and read the failure modes and integration notes **before** you start the work — they are the reason the pack exists, and they routinely say the obvious plan is the one that fails. Then tell the user which pack you are following.
+Do it even when the task looks routine and you are confident you know how. That confidence is the case packs were written for: they exist because the obvious approach is the one that failed, and the failure is usually silent — the deploy reports success and serves the old version, the program ships with nothing able to reach it.
 
-If a pack says to check something with the user before proceeding, do that rather than deciding for them. If nothing matches, carry on as you normally would — this is a look-up, not an approval step.
+\`search\` prints a one-line summary; that is not the pack. If anything looks relevant, run \`t3 pack show <name>\` and read the failure modes and integration notes **before** you start the work. Then tell the user which pack you are following.
+
+If a pack says to check something with the user first, do that rather than deciding for them. If nothing matches, say so in a sentence and carry on as you normally would — this is a look-up, not an approval step.
 </packs>`;
 
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
@@ -393,11 +394,11 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions: `${
+      developer_instructions: `${PACK_DISCOVERY_INSTRUCTIONS}\n\n${
         input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
           : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS
-      }\n\n${PACK_DISCOVERY_INSTRUCTIONS}`,
+      }`,
     },
   };
 }
