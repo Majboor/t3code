@@ -25,6 +25,7 @@ import {
   openIsolatedSession,
   PERMISSION_ERROR,
   sleep,
+  unlistProject,
 } from "./lib/e2e-harness.mjs";
 
 // Playwright is installed for the web app's browser tests; borrow that copy
@@ -714,7 +715,10 @@ try {
   }
 } finally {
   await browser.close();
-  if (!KEEP_WORKSPACE) rmSync(PROJECT_DIR, { recursive: true, force: true });
+  if (!KEEP_WORKSPACE) {
+    rmSync(PROJECT_DIR, { recursive: true, force: true });
+    unlistProject(PROJECT_DIR);
+  }
 }
 
 process.exit(finish());

@@ -19,6 +19,7 @@ import {
   createReporter,
   openIsolatedSession,
   sleep,
+  unlistProject,
 } from "./lib/e2e-harness.mjs";
 
 const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))(
@@ -75,29 +76,39 @@ try {
   await goHome(account.page);
 
   phase("A fresh account can make a workspace");
-  // Nothing else here creates one — every suite uses the workspace signup
-  // already made — which is how "does not have workspace.edit" reached a user.
-  // The bootstrap tenant does not exist until it is asked for, so nobody can
-  // hold a membership in it, and a check that demanded one refused everybody.
-  const createWorkspace = account.page.locator('button:has-text("Create Workspace")').first();
-  check("the dashboard offers to create one", (await createWorkspace.count()) > 0);
-  await createWorkspace.click();
-  await sleep(2_500);
-  const workspaceName = `eco-ws-${RUN_ID}`;
-  await account.page.locator("[data-base-ui-portal] input").first().fill(workspaceName);
-  await sleep(500);
-  await account.page
-    .locator('[data-slot="dialog-footer"] button:has-text("Create")')
-    .first()
-    .click();
-  await sleep(7_000);
-  const afterCreate = await bodyText(account.page);
-  check(
-    "it is not refused for a permission nobody could hold",
-    !/does not have workspace\.edit/.test(afterCreate),
-    /Forbidden[^]{0,80}/.exec(afterCreate)?.[0]?.replace(/\s+/g, " ") ?? "",
-  );
-  check("the workspace appears on the dashboard", afterCreate.includes(workspaceName));
+  // On its own session, having done nothing else. That matters: adding a
+  // project bootstraps a tenant, and with a tenant in hand the permission
+  // check passes for an ordinary reason and proves nothing. The bug reached a
+  // user precisely because a brand-new account has no tenant yet — the
+  // bootstrap tenant does not exist until it is asked for, so nobody can hold
+  // a membership in it, and a check demanding one refused everybody.
+  const fresh = await openIsolatedSession(browser, "fresh");
+  try {
+    const freshAccount = `eco.fresh.${RUN_ID}@example.test`;
+    check("a brand-new account signs up", await signUp(fresh, freshAccount), freshAccount);
+    await goHome(fresh.page);
+    const createWorkspace = fresh.page.locator('button:has-text("Create Workspace")').first();
+    check("the dashboard offers to create one", (await createWorkspace.count()) > 0);
+    await createWorkspace.click();
+    await sleep(2_500);
+    const workspaceName = `eco-ws-${RUN_ID}`;
+    await fresh.page.locator("[data-base-ui-portal] input").first().fill(workspaceName);
+    await sleep(500);
+    await fresh.page
+      .locator('[data-slot="dialog-footer"] button:has-text("Create")')
+      .first()
+      .click();
+    await sleep(7_000);
+    const afterCreate = await bodyText(fresh.page);
+    check(
+      "it is not refused for a permission nobody could hold",
+      !/does not have workspace\.edit/.test(afterCreate),
+      /Forbidden[^]{0,80}/.exec(afterCreate)?.[0]?.replace(/\s+/g, " ") ?? "",
+    );
+    check("the workspace appears on the dashboard", afterCreate.includes(workspaceName));
+  } finally {
+    await fresh.context.close();
+  }
 
   phase("Before anything is turned on");
   check(
@@ -221,7 +232,10 @@ try {
   console.log(`  workspace: ${PROJECT_DIR}`);
 } finally {
   await browser.close();
-  if (!KEEP) rmSync(PROJECT_DIR, { recursive: true, force: true });
+  if (!KEEP) {
+    rmSync(PROJECT_DIR, { recursive: true, force: true });
+    unlistProject(PROJECT_DIR);
+  }
 }
 
 process.exit(finish());

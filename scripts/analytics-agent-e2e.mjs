@@ -24,6 +24,7 @@ import {
   createReporter,
   openIsolatedSession,
   sleep,
+  unlistProject,
 } from "./lib/e2e-harness.mjs";
 
 const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))(
@@ -300,7 +301,10 @@ try {
     execFileSync("bash", ["-c", `kill "$(cat ${JSON.stringify(pidFile)})" 2>/dev/null || true`]);
   }
   await browser.close();
-  if (!KEEP) rmSync(APP_DIR, { recursive: true, force: true });
+  if (!KEEP) {
+    rmSync(APP_DIR, { recursive: true, force: true });
+    unlistProject(APP_DIR);
+  }
 }
 
 process.exit(finish());

@@ -22,7 +22,13 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
-import { createHarness, createReporter, openIsolatedSession, sleep } from "./lib/e2e-harness.mjs";
+import {
+  createHarness,
+  createReporter,
+  openIsolatedSession,
+  sleep,
+  unlistProject,
+} from "./lib/e2e-harness.mjs";
 
 const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))(
   "playwright",
@@ -484,7 +490,10 @@ try {
   console.log(`  deployed:  ${SSH_USER}@${SSH_HOST}:${REMOTE_DIR} on 127.0.0.1:${PORT}`);
 } finally {
   await browser.close();
-  if (!KEEP) rmSync(APP_DIR, { recursive: true, force: true });
+  if (!KEEP) {
+    rmSync(APP_DIR, { recursive: true, force: true });
+    unlistProject(APP_DIR);
+  }
 }
 
 process.exit(finish());

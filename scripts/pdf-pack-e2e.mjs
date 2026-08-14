@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { createReporter } from "./lib/e2e-harness.mjs";
+import { createReporter, unlistProject } from "./lib/e2e-harness.mjs";
 
 const RUN_ID = String(Date.now());
 const DESKTOP_DIR = path.join(os.homedir(), "Desktop");
@@ -376,7 +376,10 @@ try {
       execFileSync("bash", ["-c", `kill "$(cat ${JSON.stringify(pidFile)})" 2>/dev/null || true`]);
     }
   }
-  if (!KEEP) rmSync(APP_DIR, { recursive: true, force: true });
+  if (!KEEP) {
+    rmSync(APP_DIR, { recursive: true, force: true });
+    unlistProject(APP_DIR);
+  }
 }
 
 process.exit(finish());

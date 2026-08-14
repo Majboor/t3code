@@ -5,9 +5,42 @@
 // The suites differ in timing and in which file they probe for, so this is a
 // factory rather than a module of free functions.
 
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 export const PERMISSION_ERROR = /Forbidden|does not have (file|project|session|workspace)\./;
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Takes the project this run created back out of the sidebar.
+ *
+ * Every suite already deletes its folder, which is why the Desktop stayed
+ * tidy — but the project row pointing at that folder survived, so a few dozen
+ * runs buried the real projects under `t3-collab-1786...` entries whose
+ * folders were long gone. Marked deleted rather than dropped, which is what
+ * the app itself does; a hard delete would strand threads that reference it.
+ *
+ * Matched on the exact path this run created, never a prefix, so a suite
+ * running alongside this one keeps its own project.
+ *
+ * Best effort on purpose: tidying up must never change what a run reported.
+ */
+export function unlistProject(projectDir) {
+  const db = join(homedir(), ".t3", "dev", "state.sqlite");
+  if (!existsSync(db)) return;
+  try {
+    execFileSync("sqlite3", [
+      db,
+      `update projection_projects set deleted_at = datetime('now'), updated_at = datetime('now')
+       where deleted_at is null and workspace_root = '${projectDir.replaceAll("'", "''")}';`,
+    ]);
+  } catch {
+    // A missing sqlite3, a locked database — none of it is worth a failed run.
+  }
+}
 
 /**
  * Prints checks as they happen and remembers them for the tally. A skip stays
