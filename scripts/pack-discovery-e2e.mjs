@@ -157,6 +157,18 @@ try {
     looked.found ? "" : `saw: ${looked.seen.replace(/\s+/g, " ").slice(-200)}`,
   );
 
+  // Searching and reading are different acts, and the failures so far cannot
+  // tell them apart: the agent names the pack from the one-line summary either
+  // way. Whether it opened the pack decides whether the next failure means
+  // "never read it" or "read it and went ahead regardless", and those want
+  // opposite fixes.
+  const read = await waitForAny(account.page, /t3 pack show/i, 60_000);
+  check(
+    "and opens the pack itself, not just the summary",
+    read.found,
+    read.found ? "" : "only `search` was seen in the transcript",
+  );
+
   // The instruction says to run the CLI; this is whether the CLI was there to
   // run. Written by the server when the agent session spawned.
   const shimPath = findShim();
