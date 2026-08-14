@@ -157,12 +157,33 @@ function initRepository() {
   return git("rev-parse", "--abbrev-ref", "HEAD");
 }
 
+/**
+ * The display name the product builds from an address, e.g.
+ * collab.b.1786@example.test -> "Collab B 1786".
+ *
+ * Matching a row by email cannot work: the roster hides somebody else's
+ * address unless they have chosen to share their profile, which defaults to
+ * off. That is the product being careful, not a bug — but every check that
+ * began by finding a person failed, and it read as read-only and recolouring
+ * being broken rather than as the helper looking for something deliberately
+ * not shown.
+ */
+function displayNameFor(email) {
+  return email
+    .split("@")[0]
+    .split(".")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 async function expandMemberRow(page, email) {
   if (!(await openCollabPanel(page))) return null;
   const rows = page.locator('[data-testid="collaboration-member-row"]');
+  const displayName = displayNameFor(email);
   for (let index = 0; index < (await rows.count()); index += 1) {
     const row = rows.nth(index);
-    if (((await row.innerText().catch(() => "")) ?? "").includes(email)) {
+    const text = (await row.innerText().catch(() => "")) ?? "";
+    if (text.includes(email) || text.includes(displayName)) {
       await row
         .locator("button")
         .first()
@@ -696,7 +717,16 @@ try {
   check("the tree marks who last changed a file", authors.length > 0, authors.join(", "));
   check(
     "the mark names a real member",
-    authors.some((name) => name.length > 0 && (name.includes("collab.") || name.includes("@"))),
+    // Same reason as expandMemberRow: the address is not shown unless somebody
+    // shares their profile, so requiring one here asserted a thing the product
+    // deliberately withholds. A real member is one on the roster.
+    authors.some(
+      (name) =>
+        name.length > 0 &&
+        [ACCOUNT_A, ACCOUNT_B, ACCOUNT_C].some(
+          (email) => name.includes(email) || name.includes(displayNameFor(email)),
+        ),
+    ),
     authors.join(", "),
   );
 

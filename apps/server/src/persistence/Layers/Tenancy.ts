@@ -865,10 +865,14 @@ const makeTenancyRepository = Effect.gen(function* () {
       invites,
       (invite) =>
         sql`
-        INSERT OR REPLACE INTO tenant_invites VALUES (
+        INSERT OR REPLACE INTO tenant_invites (
+          invite_id, tenant_id, workspace_id, invited_by_user_id,
+          email, scope, roles_json, created_at,
+          expires_at, accepted_at, revoked_at, accepted_by_user_id
+        ) VALUES (
           ${invite.id}, ${invite.tenantId}, ${invite.workspaceId}, ${invite.invitedByUserId},
           ${invite.email}, ${invite.scope}, ${stringify(invite.roles)}, ${invite.createdAt},
-          ${invite.expiresAt}, ${invite.acceptedAt}, ${invite.revokedAt}
+          ${invite.expiresAt}, ${invite.acceptedAt}, ${invite.revokedAt}, ${invite.acceptedByUserId}
         )
       `,
     ).pipe(Effect.asVoid);
@@ -910,6 +914,10 @@ function decodeInviteRows(rows: any[]): TenantInvite[] {
       tenantId: TenantId.make(row.tenant_id),
       workspaceId: row.workspace_id === null ? null : WorkspaceId.make(row.workspace_id),
       invitedByUserId: UserId.make(row.invited_by_user_id),
+      acceptedByUserId:
+        row.accepted_by_user_id === null || row.accepted_by_user_id === undefined
+          ? null
+          : UserId.make(row.accepted_by_user_id),
       email: row.email,
       scope: row.scope,
       roles: parseArray(row.roles_json) as TenantInvite["roles"],

@@ -59,6 +59,7 @@ import Migration0043 from "./Migrations/043_PackRegistry.ts";
 import Migration0044 from "./Migrations/044_Analytics.ts";
 import Migration0045 from "./Migrations/045_PackEnablement.ts";
 import Migration0046 from "./Migrations/046_FileTouchesPerPerson.ts";
+import Migration0047 from "./Migrations/047_InviteAcceptedBy.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -117,6 +118,7 @@ export const migrationEntries = [
   [44, "Analytics", Migration0044],
   [45, "PackEnablement", Migration0045],
   [46, "FileTouchesPerPerson", Migration0046],
+  [47, "InviteAcceptedBy", Migration0047],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

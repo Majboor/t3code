@@ -320,6 +320,7 @@ const makeOrganizationService = Effect.gen(function* () {
         createdAt,
         expiresAt: input.expiresAt,
         acceptedAt: null,
+        acceptedByUserId: null,
         revokedAt: null,
       };
       const membership: TenantMembership = {

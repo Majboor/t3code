@@ -345,6 +345,16 @@ export const TenantInvite = Schema.Struct({
   createdAt: IsoDateTime,
   expiresAt: IsoDateTime,
   acceptedAt: Schema.NullOr(IsoDateTime),
+  /**
+   * Who accepted it. The roster used to find this by matching a membership
+   * whose createdAt equalled acceptedAt, which is a join on two clocks
+   * agreeing to the millisecond — when it missed, the member showed with no
+   * email and became impossible to tell apart from anybody else.
+   *
+   * Nullable because invites accepted before this was recorded have no answer,
+   * and inventing one would be worse than admitting it.
+   */
+  acceptedByUserId: Schema.NullOr(UserId),
   revokedAt: Schema.NullOr(IsoDateTime),
 });
 export type TenantInvite = typeof TenantInvite.Type;

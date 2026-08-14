@@ -124,6 +124,7 @@ function makeCollaborationInvite(input: {
     createdAt: NOW_ISO,
     expiresAt: "2026-05-16T12:00:00.000Z",
     acceptedAt: input.acceptedAt ?? null,
+    acceptedByUserId: null,
     revokedAt: input.revokedAt ?? null,
   };
 }
@@ -268,6 +269,7 @@ describe("OrganizationAdminPanel browser invite management", () => {
       createdAt: NOW_ISO,
       expiresAt: "2026-05-16T12:00:00.000Z",
       acceptedAt: null,
+      acceptedByUserId: null,
       revokedAt: null,
     } satisfies TenantInvite;
     const inviteEmployee = vi.fn(async () => ({

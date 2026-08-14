@@ -209,6 +209,7 @@ function makeEnvironmentApi(input: {
         createdAt: NOW_ISO,
         expiresAt: "2026-05-16T12:00:00.000Z",
         acceptedAt: NOW_ISO,
+        acceptedByUserId: null,
         revokedAt: null,
       },
       membership: {
@@ -336,6 +337,7 @@ describe("invite route browser flow", () => {
       createdAt: NOW_ISO,
       expiresAt: "2026-05-16T12:00:00.000Z",
       acceptedAt: NOW_ISO,
+      acceptedByUserId: null,
       revokedAt: null,
     };
     const acceptEmployeeInvite = vi.fn(async () => ({

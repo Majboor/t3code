@@ -353,6 +353,7 @@ const makeCollaborationService = Effect.gen(function* () {
         createdAt,
         expiresAt: input.expiresAt,
         acceptedAt: null,
+        acceptedByUserId: null,
         revokedAt: null,
       };
 
@@ -436,6 +437,7 @@ const makeCollaborationService = Effect.gen(function* () {
       const acceptedInvite = {
         ...invite,
         acceptedAt,
+        acceptedByUserId: actor.userId,
       };
       const membership: TenantMembership = {
         id: MembershipId.make(`membership:${crypto.randomUUID()}`),
@@ -952,9 +954,15 @@ const makeCollaborationService = Effect.gen(function* () {
       if (invite.workspaceId !== null && invite.workspaceId !== input.workspaceId) {
         continue;
       }
-      const membership = Array.from(state.memberships.values()).find(
-        (candidate) =>
-          candidate.tenantId === invite.tenantId && candidate.createdAt === invite.acceptedAt,
+      // Who accepted, recorded at the time. The fallback matches on the
+      // timestamps coinciding, which is how this worked before the invite
+      // carried the user and is the only thing older invites can offer.
+      const membership = Array.from(state.memberships.values()).find((candidate) =>
+        candidate.tenantId !== invite.tenantId
+          ? false
+          : invite.acceptedByUserId !== null
+            ? candidate.userId === invite.acceptedByUserId
+            : candidate.createdAt === invite.acceptedAt,
       );
       if (membership) {
         emailByUser.set(membership.userId, invite.email);
