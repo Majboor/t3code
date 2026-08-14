@@ -79,6 +79,16 @@ try {
     await en.click();
     await sleep(4000);
     check("it reports being on", /on for this project/i.test(await qv.first().innerText()));
+
+    // The other half of "on by default until you disable it": being able to.
+    const off = page.locator('[data-testid="pack-quick-view-disable"]');
+    check("and can be turned off again", (await off.count()) > 0);
+    if ((await off.count()) > 0) {
+      await off.click();
+      await sleep(4000);
+      const after = await qv.first().innerText();
+      check("it goes back to off", /turn on/i.test(after), after.replace(/\s+/g, " ").slice(-90));
+    }
   }
 
   phase("Searching packs by hand");
