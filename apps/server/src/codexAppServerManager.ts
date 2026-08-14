@@ -1,4 +1,8 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+import { ensureAgentCliShim, withShimOnPath } from "./agentCliShim.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import readline from "node:readline";
@@ -290,6 +294,32 @@ The \`request_user_input\` tool is unavailable in Default mode. If you call it w
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 </collaboration_mode>`;
 
+/**
+ * Told to the agent in every mode: the packs exist and here is how to get one.
+ *
+ * Deliberately a pointer and not the packs themselves. Pushing every pack into
+ * the context would spend it on knowledge that is usually irrelevant, and would
+ * go stale the moment a pack is updated. The agent has a shell; it can go and
+ * look when the task suggests one might help.
+ *
+ * Saying which pack it is following is part of it. A pack that silently changes
+ * what the agent does is indistinguishable, from the outside, from the agent
+ * making it up — which is exactly how this gap was noticed.
+ */
+export const PACK_DISCOVERY_INSTRUCTIONS = `<packs># Packs
+
+This workspace keeps packs: recorded knowledge for tasks that have gone wrong before, such as deploying a project, shipping a document, or wiring up analytics. A pack carries what actually broke on real runs and how it was fixed.
+
+Before starting substantial work of that kind, look for one:
+
+\`\`\`
+t3 pack search <what you are about to do>
+t3 pack show <pack name>
+\`\`\`
+
+If a pack covers the task, follow what it says and tell the user which pack you are using. If nothing matches, carry on as you normally would — this is a look-up, not an approval step.
+</packs>`;
+
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: "untrusted" | "on-request" | "never";
   readonly sandbox: "read-only" | "workspace-write" | "danger-full-access";
@@ -361,10 +391,11 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
+      developer_instructions: `${
         input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS
+      }\n\n${PACK_DISCOVERY_INSTRUCTIONS}`,
     },
   };
 }
@@ -493,10 +524,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(launchEnvironment ? { environment: launchEnvironment } : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
+      // So `t3 pack search` is a command the agent can actually run.
+      const t3Home = process.env["T3CODE_HOME"];
+      const shimDir = ensureAgentCliShim(
+        join(
+          t3Home !== undefined && t3Home.length > 0 ? t3Home : join(homedir(), ".t3code"),
+          "bin",
+        ),
+      );
+      const shimmedPath = withShimOnPath(baseEnvironment["PATH"], shimDir);
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: resolvedCwd,
         env: {
           ...baseEnvironment,
+          ...(shimmedPath !== undefined ? { PATH: shimmedPath } : {}),
           ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
         },
         stdio: ["pipe", "pipe", "pipe"],

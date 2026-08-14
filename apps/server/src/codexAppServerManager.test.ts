@@ -175,6 +175,20 @@ function createCollabNotificationHarness() {
   return { manager, context, emitEvent, updateSession };
 }
 
+/**
+ * The mode instructions are sent, and the pack pointer rides along with them.
+ * Spelling the pack line out rather than reusing the constant means a change
+ * that quietly drops it fails here instead of asserting itself true.
+ */
+function expectInstructions(modeInstructions: string): unknown {
+  return expect.toSatisfy(
+    (value: unknown) =>
+      typeof value === "string" &&
+      value.includes(modeInstructions) &&
+      value.includes("t3 pack search"),
+  );
+}
+
 describe("classifyCodexStderrLine", () => {
   it("ignores empty lines", () => {
     expect(classifyCodexStderrLine("   ")).toBeNull();
@@ -718,7 +732,7 @@ describe("sendTurn", () => {
         settings: {
           model: "gpt-5.3-codex",
           reasoning_effort: "medium",
-          developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+          developer_instructions: expectInstructions(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS),
         },
       },
     });
@@ -748,7 +762,7 @@ describe("sendTurn", () => {
         settings: {
           model: "gpt-5.3-codex",
           reasoning_effort: "medium",
-          developer_instructions: CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+          developer_instructions: expectInstructions(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS),
         },
       },
     });
@@ -779,7 +793,7 @@ describe("sendTurn", () => {
         settings: {
           model: "gpt-5.2-codex",
           reasoning_effort: "medium",
-          developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+          developer_instructions: expectInstructions(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS),
         },
       },
     });
