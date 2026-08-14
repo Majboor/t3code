@@ -154,7 +154,20 @@ export function suggestPacks(
  * would be stale the moment the pack changed.
  */
 export function promptMentionFor(pack: SuggestablePack): string {
-  return `Use the ${pack.qualified} pack for this — run \`t3 pack show ${pack.name}\` and follow its failure modes and integration notes.`;
+  // Naming the pack alone was not enough. Measured across sixteen runs, an
+  // agent told to read a pack read it and then did the obvious thing anyway
+  // about half the time — the guidance loses to a plan already formed. So the
+  // mention asks for the pack's own first question to be answered *before*
+  // any work, and for the answer to be said out loud, which is the point at
+  // which a person can disagree.
+  //
+  // Still a pointer, not a paste: the pack's words stay in the pack, so this
+  // cannot go stale when the pack changes.
+  return [
+    `Use the ${pack.qualified} pack for this.`,
+    `Run \`t3 pack show ${pack.name}\` first and read its integration knowledge and failure modes in full.`,
+    `Before writing any command or editing anything, tell me what the pack says to establish first and what your answer is. If it says to check something with me, ask before proceeding.`,
+  ].join(" ");
 }
 
 /** Appends the mention, leaving what somebody already wrote untouched. */

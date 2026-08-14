@@ -65,7 +65,8 @@
     "clean:e2e": "node scripts/clean-e2e-artifacts.mjs",
     "test:pack-discovery": "node scripts/pack-discovery-e2e.mjs",
     "test:pack-suggestions": "node scripts/pack-suggestions-e2e.mjs",
-    "packs:install": "bun scripts/install-packs.mjs"
+    "packs:install": "bun scripts/install-packs.mjs",
+    "test:pack-selected": "node scripts/pack-selected-e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "catalog:",
