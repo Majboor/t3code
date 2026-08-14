@@ -3,7 +3,7 @@
   "identity": {
     "id": "pack_c7f9cb58f6a544e7b16c",
     "name": "ssh-deploy",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "displayName": "ssh-deploy",
     "summary": "Deploy a thing to a server over SSH, whatever shape the thing is",
     "publisher": {
@@ -228,6 +228,57 @@
     ],
     "integration": [
       {
+        "id": "classify-the-thing-before-shipping-it",
+        "title": "Decide what shape the project is before choosing how to deploy it",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Look at what the project actually is before writing a deploy command. It is one of three things: it already serves HTTP, it produces a document, or it is a terminal program with no network surface at all. Each needs a different plan, and guessing produces a deploy that starts nothing.",
+          "rationale": "Every deploy command here ends in a health check against a port. A program that never opens a port cannot pass one, so shipping it unchanged gives a deploy that reports failure without saying why. The shape of the thing decides the work, and it is knowable before any of it starts.",
+          "example": "serves HTTP -> ship and start it | produces a PDF or report -> build it, then serve the file | TUI or CLI -> it has no port; see the next note"
+        },
+        "conditions": {
+          "observedAt": "2026-08-14T09:00:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "1.0.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-14T09:00:00.000Z"
+        }
+      },
+      {
+        "id": "a-terminal-program-needs-a-front-end-and-a-conversation",
+        "title": "A TUI has no web surface, so ask before inventing one",
+        "detail": {
+          "kind": "wiring",
+          "prompt": "Do this before writing any deploy command, and before deciding the task is routine. The most common way this pack is wasted is being read after the plan is already made.\n\nWhen the project is a terminal program, stop before writing any deploy command and talk to the person first. Say plainly: this has no web surface, so deploying it as-is would start something nobody can reach. Offer to build a small web front end over the same functionality, and be specific about what that means — which commands become which screens, what the front end will call underneath, and what does not survive the move (raw keyboard handling, curses redraw, anything that assumes a live terminal). Get agreement on that shape before building it. Then build the front end, give it a /healthz, and deploy that. Do not silently generate a front end and ship it: the person asked to deploy their program, and what they would get is a different program.",
+          "touches": []
+        },
+        "conditions": {
+          "observedAt": "2026-08-14T09:00:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "1.0.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-14T09:00:00.000Z"
+        }
+      },
+      {
         "id": "bind-loopback-and-front-it",
         "title": "Bind loopback and let a tunnel or proxy publish it",
         "detail": {
@@ -330,57 +381,6 @@
             "signal": "deploy.run.completed"
           },
           "recordedAt": "2026-08-09T01:55:00.000Z"
-        }
-      },
-      {
-        "id": "classify-the-thing-before-shipping-it",
-        "title": "Decide what shape the project is before choosing how to deploy it",
-        "detail": {
-          "kind": "pattern",
-          "rule": "Look at what the project actually is before writing a deploy command. It is one of three things: it already serves HTTP, it produces a document, or it is a terminal program with no network surface at all. Each needs a different plan, and guessing produces a deploy that starts nothing.",
-          "rationale": "Every deploy command here ends in a health check against a port. A program that never opens a port cannot pass one, so shipping it unchanged gives a deploy that reports failure without saying why. The shape of the thing decides the work, and it is knowable before any of it starts.",
-          "example": "serves HTTP -> ship and start it | produces a PDF or report -> build it, then serve the file | TUI or CLI -> it has no port; see the next note"
-        },
-        "conditions": {
-          "observedAt": "2026-08-14T09:00:00.000Z",
-          "other": [
-            {
-              "axis": "deployment-target",
-              "value": "Ubuntu 24.04.2 shared host"
-            }
-          ]
-        },
-        "origin": {
-          "introducedIn": "1.0.0",
-          "source": {
-            "kind": "human-report"
-          },
-          "recordedAt": "2026-08-14T09:00:00.000Z"
-        }
-      },
-      {
-        "id": "a-terminal-program-needs-a-front-end-and-a-conversation",
-        "title": "A TUI has no web surface, so ask before inventing one",
-        "detail": {
-          "kind": "wiring",
-          "prompt": "When the project is a terminal program, stop before writing any deploy command and talk to the person first. Say plainly: this has no web surface, so deploying it as-is would start something nobody can reach. Offer to build a small web front end over the same functionality, and be specific about what that means — which commands become which screens, what the front end will call underneath, and what does not survive the move (raw keyboard handling, curses redraw, anything that assumes a live terminal). Get agreement on that shape before building it. Then build the front end, give it a /healthz, and deploy that. Do not silently generate a front end and ship it: the person asked to deploy their program, and what they would get is a different program.",
-          "touches": []
-        },
-        "conditions": {
-          "observedAt": "2026-08-14T09:00:00.000Z",
-          "other": [
-            {
-              "axis": "deployment-target",
-              "value": "Ubuntu 24.04.2 shared host"
-            }
-          ]
-        },
-        "origin": {
-          "introducedIn": "1.0.0",
-          "source": {
-            "kind": "human-report"
-          },
-          "recordedAt": "2026-08-14T09:00:00.000Z"
         }
       },
       {
@@ -532,8 +532,8 @@
     "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
     "algorithm": "ed25519",
     "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
-    "manifestSha256": "5d7af938c946e97201b06a6399f5f6823d1026d642928169ba4b8f5d9d62ffcd",
-    "signature": "rJoeqlpHQlHDURPve3WHX1iWqC9N64g/d6gKHci4r0pJZhQcsKw977FYq+A8R0xrqrBhHxPAj0A3RzW8VjoMDw==",
-    "signedAt": "2026-08-13T21:43:21.201Z"
+    "manifestSha256": "ddb5d834ae896504b6f42fa3bf6f3a2318285ad8609bd3abefb2d7c16107cf5b",
+    "signature": "DqQM3buBYD8uQ/+S/KzqOdKrkivTYZ0zXYgHhZuCCZidShOxog0N+bMl5J9sQEfcIsvZZXgDFsWsdEGh8gzqCg==",
+    "signedAt": "2026-08-14T17:50:32.806Z"
   }
 }
