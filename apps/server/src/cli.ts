@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 
 // Deep imports on purpose: the package barrel also re-exports the store SDK,
@@ -1577,12 +1578,28 @@ const runServerCommand = (
  * The work is pack-cli's; this only builds the context it needs and prints the
  * answer, so the two CLIs cannot drift apart.
  */
-function packRegistryRoot(explicit: string | undefined): string {
-  const fromEnvironment = process.env["T3CODE_PACK_REGISTRY"];
+export function packRegistryRoot(
+  explicit: string | undefined,
+  environment: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string {
   if (explicit !== undefined && explicit.length > 0) return explicit;
-  if (fromEnvironment !== undefined && fromEnvironment.length > 0) return fromEnvironment;
-  const home = process.env["T3CODE_HOME"];
-  return `${home !== undefined && home.length > 0 ? home : `${homedir()}/.t3code`}/packs`;
+
+  const configured = environment["T3CODE_PACK_REGISTRY"];
+  if (configured !== undefined && configured.length > 0) return configured;
+
+  // T3CODE_HOME moves the server's state, and a server run against a scratch
+  // home has no packs in it — but the packs are still installed under the
+  // default home, because that is where installing puts them. Preferring a
+  // home that has no registry is how an agent gets told "no pack matches" in a
+  // workspace that has five, which reads as packs being useless rather than as
+  // it having looked in an empty directory.
+  const fallback = `${homedir()}/.t3code/packs`;
+  const home = environment["T3CODE_HOME"];
+  if (home === undefined || home.length === 0) return fallback;
+
+  const fromHome = `${home}/packs`;
+  return exists(fromHome) || !exists(fallback) ? fromHome : fallback;
 }
 
 class PackCommandError extends Data.TaggedError("PackCommandError")<{

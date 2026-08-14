@@ -317,7 +317,9 @@ t3 pack search <what you are about to do>
 t3 pack show <pack name>
 \`\`\`
 
-If a pack covers the task, follow what it says and tell the user which pack you are using. If nothing matches, carry on as you normally would — this is a look-up, not an approval step.
+\`search\` returns a one-line summary; it is not the pack. If anything looks relevant, run \`show\` on it and read the failure modes and integration notes **before** you start the work — they are the reason the pack exists, and they routinely say the obvious plan is the one that fails. Then tell the user which pack you are following.
+
+If a pack says to check something with the user before proceeding, do that rather than deciding for them. If nothing matches, carry on as you normally would — this is a look-up, not an approval step.
 </packs>`;
 
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
