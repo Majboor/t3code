@@ -37,6 +37,7 @@ import {
   type PackCardView,
   type PackManifest,
   type PackRefView,
+  type PackIntegrationKnowledgeView,
 } from "./manifest.ts";
 import { assessReadiness, type ReadinessReport } from "./readiness.ts";
 import type { PackRegistry } from "./registry.ts";
@@ -305,25 +306,55 @@ async function showCommand(
       ...suggestion.caveats.map((caveat) => `  caveat: ${caveat}`),
       "",
       "  integration knowledge:",
-      ...detail.integrationKnowledge.map(
-        (entry) =>
-          `    ${entry.kind ?? "unknown"}: ${entry.title ?? entry.id ?? "untitled"}${
-            entry.commonMistake !== undefined
-              ? `\n      models usually say: ${entry.commonMistake}`
-              : ""
-          }`,
-      ),
+      ...detail.integrationKnowledge.flatMap((entry) => renderKnowledge(entry)),
       "  failure modes:",
-      ...[...detail.handles, ...detail.openFailureModes].map(
-        (entry) =>
-          `    [${entry.severity ?? "?"}${entry.silent === true ? ", silent" : ""}] ${
-            entry.symptom ?? entry.id ?? "unnamed"
-          } (${entry.resolution ?? "unresolved"})`,
-      ),
+      ...[...detail.handles, ...detail.openFailureModes].flatMap((entry) => [
+        `    [${entry.severity ?? "?"}${entry.silent === true ? ", silent" : ""}] ${
+          entry.symptom ?? entry.id ?? "unnamed"
+        }`,
+        // What was done about it. A symptom without its fix tells a reader
+        // that something goes wrong and leaves them no better off.
+        ...(entry.trigger !== undefined ? [`      cause: ${entry.trigger}`] : []),
+        ...(entry.resolutionDetail !== undefined
+          ? [`      fix: ${entry.resolutionDetail}`]
+          : entry.resolution !== undefined
+            ? [`      fix: ${entry.resolution}`]
+            : []),
+      ]),
       "",
       `  integration prompt: ${detail.integration.prompt ?? "(none)"}`,
     ].join("\n"),
   };
+}
+
+/**
+ * One piece of integration knowledge, in full.
+ *
+ * This used to print the title alone. A reader — usually an agent — then saw
+ * "A TUI has no web surface, so ask before inventing one" and never saw the
+ * paragraph telling it to stop, offer a front end, and agree the shape first.
+ * It was measured skipping that step while having run `show`, which looked
+ * like the pack being ignored and was really the pack being withheld.
+ *
+ * The rule and the prompt are the pack. The title is only how you find it.
+ */
+function renderKnowledge(entry: PackIntegrationKnowledgeView): ReadonlyArray<string> {
+  const lines = [`    ${entry.kind ?? "unknown"}: ${entry.title ?? entry.id ?? "untitled"}`];
+
+  const say = (label: string, value: string | undefined) => {
+    if (value === undefined || value.trim().length === 0) return;
+    // Indented under its title, so a long rule stays attached to the thing it
+    // is a rule about when several are printed together.
+    const body = value.trim().split("\n").join("\n        ");
+    lines.push(label.length > 0 ? `      ${label}: ${body}` : `      ${body}`);
+  };
+
+  say("", entry.rule);
+  say("", entry.prompt);
+  say("why", entry.rationale);
+  say("e.g.", entry.example);
+  say("models usually say", entry.commonMistake);
+  return lines;
 }
 
 async function initCommand(

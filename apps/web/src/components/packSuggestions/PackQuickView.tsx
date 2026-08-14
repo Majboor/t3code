@@ -74,8 +74,9 @@ export function PackQuickView({
 }) {
   const [manifest, setManifest] = useState<PackManifest | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
-  const [enabling, setEnabling] = useState(false);
-  const [enabled, setEnabled] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // null until we know, so the button cannot claim "off" while still asking.
+  const [enabled, setEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     const api = readEnvironmentApi(scope.environmentId);
@@ -98,33 +99,52 @@ export function PackQuickView({
           setFailed(error instanceof Error ? error.message : "Could not read this pack.");
         }
       });
+    if (scope.projectId) {
+      api.packs
+        .listEnablements({
+          tenantId: scope.tenantId,
+          workspaceId: scope.workspaceId,
+          projectId: scope.projectId,
+        })
+        .then((result) => {
+          if (cancelled) return;
+          setEnabled(result.enablements.some((entry) => entry.packId === packId));
+        })
+        .catch(() => {
+          // Not knowing is not the same as being off; leave it unknown rather
+          // than offering to turn on something that already is.
+          if (!cancelled) setEnabled(null);
+        });
+    }
+
     return () => {
       cancelled = true;
     };
-  }, [packId, scope.environmentId, scope.tenantId, scope.workspaceId]);
+  }, [packId, scope.environmentId, scope.projectId, scope.tenantId, scope.workspaceId]);
 
-  async function enable() {
+  async function toggle(next: boolean) {
     const api = readEnvironmentApi(scope.environmentId);
     if (!api || !scope.projectId) {
       return;
     }
-    setEnabling(true);
+    setBusy(true);
     try {
-      await api.packs.enable({
+      const scoped = {
         tenantId: scope.tenantId,
         workspaceId: scope.workspaceId,
         projectId: scope.projectId,
         packId: packId as never,
-      });
-      setEnabled(true);
+      };
+      await (next ? api.packs.enable(scoped) : api.packs.disable(scoped));
+      setEnabled(next);
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: `Could not turn on ${packName}`,
+        title: `Could not turn ${next ? "on" : "off"} ${packName}`,
         description: error instanceof Error ? error.message : "The request failed.",
       });
     } finally {
-      setEnabling(false);
+      setBusy(false);
     }
   }
 
@@ -186,17 +206,27 @@ export function PackQuickView({
             <div className="mt-3 flex items-center gap-2">
               <Button
                 size="xs"
-                variant={enabled ? "outline" : "default"}
-                disabled={enabling || enabled}
-                data-testid="pack-quick-view-enable"
-                onClick={() => void enable()}
+                variant={enabled === true ? "outline" : "default"}
+                disabled={busy || enabled === null}
+                data-testid={
+                  enabled === true ? "pack-quick-view-disable" : "pack-quick-view-enable"
+                }
+                onClick={() => void toggle(enabled !== true)}
               >
-                {enabled ? <CheckIcon className="size-3" /> : null}
-                {enabled ? "On for this project" : enabling ? "Turning on…" : "Turn on"}
+                {enabled === true ? <CheckIcon className="size-3" /> : null}
+                {enabled === null
+                  ? "Checking…"
+                  : busy
+                    ? enabled
+                      ? "Turning off…"
+                      : "Turning on…"
+                    : enabled
+                      ? "On for this project"
+                      : "Turn on"}
               </Button>
               <span className="text-[10px] text-muted-foreground">
-                {enabled
-                  ? "The agent will be told this pack applies here."
+                {enabled === true
+                  ? "The agent will be told this pack applies here. Click to turn it off."
                   : "Turning it on records that this project uses the pack."}
               </span>
             </div>
