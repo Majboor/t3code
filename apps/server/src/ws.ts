@@ -2278,10 +2278,18 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           );
         }
 
+        // The bootstrap tenant is created on demand a few lines below, so nobody
+        // can hold a membership in it yet — and requiring one made a signed-in
+        // person on their own machine hit "does not have workspace.edit" against
+        // a tenant that did not exist. The two conditions have to agree, and the
+        // one that matters is the same either way: a session scoped to some
+        // other tenant may not reach this.
+        const isBootstrappingLocalPersonal =
+          !tenantSession && input.tenantId === TenantId.make("tenant-local-personal");
         const permissionCheck =
-          tenantSession || !isImplicitLocalOwnerSession(session)
-            ? ensureTenantPermission(input.tenantId, "workspace.edit")
-            : Effect.void;
+          isBootstrappingLocalPersonal || (!tenantSession && isImplicitLocalOwnerSession(session))
+            ? Effect.void
+            : ensureTenantPermission(input.tenantId, "workspace.edit");
 
         return permissionCheck.pipe(
           Effect.flatMap(() =>
