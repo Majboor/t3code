@@ -849,7 +849,7 @@ describe("PackManifest", () => {
 
   it("resolves a service binding through the interface that hosts it", () => {
     const parsed = decodeManifest(fullManifest);
-    const api = parsed.interfaces.find((entry) => entry.kind === "api");
+    const api = parsed.interfaces?.find((entry) => entry.kind === "api");
 
     if (api?.kind !== "api") {
       throw new Error("Expected an api interface");

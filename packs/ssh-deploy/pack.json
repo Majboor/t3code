@@ -538,8 +538,8 @@
     "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
     "algorithm": "ed25519",
     "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
-    "manifestSha256": "353b822d58da2f95191c671be598ceb81b52ada8c12614c999ec1bfa6aad38e2",
-    "signature": "BRktHz2U7Lbq7ncpE22g+tX96ucJ/6Xatd/ikRYUnycjYClfa5a10jtmJCOeB0kEdEP7Kctx7FWfkHcReN0hCQ==",
-    "signedAt": "2026-08-15T01:56:13.167Z"
+    "manifestSha256": "2efa42c29c2c4ae533adf4f4fdb74d48e105308990c51e594c033b7761b41b40",
+    "signature": "2dFjLHZgCHLsdihQW0Fh2a26oLYC0mW4SGMg4BC9CdJc8rUIb1YbxaZNis2217f2DgmXN0j6S5QEGxt6k3eDDQ==",
+    "signedAt": "2026-08-15T18:51:31.251Z"
   }
 }

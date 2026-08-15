@@ -149,7 +149,7 @@ describe("buildManifest", () => {
 
   it("declares a terminal program by the command that runs it", () => {
     const manifest = buildManifest({ ...input, shape: "tui", startCommand: "./bin/report" });
-    const [surface] = manifest.interfaces;
+    const [surface] = manifest.interfaces ?? [];
     expect(surface?.kind).toBe("tui");
     expect(surface && "command" in surface && surface.command).toBe("./bin/report");
   });

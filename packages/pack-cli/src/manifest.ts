@@ -847,6 +847,13 @@ export function readDetail(manifest: PackManifest): PackDetailView {
   };
 }
 
+/**
+ * The summary `t3-pack init` wrote into its placeholder interface, kept so a
+ * manifest that still carries it can be recognised. Scaffolding one stopped in
+ * favour of no interface at all; this only finds the packs written before that.
+ */
+export const SCAFFOLD_EXPORT_SUMMARY_PREFIX = "Replace with what this pack actually exports";
+
 // ── What the readiness rules need that is not on a card ─────────────────────
 
 export interface PackReadinessFacts {
@@ -854,6 +861,8 @@ export interface PackReadinessFacts {
   readonly startCommand: string | undefined;
   readonly interfaceKinds: ReadonlyArray<string>;
   readonly interfaceServiceIds: ReadonlyArray<string>;
+  /** Interfaces still carrying the summary `init` used to write. */
+  readonly scaffoldInterfaceIds: ReadonlyArray<string>;
   readonly runtimeServiceIds: ReadonlyArray<string>;
   readonly operationIds: ReadonlyArray<string>;
   readonly meteredOperationIds: ReadonlyArray<string>;
@@ -938,6 +947,15 @@ export function readReadinessFacts(manifest: PackManifest): PackReadinessFacts {
     interfaceServiceIds: interfaces
       .map((entry) => text(entry, "serviceId"))
       .filter((serviceId): serviceId is string => serviceId !== undefined),
+    // Interfaces still carrying what `init` wrote. Named by their id so the
+    // report says which one to go and look at.
+    scaffoldInterfaceIds: interfaces
+      .filter((entry) =>
+        items(entry, "exports").some((exported) =>
+          (text(exported, "summary") ?? "").startsWith(SCAFFOLD_EXPORT_SUMMARY_PREFIX),
+        ),
+      )
+      .map((entry, index) => text(entry, "id") ?? `interfaces[${index}]`),
     runtimeServiceIds: items(manifest, "runtime", "services")
       .map((entry) => text(entry, "id"))
       .filter((id): id is string => id !== undefined),
@@ -1021,21 +1039,11 @@ export function buildStarterManifest(input: StarterManifestInput): Record<string
     capability: { does: input.does },
     knowledge: {},
     requirements: {},
-    interfaces: [
-      {
-        kind: "library",
-        id: input.name,
-        title: input.displayName,
-        language: "typescript",
-        exports: [
-          {
-            name: "install",
-            kind: "function",
-            summary: "Replace with what this pack actually exports.",
-          },
-        ],
-      },
-    ],
+    // No `interfaces`. It used to scaffold a typescript library exporting
+    // `install`, on the assumption the author would replace it — and in every
+    // pack written so far, nobody did, so each one shipped claiming a function
+    // it does not have. A pack that exports nothing should say nothing; an
+    // author with a real interface can add one.
     runtime: { target: input.target, commands: {} },
     permissions: {},
     verification: {

@@ -38,6 +38,7 @@ export type ReadinessCode =
   | "failure-mode-open-critical"
   | "check-never-run"
   | "advisory-open"
+  | "interface-scaffold-unfilled"
   | "contents-digest-missing"
   | "signature-missing";
 
@@ -113,6 +114,14 @@ export function assessReadiness(input: {
       "integration-prompt-thin",
       MANIFEST_PATHS.integrationPrompt,
       "The integration prompt is what another agent pastes to start using this pack; it has to be actionable on its own.",
+    );
+  }
+
+  for (const interfaceId of facts.scaffoldInterfaceIds) {
+    warn(
+      "interface-scaffold-unfilled",
+      MANIFEST_PATHS.interfaces,
+      `Interface "${interfaceId}" still carries the summary the scaffold wrote, so this pack claims an export it does not have. Describe the real interface, or drop it — a pack that exports nothing may declare none.`,
     );
   }
 

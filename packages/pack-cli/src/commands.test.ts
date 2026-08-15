@@ -633,6 +633,68 @@ describe("init and validate", () => {
     expect(result["readiness"].publishable).toBe(false);
   });
 
+  // It used to scaffold a typescript library exporting `install`, and every
+  // pack written so far shipped that placeholder unchanged — each one claiming
+  // a function it does not have.
+  it("scaffolds no interface, rather than one the author has to remember to delete", async () => {
+    const store = makeMemoryStore();
+    const context = makeContext(store);
+
+    await run(
+      {
+        kind: "init",
+        name: "receipts",
+        directory: undefined,
+        publisher: "local",
+        displayName: undefined,
+        summary: undefined,
+        does: undefined,
+        license: "MIT",
+        target: "node",
+      },
+      context,
+    );
+
+    const manifest = JSON.parse(store.files.get("/work/receipts.pack/pack.json") ?? "{}");
+    expect(manifest.interfaces).toBeUndefined();
+    expect(JSON.stringify(manifest)).not.toContain("Replace with what this pack actually exports");
+  });
+
+  it("warns when an interface still carries the scaffold's summary", async () => {
+    const scaffolded = {
+      ...minimalManifest("receipts"),
+      interfaces: [
+        {
+          kind: "library",
+          id: "receipts",
+          title: "receipts",
+          language: "typescript",
+          exports: [
+            {
+              name: "install",
+              kind: "function",
+              summary: "Replace with what this pack actually exports.",
+            },
+          ],
+        },
+      ],
+    };
+    const store = makeMemoryStore({
+      "/work/receipts.pack/pack.json": JSON.stringify(scaffolded),
+    });
+    const context = makeContext(store);
+
+    const outcome = await run(
+      { kind: "validate", directory: "/work/receipts.pack" },
+      context,
+    );
+    const codes = (outcome.result as Record<string, any>)["issues"].map(
+      (issue: { code: string }) => issue.code,
+    );
+
+    expect(codes).toContain("interface-scaffold-unfilled");
+  });
+
   it("refuses to overwrite a pack that is already there", async () => {
     const store = makeMemoryStore({
       "/work/receipts.pack/pack.json": JSON.stringify(minimalManifest("receipts")),

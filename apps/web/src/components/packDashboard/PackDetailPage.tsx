@@ -246,7 +246,7 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
         ) : null}
 
         <div className="mt-2 flex flex-wrap gap-1" data-testid="pack-detail-interfaces">
-          {manifest.interfaces.map((entry) => (
+          {(manifest.interfaces ?? []).map((entry) => (
             <Badge key={entry.id} size="sm" variant="outline">
               {entry.kind}: {entry.title}
             </Badge>

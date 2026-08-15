@@ -1809,7 +1809,21 @@ export const PackManifest = Schema.Struct({
   capability: PackCapability,
   knowledge: PackKnowledge,
   requirements: PackRequirements,
-  interfaces: Schema.NonEmptyArray(PackInterface),
+  /**
+   * Optional, because the most valuable packs have no callable surface at all.
+   *
+   * Requiring at least one made every knowledge pack declare something it does
+   * not have: all four of the packs written so far shipped the scaffold's
+   * placeholder library, claiming a `typescript` export named `install` with
+   * the summary "Replace with what this pack actually exports.". A pack whose
+   * whole contribution is knowing that a health check answered by the previous
+   * deployment makes a failed deploy look successful exports nothing, and
+   * saying so is more useful than a fiction.
+   *
+   * Still non-empty when present: declaring `interfaces: []` says the same as
+   * omitting it, and one way of saying a thing is enough.
+   */
+  interfaces: Schema.optional(Schema.NonEmptyArray(PackInterface)),
   runtime: PackRuntime,
   permissions: PackPermissions,
   verification: PackVerification,
