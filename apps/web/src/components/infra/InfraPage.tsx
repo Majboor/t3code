@@ -91,7 +91,13 @@ export function InfraPage({ projectId }: { projectId: ProjectId }) {
     },
   });
 
-  if (environmentId === null || scope.isPending || enablements.isPending) {
+  // The failure is read before the wait, and the wait asks whether a request is
+  // actually in flight rather than whether one has resolved. A query that never
+  // ran because the one before it failed reports itself as pending forever, so
+  // asking about pending first left the page spinning on the one state that has
+  // something to say.
+  const failure = scope.error ?? enablements.error;
+  if (!failure && (environmentId === null || scope.isLoading || enablements.isLoading)) {
     return (
       <Shell>
         <Spinner />
@@ -99,7 +105,6 @@ export function InfraPage({ projectId }: { projectId: ProjectId }) {
     );
   }
 
-  const failure = scope.error ?? enablements.error;
   if (failure) {
     return (
       <Shell>
