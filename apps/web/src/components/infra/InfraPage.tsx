@@ -2,11 +2,14 @@ import { ArrowLeftIcon, CircleCheckIcon, CircleDashedIcon, PowerIcon } from "luc
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
+import { scopeProjectRef } from "@t3tools/client-runtime";
 import type { ProjectId } from "@t3tools/contracts";
 
 import { describeReadiness, orderForAttention } from "./infra.logic";
+import { resolveInfraScope } from "./infraScope.logic";
 import { readEnvironmentApi } from "../../environmentApi";
 import { usePrimaryEnvironmentId } from "../../environments/primary/context";
+import { selectProjectByRef, useStore } from "../../store";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
@@ -49,17 +52,26 @@ function Shell({ children }: { children: React.ReactNode }) {
 export function InfraPage({ projectId }: { projectId: ProjectId }) {
   const environmentId = usePrimaryEnvironmentId();
   const queryClient = useQueryClient();
+  const ownership = useStore(
+    (state) =>
+      selectProjectByRef(
+        state,
+        environmentId === null ? null : scopeProjectRef(environmentId, projectId),
+      )?.ownership,
+  );
 
   const scope = useQuery({
     enabled: environmentId !== null,
-    queryKey: ["infra", "scope", environmentId],
+    queryKey: ["infra", "scope", environmentId, projectId, ownership?.workspaceId ?? null],
     queryFn: async () => {
       const api = environmentId === null ? undefined : readEnvironmentApi(environmentId);
       if (!api) throw new Error("This window is not connected to an environment.");
-      const snapshot = await api.organizations.list();
-      const workspace = (snapshot.workspaces ?? [])[0];
-      if (!workspace) throw new Error("This session can see no workspace.");
-      return { tenantId: workspace.tenantId, workspaceId: workspace.id };
+      // Only the guess needs the network: a project that carries its ownership
+      // has already named the workspace its packs live in.
+      const workspaces = ownership ? [] : ((await api.organizations.list()).workspaces ?? []);
+      const resolved = resolveInfraScope({ ownership, workspaces });
+      if (!resolved) throw new Error("This session can see no workspace.");
+      return resolved;
     },
   });
 
