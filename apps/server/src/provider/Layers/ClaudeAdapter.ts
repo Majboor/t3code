@@ -553,8 +553,24 @@ const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+/**
+ * Where a T3-spawned Claude session reads settings from.
+ *
+ * `user` is deliberately absent. It loads `~/.claude`, which belongs to the
+ * person and not to T3, and brings with it whatever they have configured for
+ * their own CLI — including MCP servers. That is the same inheritance that let
+ * an agent publish a site through a Codex plugin and leave T3 with no record of
+ * the deploy; Claude had the identical hole by a different route.
+ *
+ * `project` and `local` stay: those live in the repository the agent is working
+ * in, so they describe the work rather than the person, and dropping them would
+ * break the per-project configuration people legitimately rely on.
+ *
+ * This does not touch credentials — those come from `CLAUDE_CONFIG_DIR` and the
+ * keychain, not from a settings source, so signing in still works and `claude`
+ * in a terminal is unaffected.
+ */
 const CLAUDE_SETTING_SOURCES = [
-  "user",
   "project",
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;

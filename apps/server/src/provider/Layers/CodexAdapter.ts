@@ -22,7 +22,7 @@ import {
   TurnId,
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Queue, Schema, Context, Stream } from "effect";
+import { Effect, FileSystem, Layer, Path, Queue, Schema, Context, Stream } from "effect";
 
 import {
   ProviderAdapterProcessError,
@@ -39,6 +39,7 @@ import {
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { resolveCuratedCodexHome } from "../curatedCodexHome.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -1375,6 +1376,7 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   options?: CodexAdapterLiveOptions,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
   const serverConfig = yield* Effect.service(ServerConfig);
   const nativeEventLogger =
     options?.nativeEventLogger ??
@@ -1427,7 +1429,28 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       );
       const binaryPath = codexSettings.binaryPath;
       const launchEnvironment = input.providerLaunchEnvironment?.env;
-      const homePath = launchEnvironment?.CODEX_HOME ?? codexSettings.homePath;
+      // Where this agent reads its Codex config from.
+      //
+      // An isolated launch environment already names a T3-owned home, and an
+      // explicitly configured `homePath` is the user overriding this on
+      // purpose. With neither, the agent used to fall through to the person's
+      // own `~/.codex` and inherit everything configured for their personal
+      // CLI — every MCP server and every plugin, including the one that
+      // published a site T3 has no record of. It gets a curated home instead:
+      // same model, same trusted folders, none of the tools.
+      //
+      // A failure here is not worth refusing to start a session over, so it
+      // falls back to the old behaviour rather than taking the turn down.
+      const curatedHome =
+        launchEnvironment?.CODEX_HOME !== undefined || codexSettings.homePath
+          ? null
+          : yield* resolveCuratedCodexHome({ stateDir: serverConfig.stateDir }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, pathService),
+              Effect.catch(() => Effect.succeed(null)),
+            );
+      const homePath =
+        launchEnvironment?.CODEX_HOME ?? (codexSettings.homePath || curatedHome?.path);
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",

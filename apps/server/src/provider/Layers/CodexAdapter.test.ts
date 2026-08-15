@@ -152,7 +152,7 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
 const validationManager = new FakeCodexManager();
 const validationLayer = it.layer(
   makeCodexAdapterLive({ manager: validationManager }).pipe(
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-codex-adapter-" })),
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
     Layer.provideMerge(NodeServices.layer),
@@ -201,7 +201,18 @@ validationLayer("CodexAdapterLive validation", (it) => {
         runtimeMode: "full-access",
       });
 
-      assert.deepStrictEqual(validationManager.startSessionImpl.mock.calls[0]?.[0], {
+      const startInput = validationManager.startSessionImpl.mock.calls[0]?.[0];
+
+      // With no configured home and no isolated launch environment, the session
+      // gets T3's curated Codex home rather than falling through to the user's
+      // own ~/.codex and inheriting its MCP servers and plugins.
+      assert.ok(
+        startInput?.homePath?.endsWith("/provider-homes/codex"),
+        `expected a curated home, got ${String(startInput?.homePath)}`,
+      );
+
+      const { homePath: _curatedHome, ...rest } = startInput ?? {};
+      assert.deepStrictEqual(rest, {
         provider: "codex",
         threadId: asThreadId("thread-1"),
         binaryPath: "codex",
@@ -254,7 +265,7 @@ sessionErrorManager.sendTurnImpl.mockImplementation(async () => {
 });
 const sessionErrorLayer = it.layer(
   makeCodexAdapterLive({ manager: sessionErrorManager }).pipe(
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-codex-adapter-" })),
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
     Layer.provideMerge(NodeServices.layer),
@@ -316,7 +327,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
 const lifecycleManager = new FakeCodexManager();
 const lifecycleLayer = it.layer(
   makeCodexAdapterLive({ manager: lifecycleManager }).pipe(
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-codex-adapter-" })),
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
     Layer.provideMerge(NodeServices.layer),

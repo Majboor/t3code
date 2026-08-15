@@ -278,7 +278,10 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
+      // "user" is deliberately absent: it loads ~/.claude, which would bring the
+      // person's own MCP servers into every session T3 spawns. Project and local
+      // live in the repository being worked in, so they stay.
+      assert.deepEqual(createInput?.options.settingSources, ["project", "local"]);
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
     }).pipe(
@@ -298,7 +301,10 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
+      // "user" is deliberately absent: it loads ~/.claude, which would bring the
+      // person's own MCP servers into every session T3 spawns. Project and local
+      // live in the repository being worked in, so they stay.
+      assert.deepEqual(createInput?.options.settingSources, ["project", "local"]);
       assert.equal(createInput?.options.permissionMode, undefined);
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
     }).pipe(
