@@ -1,4 +1,5 @@
 import type {
+  PackAnalytics,
   PackConditionAxis,
   PackConditions,
   PackFailureMode,
@@ -14,6 +15,7 @@ import type {
   PackVisibilityScope,
 } from "@t3tools/contracts";
 import { PACK_SURFACE_HALF_LIFE_DAYS, PACK_VISIBILITY_WIDTH } from "@t3tools/contracts";
+import { analyticsStreamsForPack } from "@t3tools/shared/analyticsStreamTemplates";
 
 const MONTH_NAMES: readonly string[] = [
   "January",
@@ -511,6 +513,32 @@ export function listIntegrationTargets(
 const DEPLOY_PREPARATION_STEPS = ["install", "build", "migrate"] as const;
 
 /**
+ * Where a deploy is going, and how far it is published.
+ *
+ * `local-only` is a real destination rather than a lesser one: a thing bound to
+ * loopback on the machine you are sitting at is the fastest way to find out
+ * whether it survives being started, and publishing it to the internet to
+ * discover that is a worse trade than most people expect.
+ */
+export type DeployPromptTarget = "cloud" | "local-tunnel" | "local-only";
+
+const DEPLOY_TARGET_LINES: Record<DeployPromptTarget, ReadonlyArray<string>> = {
+  cloud: [
+    "Deploy it to the `cloud` target in `deploy.config.json` — the shared node, over SSH.",
+    "Read the SSH password from the server secret store and pass it through the environment, never on the command line.",
+    "The node runs other people's services, so check the port is free before taking it.",
+  ],
+  "local-tunnel": [
+    "Deploy it to the `local` target — run it on this machine, bound to loopback.",
+    "Then publish it with `cloudflared tunnel --url http://127.0.0.1:$DEPLOY_PORT` and tell me the address it prints. That address changes every time the tunnel restarts, so it is worth capturing rather than assuming.",
+  ],
+  "local-only": [
+    "Deploy it to the `local` target — run it on this machine, bound to loopback.",
+    "Do not open a tunnel. Nothing outside this machine should be able to reach it; tell me the localhost URL to open.",
+  ],
+};
+
+/**
  * What to ask an agent for when somebody wants this pack deployed.
  *
  * It describes the goal and lets the agent work out the command, rather than
@@ -524,11 +552,19 @@ const DEPLOY_PREPARATION_STEPS = ["install", "build", "migrate"] as const;
  *
  * Null when the pack declares no runtime commands at all — that is a library,
  * and there is nothing to start.
+ *
+ * When the pack has analytics to report, the prompt names the stream and its
+ * properties. Deploying is the only moment an ingest key can be handed over —
+ * it is minted into the deploy and never stored — so a deploy that does not ask
+ * for one produces a deployment that can never report anything without being
+ * deployed again.
  */
 export function buildDeployPrompt(input: {
   readonly qualifiedName: string;
   readonly runtime: PackRuntime;
   readonly requirements: PackRequirements;
+  readonly analytics?: PackAnalytics | undefined;
+  readonly target?: DeployPromptTarget | undefined;
 }): string | null {
   const { commands } = input.runtime;
   const start = commands.start;
@@ -560,10 +596,41 @@ export function buildDeployPrompt(input: {
     lines.push(`It needs ${named.join(", ")} before it can run.`);
   }
 
-  lines.push(
-    "",
-    "Use `t3 deploy add` to register it. Ask me for the host and credentials before running anything.",
-  );
+  const streams = analyticsStreamsForPack({
+    runtime: input.runtime,
+    analytics: input.analytics,
+  });
+  const stream = streams[0];
+  if (stream !== undefined) {
+    const properties = stream.properties
+      .map((property) => `${property.name} (${property.type})`)
+      .join(", ");
+    lines.push(
+      "",
+      `It should report to a \`${stream.name}\` stream — ${stream.purpose} ${stream.why}`,
+      properties.length === 0
+        ? "Declare it with no properties for now."
+        : `Declare it with ${properties}.`,
+      // The key cannot be fetched afterwards, so asking for it during the deploy
+      // is not a convenience — it is the only time it exists.
+      "Ask for the analytics stream as part of the deploy so the ingest key is injected into it; it cannot be retrieved later.",
+    );
+  }
+
+  const target = input.target;
+  if (target === undefined) {
+    lines.push(
+      "",
+      "Use `t3 deploy add` to register it. Ask me for the host and credentials before running anything.",
+    );
+  } else {
+    lines.push("", ...DEPLOY_TARGET_LINES[target]);
+    // Only the cloud target needs anything from the person. Asking for a host
+    // before a loopback deploy is asking for something that does not exist.
+    if (target === "cloud") {
+      lines.push("Ask me for anything the config does not already answer before running it.");
+    }
+  }
   return lines.join("\n");
 }
 

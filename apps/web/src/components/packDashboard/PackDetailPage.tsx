@@ -214,6 +214,7 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
         qualifiedName={`${identity.publisher.handle}/${identity.name}`}
         runtime={manifest.runtime}
         requirements={manifest.requirements}
+        analytics={manifest.analytics}
       />
 
       <section className="rounded-lg border border-border p-4" data-testid="pack-detail-capability">

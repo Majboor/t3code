@@ -569,4 +569,104 @@ describe("buildDeployPrompt", () => {
       }),
     ).toBeNull();
   });
+
+  it("names the stream the pack itself declared, with its properties", () => {
+    const prompt = buildDeployPrompt({
+      qualifiedName: "acme/checkout",
+      runtime,
+      requirements,
+      analytics: {
+        events: [
+          {
+            name: "checkout.completed",
+            source: "backend",
+            description: "A completed checkout.",
+            properties: [
+              { name: "amount", type: "number", pii: false },
+              { name: "email", type: "string", pii: true },
+            ],
+          },
+        ],
+      } as never,
+    });
+
+    expect(prompt).toContain("`checkout.completed` stream");
+    expect(prompt).toContain("amount (number)");
+    // Marked as personal data in the manifest, so it does not get declared into
+    // a stream that has nowhere to record that.
+    expect(prompt).not.toContain("email");
+  });
+
+  it("asks for the key during the deploy, because there is no later", () => {
+    const prompt = buildDeployPrompt({
+      qualifiedName: "acme/checkout",
+      runtime,
+      requirements,
+      analytics: {
+        events: [
+          { name: "checkout.completed", source: "backend", description: "A completed checkout." },
+        ],
+      } as never,
+    });
+
+    expect(prompt).toContain("cannot be retrieved later");
+  });
+
+  it("falls back to an inferred stream when the pack declared no analytics", () => {
+    const prompt = buildDeployPrompt({
+      qualifiedName: "acme/checkout",
+      runtime: {
+        target: "node",
+        commands: { start: { command: "bun run start" } },
+      } as never,
+      requirements: {} as never,
+    });
+
+    expect(prompt).toContain("`run.completed` stream");
+  });
+});
+
+
+describe("buildDeployPrompt targets", () => {
+  const runtime = {
+    target: "node",
+    commands: { start: { command: "bun run start" } },
+  } as unknown as PackRuntime;
+  const requirements = {} as unknown as PackRequirements;
+
+  const promptFor = (target: "cloud" | "local-tunnel" | "local-only") =>
+    buildDeployPrompt({ qualifiedName: "acme/checkout", runtime, requirements, target }) ?? "";
+
+  it("sends a cloud deploy over SSH and keeps the password off the command line", () => {
+    const prompt = promptFor("cloud");
+    expect(prompt).toContain("`cloud` target");
+    expect(prompt).toContain("server secret store");
+    expect(prompt).toContain("never on the command line");
+  });
+
+  it("opens a tunnel for a local deploy that should be reachable", () => {
+    const prompt = promptFor("local-tunnel");
+    expect(prompt).toContain("`local` target");
+    expect(prompt).toContain("cloudflared tunnel --url");
+    expect(prompt).toContain("changes every time the tunnel restarts");
+  });
+
+  it("keeps a localhost-only deploy off the internet, and says so", () => {
+    const prompt = promptFor("local-only");
+    expect(prompt).toContain("Do not open a tunnel");
+    expect(prompt).not.toContain("cloudflared tunnel --url");
+  });
+
+  it("does not ask for a host when nothing is being deployed to one", () => {
+    // Asking for credentials before a loopback deploy asks for something that
+    // does not exist.
+    expect(promptFor("local-only")).not.toContain("Ask me for");
+    expect(promptFor("local-tunnel")).not.toContain("Ask me for");
+    expect(promptFor("cloud")).toContain("Ask me for");
+  });
+
+  it("keeps the old wording when no target is chosen", () => {
+    const prompt = buildDeployPrompt({ qualifiedName: "acme/checkout", runtime, requirements });
+    expect(prompt).toContain("t3 deploy add");
+  });
 });

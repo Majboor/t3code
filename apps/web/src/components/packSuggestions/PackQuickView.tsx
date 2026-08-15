@@ -11,13 +11,33 @@
  * pack's own words: a paraphrase of "the deploy reports success and serves the
  * old version" is how that knowledge stops being actionable.
  */
-import { AlertTriangleIcon, CheckIcon, LoaderIcon, RocketIcon, XIcon } from "lucide-react";
-import type { EnvironmentId, PackManifest, ProjectId, TenantId } from "@t3tools/contracts";
+import {
+  AlertTriangleIcon,
+  ChartNoAxesColumnIcon,
+  CheckIcon,
+  LoaderIcon,
+  RocketIcon,
+  XIcon,
+} from "lucide-react";
+import type {
+  Deployment,
+  EnvironmentId,
+  PackManifest,
+  ProjectId,
+  TenantId,
+} from "@t3tools/contracts";
 import type { WorkspaceId } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
-import { buildDeployPrompt } from "../packDashboard/packDetail.logic";
+import {
+  analyticsStreamsForPack,
+  proposeStreamForDeployment,
+} from "@t3tools/shared/analyticsStreamTemplates";
+
+import { mostRecentLiveDeployment } from "../analytics/deploymentLinks.logic";
+import { buildEnableAnalyticsPrompt } from "../analytics/enableAnalytics.logic";
+import { buildDeployPrompt, type DeployPromptTarget } from "../packDashboard/packDetail.logic";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 
@@ -81,6 +101,11 @@ export function PackQuickView({
   const [busy, setBusy] = useState(false);
   // null until we know, so the button cannot claim "off" while still asking.
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  // What this project has live, if anything — null also covers "not asked yet".
+  const [deployment, setDeployment] = useState<Deployment | null>(null);
+  // "Deploy locally" is a question, not an action: loopback and a public tunnel
+  // are different enough that picking one for somebody is the wrong default.
+  const [askingLocal, setAskingLocal] = useState(false);
 
   useEffect(() => {
     const api = readEnvironmentApi(scope.environmentId);
@@ -118,6 +143,17 @@ export function PackQuickView({
           // Not knowing is not the same as being off; leave it unknown rather
           // than offering to turn on something that already is.
           if (!cancelled) setEnabled(null);
+        });
+
+      // Offering to make something report only means anything once it is live.
+      api.deploys
+        .listDeployments({ projectId: scope.projectId })
+        .then((result) => {
+          if (cancelled) return;
+          setDeployment(mostRecentLiveDeployment(result.deployments));
+        })
+        .catch(() => {
+          if (!cancelled) setDeployment(null);
         });
     }
 
@@ -160,6 +196,53 @@ export function PackQuickView({
         qualifiedName: `${manifest.identity.publisher.handle}/${manifest.identity.name}`,
         runtime: manifest.runtime,
         requirements: manifest.requirements,
+        ...(manifest.analytics !== undefined ? { analytics: manifest.analytics } : {}),
+      })
+    : null;
+
+  // Only once something is live: reporting is a property of a running thing, and
+  // offering it before there is one describes work nobody can do yet.
+  //
+  // The pack's own declaration wins when it has one; otherwise the stream comes
+  // from the shape of what was deployed, so a pack that never described its
+  // telemetry still gets an offer worth taking.
+  const analyticsStream =
+    manifest === null
+      ? null
+      : (analyticsStreamsForPack({
+          runtime: manifest.runtime,
+          ...(manifest.analytics !== undefined ? { analytics: manifest.analytics } : {}),
+        })[0] ??
+        (deployment === null
+          ? null
+          : proposeStreamForDeployment({ name: deployment.name, url: deployment.url })));
+
+  const usePromptForTarget = (target: DeployPromptTarget) => {
+    if (manifest === null) return;
+    const prompt = buildDeployPrompt({
+      qualifiedName: `${manifest.identity.publisher.handle}/${manifest.identity.name}`,
+      runtime: manifest.runtime,
+      requirements: manifest.requirements,
+      ...(manifest.analytics !== undefined ? { analytics: manifest.analytics } : {}),
+      target,
+    });
+    if (prompt === null) return;
+    onUsePrompt(prompt);
+    onClose();
+  };
+
+  const analyticsPrompt = manifest
+    ? buildEnableAnalyticsPrompt({
+        subject: `${manifest.identity.publisher.handle}/${manifest.identity.name}`,
+        stream: analyticsStream,
+        deployment:
+          deployment === null
+            ? null
+            : {
+                name: deployment.name,
+                url: deployment.url,
+                reportsToCount: deployment.analyticsStreamIds.length,
+              },
       })
     : null;
 
@@ -246,21 +329,86 @@ export function PackQuickView({
           ) : null}
 
           {deployPrompt === null ? null : (
+            <div className="mt-2 grid gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  data-testid="pack-quick-view-deploy-cloud"
+                  onClick={() => {
+                    usePromptForTarget("cloud");
+                  }}
+                >
+                  <RocketIcon className="size-3" />
+                  Deploy to cloud
+                </Button>
+                <Button
+                  size="xs"
+                  variant={askingLocal ? "default" : "outline"}
+                  data-testid="pack-quick-view-deploy-local"
+                  onClick={() => {
+                    setAskingLocal((asking) => !asking);
+                  }}
+                >
+                  <RocketIcon className="size-3" />
+                  Deploy locally
+                </Button>
+                {askingLocal ? null : (
+                  <span className="text-[10px] text-muted-foreground">
+                    Writes what this takes to run into the prompt, for you to read before sending.
+                  </span>
+                )}
+              </div>
+
+              {/* Local can mean two quite different things, and the difference is
+                  whether the internet can reach it — worth one deliberate click
+                  rather than a default somebody discovers later. */}
+              {askingLocal ? (
+                <div className="flex flex-wrap items-center gap-2 pl-1">
+                  <span className="text-[10px] text-muted-foreground">Reachable from</span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    data-testid="pack-quick-view-deploy-local-tunnel"
+                    onClick={() => {
+                      usePromptForTarget("local-tunnel");
+                    }}
+                  >
+                    Anywhere, via a tunnel
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    data-testid="pack-quick-view-deploy-local-only"
+                    onClick={() => {
+                      usePromptForTarget("local-only");
+                    }}
+                  >
+                    This machine only
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {analyticsPrompt === null ? null : (
             <div className="mt-2 flex items-center gap-2">
               <Button
                 size="xs"
                 variant="outline"
-                data-testid="pack-quick-view-deploy"
+                data-testid="pack-quick-view-enable-analytics"
                 onClick={() => {
-                  onUsePrompt(deployPrompt);
+                  onUsePrompt(analyticsPrompt);
                   onClose();
                 }}
               >
-                <RocketIcon className="size-3" />
-                Deploy it
+                <ChartNoAxesColumnIcon className="size-3" />
+                Enable analytics
               </Button>
               <span className="text-[10px] text-muted-foreground">
-                Writes what this takes to run into the prompt, for you to read before sending.
+                {deployment === null
+                  ? null
+                  : `Writes what it would take for ${deployment.name} to report into the prompt.`}
               </span>
             </div>
           )}

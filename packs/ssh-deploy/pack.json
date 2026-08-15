@@ -3,7 +3,7 @@
   "identity": {
     "id": "pack_c7f9cb58f6a544e7b16c",
     "name": "ssh-deploy",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "displayName": "ssh-deploy",
     "summary": "Deploy a thing to a server over SSH, whatever shape the thing is",
     "publisher": {
@@ -12,7 +12,13 @@
       "displayName": "t3demo"
     },
     "license": "UNLICENSED",
-    "tags": ["deploy", "ssh", "tui", "web", "documents"]
+    "tags": [
+      "deploy",
+      "ssh",
+      "tui",
+      "web",
+      "documents"
+    ]
   },
   "provenance": {
     "workspace": {
@@ -415,10 +421,10 @@
     "environment": [
       {
         "name": "DEPLOY_SSH_HOST",
-        "purpose": "Host the app is shipped to.",
+        "purpose": "Host the app is shipped to. The LogicPacks deployment node.",
         "secret": false,
         "required": true,
-        "example": "203.0.113.10"
+        "example": "164.68.117.31"
       },
       {
         "name": "DEPLOY_SSH_USER",
@@ -435,17 +441,17 @@
       },
       {
         "name": "DEPLOY_REMOTE_DIR",
-        "purpose": "Directory on the host the app is unpacked into.",
+        "purpose": "Directory on the host the app is unpacked into. One flat directory per deployment.",
         "secret": false,
         "required": true,
-        "example": "/srv/my-app"
+        "example": "/srv/t3-pack-1786667796599"
       },
       {
         "name": "DEPLOY_PORT",
-        "purpose": "Loopback port gunicorn binds. Must be free on the host.",
+        "purpose": "Loopback port the app binds. Must be free on the host — check with `ss -ltn` before taking it, because the host runs unrelated services on nearby ports.",
         "secret": false,
         "required": true,
-        "example": "18901"
+        "example": "19400"
       },
       {
         "name": "DEPLOY_START_COMMAND",
@@ -526,14 +532,14 @@
     "workspaceKeyId": "wsk_2fadd5dfb56c40d6bd28"
   },
   "integration": {
-    "prompt": "Deploy this project to a host over SSH.\n\nFirst work out what it is, because that decides everything after:\n- It already serves HTTP -> ship it and start it.\n- It produces a document -> build the document, then serve the file.\n- It is a terminal program -> it has no port and cannot pass a health check. Stop and talk to the person: offer a small web front end over the same functionality, say which commands become which screens and what will not survive the move, and agree that shape before building it. Do not ship a front end nobody asked for.\n\nThen, whatever the shape:\n1. Preflight before shipping anything: the tools exist locally, the host has what the start command needs, and nothing is already on DEPLOY_PORT.\n2. Stamp a build id, and serve it from /healthz.\n3. Ship the directory and start the process detached, with its pid written down.\n4. Verify from a separate session, and require the build id you just shipped — not merely that something answers, which the previous deployment will happily do.\n\nBind loopback and let the host's existing tunnel or proxy publish it. Read the SSH password from the server secret store, never from a command line."
+    "prompt": "Deploy this project, either to this machine or to a host over SSH.\n\nRead `deploy.config.json` from the project root first. If it is not there this is the first deploy: ask for what you need — which target, and for an ssh target the host, user, remote directory, port range and the *name* of the secret holding the password — then write the file. Never write the password into it. Every deploy after this one reads the file and asks nothing.\n\nTwo targets:\n- `local` -> run the start command on this machine.\n- `ssh` -> ship it to the host and start it there.\n\nEither way, publish with a cloudflare quick tunnel once it is listening:\n`cloudflared tunnel --url http://127.0.0.1:$DEPLOY_PORT`. It prints the address on startup — capture it, because it is the deployment's address and it changes every time the tunnel restarts.\n\nFirst work out what the project is, because that decides everything after:\n- It already serves HTTP -> ship it and start it.\n- It produces a document -> build the document, then serve the file.\n- It is a terminal program -> it has no port and cannot pass a health check. Stop and talk to the person: offer a small web front end over the same functionality, say which commands become which screens and what will not survive the move, and agree that shape before building it. Do not ship a front end nobody asked for.\n\nThen, whatever the shape:\n1. Preflight before shipping anything: the tools exist locally, the host has what the start command needs, and nothing is already on DEPLOY_PORT.\n2. Stamp a build id, and serve it from /healthz.\n3. Ship the directory and start the process detached, with its pid written down.\n4. Verify from a separate session, and require the build id you just shipped — not merely that something answers, which the previous deployment will happily do.\n\nBind loopback and let the tunnel publish it. Read the SSH password from the server secret store, never from a command line."
   },
   "signature": {
     "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
     "algorithm": "ed25519",
     "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
-    "manifestSha256": "73499936d85d5a2872a5bbf25a93861e5b5af41e5e5b07fdb90bd11e61974505",
-    "signature": "jzH98f7vPoSalIPYXkjfJ89NB39B9Kb0UdRKFsbx8gRKUeKQWhgIvZ0ZgRSqouqV9Kigd4C1jpnhq3OwlyIdBg==",
-    "signedAt": "2026-08-14T18:44:19.454Z"
+    "manifestSha256": "353b822d58da2f95191c671be598ceb81b52ada8c12614c999ec1bfa6aad38e2",
+    "signature": "BRktHz2U7Lbq7ncpE22g+tX96ucJ/6Xatd/ikRYUnycjYClfa5a10jtmJCOeB0kEdEP7Kctx7FWfkHcReN0hCQ==",
+    "signedAt": "2026-08-15T01:56:13.167Z"
   }
 }

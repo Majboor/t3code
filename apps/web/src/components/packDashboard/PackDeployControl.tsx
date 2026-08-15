@@ -1,5 +1,5 @@
 import { CopyIcon, RocketIcon, TriangleAlertIcon } from "lucide-react";
-import type { PackRequirements, PackRuntime } from "@t3tools/contracts";
+import type { PackAnalytics, PackRequirements, PackRuntime } from "@t3tools/contracts";
 
 import { buildDeployPrompt } from "./packDetail.logic";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -39,14 +39,21 @@ export function PackDeployControl({
   qualifiedName,
   runtime,
   requirements,
+  analytics,
 }: {
   qualifiedName: string;
   runtime: PackRuntime;
   requirements: PackRequirements;
+  analytics?: PackAnalytics | undefined;
 }) {
   // The same words the composer's quick view writes into the prompt bar, so a
   // pack does not describe its own deploy two different ways.
-  const deployPrompt = buildDeployPrompt({ qualifiedName, runtime, requirements });
+  const deployPrompt = buildDeployPrompt({
+    qualifiedName,
+    runtime,
+    requirements,
+    ...(analytics !== undefined ? { analytics } : {}),
+  });
   const { required } = listDeployInputs(requirements);
   const steps = DEPLOY_STEPS.flatMap(([key, label]) => {
     const step = runtime.commands[key];
