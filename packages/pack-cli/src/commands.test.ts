@@ -524,6 +524,58 @@ describe("show", () => {
     expect(detail["integration"].prompt).toContain("stripe-checkout");
   });
 
+  // `search` prints `acme/stripe-checkout@1.2.0`. Pasting that straight into
+  // `show` used to fail with "no pack", which is what an agent does with the
+  // identifier the tool just handed it.
+  it("accepts the name@version identifier that search prints", async () => {
+    const context = makeContext(seedRegistry());
+
+    const outcome = await run(
+      { kind: "show", pack: "acme/stripe-checkout@1.2.0", version: undefined },
+      context,
+    );
+
+    const ref = (outcome.result as Record<string, any>)["ref"];
+    expect(ref.publisher).toBe("acme");
+    expect(ref.name).toBe("stripe-checkout");
+  });
+
+  it("accepts the version suffix without a publisher too", async () => {
+    const context = makeContext(seedRegistry());
+
+    const outcome = await run(
+      { kind: "show", pack: "stripe-checkout@1.2.0", version: undefined },
+      context,
+    );
+
+    expect((outcome.result as Record<string, any>)["ref"].name).toBe("stripe-checkout");
+  });
+
+  it("still fails when the suffixed version does not exist", async () => {
+    const context = makeContext(seedRegistry());
+
+    const error = await run(
+      { kind: "show", pack: "stripe-checkout@9.9.9", version: undefined },
+      context,
+    ).catch((cause: unknown) => cause);
+
+    expect(isPackCliError(error)).toBe(true);
+  });
+
+  // An `@` that is not a version must stay part of the name, or a publisher
+  // handle carrying one becomes unreachable.
+  it("leaves an @ that is not a version alone", async () => {
+    const context = makeContext(seedRegistry());
+
+    const error = await run(
+      { kind: "show", pack: "stripe-checkout@beta", version: undefined },
+      context,
+    ).catch((cause: unknown) => cause);
+
+    expect(isPackCliError(error)).toBe(true);
+    expect(String((error as { message?: string }).message)).toContain("stripe-checkout@beta");
+  });
+
   it("resolves a publisher-qualified reference", async () => {
     const context = makeContext(seedRegistry());
 

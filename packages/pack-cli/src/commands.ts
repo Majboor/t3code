@@ -281,19 +281,48 @@ async function searchCommand(
   };
 }
 
+/**
+ * Split the `name@version` that `search` prints back into its parts.
+ *
+ * `search` prints `t3demo/ssh-deploy@1.3.0` and `show` took a bare name, so
+ * copying the identifier straight out of the search results — the obvious thing
+ * to do, and what an agent does — failed with "no pack". The lookup is
+ * unchanged; this only accepts the shape this tool already hands out.
+ *
+ * Split on the last `@` so a publisher handle containing one survives, and only
+ * when what follows looks like a version rather than part of a name.
+ */
+function splitPackIdentifier(identifier: string): {
+  readonly name: string;
+  readonly version: string | undefined;
+} {
+  const at = identifier.lastIndexOf("@");
+  if (at <= 0) {
+    return { name: identifier, version: undefined };
+  }
+  const candidate = identifier.slice(at + 1);
+  return /^\d[\w.+-]*$/.test(candidate)
+    ? { name: identifier.slice(0, at), version: candidate }
+    : { name: identifier, version: undefined };
+}
+
 async function showCommand(
   command: Extract<ParsedCommand, { kind: "show" }>,
   context: CommandContext,
 ): Promise<CommandOutcome> {
+  const requested = splitPackIdentifier(command.pack);
+  // An explicit `--version` still wins; the suffix is only a fallback for
+  // whichever form the caller pasted in.
+  const version = command.version ?? requested.version;
   const record = await context.registry.get({
-    name: command.pack,
-    ...(command.version !== undefined ? { version: command.version } : {}),
+    name: requested.name,
+    ...(version !== undefined ? { version } : {}),
   });
   if (record === undefined) {
     throw new PackCliError(
       "pack-not-found",
-      `No pack "${command.pack}"${command.version !== undefined ? `@${command.version}` : ""} in ${context.registry.root}.`,
-      { pack: command.pack, registry: context.registry.root },
+      `No pack "${requested.name}${version !== undefined ? `@${version}` : ""}" in ${context.registry.root}.`,
+      { pack: requested.name, registry: context.registry.root },
     );
   }
   const detail = readDetail(record.manifest);
