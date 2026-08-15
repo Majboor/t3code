@@ -83,3 +83,72 @@ describe("decider project.create workspace root uniqueness", () => {
     expect(event.type).toBe("project.created");
   });
 });
+
+const decideProjectMetaUpdate = (input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly projectId: string;
+  readonly workspaceRoot: string;
+}) =>
+  decideOrchestrationCommand({
+    command: {
+      type: "project.meta.update",
+      commandId: CommandId.make(`cmd-meta-${input.projectId}`),
+      projectId: ProjectId.make(input.projectId),
+      workspaceRoot: input.workspaceRoot,
+    },
+    readModel: input.readModel,
+  });
+
+/**
+ * Same folder-identity rule as `project.create`. Without it the refusal is only
+ * a speed bump: create somewhere free, then move onto the taken folder.
+ */
+describe("decider project.meta.update workspace root uniqueness", () => {
+  const twoProjects = Effect.gen(function* () {
+    const withFirst = yield* readModelWithProject({
+      projectId: "project-aero",
+      workspaceRoot: "/Users/hico/aero-build",
+    });
+    const decided = yield* decideProjectCreate({
+      readModel: withFirst,
+      projectId: "project-p40",
+      workspaceRoot: "/Users/hico/p40",
+    });
+    const event = Array.isArray(decided) ? decided[0]! : decided;
+    return yield* projectEvent(withFirst, { ...event, sequence: 2 });
+  });
+
+  it("refuses to move a project onto a folder another project already owns", async () => {
+    const error = await Effect.runPromise(
+      twoProjects.pipe(
+        Effect.flatMap((readModel) =>
+          decideProjectMetaUpdate({
+            readModel,
+            projectId: "project-p40",
+            workspaceRoot: "/Users/hico/aero-build",
+          }),
+        ),
+        Effect.flip,
+      ),
+    );
+
+    expect(parseWorkspaceRootAlreadyClaimedProjectId(error)).toBe("project-aero");
+  });
+
+  it("lets a project keep the folder it already owns", async () => {
+    const event = await Effect.runPromise(
+      twoProjects.pipe(
+        Effect.flatMap((readModel) =>
+          decideProjectMetaUpdate({
+            readModel,
+            projectId: "project-aero",
+            workspaceRoot: "/Users/hico/aero-build",
+          }),
+        ),
+        Effect.map((decided) => (Array.isArray(decided) ? decided[0]! : decided)),
+      ),
+    );
+
+    expect(event.type).toBe("project.meta-updated");
+  });
+});

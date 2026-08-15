@@ -105,9 +105,15 @@ export function requireWorkspaceRootUnclaimed(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
   readonly workspaceRoot: string;
+  /**
+   * The project being changed, when there is one. A project already holds its
+   * own root, so without this an edit that leaves the root alone would be
+   * refused for colliding with itself.
+   */
+  readonly exceptProjectId?: ProjectId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
   const existingProject = findActiveProjectByWorkspaceRoot(input.readModel, input.workspaceRoot);
-  if (!existingProject) {
+  if (!existingProject || existingProject.id === input.exceptProjectId) {
     return Effect.void;
   }
   return Effect.fail(

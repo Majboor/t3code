@@ -100,6 +100,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      // Moving a project onto a folder another project already holds makes the
+      // same duplicate `project.create` refuses, just by a slower route.
+      if (command.workspaceRoot !== undefined) {
+        yield* requireWorkspaceRootUnclaimed({
+          readModel,
+          command,
+          workspaceRoot: command.workspaceRoot,
+          exceptProjectId: command.projectId,
+        });
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({
