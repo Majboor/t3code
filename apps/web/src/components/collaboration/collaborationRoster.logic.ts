@@ -1,6 +1,25 @@
 import type { CollaborationMember, CollaborationPresence } from "@t3tools/contracts";
 
 /**
+ * The colour wheel a person is drawn with, anywhere in the app.
+ *
+ * It lives here rather than in the roster component because the usage report
+ * needs the same eight: someone whose avatar is orange in the roster and green
+ * in the leaderboard reads as two different people, which is the one thing a
+ * colour is supposed to prevent.
+ */
+export const MEMBER_COLORS = [
+  "hsl(4 74% 58%)",
+  "hsl(28 82% 55%)",
+  "hsl(45 85% 50%)",
+  "hsl(142 55% 45%)",
+  "hsl(190 70% 45%)",
+  "hsl(215 80% 58%)",
+  "hsl(265 65% 62%)",
+  "hsl(320 60% 58%)",
+] as const;
+
+/**
  * Long enough to swallow a burst of heartbeats from several people at once,
  * short enough that somebody who has just joined shows up while they are still
  * looking at the panel.

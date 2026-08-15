@@ -7,22 +7,10 @@ import type {
   CollaborationUsageProviderBreakdown,
 } from "@t3tools/contracts";
 
-/**
- * The roster's colour wheel, repeated here rather than imported because it
- * lives inside a component file that this panel must not reach into. A person
- * only lands on one of these when the usage report is the first place the app
- * has met them; anywhere the roster is loaded, its own colour wins.
- */
-const USAGE_MEMBER_COLORS = [
-  "hsl(4 74% 58%)",
-  "hsl(28 82% 55%)",
-  "hsl(45 85% 50%)",
-  "hsl(142 55% 45%)",
-  "hsl(190 70% 45%)",
-  "hsl(215 80% 58%)",
-  "hsl(265 65% 62%)",
-  "hsl(320 60% 58%)",
-] as const;
+// The same wheel the roster draws from, so a person keeps one colour across
+// both. Someone only lands on it here when the usage report is the first place
+// the app has met them; anywhere the roster is loaded, its own colour wins.
+import { MEMBER_COLORS } from "../collaborationRoster.logic";
 
 const MILLISECONDS_PER_DAY = 86_400_000;
 
@@ -349,7 +337,7 @@ export function usageAvatarMember(entry: {
   return {
     displayName: entry.displayName,
     avatarInitials: usageAvatarInitials(entry.displayName),
-    color: USAGE_MEMBER_COLORS[hashToIndex(entry.userId, USAGE_MEMBER_COLORS.length)] ?? "",
+    color: MEMBER_COLORS[hashToIndex(entry.userId, MEMBER_COLORS.length)] ?? "",
     // Never rendered here: the avatar is drawn without its status dot, because
     // a report about last month says nothing about who is online now.
     status: "offline",

@@ -5,21 +5,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { readEnvironmentApi } from "../../environmentApi";
 import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
-import { applyPresenceToRoster, ROSTER_REFRESH_DEBOUNCE_MS } from "./collaborationRoster.logic";
+import {
+  applyPresenceToRoster,
+  MEMBER_COLORS,
+  ROSTER_REFRESH_DEBOUNCE_MS,
+} from "./collaborationRoster.logic";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
-
-/** The palette a lead can pick from when overriding someone's colour. */
-const MEMBER_COLORS = [
-  "hsl(4 74% 58%)",
-  "hsl(28 82% 55%)",
-  "hsl(45 85% 50%)",
-  "hsl(142 55% 45%)",
-  "hsl(190 70% 45%)",
-  "hsl(215 80% 58%)",
-  "hsl(265 65% 62%)",
-  "hsl(320 60% 58%)",
-] as const;
 
 /**
  * Someone who can watch but not prompt. Mirrors the server's rule rather than
