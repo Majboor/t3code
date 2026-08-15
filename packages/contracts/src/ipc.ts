@@ -11,6 +11,7 @@ import type {
   AnalyticsQueryInput,
   AnalyticsQueryResult,
 } from "./analytics.ts";
+import type { DeploymentListInput, DeploymentListResult } from "./deploy.ts";
 import type {
   GitAbortMergeInput,
   GitAbortMergeResult,
@@ -501,6 +502,13 @@ export interface EnvironmentApi {
   analytics: {
     listStreams: (input: AnalyticsListStreamsInput) => Promise<AnalyticsListStreamsResult>;
     query: (input: AnalyticsQueryInput) => Promise<AnalyticsQueryResult>;
+  };
+  /**
+   * Reading only, for the same reason: registering a deployment is a write into
+   * a project's shape, and the app's job here is to show what is already live.
+   */
+  deploys: {
+    listDeployments: (input: DeploymentListInput) => Promise<DeploymentListResult>;
   };
   packs: {
     publish: (input: PackPublishInput) => Promise<PackPublishResult>;

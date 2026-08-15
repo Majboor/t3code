@@ -157,6 +157,9 @@ export interface WsRpcClient {
     readonly declareStream: RpcUnaryMethod<typeof WS_METHODS.analyticsDeclareStream>;
     readonly query: RpcUnaryMethod<typeof WS_METHODS.analyticsQuery>;
   };
+  readonly deploys: {
+    readonly listDeployments: RpcUnaryMethod<typeof WS_METHODS.deployListDeployments>;
+  };
   readonly packs: {
     readonly publish: RpcUnaryMethod<typeof WS_METHODS.packsPublish>;
     readonly recordVersion: RpcUnaryMethod<typeof WS_METHODS.packsRecordVersion>;
@@ -402,6 +405,10 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       declareStream: (input) =>
         transport.request((client) => client[WS_METHODS.analyticsDeclareStream](input)),
       query: (input) => transport.request((client) => client[WS_METHODS.analyticsQuery](input)),
+    },
+    deploys: {
+      listDeployments: (input) =>
+        transport.request((client) => client[WS_METHODS.deployListDeployments](input)),
     },
     packs: {
       publish: (input) => transport.request((client) => client[WS_METHODS.packsPublish](input)),

@@ -172,6 +172,32 @@ const makeAnalyticsStore = Effect.gen(function* () {
       return { stream, ingestKey };
     });
 
+  const reissueIngestKey: AnalyticsStoreShape["reissueIngestKey"] = (input) =>
+    Effect.gen(function* () {
+      const found = yield* repository
+        .findStream({ projectId: input.projectId, name: input.stream })
+        .pipe(Effect.mapError(storageFailed("Failed to read the analytics stream.")));
+      if (Option.isNone(found)) {
+        return yield* new AnalyticsError({
+          code: "stream-not-found",
+          message: `No stream named ${input.stream} on this project.`,
+        });
+      }
+
+      const ingestKey = randomBytes(INGEST_KEY_BYTES).toString("base64url");
+      const stream = {
+        ...found.value,
+        ingestKeyName: hashKey(ingestKey),
+        updatedAt: nowIso(),
+      };
+
+      yield* repository
+        .upsertStream(stream)
+        .pipe(Effect.mapError(storageFailed("Failed to store the analytics stream.")));
+
+      return { stream, ingestKey };
+    });
+
   const listStreams: AnalyticsStoreShape["listStreams"] = (input) =>
     repository.listStreams(input).pipe(
       Effect.mapError(storageFailed("Failed to list analytics streams.")),
@@ -279,7 +305,13 @@ const makeAnalyticsStore = Effect.gen(function* () {
       };
     });
 
-  return { declareStream, listStreams, record, query } satisfies AnalyticsStoreShape;
+  return {
+    declareStream,
+    reissueIngestKey,
+    listStreams,
+    record,
+    query,
+  } satisfies AnalyticsStoreShape;
 });
 
 export const AnalyticsStoreLive = Layer.effect(AnalyticsStore, makeAnalyticsStore);

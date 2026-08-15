@@ -58,6 +58,8 @@ import { expandHomePath, resolveBaseDir } from "./os-jank.ts";
 import { runServer } from "./server.ts";
 import { DeployService, type DeployServiceShape } from "./deploy/Services/DeployService.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
+import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
+import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
 import { AnalyticsStore, type AnalyticsStoreShape } from "./analytics/Services/AnalyticsStore.ts";
 import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
@@ -1193,6 +1195,18 @@ const runDeployCommand = Effect.fn("runDeployCommand")(function* (
       DeployServiceLive.pipe(
         Layer.provide(DeployRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
         Layer.provide(ServerSecretStoreLive),
+        Layer.provide(
+          AnalyticsStoreLive.pipe(
+            Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
+          ),
+        ),
+        Layer.provide(
+          DeploymentRegistryLive.pipe(
+            Layer.provide(DeploymentRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
+            Layer.provide(DeployRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
+            Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
+          ),
+        ),
         Layer.provide(Layer.succeed(ServerConfig, config)),
         Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
       ),

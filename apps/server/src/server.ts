@@ -89,6 +89,8 @@ import { OrganizationServiceLive } from "./organizations/Layers/OrganizationServ
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
+import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
+import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
 import { PackEnablementServiceLive } from "./packEnablement/Layers/PackEnablementService.ts";
 import { PackEnablementRepositoryLive } from "./persistence/Layers/PackEnablement.ts";
@@ -272,13 +274,27 @@ const ThreadPreferenceLayerLive = ProjectionThreadPreferenceRepositoryLive.pipe(
 );
 const DeployRepositoryLayerLive = DeployRepositoryLive.pipe(Layer.provide(PersistenceLayerLive));
 
+const AnalyticsRepositoryLayerLive = AnalyticsRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
+const AnalyticsLayerLive = AnalyticsStoreLive.pipe(Layer.provide(AnalyticsRepositoryLayerLive));
+
+// The registry sits across both directories on purpose: it is the only thing
+// that knows a deployment's streams were actually declared on its project.
+const DeploymentRegistryLayerLive = DeploymentRegistryLive.pipe(
+  Layer.provide(DeploymentRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+  Layer.provide(DeployRepositoryLayerLive),
+  Layer.provide(AnalyticsRepositoryLayerLive),
+);
+
+// Deploying now reaches both: it mints the ingest key a deployment carries, and
+// records what that deploy put live.
 const DeployLayerLive = DeployServiceLive.pipe(
   Layer.provide(DeployRepositoryLayerLive),
   Layer.provide(ServerSecretStoreLive),
-);
-
-const AnalyticsLayerLive = AnalyticsStoreLive.pipe(
-  Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+  Layer.provide(AnalyticsLayerLive),
+  Layer.provide(DeploymentRegistryLayerLive),
 );
 
 const PersistenceServicesLayerLive = Layer.mergeAll(
@@ -286,6 +302,7 @@ const PersistenceServicesLayerLive = Layer.mergeAll(
   ThreadPreferenceLayerLive,
   DeployLayerLive,
   AnalyticsLayerLive,
+  DeploymentRegistryLayerLive,
 );
 
 const TenantRuntimeLifecycleOwnerLayerLive = TenantRuntimeLifecycleOwnerLive.pipe(

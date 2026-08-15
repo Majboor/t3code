@@ -110,6 +110,9 @@ const rpcClientMock = {
     listStreams: vi.fn(),
     query: vi.fn(),
   },
+  deploys: {
+    listDeployments: vi.fn(),
+  },
   packs: {
     publish: vi.fn(),
     recordVersion: vi.fn(),

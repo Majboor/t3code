@@ -11,6 +11,7 @@ import type {
   AnalyticsQueryResult,
   AnalyticsRecordInput,
   AnalyticsRecordResult,
+  AnalyticsStream,
   ProjectId,
 } from "@t3tools/contracts";
 
@@ -25,6 +26,25 @@ export interface AnalyticsStoreShape {
   readonly declareStream: (
     input: AnalyticsDeclareStreamInput,
   ) => Effect.Effect<AnalyticsDeclareStreamResult, AnalyticsError>;
+
+  /**
+   * Mints a fresh ingest key for a stream that already exists and replaces the
+   * stored digest with the new one.
+   *
+   * This is the only way a deployment can be handed a working key for a stream
+   * somebody else declared, and it exists because the alternative is worse: the
+   * key is stored hashed precisely so a leaked database cannot write to anyone's
+   * numbers, and keeping a retrievable copy to hand out later would give that
+   * up. The cost is that the previous key stops working, which is why the caller
+   * has to establish that nothing else is still using it.
+   */
+  readonly reissueIngestKey: (input: {
+    readonly projectId: ProjectId;
+    readonly stream: AnalyticsDeclareStreamInput["name"];
+  }) => Effect.Effect<
+    { readonly stream: AnalyticsStream; readonly ingestKey: string },
+    AnalyticsError
+  >;
 
   readonly listStreams: (
     input: AnalyticsListStreamsInput,

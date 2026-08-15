@@ -134,6 +134,7 @@ import { OrganizationService } from "./organizations/Services/OrganizationServic
 import { PackRegistryService } from "./packs/Services/PackRegistryService.ts";
 import { TenancyRepository } from "./persistence/Services/Tenancy.ts";
 import { DeployService } from "./deploy/Services/DeployService.ts";
+import { DeploymentRegistry } from "./deploy/Services/DeploymentRegistry.ts";
 import { AnalyticsStore } from "./analytics/Services/AnalyticsStore.ts";
 import { PackEnablementService } from "./packEnablement/Services/PackEnablementService.ts";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
@@ -743,6 +744,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const tenancyRepository = yield* TenancyRepository;
       const deployService = yield* DeployService;
       const analyticsStore = yield* AnalyticsStore;
+      const deploymentRegistry = yield* DeploymentRegistry;
       const packEnablement = yield* PackEnablementService;
       const threadPreferences = yield* ProjectionThreadPreferenceRepository;
       const rateLimitRef = yield* Ref.make({
@@ -4544,6 +4546,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                         targetId: input.targetId,
                         actor: { label: collaborationActor.displayName },
                         workspaceRoot: project.workspaceRoot,
+                        ...(input.analytics !== undefined ? { analytics: input.analytics } : {}),
                       }),
                     ),
                   ),
@@ -4570,6 +4573,65 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   }),
                 ),
                 Effect.map((runs) => ({ runs })),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.deployListDeployments]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployListDeployments,
+            withRateLimit(
+              (input.projectId === undefined
+                ? Effect.void
+                : ensureDeployProjectAccess(input.projectId, "project.view")
+              ).pipe(
+                Effect.flatMap(() =>
+                  deploymentRegistry.list({
+                    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+                    ...(input.targetId !== undefined ? { targetId: input.targetId } : {}),
+                  }),
+                ),
+                Effect.map((deployments) => ({ deployments })),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.deployRegisterDeployment]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployRegisterDeployment,
+            withRateLimit(
+              // Registering says what a project is serving and which streams it
+              // writes to, so it asks for edit rather than view.
+              ensureDeployProjectAccess(input.projectId, "project.edit").pipe(
+                Effect.flatMap(() => deploymentRegistry.register(input)),
+                Effect.map((deployment) => ({ deployment })),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.deployUpdateDeployment]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployUpdateDeployment,
+            withRateLimit(
+              deploymentRegistry.projectOf({ deploymentId: input.deploymentId }).pipe(
+                Effect.flatMap((projectId) => ensureDeployProjectAccess(projectId, "project.edit")),
+                Effect.flatMap(() => deploymentRegistry.update(input)),
+                Effect.map((deployment) => ({ deployment })),
+              ),
+              (message) => new DeployError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.deployArchiveDeployment]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deployArchiveDeployment,
+            withRateLimit(
+              deploymentRegistry.projectOf({ deploymentId: input.deploymentId }).pipe(
+                Effect.flatMap((projectId) => ensureDeployProjectAccess(projectId, "project.edit")),
+                Effect.flatMap(() => deploymentRegistry.archive(input)),
               ),
               (message) => new DeployError({ code: "forbidden", message }),
             ),

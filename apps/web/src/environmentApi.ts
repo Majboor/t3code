@@ -88,6 +88,9 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       listStreams: rpcClient.analytics.listStreams,
       query: rpcClient.analytics.query,
     },
+    deploys: {
+      listDeployments: rpcClient.deploys.listDeployments,
+    },
     packs: {
       publish: rpcClient.packs.publish,
       recordVersion: rpcClient.packs.recordVersion,

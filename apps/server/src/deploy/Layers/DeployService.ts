@@ -1,6 +1,7 @@
 import { DateTime, Effect, Layer, Option } from "effect";
 
 import {
+  type DeployAnalyticsInjection,
   DeployError,
   type DeployRun,
   DeployRunId,
@@ -9,9 +10,11 @@ import {
   DeployTargetId,
 } from "@t3tools/contracts";
 
+import { AnalyticsStore } from "../../analytics/Services/AnalyticsStore.ts";
 import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import { DeployRepository } from "../../persistence/Services/DeployTargets.ts";
 import { runProcess } from "../../processRunner.ts";
+import { DeploymentRegistry } from "../Services/DeploymentRegistry.ts";
 import { DeployService, type DeployServiceShape } from "../Services/DeployService.ts";
 
 const DEPLOY_TIMEOUT_MS = 10 * 60_000;
@@ -51,12 +54,122 @@ function truncateOutput(value: string): string {
   return `${value.slice(0, MAX_OUTPUT_BYTES)}\n...output truncated...`;
 }
 
+/** Where the ingest key arrives unless the target's command expects another name. */
+export const DEFAULT_INGEST_KEY_VARIABLE = "T3_ANALYTICS_INGEST_KEY";
+
+const REDACTED = "***";
+
+/**
+ * Take a secret back out of text that is about to be stored.
+ *
+ * Deploy output is captured and kept, and a deploy script that echoes its
+ * environment — `set -x` is enough — would write the ingest key into a row that
+ * outlives the deploy. The key is injected as an environment variable, so this
+ * is the one place it can leak back into the database.
+ */
+export function redactSecret(text: string, secret: string): string {
+  if (secret.length === 0) return text;
+  return text.split(secret).join(REDACTED);
+}
+
+/**
+ * Decide how to get a working key for a stream, given what already reports to it.
+ *
+ * Reissuing is what makes a key obtainable at all for a stream that exists, and
+ * it breaks whatever was using the old one. That is acceptable for the
+ * deployment being replaced and unacceptable for anything else, so the decision
+ * turns entirely on who else is still reporting.
+ */
+export function planIngestKey(input: {
+  readonly streamExists: boolean;
+  /** Live deployments reporting to the stream, excluding the one being deployed. */
+  readonly otherReporters: ReadonlyArray<string>;
+}): { readonly action: "declare" | "reissue" } | { readonly action: "refuse"; readonly why: string } {
+  if (!input.streamExists) {
+    return { action: "declare" };
+  }
+  if (input.otherReporters.length > 0) {
+    return {
+      action: "refuse",
+      why: `${input.otherReporters.join(", ")} ${
+        input.otherReporters.length === 1 ? "already reports" : "already report"
+      } to this stream. Issuing a key here would stop ${
+        input.otherReporters.length === 1 ? "it" : "them"
+      } being able to write, so this deploy would silently take their numbers away.`,
+    };
+  }
+  return { action: "reissue" };
+}
+
 const makeDeployService = Effect.gen(function* () {
   const repository = yield* DeployRepository;
   const secrets = yield* ServerSecretStore;
+  const analyticsStore = yield* AnalyticsStore;
+  const deploymentRegistry = yield* DeploymentRegistry;
 
   const repositoryError = (message: string) => (cause: unknown) =>
     new DeployError({ code: "execution-failed", message, cause });
+
+  /**
+   * Mint the key this deploy will carry.
+   *
+   * Done before the process starts, because the key has to be in its
+   * environment. That ordering has a cost worth naming: a deploy that then fails
+   * has still replaced the stream's key, so the instance it was replacing keeps
+   * running but stops being able to report. Only the deployment being replaced
+   * can be in that position — anything else is refused above — which is what
+   * makes the cost bearable rather than arbitrary.
+   */
+  const issueIngestKey = (input: {
+    readonly target: DeployTarget;
+    readonly analytics: DeployAnalyticsInjection;
+    readonly deploymentName: string;
+  }): Effect.Effect<string, DeployError> =>
+    Effect.gen(function* () {
+      const projectId = input.target.projectId;
+      const analyticsError = (cause: { readonly message: string }) =>
+        new DeployError({ code: "execution-failed", message: cause.message });
+
+      const listed = yield* analyticsStore
+        .listStreams({ projectId })
+        .pipe(Effect.mapError(analyticsError));
+      const existing = listed.streams.find((stream) => stream.name === input.analytics.stream);
+
+      const live = yield* deploymentRegistry.list({ projectId });
+      const otherReporters =
+        existing === undefined
+          ? []
+          : live
+              .filter(
+                (deployment) =>
+                  deployment.name !== input.deploymentName &&
+                  deployment.analyticsStreamIds.includes(existing.id),
+              )
+              .map((deployment) => deployment.name);
+
+      const plan = planIngestKey({ streamExists: existing !== undefined, otherReporters });
+      if (plan.action === "refuse") {
+        return yield* new DeployError({ code: "analytics-conflict", message: plan.why });
+      }
+
+      if (plan.action === "declare") {
+        const declared = yield* analyticsStore
+          .declareStream({
+            projectId,
+            name: input.analytics.stream,
+            purpose:
+              input.analytics.purpose ?? `Reported by the ${input.deploymentName} deployment.`,
+            properties: input.analytics.properties ?? [],
+          })
+          .pipe(Effect.mapError(analyticsError));
+        return declared.ingestKey;
+      }
+
+      const reissued = yield* analyticsStore
+        .reissueIngestKey({ projectId, stream: input.analytics.stream })
+        .pipe(Effect.mapError(analyticsError));
+      return reissued.ingestKey;
+    });
 
   const listTargets: DeployServiceShape["listTargets"] = (input) =>
     repository
@@ -142,6 +255,16 @@ const makeDeployService = Effect.gen(function* () {
         });
       }
 
+      const deploymentName = input.analytics?.deploymentName ?? target.name;
+      const ingestKey =
+        input.analytics === undefined
+          ? undefined
+          : yield* issueIngestKey({
+              target,
+              analytics: input.analytics,
+              deploymentName,
+            });
+
       const startedAtInstant = yield* DateTime.now;
       const startedAt = DateTime.formatIso(DateTime.toUtc(startedAtInstant));
       const runRecord: DeployRun = {
@@ -179,6 +302,13 @@ const makeDeployService = Effect.gen(function* () {
             env: {
               ...process.env,
               ...(password !== undefined ? { SSHPASS: password } : {}),
+              // The only place this key exists outside the deployment. Nothing
+              // writes it down, here or anywhere downstream.
+              ...(ingestKey !== undefined
+                ? {
+                    [input.analytics?.keyVariable ?? DEFAULT_INGEST_KEY_VARIABLE]: ingestKey,
+                  }
+                : {}),
             },
           }),
         catch: (cause) =>
@@ -190,8 +320,11 @@ const makeDeployService = Effect.gen(function* () {
       });
 
       const completedAtInstant = yield* DateTime.now;
+      const captured = [result.stdout, result.stderr].filter((part) => part.length > 0).join("\n");
+      // Redacted before truncation, so a key straddling the cut cannot survive
+      // as a fragment of itself.
       const output = truncateOutput(
-        [result.stdout, result.stderr].filter((part) => part.length > 0).join("\n"),
+        ingestKey === undefined ? captured : redactSecret(captured, ingestKey),
       );
       const completed: DeployRun = {
         ...runRecord,
@@ -203,6 +336,21 @@ const makeDeployService = Effect.gen(function* () {
       yield* repository
         .upsertRun(completed)
         .pipe(Effect.mapError(repositoryError("Failed to record deploy result.")));
+
+      // Only a run that worked put something live. A failed one leaves the
+      // previous deployment recorded as it was, which is still true of the world.
+      if (input.analytics !== undefined && completed.status === "succeeded") {
+        yield* deploymentRegistry.register({
+          projectId: target.projectId,
+          targetId: target.id,
+          name: deploymentName,
+          ...(input.analytics.url !== undefined ? { url: input.analytics.url } : {}),
+          status: "live",
+          lastRunId: completed.id,
+          streams: [input.analytics.stream],
+        });
+      }
+
       yield* Effect.logInfo("deploy.run.completed").pipe(
         Effect.annotateLogs({
           targetId: target.id,
@@ -235,5 +383,5 @@ const makeDeployService = Effect.gen(function* () {
 export const DeployServiceLive: Layer.Layer<
   DeployService,
   never,
-  DeployRepository | ServerSecretStore
+  DeployRepository | ServerSecretStore | AnalyticsStore | DeploymentRegistry
 > = Layer.effect(DeployService, makeDeployService);

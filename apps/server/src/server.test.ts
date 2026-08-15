@@ -114,6 +114,8 @@ import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
 import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
+import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
+import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
 import { PackEnablementServiceLive } from "./packEnablement/Layers/PackEnablementService.ts";
 import { PackEnablementRepositoryLive } from "./persistence/Layers/PackEnablement.ts";
@@ -326,9 +328,21 @@ const threadPreferenceTestLayer = ProjectionThreadPreferenceRepositoryLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
 );
 
+const deploymentRegistryTestLayer = DeploymentRegistryLive.pipe(
+  Layer.provide(DeploymentRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(DeployRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+);
+
 const deployTestLayer = DeployServiceLive.pipe(
   Layer.provide(DeployRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
   Layer.provide(ServerSecretStoreLive),
+  Layer.provide(
+    AnalyticsStoreLive.pipe(
+      Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+    ),
+  ),
+  Layer.provide(deploymentRegistryTestLayer),
 );
 
 const analyticsTestLayer = AnalyticsStoreLive.pipe(
@@ -695,6 +709,7 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(threadPreferenceTestLayer),
       Layer.provideMerge(deployTestLayer),
       Layer.provideMerge(analyticsTestLayer),
+      Layer.provideMerge(deploymentRegistryTestLayer),
       Layer.provideMerge(packEnablementTestLayer),
       Layer.provideMerge(collaborationTestLayer),
       Layer.provideMerge(organizationTestLayer),

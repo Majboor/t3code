@@ -53,6 +53,13 @@ import {
   DeployListRunsResult,
   DeployListTargetsInput,
   DeployListTargetsResult,
+  DeploymentArchiveInput,
+  DeploymentListInput,
+  DeploymentListResult,
+  DeploymentRegisterInput,
+  DeploymentRegisterResult,
+  DeploymentUpdateInput,
+  DeploymentUpdateResult,
   DeployRunInput,
   DeployRunResult,
 } from "./deploy.ts";
@@ -345,6 +352,10 @@ export const WS_METHODS = {
   deployDeleteTarget: "deploy.targets.delete",
   deployRun: "deploy.run",
   deployListRuns: "deploy.runs.list",
+  deployListDeployments: "deploy.deployments.list",
+  deployRegisterDeployment: "deploy.deployments.register",
+  deployUpdateDeployment: "deploy.deployments.update",
+  deployArchiveDeployment: "deploy.deployments.archive",
   analyticsListStreams: "analytics.streams.list",
   analyticsDeclareStream: "analytics.streams.declare",
   analyticsQuery: "analytics.query",
@@ -625,6 +636,29 @@ export const WsDeployRunRpc = Rpc.make(WS_METHODS.deployRun, {
 export const WsDeployListRunsRpc = Rpc.make(WS_METHODS.deployListRuns, {
   payload: DeployListRunsInput,
   success: DeployListRunsResult,
+  error: DeployError,
+});
+
+export const WsDeployListDeploymentsRpc = Rpc.make(WS_METHODS.deployListDeployments, {
+  payload: DeploymentListInput,
+  success: DeploymentListResult,
+  error: DeployError,
+});
+
+export const WsDeployRegisterDeploymentRpc = Rpc.make(WS_METHODS.deployRegisterDeployment, {
+  payload: DeploymentRegisterInput,
+  success: DeploymentRegisterResult,
+  error: DeployError,
+});
+
+export const WsDeployUpdateDeploymentRpc = Rpc.make(WS_METHODS.deployUpdateDeployment, {
+  payload: DeploymentUpdateInput,
+  success: DeploymentUpdateResult,
+  error: DeployError,
+});
+
+export const WsDeployArchiveDeploymentRpc = Rpc.make(WS_METHODS.deployArchiveDeployment, {
+  payload: DeploymentArchiveInput,
   error: DeployError,
 });
 
@@ -1256,6 +1290,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeployDeleteTargetRpc,
   WsDeployRunRpc,
   WsDeployListRunsRpc,
+  WsDeployListDeploymentsRpc,
+  WsDeployRegisterDeploymentRpc,
+  WsDeployUpdateDeploymentRpc,
+  WsDeployArchiveDeploymentRpc,
   WsAnalyticsListStreamsRpc,
   WsAnalyticsDeclareStreamRpc,
   WsAnalyticsQueryRpc,
