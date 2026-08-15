@@ -1,10 +1,11 @@
 import { CheckIcon, EyeIcon, ShieldCheckIcon, UserMinusIcon } from "lucide-react";
 import type { CollaborationMember, EnvironmentId, TenantId, WorkspaceId } from "@t3tools/contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
 import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
+import { applyPresenceToRoster, ROSTER_REFRESH_DEBOUNCE_MS } from "./collaborationRoster.logic";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 
@@ -220,6 +221,32 @@ export function CollaborationPeople({
     refresh();
   }, [refresh]);
 
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const membersRef = useRef(members);
+  membersRef.current = members;
+  const pendingRefreshRef = useRef<number | null>(null);
+
+  // Several people joining at once is still one roster to fetch.
+  const scheduleRefresh = useCallback(() => {
+    if (pendingRefreshRef.current !== null) {
+      return;
+    }
+    pendingRefreshRef.current = window.setTimeout(() => {
+      pendingRefreshRef.current = null;
+      refreshRef.current();
+    }, ROSTER_REFRESH_DEBOUNCE_MS);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (pendingRefreshRef.current !== null) {
+        window.clearTimeout(pendingRefreshRef.current);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!environmentId || !tenantId || !workspaceId) {
       return;
@@ -231,17 +258,30 @@ export function CollaborationPeople({
     return api.collaboration.subscribe(
       { tenantId, workspaceId },
       (event) => {
-        if (
-          event.type === "member-updated" ||
-          event.type === "member-removed" ||
-          event.type === "presence-upserted"
-        ) {
-          refresh();
+        // A membership change is what it says it is, and rare enough to answer
+        // straight away.
+        if (event.type === "member-updated" || event.type === "member-removed") {
+          refreshRef.current();
+          return;
+        }
+        if (event.type !== "presence-upserted") {
+          return;
+        }
+        // A heartbeat is not a roster change: everybody emits one every ~30s,
+        // and it carries the presence it announces, so a familiar person's dot
+        // moves for free. Only a stranger means the roster itself has moved.
+        const outcome = applyPresenceToRoster(membersRef.current, event.presence);
+        if (outcome.members !== membersRef.current) {
+          membersRef.current = outcome.members;
+          setMembers(outcome.members);
+        }
+        if (!outcome.isKnownMember) {
+          scheduleRefresh();
         }
       },
-      { onResubscribe: refresh },
+      { onResubscribe: () => refreshRef.current() },
     );
-  }, [environmentId, refresh, tenantId, workspaceId]);
+  }, [environmentId, scheduleRefresh, tenantId, workspaceId]);
 
   const mutate = useCallback(
     async (run: (api: NonNullable<ReturnType<typeof readEnvironmentApi>>) => Promise<unknown>) => {

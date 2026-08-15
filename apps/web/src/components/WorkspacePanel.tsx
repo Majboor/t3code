@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type {
   CollaborationFileTouch,
+  GitStatusResult,
   GitWorkingTreeFileStatus,
   ProjectCreateEntryInput,
   ProjectDirectoryEntry,
@@ -91,6 +92,10 @@ import {
   WorkspacePanelShell,
   type WorkspacePanelMode,
 } from "./WorkspacePanelShell";
+import {
+  createWorkspaceDirectoryRelistGate,
+  type WorkspaceDirectoryRelistGate,
+} from "./workspaceTreePoll.logic";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -119,7 +124,12 @@ const EMPTY_WORKSPACE_AUTHORS: ReadonlyMap<string, CollaborationFileTouch> = new
 // The tree mirrors a directory that anyone can change without telling us: a
 // collaborator in another browser, the agent, or a process outside the app
 // entirely. Re-list what is on screen on a timer so it stops going stale.
-const WORKSPACE_TREE_POLL_INTERVAL_MS = 5_000;
+//
+// The cost scales with folders open, because there is no call that returns the
+// whole visible tree — see `workspaceTreePoll.logic.ts`. With 12 folders
+// expanded that was 144 requests/minute from the tree alone; at 15s it is 48,
+// and none at all while a turn is running.
+const WORKSPACE_TREE_POLL_INTERVAL_MS = 15_000;
 const WORKSPACE_ACCEPTED_DIFF_STORAGE_PREFIX = "t3code:workspace-accepted-diffs:v1";
 const WORKSPACE_DIFF_REVIEW_STORAGE_PREFIX = "t3code:workspace-diff-review:v1";
 
@@ -566,6 +576,10 @@ export default function WorkspacePanel({
   }, [currentWorkspaceWorkingTreeFiles]);
   const hasCurrentGitStatusSnapshotRef = useRef(gitStatus.data !== null);
   hasCurrentGitStatusSnapshotRef.current = gitStatus.data !== null;
+  // The server only publishes a status it considers changed, so a new object
+  // here is the cheapest honest signal that the diffs are worth re-fetching.
+  const gitStatusDataRef = useRef(gitStatus.data);
+  gitStatusDataRef.current = gitStatus.data;
   const gitStatusIsRepoRef = useRef(Boolean(gitStatus.data?.isRepo));
   gitStatusIsRepoRef.current = Boolean(gitStatus.data?.isRepo);
   const lastCommittedGitStatusSnapshotRef = useRef<WorkspaceGitStatusSnapshot | null>(
@@ -637,6 +651,21 @@ export default function WorkspacePanel({
   openTabsRef.current = openTabs;
   const expandedDirectoriesByPathRef = useRef(expandedDirectoriesByPath);
   expandedDirectoriesByPathRef.current = expandedDirectoriesByPath;
+  // A gate per workspace: what it remembers about a directory is meaningless
+  // once the tree is pointing somewhere else.
+  const directoryRelistTargetKey = `${activeEnvironmentId ?? ""}:${activeWorkspaceRoot ?? ""}`;
+  const directoryRelistGateRef = useRef<{
+    targetKey: string;
+    gate: WorkspaceDirectoryRelistGate;
+  }>({ targetKey: directoryRelistTargetKey, gate: createWorkspaceDirectoryRelistGate() });
+  if (directoryRelistGateRef.current.targetKey !== directoryRelistTargetKey) {
+    directoryRelistGateRef.current = {
+      targetKey: directoryRelistTargetKey,
+      gate: createWorkspaceDirectoryRelistGate(),
+    };
+  }
+  const workspaceTurnIsRunningRef = useRef(false);
+  workspaceTurnIsRunningRef.current = activeThread?.session?.orchestrationStatus === "running";
   const activeFileState = activeFilePath ? (fileStateByPath[activeFilePath] ?? null) : null;
   const activeFileDraft =
     activeFilePath && activeFileState && !activeFileState.isBinary && !activeFileState.tooLarge
@@ -867,23 +896,37 @@ export default function WorkspacePanel({
     [directoryEntriesByPath, loadDirectory],
   );
 
+  /**
+   * The one way the tree gets re-listed. The poll, the refresh button, a turn
+   * boundary and every move of the diff signature all come through here, so
+   * the gate can stop them fanning out over the same folders at once.
+   */
   const refreshExpandedDirectories = useCallback(
-    (options?: { silent?: boolean }) => {
-      const directoryPaths = Object.keys(expandedDirectoriesByPathRef.current).map((pathValue) =>
-        pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
-      );
-      if (directoryPaths.length === 0) {
+    (options?: { silent?: boolean; immediate?: boolean }) => {
+      const directoryKeys = Object.keys(expandedDirectoriesByPathRef.current);
+      if (directoryKeys.length === 0) {
+        return;
+      }
+
+      const gate = directoryRelistGateRef.current.gate;
+      const claimedKeys = gate.claim(directoryKeys, {
+        now: Date.now(),
+        ...(options?.immediate ? { immediate: true } : {}),
+      });
+      if (claimedKeys.length === 0) {
         return;
       }
 
       void Promise.all(
-        directoryPaths.map((directoryPath) =>
-          loadDirectory(directoryPath, {
+        claimedKeys.map((directoryKeyValue) =>
+          loadDirectory(directoryKeyValue === ROOT_DIRECTORY_KEY ? null : directoryKeyValue, {
             force: true,
             ...(options?.silent ? { silent: true } : {}),
           }),
         ),
-      ).catch(() => undefined);
+      )
+        .catch(() => undefined)
+        .finally(() => gate.release(claimedKeys));
     },
     [loadDirectory],
   );
@@ -1123,7 +1166,8 @@ export default function WorkspacePanel({
     void queryClient.invalidateQueries({
       queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
     });
-    refreshExpandedDirectories();
+    // Somebody pressed refresh: they get an answer, not the throttle.
+    refreshExpandedDirectories({ immediate: true });
     refreshCleanOpenFiles();
   }, [
     activeEnvironmentId,
@@ -2058,7 +2102,7 @@ export default function WorkspacePanel({
       return;
     }
 
-    const refreshTree = () => {
+    const refreshTreeOnVisibilityChange = () => {
       // A hidden tab has nobody looking at the tree; catch up when it comes back.
       if (document.visibilityState === "hidden") {
         return;
@@ -2066,12 +2110,26 @@ export default function WorkspacePanel({
       refreshExpandedDirectories({ silent: true });
     };
 
-    const intervalId = window.setInterval(refreshTree, WORKSPACE_TREE_POLL_INTERVAL_MS);
-    document.addEventListener("visibilitychange", refreshTree);
+    const refreshTreeOnTimer = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      // While a turn runs, the 2s git poll below is already watching this
+      // workspace, and every change it sees moves the diff signature, which
+      // re-lists the tree. Polling on top of that only spends the request
+      // budget at the moment it is scarcest — someone watching an agent work.
+      if (workspaceTurnIsRunningRef.current) {
+        return;
+      }
+      refreshExpandedDirectories({ silent: true });
+    };
+
+    const intervalId = window.setInterval(refreshTreeOnTimer, WORKSPACE_TREE_POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", refreshTreeOnVisibilityChange);
 
     return () => {
       window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", refreshTree);
+      document.removeEventListener("visibilitychange", refreshTreeOnVisibilityChange);
     };
   }, [activeEnvironmentId, activeWorkspaceRoot, refreshExpandedDirectories]);
 
@@ -2084,11 +2142,24 @@ export default function WorkspacePanel({
       return;
     }
 
+    // The status refresh is cheap to ask for often: it de-dupes what is in
+    // flight and debounces itself at 1s. The diff invalidation had no such
+    // guard, so it re-fetched the same bytes 30 times a minute while an agent
+    // was only thinking. The server publishes a status only when it has
+    // actually changed, so follow that instead of the clock.
+    let lastInvalidatedGitStatus: GitStatusResult | null = null;
+
     const intervalId = window.setInterval(() => {
       void refreshGitStatus({
         environmentId: activeEnvironmentId,
         cwd: activeWorkspaceRoot,
       }).catch(() => undefined);
+
+      const gitStatusData = gitStatusDataRef.current;
+      if (gitStatusData === lastInvalidatedGitStatus) {
+        return;
+      }
+      lastInvalidatedGitStatus = gitStatusData;
       void queryClient.invalidateQueries({
         queryKey: gitQueryKeys.workingTreeDiffs(activeEnvironmentId, activeWorkspaceRoot),
       });
@@ -2130,12 +2201,9 @@ export default function WorkspacePanel({
       queryKey: workspaceQueryKeys.all,
     });
 
-    const directoryPaths = Object.keys(expandedDirectoriesByPath).map((pathValue) =>
-      pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
-    );
-    void Promise.all(
-      directoryPaths.map((directoryPath) => loadDirectory(directoryPath, { force: true })),
-    ).catch(() => undefined);
+    // Through the one gated path, so a run of checkpoints does not fan out over
+    // the same folders faster than the answers come back.
+    refreshExpandedDirectories();
 
     for (const filePath of openTabs) {
       if (dirtyFilePathSet.has(filePath)) {
@@ -2175,11 +2243,10 @@ export default function WorkspacePanel({
     activeFilePath,
     activeWorkspaceRoot,
     dirtyFilePathSet,
-    expandedDirectoriesByPath,
-    loadDirectory,
     loadFile,
     openTabs,
     queryClient,
+    refreshExpandedDirectories,
     resolveLatestVisibleDiffState,
     workspaceAgentDiffHistoryByPath,
     workspaceDiffSignature,
@@ -2210,12 +2277,9 @@ export default function WorkspacePanel({
       queryKey: workspaceQueryKeys.all,
     });
 
-    const directoryPaths = Object.keys(expandedDirectoriesByPath).map((pathValue) =>
-      pathValue === ROOT_DIRECTORY_KEY ? null : pathValue,
-    );
-    void Promise.all(
-      directoryPaths.map((directoryPath) => loadDirectory(directoryPath, { force: true })),
-    ).catch(() => undefined);
+    // Same gated path as the poll: a live turn moves this signature every time
+    // the agent writes, which is exactly when the budget is tightest.
+    refreshExpandedDirectories();
 
     for (const filePath of openTabs) {
       if (dirtyFilePathSet.has(filePath)) {
@@ -2246,13 +2310,12 @@ export default function WorkspacePanel({
     activeEnvironmentId,
     activeWorkspaceRoot,
     dirtyFilePathSet,
-    expandedDirectoriesByPath,
     liveWorkspaceDiffSignature,
     liveWorkspaceDiffStatByPath,
-    loadDirectory,
     loadFile,
     openTabs,
     queryClient,
+    refreshExpandedDirectories,
     resolveLatestVisibleDiffState,
   ]);
 
