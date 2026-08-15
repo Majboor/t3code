@@ -1634,7 +1634,13 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const queryUsage: CollaborationServiceShape["queryUsage"] = (actor, input) =>
     Effect.gen(function* () {
-      const untilMs = input.until === undefined ? Date.now() : Date.parse(input.until);
+      // The window is half-open — `[since, until)` in SQL — so that two
+      // adjacent windows cannot both claim a sample on the boundary. That makes
+      // the default upper bound a millisecond in the future rather than `now`:
+      // asking for usage "up to now" has to include a sample stamped now, and
+      // with a bare `Date.now()` the report a turn had just filed was dropped
+      // whenever it landed in the same millisecond as the request.
+      const untilMs = input.until === undefined ? Date.now() + 1 : Date.parse(input.until);
       const requestedSinceMs =
         input.since === undefined ? untilMs - DEFAULT_USAGE_WINDOW_MS : Date.parse(input.since);
       if (Number.isNaN(untilMs) || Number.isNaN(requestedSinceMs)) {
