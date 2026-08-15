@@ -19,6 +19,23 @@ describe("T3_AGENT_INSTRUCTIONS", () => {
   });
 });
 
+describe("PACK_DISCOVERY_INSTRUCTIONS", () => {
+  // An agent ran the search, narrated "the pack lookup is still running",
+  // moved on to reading files, and then reported that no deployment pack
+  // matched — while `ssh-deploy` was the top hit at score 5. The search takes
+  // about half a second; it never waited for the answer it reported.
+  it("requires the search to have returned before its result is reported", () => {
+    expect(PACK_DISCOVERY_INSTRUCTIONS).toContain("Wait for it to finish");
+    expect(PACK_DISCOVERY_INSTRUCTIONS).toContain(
+      "a search that did not run is not a search that found nothing",
+    );
+  });
+
+  it("says not to start the next step while it is still running", () => {
+    expect(PACK_DISCOVERY_INSTRUCTIONS).toContain("still running");
+  });
+});
+
 describe("DEPLOYMENT_ROUTE_INSTRUCTIONS", () => {
   it("names MCP servers and provider plugins as the route not to take", () => {
     expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain("MCP server");

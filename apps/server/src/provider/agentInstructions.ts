@@ -32,6 +32,8 @@ t3 pack search <what you are about to do>
 
 Do it even when the task looks routine and you are confident you know how. That confidence is the case packs were written for: they exist because the obvious approach is the one that failed, and the failure is usually silent — the deploy reports success and serves the old version, the program ships with nothing able to reach it.
 
+**Wait for it to finish and read what it printed.** It takes well under a second. Do not start the next step while it is still running, and do not report what it found until you have its output in front of you — "no pack matches" is a claim about a result you have to have actually seen. If the command failed or you never got the output, say that instead; a search that did not run is not a search that found nothing.
+
 \`search\` prints a one-line summary; that is not the pack. If anything looks relevant, run \`t3 pack show <name>\` and read the failure modes and integration notes **before** you start the work. Then tell the user which pack you are following.
 
 If a pack says to check something with the user first, do that rather than deciding for them. If nothing matches, say so in a sentence and carry on as you normally would — this is a look-up, not an approval step.
