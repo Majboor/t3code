@@ -33,6 +33,7 @@ import {
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
 import { useStore } from "../../store";
+import { USAGE_PANEL_SETTINGS_STORAGE_KEY } from "../collaboration/usage/usagePanel.logic";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { AccountSettingsPanel, GeneralSettingsPanel } from "./SettingsPanels";
 
@@ -778,7 +779,7 @@ describe("GeneralSettingsPanel observability", () => {
     await page.getByRole("button", { name: "Save profile" }).click();
     await expect.element(page.getByText("Account profile updated.")).toBeInTheDocument();
     await expect.element(page.getByText("Updated Settings User")).toBeInTheDocument();
-    await page.getByRole("button", { name: "Sign out of Supabase" }).click();
+    await page.getByRole("button", { name: "Forget Supabase session" }).click();
     expect(readSupabaseBrowserAccessToken()).toBeNull();
     await expect
       .element(page.getByText("Supabase browser session removed. Sign in again to reconnect."))
@@ -1106,4 +1107,326 @@ describe("GeneralSettingsPanel observability", () => {
 
     expect(openInEditor).toHaveBeenCalledWith("/repo/project/.t3/logs", "cursor");
   });
+
+  it("shows usage sharing as on for a member who was never asked, and records an opt-out", async () => {
+    await clearBrowserState();
+    const environmentId = EnvironmentId.make("environment-local");
+    useStore.setState({
+      activeEnvironmentId: environmentId,
+      environmentStateById: {
+        [environmentId]: makeEnvironmentStateWithProjects(environmentId, [
+          {
+            projectId: "usage-privacy-project",
+            tenantId: "tenant-1",
+            workspaceId: "workspace-1",
+          },
+        ]),
+      },
+    });
+    const collaboration = {
+      getConsent: vi.fn().mockResolvedValue({
+        consent: null,
+        effective: { shareProfile: false, shareUsage: true, isDecided: false },
+      }),
+      updateConsent: vi.fn().mockResolvedValue({
+        consent: {
+          tenantId: "tenant-1",
+          workspaceId: "workspace-1",
+          userId: "supabase:usage-privacy-user",
+          shareProfile: false,
+          shareUsage: false,
+          decidedAt: "2026-08-15T00:00:00.000Z",
+        },
+        effective: { shareProfile: false, shareUsage: false, isDecided: true },
+      }),
+    };
+    __setEnvironmentApiOverrideForTests(environmentId, {
+      collaboration,
+    } as never);
+    stubAccountProfileFetch();
+
+    mounted = await render(<AccountSettingsPanel />);
+
+    const toggle = page.getByLabelText("Share my token usage with the workspace");
+    await expect
+      .element(
+        page.getByText("Shared with Payments. This is the default — you have not changed it."),
+      )
+      .toBeInTheDocument();
+    await expect.element(toggle).toBeChecked();
+    expect(collaboration.getConsent).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      workspaceId: "workspace-1",
+    });
+
+    await toggle.click();
+
+    await expect
+      .element(
+        page.getByText(
+          "Hidden from other members of Payments. You still see your own numbers, and workspace billing still counts them.",
+        ),
+      )
+      .toBeInTheDocument();
+    await expect.element(toggle).not.toBeChecked();
+    expect(collaboration.updateConsent).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      workspaceId: "workspace-1",
+      shareProfile: false,
+      shareUsage: false,
+    });
+  });
+
+  it("leaves profile sharing switched on when usage sharing is switched off", async () => {
+    await clearBrowserState();
+    const environmentId = EnvironmentId.make("environment-local");
+    useStore.setState({
+      activeEnvironmentId: environmentId,
+      environmentStateById: {
+        [environmentId]: makeEnvironmentStateWithProjects(environmentId, [
+          {
+            projectId: "usage-privacy-profile",
+            tenantId: "tenant-1",
+            workspaceId: "workspace-1",
+          },
+        ]),
+      },
+    });
+    const collaboration = {
+      getConsent: vi.fn().mockResolvedValue({
+        consent: {
+          tenantId: "tenant-1",
+          workspaceId: "workspace-1",
+          userId: "supabase:usage-privacy-user",
+          shareProfile: true,
+          shareUsage: true,
+          decidedAt: "2026-08-01T00:00:00.000Z",
+        },
+        effective: { shareProfile: true, shareUsage: true, isDecided: true },
+      }),
+      updateConsent: vi.fn().mockResolvedValue({
+        consent: {
+          tenantId: "tenant-1",
+          workspaceId: "workspace-1",
+          userId: "supabase:usage-privacy-user",
+          shareProfile: true,
+          shareUsage: false,
+          decidedAt: "2026-08-15T00:00:00.000Z",
+        },
+        effective: { shareProfile: true, shareUsage: false, isDecided: true },
+      }),
+    };
+    __setEnvironmentApiOverrideForTests(environmentId, {
+      collaboration,
+    } as never);
+    stubAccountProfileFetch();
+
+    mounted = await render(<AccountSettingsPanel />);
+
+    await expect
+      .element(page.getByText("Shared with Payments. You chose this."))
+      .toBeInTheDocument();
+    await page.getByLabelText("Share my token usage with the workspace").click();
+
+    await vi.waitFor(() => {
+      expect(collaboration.updateConsent).toHaveBeenCalledWith({
+        tenantId: "tenant-1",
+        workspaceId: "workspace-1",
+        shareProfile: true,
+        shareUsage: false,
+      });
+    });
+  });
+
+  it("asks which workspace to answer for when projects span several", async () => {
+    await clearBrowserState();
+    const environmentId = EnvironmentId.make("environment-local");
+    useStore.setState({
+      activeEnvironmentId: environmentId,
+      environmentStateById: {
+        [environmentId]: makeEnvironmentStateWithProjects(environmentId, [
+          {
+            projectId: "usage-privacy-a",
+            tenantId: "tenant-1",
+            workspaceId: "workspace-1",
+          },
+          {
+            projectId: "usage-privacy-b",
+            tenantId: "tenant-2",
+            workspaceId: "workspace-2",
+            tenantName: "Globex",
+            workspaceName: "Billing",
+          },
+        ]),
+      },
+    });
+    const collaboration = {
+      getConsent: vi.fn().mockResolvedValue({
+        consent: null,
+        effective: { shareProfile: false, shareUsage: true, isDecided: false },
+      }),
+      updateConsent: vi.fn(),
+    };
+    __setEnvironmentApiOverrideForTests(environmentId, {
+      collaboration,
+    } as never);
+    stubAccountProfileFetch();
+
+    mounted = await render(<AccountSettingsPanel />);
+
+    await expect
+      .element(
+        page.getByText(
+          "Your projects span several workspaces. Pick one to see and change what it shares.",
+        ),
+      )
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByLabelText("Share my token usage with the workspace"))
+      .toBeDisabled();
+    expect(collaboration.getConsent).not.toHaveBeenCalled();
+
+    await page.getByLabelText("Usage sharing workspace").click();
+    await page.getByRole("option", { name: "Globex · Billing" }).click();
+
+    await vi.waitFor(() => {
+      expect(collaboration.getConsent).toHaveBeenCalledWith({
+        tenantId: "tenant-2",
+        workspaceId: "workspace-2",
+      });
+    });
+  });
+
+  it("explains the usage sharing toggle instead of breaking it when no project is in a workspace", async () => {
+    await clearBrowserState();
+    const environmentId = EnvironmentId.make("environment-local");
+    useStore.setState({
+      activeEnvironmentId: environmentId,
+      environmentStateById: {
+        [environmentId]: makeEnvironmentStateWithProjects(environmentId, [
+          { projectId: "usage-privacy-local" },
+        ]),
+      },
+    });
+    const collaboration = { getConsent: vi.fn(), updateConsent: vi.fn() };
+    __setEnvironmentApiOverrideForTests(environmentId, {
+      collaboration,
+    } as never);
+    stubAccountProfileFetch();
+
+    mounted = await render(<AccountSettingsPanel />);
+
+    await expect
+      .element(
+        page.getByText(
+          "No project here belongs to a shared workspace yet, so there is nobody to share with.",
+        ),
+      )
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByLabelText("Share my token usage with the workspace"))
+      .toBeDisabled();
+    expect(collaboration.getConsent).not.toHaveBeenCalled();
+  });
+
+  it("keeps the usage panel visible by default and remembers switching it off", async () => {
+    await clearBrowserState();
+    stubAccountProfileFetch();
+
+    mounted = await render(<AccountSettingsPanel />);
+
+    const toggle = page.getByLabelText("Show the usage panel");
+    await expect.element(toggle).toBeChecked();
+    await toggle.click();
+    await expect.element(toggle).not.toBeChecked();
+
+    await vi.waitFor(() => {
+      expect(localStorage.getItem(USAGE_PANEL_SETTINGS_STORAGE_KEY)).toContain("false");
+    });
+  });
 });
+
+/** A store environment whose projects carry the workspace ownership consent needs. */
+function makeEnvironmentStateWithProjects(
+  environmentId: EnvironmentId,
+  projects: ReadonlyArray<{
+    projectId: string;
+    tenantId?: string;
+    workspaceId?: string;
+    tenantName?: string;
+    workspaceName?: string;
+  }>,
+) {
+  const projectById = Object.fromEntries(
+    projects.map((project) => [
+      project.projectId,
+      {
+        id: ProjectId.make(project.projectId),
+        environmentId,
+        name: project.projectId,
+        cwd: `/repo/${project.projectId}`,
+        defaultModelSelection: null,
+        scripts: [],
+        ownership:
+          project.tenantId && project.workspaceId
+            ? {
+                tenantId: project.tenantId,
+                tenantDisplayName: project.tenantName ?? "Acme",
+                workspaceId: project.workspaceId,
+                workspaceTitle: project.workspaceName ?? "Payments",
+                organizationId: null,
+                organizationDisplayName: null,
+                ownerUserId: null,
+                ownerDisplayName: null,
+              }
+            : null,
+      },
+    ]),
+  );
+
+  return {
+    projectIds: projects.map((project) => ProjectId.make(project.projectId)),
+    projectById,
+    threadIds: [],
+    threadIdsByProjectId: {},
+    threadShellById: {},
+    threadSessionById: {},
+    threadTurnStateById: {},
+    messageIdsByThreadId: {},
+    messageByThreadId: {},
+    activityIdsByThreadId: {},
+    activityByThreadId: {},
+    proposedPlanIdsByThreadId: {},
+    proposedPlanByThreadId: {},
+    turnDiffIdsByThreadId: {},
+    turnDiffSummaryByThreadId: {},
+    sidebarThreadSummaryById: {},
+    bootstrapComplete: true,
+  } as never;
+}
+
+function stubAccountProfileFetch() {
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/auth/profile")) {
+      return new Response(
+        JSON.stringify({
+          userId: "supabase:usage-privacy-user",
+          subject: "usage-privacy@example.test",
+          displayName: "Usage Privacy User",
+          avatarInitials: "UP",
+          role: "client",
+          sessionId: "supabase:usage-privacy-user",
+          sessionMethod: "bearer-session-token",
+          client: { deviceType: "browser", browser: "Chromium" },
+          expiresAt: "2036-05-07T00:00:00.000Z",
+          tenantStatus: "active",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    throw new Error(`Unhandled fetch ${init?.method ?? "GET"} ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+}

@@ -46,6 +46,7 @@ import { ProjectSurfaceLinks } from "./ProjectSurfaceLinks";
 import { shortcutLabelForCommand } from "~/keybindings";
 import type { DesktopLayoutModeDefinition } from "~/desktopLayoutModes";
 import { CollaborationPresenceBar } from "../collaboration/CollaborationPresenceBar";
+import { CollaborationUsageBar } from "../collaboration/CollaborationUsageBar";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -148,12 +149,17 @@ export const ChatHeader = memo(function ChatHeader({
             </div>
           )}
           {activeProjectId ? (
-            <div className="mt-1 @xl/header-actions:mt-0">
+            <div className="mt-1 flex items-center gap-1.5 @xl/header-actions:mt-0">
               <CollaborationPresenceBar
                 environmentId={activeThreadEnvironmentId}
                 ownership={activeProjectOwnership}
                 projectId={activeProjectId}
                 threadId={activeThreadId}
+              />
+              <CollaborationUsageBar
+                environmentId={activeThreadEnvironmentId}
+                ownership={activeProjectOwnership}
+                projectId={activeProjectId}
               />
             </div>
           ) : null}

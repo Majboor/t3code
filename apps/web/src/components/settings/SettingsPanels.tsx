@@ -55,6 +55,7 @@ import {
   getCustomModelOptionsByProvider,
   resolveAppModelSelectionState,
 } from "../../modelSelection";
+import { readEnvironmentApi } from "../../environmentApi";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -82,6 +83,19 @@ import {
   SettingsSection,
   useRelativeTimeTick,
 } from "./settingsLayout";
+import {
+  DEFAULT_USAGE_PANEL_SETTINGS,
+  useUsagePanelSettings,
+} from "../collaboration/usage/usagePanel.logic";
+import {
+  buildUsageConsentUpdate,
+  deriveUsageSharingState,
+  describeUsageSharing,
+  listUsagePrivacyScopes,
+  reconcileSelectedScopeKey,
+  resolveUsagePrivacyScope,
+  type UsageSharingState,
+} from "./usagePrivacy.logic";
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
   useServerAvailableEditors,
@@ -472,6 +486,161 @@ function AccountProfileSummary({ profile }: { profile: AuthUserProfile }) {
   );
 }
 
+/**
+ * Consent lives per (tenant, workspace, user), and settings — unlike the thread
+ * header — has no project to take a scope from. The projects the session has
+ * already loaded carry the ownership stamp, so they are the scope list: one
+ * workspace resolves silently, several are offered as a choice rather than
+ * guessed at, and none renders as an explanation instead of a dead switch.
+ */
+function UsagePrivacySection() {
+  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const scopes = useMemo(() => listUsagePrivacyScopes(projects), [projects]);
+  const [selectedScopeKey, setSelectedScopeKey] = useState<string | null>(null);
+  const scope = useMemo(
+    () => resolveUsagePrivacyScope(scopes, reconcileSelectedScopeKey(scopes, selectedScopeKey)),
+    [scopes, selectedScopeKey],
+  );
+
+  const [usagePanelSettings, updateUsagePanelSettings] = useUsagePanelSettings();
+  const [sharingState, setSharingState] = useState<UsageSharingState | null>(null);
+  const [sharingError, setSharingError] = useState<string | null>(null);
+  const [isSavingSharing, setIsSavingSharing] = useState(false);
+
+  useEffect(() => {
+    setSharingState(null);
+    setSharingError(null);
+    if (!scope) return;
+    const api = readEnvironmentApi(scope.environmentId);
+    if (!api) {
+      setSharingError("This backend is not connected, so its sharing choice cannot be read.");
+      return;
+    }
+    let cancelled = false;
+    void api.collaboration
+      .getConsent({ tenantId: scope.tenantId, workspaceId: scope.workspaceId })
+      .then((result) => {
+        if (!cancelled) setSharingState(deriveUsageSharingState(result));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setSharingError(
+          error instanceof Error ? error.message : "Failed to read your sharing choice.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scope]);
+
+  const setShareUsage = useCallback(
+    async (shareUsage: boolean) => {
+      if (!scope || !sharingState) return;
+      const api = readEnvironmentApi(scope.environmentId);
+      if (!api) return;
+      setIsSavingSharing(true);
+      setSharingError(null);
+      try {
+        const result = await api.collaboration.updateConsent(
+          buildUsageConsentUpdate({ scope, state: sharingState, shareUsage }),
+        );
+        setSharingState(deriveUsageSharingState(result));
+      } catch (error) {
+        setSharingError(
+          error instanceof Error ? error.message : "Failed to save your sharing choice.",
+        );
+      } finally {
+        setIsSavingSharing(false);
+      }
+    },
+    [scope, sharingState],
+  );
+
+  const sharingStatus =
+    scopes.length === 0
+      ? "No project here belongs to a shared workspace yet, so there is nobody to share with."
+      : !scope
+        ? "Your projects span several workspaces. Pick one to see and change what it shares."
+        : sharingState
+          ? describeUsageSharing(sharingState, scope)
+          : "Reading your current choice…";
+
+  return (
+    <SettingsSection title="Privacy">
+      <SettingsRow
+        title="Share my token usage with the workspace"
+        description="On by default. Other members see your token totals and prompt counts next to your name in the workspace's usage views. Turn it off and the server stops sending those numbers to them, while you keep seeing your own. This does not make your activity anonymous, and it does not change what the workspace is billed for."
+        status={
+          sharingError ? (
+            <span className="text-destructive">{sharingError}</span>
+          ) : (
+            <span>{sharingStatus}</span>
+          )
+        }
+        control={
+          <>
+            {scopes.length > 1 ? (
+              <Select
+                value={selectedScopeKey ?? ""}
+                onValueChange={(value) => setSelectedScopeKey(String(value) || null)}
+              >
+                <SelectTrigger className="w-full sm:w-56" aria-label="Usage sharing workspace">
+                  <SelectValue>{scope ? scope.label : "Choose a workspace"}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {scopes.map((option) => (
+                    <SelectItem hideIndicator key={option.key} value={option.key}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            ) : null}
+            <Switch
+              // Never draw this as off before the answer arrives: usage is shared
+              // by default, and a flicker to "not shared" is a promise we would be
+              // breaking rather than a harmless loading state.
+              checked={sharingState ? sharingState.shareUsage : true}
+              disabled={!scope || !sharingState || isSavingSharing}
+              onCheckedChange={(checked) => void setShareUsage(Boolean(checked))}
+              aria-label="Share my token usage with the workspace"
+            />
+          </>
+        }
+      />
+      <SettingsRow
+        title="Show the usage panel"
+        description="Keep the workspace usage panel available in this app. This is a preference on this device only — it changes nothing about what other members can see."
+        resetAction={
+          usagePanelSettings.enabled !== DEFAULT_USAGE_PANEL_SETTINGS.enabled ? (
+            <SettingResetButton
+              label="usage panel visibility"
+              onClick={() =>
+                updateUsagePanelSettings((previous) => ({
+                  ...previous,
+                  enabled: DEFAULT_USAGE_PANEL_SETTINGS.enabled,
+                }))
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={usagePanelSettings.enabled}
+            onCheckedChange={(checked) =>
+              updateUsagePanelSettings((previous) => ({
+                ...previous,
+                enabled: Boolean(checked),
+              }))
+            }
+            aria-label="Show the usage panel"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 export function AccountSettingsPanel() {
   const [profile, setProfile] = useState<AuthUserProfile | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -671,6 +840,7 @@ export function AccountSettingsPanel() {
           description="Pairing is complete for this backend. Provider setup and workspace creation continue from General and Connections."
         />
       </SettingsSection>
+      <UsagePrivacySection />
       <ProviderAccountsSection />
     </SettingsPageContainer>
   );
