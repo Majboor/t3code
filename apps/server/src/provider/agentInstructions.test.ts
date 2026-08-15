@@ -48,6 +48,26 @@ describe("DEPLOYMENT_ROUTE_INSTRUCTIONS", () => {
     );
   });
 
+  // Having nowhere to deploy used to end the turn: the agent said "configure a
+  // target" and the person had no way to do it, because nothing could put a
+  // password in the secret store. Now it can offer to set it up.
+  it("offers to configure a target rather than handing the work back", () => {
+    expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain("offer to set it up");
+    expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain("t3 secret set");
+    expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain("deploy.config.json");
+  });
+
+  it("keeps the password out of the config, the repo and the command line", () => {
+    expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain("by name");
+    expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain("never as a command-line argument");
+    // Piped, so the value is on stdin rather than in argv.
+    expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain('printf %s "<the password>" | t3 secret set');
+  });
+
+  it("says to check what is listening before taking a port on a shared host", () => {
+    expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain("already listening");
+  });
+
   it("keeps the escape hatch, so a named tool is still usable", () => {
     expect(DEPLOYMENT_ROUTE_INSTRUCTIONS).toContain("The exception is being asked");
   });

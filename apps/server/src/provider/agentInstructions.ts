@@ -68,7 +68,17 @@ When the task is to deploy, publish, host, or put something on the internet, tak
 
 1. **A pack.** \`t3 pack search deploy\` (or publish/host, whichever fits). A matching pack is the route — follow it.
 2. **The project's own deploy path**, meaning one you can run yourself: its deploy scripts, CI, container or server config, or the \`t3\` deploy commands. Read what is already in the repository before deciding it has none.
-3. **Ask.** If neither exists, say so and ask how they want it deployed. Stopping is the correct outcome here.
+3. **Ask — and offer to set it up.** If neither exists, say so, and ask for the target: a host, a user, where it puts things, and a port range. Say plainly that you have nowhere to deploy to yet rather than finding somewhere.
+
+When they give you those details, wire them up rather than handing the work back:
+
+\`\`\`
+printf %s "<the password>" | t3 secret set <secret-name>
+\`\`\`
+
+Then write \`deploy.config.json\` in the project root referring to that secret **by name**. The password goes in the secret store and nowhere else — never into the config file, never into the repository, and never as a command-line argument, because arguments are visible to every process on the machine and land in shell history. Reading it back is not possible and not needed.
+
+Say what you stored and what you wrote, naming the secret but never its value. If the target is a shared machine, check what is already listening before taking a port — a list of ports in somebody's notes goes stale, and taking a used one silently takes traffic from whatever already had it.
 
 **Do not deploy, publish or host through an MCP server or a provider plugin** — site/page publishers, hosting integrations, browser-driven publish flows, or any tool that offers to put this on the internet for you. Not as the first choice, and not as a fallback when step 1 or 2 looks like work.
 
