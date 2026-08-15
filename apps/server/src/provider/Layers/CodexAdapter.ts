@@ -206,7 +206,35 @@ function toCanonicalItemType(raw: unknown): CanonicalItemType {
   return "unknown";
 }
 
-function itemTitle(itemType: CanonicalItemType): string | undefined {
+/**
+ * Which MCP tool a call actually ran, as the item reports it.
+ *
+ * The server and the tool arrive as separate fields on some payloads and as one
+ * qualified name on others, and a call that is only in progress carries
+ * `toolName` rather than either. All of them are read, and none of them being
+ * present is a real possibility — the caller keeps the generic label then,
+ * rather than inventing a name for a tool it cannot identify.
+ */
+function mcpToolLabel(source: Record<string, unknown>): string | undefined {
+  const invocation = asObject(source.invocation);
+  const server = asString(source.server) ?? asString(invocation?.server);
+  const tool =
+    asString(source.tool) ??
+    asString(source.toolName) ??
+    asString(invocation?.tool) ??
+    asString(invocation?.name) ??
+    asString(source.name);
+  if (tool === undefined || tool.trim().length === 0) {
+    return undefined;
+  }
+  const trimmed = tool.trim();
+  return server && server.trim().length > 0 ? `${server.trim()} · ${trimmed}` : trimmed;
+}
+
+function itemTitle(
+  itemType: CanonicalItemType,
+  source?: Record<string, unknown>,
+): string | undefined {
   switch (itemType) {
     case "assistant_message":
       return "Assistant message";
@@ -221,7 +249,7 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
     case "file_change":
       return "File change";
     case "mcp_tool_call":
-      return "MCP tool call";
+      return (source === undefined ? undefined : mcpToolLabel(source)) ?? "MCP tool call";
     case "dynamic_tool_call":
       return "Tool call";
     case "web_search":
@@ -551,6 +579,7 @@ function mapItemLifecycle(
   }
 
   const detail = itemDetail(source, payload ?? {});
+  const title = itemTitle(itemType, source);
   const status =
     lifecycle === "item.started"
       ? "inProgress"
@@ -564,7 +593,7 @@ function mapItemLifecycle(
     payload: {
       itemType,
       ...(status ? { status } : {}),
-      ...(itemTitle(itemType) ? { title: itemTitle(itemType) } : {}),
+      ...(title ? { title } : {}),
       ...(detail ? { detail } : {}),
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },

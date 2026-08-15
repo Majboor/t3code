@@ -363,6 +363,84 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("titles an MCP tool call with the server and tool it actually ran", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      const event: ProviderEvent = {
+        id: asEventId("evt-mcp-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("mcp_1"),
+        payload: {
+          item: {
+            type: "mcpToolCall",
+            id: "mcp_1",
+            server: "chrome-devtools",
+            tool: "take_snapshot",
+          },
+        },
+      };
+
+      lifecycleManager.emit("event", event);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "mcp_tool_call");
+      assert.equal(firstEvent.value.payload.title, "chrome-devtools · take_snapshot");
+    }),
+  );
+
+  it.effect("keeps the generic MCP label when the item names no tool", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      const event: ProviderEvent = {
+        id: asEventId("evt-mcp-anonymous"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("mcp_2"),
+        payload: {
+          item: {
+            type: "mcpToolCall",
+            id: "mcp_2",
+          },
+        },
+      };
+
+      lifecycleManager.emit("event", event);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "mcp_tool_call");
+      assert.equal(firstEvent.value.payload.title, "MCP tool call");
+    }),
+  );
+
   it.effect("maps completed plan items to canonical proposed-plan completion events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
