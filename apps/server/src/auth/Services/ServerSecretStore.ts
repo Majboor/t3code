@@ -14,6 +14,15 @@ export interface ServerSecretStoreShape {
     bytes: number,
   ) => Effect.Effect<Uint8Array, SecretStoreError>;
   readonly remove: (name: string) => Effect.Effect<void, SecretStoreError>;
+  /**
+   * The names that are stored, never the values.
+   *
+   * A deploy target refers to its password by name, so the question "is the
+   * secret this target needs actually here" has to be answerable without
+   * reading anything back — otherwise the only way to check a target is
+   * configured is to run it and see what happens.
+   */
+  readonly list: () => Effect.Effect<ReadonlyArray<string>, SecretStoreError>;
 }
 
 export class ServerSecretStore extends Context.Service<ServerSecretStore, ServerSecretStoreShape>()(

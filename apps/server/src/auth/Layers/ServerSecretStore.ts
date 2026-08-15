@@ -10,6 +10,9 @@ import {
   type ServerSecretStoreShape,
 } from "../Services/ServerSecretStore.ts";
 
+/** What a stored secret is called on disk, so listing can undo it. */
+const SECRET_FILE_SUFFIX = ".bin";
+
 export const makeServerSecretStore = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -26,7 +29,8 @@ export const makeServerSecretStore = Effect.gen(function* () {
     ),
   );
 
-  const resolveSecretPath = (name: string) => path.join(serverConfig.secretsDir, `${name}.bin`);
+  const resolveSecretPath = (name: string) =>
+    path.join(serverConfig.secretsDir, `${name}${SECRET_FILE_SUFFIX}`);
 
   const isPlatformError = (u: unknown): u is PlatformError.PlatformError =>
     Predicate.isTagged(u, "PlatformError");
@@ -137,11 +141,34 @@ export const makeServerSecretStore = Effect.gen(function* () {
       ),
     );
 
+  const list: ServerSecretStoreShape["list"] = () =>
+    fileSystem.readDirectory(serverConfig.secretsDir).pipe(
+      Effect.map((entries) =>
+        entries
+          .filter((entry) => entry.endsWith(SECRET_FILE_SUFFIX))
+          .map((entry) => entry.slice(0, -SECRET_FILE_SUFFIX.length))
+          .toSorted(),
+      ),
+      // A directory that is not there yet holds no secrets, which is an answer
+      // rather than a failure.
+      Effect.catch((cause) =>
+        cause.reason._tag === "NotFound"
+          ? Effect.succeed<ReadonlyArray<string>>([])
+          : Effect.fail(
+              new SecretStoreError({
+                message: "Failed to list stored secrets.",
+                cause,
+              }),
+            ),
+      ),
+    );
+
   return {
     get,
     set,
     getOrCreateRandom,
     remove,
+    list,
   } satisfies ServerSecretStoreShape;
 });
 

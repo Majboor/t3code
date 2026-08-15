@@ -65,6 +65,10 @@ import { AnalyticsStore, type AnalyticsStoreShape } from "./analytics/Services/A
 import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
+import {
+  ServerSecretStore,
+  type ServerSecretStoreShape,
+} from "./auth/Services/ServerSecretStore.ts";
 import { AuthControlPlaneRuntimeLive } from "./auth/Layers/AuthControlPlane.ts";
 import {
   formatIssuedPairingCredential,
@@ -1571,6 +1575,122 @@ const analyticsCommand = Command.make("analytics").pipe(
   Command.withSubcommands([analyticsDeclareCommand, analyticsListCommand, analyticsQueryCommand]),
 );
 
+/**
+ * Put a secret in the store without it ever being an argument.
+ *
+ * A deploy target names its password by secret name, and until now nothing
+ * could put one there: the store was reachable from the server process and from
+ * nowhere else, so a target referencing `logicpacks-node-root` could be written
+ * and never resolved. That is the gap that made "configure a deploy" a thing
+ * somebody had to be told to do by hand.
+ *
+ * The value is read from stdin and never from argv, because an argument is
+ * visible in `ps` to every user on the machine and lands in shell history. That
+ * matters more than usual here: the caller is often an agent running a command
+ * in somebody's project.
+ */
+const runSecretMutation = Effect.fn("runSecretMutation")(function* (
+  flags: { readonly baseDir: Option.Option<string> },
+  run: (store: ServerSecretStoreShape) => Effect.Effect<string, Error>,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  return yield* Effect.gen(function* () {
+    const store = yield* ServerSecretStore;
+    yield* Console.log(yield* run(store));
+  }).pipe(
+    Effect.provide(
+      ServerSecretStoreLive.pipe(
+        Layer.provide(Layer.succeed(ServerConfig, config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
+      ),
+    ),
+  );
+});
+
+class SecretInputError extends Data.TaggedError("SecretInputError")<{
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
+
+const readSecretFromStdin = Effect.tryPromise({
+  try: async () => {
+    const chunks: Array<Buffer> = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(Buffer.from(chunk));
+    }
+    // Only a trailing newline is stripped: a password may legitimately end in
+    // a space, and trimming it would store something the host will reject with
+    // an error that says nothing about why.
+    return Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+  },
+  catch: (cause) =>
+    new SecretInputError({ message: "Failed to read the secret from stdin.", cause }),
+}).pipe(Effect.mapError((error) => new Error(`${error.message} ${String(error.cause)}`)));
+
+const secretSetCommand = Command.make("set", {
+  ...projectLocationFlags,
+  name: Argument.string("name").pipe(
+    Argument.withDescription("Secret name, as a deploy target's passwordSecretName refers to it."),
+  ),
+}).pipe(
+  Command.withDescription("Store a secret, reading its value from stdin."),
+  Command.withHandler((flags) =>
+    runSecretMutation(flags, (store) =>
+      Effect.gen(function* () {
+        const value = yield* readSecretFromStdin;
+        if (value.length === 0) {
+          return yield* Effect.fail(
+            new Error(
+              `No value on stdin. Pipe the secret in, for example: printf %s "$PASSWORD" | t3 secret set ${flags.name}`,
+            ),
+          );
+        }
+        yield* store
+          .set(flags.name, new TextEncoder().encode(value))
+          .pipe(Effect.mapError((cause) => new Error(cause.message)));
+        // The length, never the value: enough to see a paste went wrong,
+        // useless to anyone reading the transcript afterwards.
+        return `Stored secret '${flags.name}' (${value.length} characters).`;
+      }),
+    ),
+  ),
+);
+
+const secretListCommand = Command.make("list", {
+  ...projectLocationFlags,
+}).pipe(
+  Command.withDescription("List stored secret names. Values are never shown."),
+  Command.withHandler((flags) =>
+    runSecretMutation(flags, (store) =>
+      Effect.gen(function* () {
+        const names = yield* store.list().pipe(Effect.mapError((cause) => new Error(cause.message)));
+        return names.length === 0 ? "No secrets stored." : names.join("\n");
+      }),
+    ),
+  ),
+);
+
+const secretRemoveCommand = Command.make("remove", {
+  ...projectLocationFlags,
+  name: Argument.string("name").pipe(Argument.withDescription("Secret name to remove.")),
+}).pipe(
+  Command.withDescription("Remove a stored secret."),
+  Command.withHandler((flags) =>
+    runSecretMutation(flags, (store) =>
+      Effect.gen(function* () {
+        yield* store.remove(flags.name).pipe(Effect.mapError((cause) => new Error(cause.message)));
+        return `Removed secret '${flags.name}'.`;
+      }),
+    ),
+  ),
+);
+
+const secretCommand = Command.make("secret").pipe(
+  Command.withDescription("Store the secrets a deploy target refers to by name."),
+  Command.withSubcommands([secretSetCommand, secretListCommand, secretRemoveCommand]),
+);
+
 const deployCommand = Command.make("deploy").pipe(
   Command.withDescription("Manage and run deploy targets."),
   Command.withSubcommands([
@@ -1700,6 +1820,7 @@ export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     authCommand,
     projectCommand,
     deployCommand,
+    secretCommand,
     analyticsCommand,
     packCommand,
   ]),
