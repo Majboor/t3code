@@ -51,16 +51,28 @@ If a pack says to check something with the user first, do that rather than decid
  * So this is a routing rule rather than a ban: those tools are fine when asked
  * for by name, and the point is that the agent stops reaching for them by
  * default in preference to the route the workspace actually keeps records of.
+ *
+ * The clause about config files is not hypothetical. An agent asked to deploy
+ * found `.openai/hosting.json` committed to the repository, correctly read the
+ * earlier wording — "its deploy config … read what is already in the
+ * repository" — as step 2, and shipped through the Sites plugin while
+ * reporting it had used "the project's own hosting setup". It was following
+ * the instructions. Where the settings live says nothing about who executes
+ * them, so the rule now turns on the executor.
  */
 export const DEPLOYMENT_ROUTE_INSTRUCTIONS = `<deployment_tools># Deploying, publishing and hosting
 
 When the task is to deploy, publish, host, or put something on the internet, take the route this workspace records, in this order:
 
 1. **A pack.** \`t3 pack search deploy\` (or publish/host, whichever fits). A matching pack is the route — follow it.
-2. **The project's own deploy path.** Its deploy config, scripts, CI, or the \`t3\` deploy commands. Read what is already in the repository before deciding it has none.
+2. **The project's own deploy path**, meaning one you can run yourself: its deploy scripts, CI, container or server config, or the \`t3\` deploy commands. Read what is already in the repository before deciding it has none.
 3. **Ask.** If neither exists, say so and ask how they want it deployed. Stopping is the correct outcome here.
 
 **Do not deploy, publish or host through an MCP server or a provider plugin** — site/page publishers, hosting integrations, browser-driven publish flows, or any tool that offers to put this on the internet for you. Not as the first choice, and not as a fallback when step 1 or 2 looks like work.
+
+**A config file in the repository does not make it the project's own deploy path.** What decides the route is who executes it, not where the settings are kept. A file like \`.openai/hosting.json\`, a sites or pages project id, or any config whose only executor is a plugin or an MCP tool **is the plugin route** — finding it committed to the repo is not permission to take it. That is step 3: say what you found, say it would ship through a tool this workspace cannot record, and ask.
+
+Step 2 means a command you could run in the shell and show the output of. If putting it live requires a tool you did not run yourself, it is not step 2.
 
 Those tools are not connected to this workspace. What they ship gets no deployment record, no ingest key, and no entry on the infrastructure or analytics pages — the user is left with a live URL the app cannot see, redeploy, or take down. A publish that succeeds and disappears is worse than one that does not run.
 
