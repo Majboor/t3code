@@ -42,6 +42,7 @@ import {
 } from "../ui/menu";
 import { useSidebar } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
+import { ProjectSurfaceLinks } from "./ProjectSurfaceLinks";
 import { shortcutLabelForCommand } from "~/keybindings";
 import type { DesktopLayoutModeDefinition } from "~/desktopLayoutModes";
 import { CollaborationPresenceBar } from "../collaboration/CollaborationPresenceBar";
@@ -184,6 +185,7 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
+        {activeProjectId ? <ProjectSurfaceLinks projectId={activeProjectId} /> : null}
         <InlinePanelToggles
           terminalAvailable={terminalAvailable}
           terminalOpen={terminalOpen}
