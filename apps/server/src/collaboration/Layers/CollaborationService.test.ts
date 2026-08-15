@@ -7,10 +7,11 @@ import { TenantId, ThreadId, UserId, WorkspaceId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 
-import { CollaborationServiceLive } from "./CollaborationService.ts";
+import { CollaborationServiceLive, deriveUsageObservation } from "./CollaborationService.ts";
 import { CollaborationService } from "../Services/CollaborationService.ts";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
+import type { CollaborationMemberUsageRecord } from "../../persistence/Services/Tenancy.ts";
 
 const tenantId = TenantId.make("tenant-collab");
 const workspaceId = WorkspaceId.make("workspace-collab");
@@ -484,7 +485,7 @@ it.effect("adds up the tokens a member has spent across their threads", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
-it.effect("withholds a member's tokens until they agree to share usage", () =>
+it.effect("counts a member who has never been asked about sharing usage", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;
     const recorded = yield* collaboration.recordUsage(member, {
@@ -495,23 +496,107 @@ it.effect("withholds a member's tokens until they agree to share usage", () =>
     // Your own usage is never hidden from you.
     assert.strictEqual(recorded.member.tokensUsed, 500);
 
+    // Usage is shared by default: a workspace that cannot see what it is
+    // collectively spending cannot manage it, so silence counts as sharing.
     const asLead = yield* collaboration.listMembers(lead, scope);
     assert.strictEqual(
       asLead.members.find((entry) => entry.userId === member.userId)?.tokensUsed,
-      null,
+      500,
+    );
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("hides the usage of a member who has explicitly opted out", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    yield* collaboration.recordUsage(member, {
+      ...scope,
+      threadId,
+      totalTokens: 500,
+    });
+
+    yield* collaboration.updateConsent(member, {
+      ...scope,
+      shareProfile: false,
+      shareUsage: false,
+    });
+
+    const asLead = yield* collaboration.listMembers(lead, scope);
+    const hidden = asLead.members.find((entry) => entry.userId === member.userId);
+    assert.strictEqual(hidden?.sharesUsage, false);
+    assert.strictEqual(hidden?.tokensUsed, null);
+    assert.strictEqual(hidden?.promptCount, null);
+
+    // Opting out hides you from the workspace, not from yourself.
+    const asSelf = yield* collaboration.listMembers(member, scope);
+    assert.strictEqual(
+      asSelf.members.find((entry) => entry.userId === member.userId)?.tokensUsed,
+      500,
     );
 
+    // And it is reversible.
     yield* collaboration.updateConsent(member, {
       ...scope,
       shareProfile: false,
       shareUsage: true,
     });
-
     const shared = yield* collaboration.listMembers(lead, scope);
     assert.strictEqual(
       shared.members.find((entry) => entry.userId === member.userId)?.tokensUsed,
       500,
     );
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("keeps sharing an email address something someone has to opt into", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    yield* collaboration.recordUsage(member, {
+      ...scope,
+      threadId,
+      totalTokens: 10,
+    });
+
+    // The two defaults deliberately disagree: usage is on, profile is off.
+    const asLead = yield* collaboration.listMembers(lead, scope);
+    const undecided = asLead.members.find((entry) => entry.userId === member.userId);
+    assert.strictEqual(undecided?.sharesUsage, true);
+    assert.strictEqual(undecided?.sharesProfile, false);
+    assert.strictEqual(undecided?.email, null);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("tells an undecided member apart from one who chose to share", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    const before = yield* collaboration.getConsent(member, scope);
+    assert.strictEqual(before.consent, null);
+    assert.strictEqual(before.effective.isDecided, false);
+    assert.strictEqual(before.effective.shareUsage, true);
+    assert.strictEqual(before.effective.shareProfile, false);
+
+    yield* collaboration.updateConsent(member, {
+      ...scope,
+      shareProfile: true,
+      shareUsage: true,
+    });
+
+    const after = yield* collaboration.getConsent(member, scope);
+    assert.strictEqual(after.consent?.shareUsage, true);
+    assert.strictEqual(after.effective.isDecided, true);
+    assert.strictEqual(after.effective.shareUsage, true);
+
+    // An opt-out is a decision too, and reads back as one.
+    yield* collaboration.updateConsent(member, {
+      ...scope,
+      shareProfile: true,
+      shareUsage: false,
+    });
+    const opted = yield* collaboration.getConsent(member, scope);
+    assert.strictEqual(opted.consent?.shareUsage, false);
+    assert.strictEqual(opted.effective.isDecided, true);
+    assert.strictEqual(opted.effective.shareUsage, false);
   }).pipe(Effect.provide(makeLayer())),
 );
 
@@ -538,5 +623,228 @@ it.effect("keeps every author of a path, and the latest is still recoverable", (
     const forB = touches.touches.filter((touch) => touch.path === "b.txt");
     assert.strictEqual(forB.length, 1);
     assert.strictEqual(forB[0]?.userId, member.userId);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+const emptySnapshot = {
+  totalTokens: 0,
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  outputTokens: 0,
+  reasoningOutputTokens: 0,
+};
+
+/** The stored row shape the delta rules read, with the fields under test. */
+function storedUsage(
+  fields: Partial<CollaborationMemberUsageRecord>,
+): CollaborationMemberUsageRecord {
+  return {
+    tenantId,
+    workspaceId,
+    userId: member.userId,
+    threadId,
+    totalTokens: 0,
+    updatedAt: "2026-08-15T00:00:00.000Z",
+    ...fields,
+  };
+}
+
+it("treats a thread's first report as the whole total", () => {
+  const observed = deriveUsageObservation(undefined, {
+    ...emptySnapshot,
+    totalTokens: 1_000,
+    inputTokens: 800,
+    outputTokens: 200,
+  });
+  assert.strictEqual(observed.delta?.totalTokens, 1_000);
+  assert.strictEqual(observed.delta?.inputTokens, 800);
+  assert.strictEqual(observed.highWaterTotal, 1_000);
+});
+
+it("emits nothing for a repeated identical report", () => {
+  const previous = storedUsage({
+    totalTokens: 1_000,
+    lastTotalTokens: 1_000,
+    lastInputTokens: 800,
+    lastOutputTokens: 200,
+  });
+  const observed = deriveUsageObservation(previous, {
+    ...emptySnapshot,
+    totalTokens: 1_000,
+    inputTokens: 800,
+    outputTokens: 200,
+  });
+  assert.strictEqual(observed.delta, null);
+  assert.strictEqual(observed.changed, false);
+});
+
+it("records only the difference when a cumulative report grows", () => {
+  const previous = storedUsage({
+    totalTokens: 1_000,
+    lastTotalTokens: 1_000,
+    lastInputTokens: 800,
+    lastOutputTokens: 200,
+  });
+  const observed = deriveUsageObservation(previous, {
+    ...emptySnapshot,
+    totalTokens: 1_500,
+    inputTokens: 1_100,
+    outputTokens: 400,
+  });
+  assert.strictEqual(observed.delta?.totalTokens, 500);
+  assert.strictEqual(observed.delta?.inputTokens, 300);
+  assert.strictEqual(observed.delta?.outputTokens, 200);
+  assert.strictEqual(observed.highWaterTotal, 1_500);
+});
+
+it("never emits a negative sample when a provider compacts or resets", () => {
+  const previous = storedUsage({
+    totalTokens: 100_000,
+    lastTotalTokens: 100_000,
+    lastInputTokens: 90_000,
+    lastOutputTokens: 10_000,
+  });
+  const compacted = deriveUsageObservation(previous, {
+    ...emptySnapshot,
+    totalTokens: 12_000,
+    inputTokens: 10_000,
+    outputTokens: 2_000,
+  });
+  assert.strictEqual(compacted.delta, null);
+  // The high-water figure the People panel sums must not go backwards...
+  assert.strictEqual(compacted.highWaterTotal, 100_000);
+  // ...but the delta baseline follows the provider down, so the tokens spent
+  // climbing back are counted rather than silently discarded.
+  assert.strictEqual(compacted.baseline.totalTokens, 12_000);
+
+  const afterCompaction = deriveUsageObservation(
+    storedUsage({
+      totalTokens: 100_000,
+      lastTotalTokens: compacted.baseline.totalTokens,
+      lastInputTokens: compacted.baseline.inputTokens,
+      lastOutputTokens: compacted.baseline.outputTokens,
+    }),
+    {
+      ...emptySnapshot,
+      totalTokens: 15_000,
+      inputTokens: 12_000,
+      outputTokens: 3_000,
+    },
+  );
+  assert.strictEqual(afterCompaction.delta?.totalTokens, 3_000);
+});
+
+it("adopts a pre-migration row as a baseline instead of replaying its history", () => {
+  // 115 rows in the user's dev database look like this: a real accumulated
+  // total with no baseline behind it. Emitting that total as one sample would
+  // put months of spend on a single day.
+  const previous = storedUsage({
+    totalTokens: 2_883_650,
+    lastTotalTokens: null,
+  });
+  const observed = deriveUsageObservation(previous, {
+    ...emptySnapshot,
+    totalTokens: 2_884_000,
+    inputTokens: 2_000_000,
+    outputTokens: 800_000,
+  });
+  assert.strictEqual(observed.delta, null);
+  assert.strictEqual(observed.changed, true);
+  assert.strictEqual(observed.baseline.totalTokens, 2_884_000);
+});
+
+it.effect("builds a usage report with a cost estimate, split by model and hour", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.recordUsage(member, {
+      ...scope,
+      threadId,
+      totalTokens: 1_000_000,
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      provider: "claudeAgent",
+      model: "claude-sonnet-4-6",
+    });
+    yield* collaboration.recordUsage(member, {
+      ...scope,
+      threadId: otherThreadId,
+      totalTokens: 500,
+      inputTokens: 400,
+      outputTokens: 100,
+      provider: "codex",
+      // Deliberately absent from the rate table.
+      model: "gpt-5.3-codex-spark",
+    });
+
+    const report = yield* collaboration.queryUsage(member, scope);
+
+    assert.strictEqual(report.totals.totalTokens, 1_000_500);
+    assert.strictEqual(report.byHourOfDay.length, 24);
+    assert.strictEqual(
+      report.byHourOfDay.reduce((sum, bucket) => sum + bucket.totals.totalTokens, 0),
+      1_000_500,
+    );
+    assert.strictEqual(report.leaderboard[0]?.userId, member.userId);
+    assert.strictEqual(report.leaderboard[0]?.isViewer, true);
+
+    // 1M input at $3/MTok plus 1M output at $15/MTok. The unpriced model is
+    // reported separately rather than quietly costing nothing.
+    assert.strictEqual(report.estimatedCost.estimatedInputCost, 3);
+    assert.strictEqual(report.estimatedCost.estimatedOutputCost, 15);
+    assert.strictEqual(report.estimatedCost.unpricedTokens, 500);
+    assert.deepStrictEqual(report.estimatedCost.unpricedModels, ["gpt-5.3-codex-spark"]);
+
+    const providers = report.byProvider.map((entry) => entry.provider).toSorted();
+    assert.deepStrictEqual(providers, ["claudeAgent", "codex"]);
+    assert.strictEqual(
+      report.byModel.find((entry) => entry.model === "gpt-5.3-codex-spark")?.isPriced,
+      false,
+    );
+    assert.strictEqual(
+      report.byModel.find((entry) => entry.model === "claude-sonnet-4-6")?.isPriced,
+      true,
+    );
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("leaves an opted-out member out of every total the workspace can see", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.recordUsage(member, {
+      ...scope,
+      threadId,
+      totalTokens: 900,
+      inputTokens: 900,
+      provider: "codex",
+      model: "gpt-5.4",
+    });
+    yield* collaboration.recordUsage(delegate, {
+      ...scope,
+      threadId: otherThreadId,
+      totalTokens: 100,
+      inputTokens: 100,
+      provider: "codex",
+      model: "gpt-5.4",
+    });
+    yield* collaboration.updateConsent(member, {
+      ...scope,
+      shareProfile: false,
+      shareUsage: false,
+    });
+
+    const asLead = yield* collaboration.queryUsage(lead, scope);
+    assert.strictEqual(asLead.totals.totalTokens, 100);
+    assert.strictEqual(asLead.hiddenMemberCount, 1);
+    assert.strictEqual(
+      asLead.leaderboard.some((entry) => entry.userId === member.userId),
+      false,
+    );
+
+    // Nobody is hidden from themselves.
+    const asSelf = yield* collaboration.queryUsage(member, scope);
+    assert.strictEqual(asSelf.totals.totalTokens, 1_000);
+    assert.strictEqual(asSelf.hiddenMemberCount, 0);
   }).pipe(Effect.provide(makeLayer())),
 );

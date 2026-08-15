@@ -148,6 +148,7 @@ export interface WsRpcClient {
     readonly updateMember: RpcUnaryMethod<typeof WS_METHODS.collaborationMembersUpdate>;
     readonly removeMember: RpcUnaryMethod<typeof WS_METHODS.collaborationMembersRemove>;
     readonly recordUsage: RpcUnaryMethod<typeof WS_METHODS.collaborationUsageRecord>;
+    readonly queryUsage: RpcUnaryMethod<typeof WS_METHODS.collaborationUsageQuery>;
     readonly getConsent: RpcUnaryMethod<typeof WS_METHODS.collaborationConsentGet>;
     readonly updateConsent: RpcUnaryMethod<typeof WS_METHODS.collaborationConsentUpdate>;
     readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribeCollaboration>;
@@ -388,6 +389,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.collaborationMembersRemove](input)),
       recordUsage: (input) =>
         transport.request((client) => client[WS_METHODS.collaborationUsageRecord](input)),
+      queryUsage: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationUsageQuery](input)),
       getConsent: (input) =>
         transport.request((client) => client[WS_METHODS.collaborationConsentGet](input)),
       updateConsent: (input) =>

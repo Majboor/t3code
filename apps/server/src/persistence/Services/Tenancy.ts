@@ -53,7 +53,14 @@ export interface CollaborationMemberProfileRecord {
   readonly updatedAt: string;
 }
 
-/** The highest token total one member's thread has reached. */
+/**
+ * The highest token total one member's thread has reached, plus the figures it
+ * last actually reported.
+ *
+ * `totalTokens` only climbs and is what a member's usage is summed from. The
+ * `last*` fields are the delta baseline for the sample series and follow the
+ * provider down when it compacts. Null on rows written before migration 050.
+ */
 export interface CollaborationMemberUsageRecord {
   readonly tenantId: string;
   readonly workspaceId: string;
@@ -61,6 +68,70 @@ export interface CollaborationMemberUsageRecord {
   readonly threadId: string;
   readonly totalTokens: number;
   readonly updatedAt: string;
+  readonly lastTotalTokens?: number | null;
+  readonly lastInputTokens?: number | null;
+  readonly lastCachedInputTokens?: number | null;
+  readonly lastOutputTokens?: number | null;
+  readonly lastReasoningOutputTokens?: number | null;
+}
+
+/**
+ * One observation in the append-only usage series (migration 050).
+ *
+ * Every token field is the CHANGE since the previous observation for the same
+ * (member, thread), never a running total — summing a set of these rows is
+ * therefore meaningful, which is the whole point of keeping them.
+ */
+export interface CollaborationUsageSampleRecord {
+  readonly sampleId: string;
+  readonly tenantId: string;
+  readonly workspaceId: string;
+  readonly userId: string;
+  readonly threadId: string;
+  readonly turnId: string | null;
+  readonly observedAt: string;
+  /** Raw provider id (`codex` / `claudeAgent`), or null when unresolved. */
+  readonly provider: string | null;
+  /** Raw model id, or null when unresolved. Priced by the server's rate table. */
+  readonly model: string | null;
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningOutputTokens: number;
+  readonly totalTokens: number;
+}
+
+/** A half-open window over the sample series: `since` inclusive, `until` exclusive. */
+export interface CollaborationUsageWindowQuery {
+  readonly tenantId: string;
+  readonly workspaceId: string;
+  readonly since: string;
+  readonly until: string;
+}
+
+/**
+ * Samples rolled up in SQL to the finest grain any of the panel's views need.
+ *
+ * One query rather than four: a leaderboard, a daily trend, an hour-of-day
+ * histogram and a provider split are all sums over subsets of this grouping, so
+ * fetching it once and re-aggregating in memory keeps consent filtering and
+ * cost arithmetic out of SQL — where per-member visibility rules do not belong.
+ * Cardinality is bounded by members x models x days x 24.
+ */
+export interface CollaborationUsageBucketRecord {
+  readonly userId: string;
+  readonly provider: string | null;
+  readonly model: string | null;
+  /** UTC calendar day, `YYYY-MM-DD`. */
+  readonly day: string;
+  /** UTC hour of day, 0-23. */
+  readonly hour: number;
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningOutputTokens: number;
+  readonly totalTokens: number;
+  readonly sampleCount: number;
 }
 
 export interface CollaborationPersistenceSnapshot {
@@ -130,6 +201,22 @@ export interface TenancyRepositoryShape {
   readonly saveCollaboration: (
     snapshot: CollaborationPersistenceSnapshot,
   ) => Effect.Effect<void, TenancyRepositoryError>;
+  /**
+   * Appends to the usage series. Deliberately not part of the collaboration
+   * snapshot: that is saved by rewriting whole tables, which an append-only
+   * history cannot survive and would not fit in memory for long.
+   *
+   * Optional, like the governance arrays above and for the same reason: several
+   * repositories are hand-written stand-ins that predate the series and have no
+   * table to write to. A repository without these keeps working; it simply has
+   * no history to offer, which reads as an empty window rather than an error.
+   */
+  readonly appendCollaborationUsageSamples?: (
+    samples: ReadonlyArray<CollaborationUsageSampleRecord>,
+  ) => Effect.Effect<void, TenancyRepositoryError>;
+  readonly readCollaborationUsageBuckets?: (
+    query: CollaborationUsageWindowQuery,
+  ) => Effect.Effect<ReadonlyArray<CollaborationUsageBucketRecord>, TenancyRepositoryError>;
   readonly loadWorkspaces: () => Effect.Effect<
     WorkspacePersistenceSnapshot,
     TenancyRepositoryError

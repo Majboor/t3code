@@ -111,6 +111,8 @@ import {
   CollaborationMemberRemoveResult,
   CollaborationMemberResult,
   CollaborationMemberUpdateInput,
+  CollaborationUsageQueryInput,
+  CollaborationUsageQueryResult,
   CollaborationUsageRecordInput,
   CollaborationInviteAcceptInput,
   CollaborationInviteAcceptResult,
@@ -333,6 +335,7 @@ export const WS_METHODS = {
   collaborationMembersUpdate: "collaboration.members.update",
   collaborationMembersRemove: "collaboration.members.remove",
   collaborationUsageRecord: "collaboration.usage.record",
+  collaborationUsageQuery: "collaboration.usage.query",
   collaborationConsentGet: "collaboration.consent.get",
   collaborationConsentUpdate: "collaboration.consent.update",
   subscribeCollaboration: "collaboration.subscribe",
@@ -946,6 +949,12 @@ export const WsCollaborationUsageRecordRpc = Rpc.make(WS_METHODS.collaborationUs
   error: CollaborationError,
 });
 
+export const WsCollaborationUsageQueryRpc = Rpc.make(WS_METHODS.collaborationUsageQuery, {
+  payload: CollaborationUsageQueryInput,
+  success: CollaborationUsageQueryResult,
+  error: CollaborationError,
+});
+
 export const WsCollaborationConsentGetRpc = Rpc.make(WS_METHODS.collaborationConsentGet, {
   payload: CollaborationConsentGetInput,
   success: CollaborationConsentResult,
@@ -1335,6 +1344,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCollaborationMembersUpdateRpc,
   WsCollaborationMembersRemoveRpc,
   WsCollaborationUsageRecordRpc,
+  WsCollaborationUsageQueryRpc,
   WsCollaborationConsentGetRpc,
   WsCollaborationConsentUpdateRpc,
   WsSubscribeCollaborationRpc,

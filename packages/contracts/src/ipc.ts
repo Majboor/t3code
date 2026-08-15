@@ -107,6 +107,8 @@ import type {
   CollaborationMemberRemoveResult,
   CollaborationMemberResult,
   CollaborationMemberUpdateInput,
+  CollaborationUsageQueryInput,
+  CollaborationUsageQueryResult,
   CollaborationUsageRecordInput,
   CollaborationSettingsGetInput,
   CollaborationSettingsResult,
@@ -488,6 +490,8 @@ export interface EnvironmentApi {
       input: CollaborationMemberRemoveInput,
     ) => Promise<CollaborationMemberRemoveResult>;
     recordUsage: (input: CollaborationUsageRecordInput) => Promise<CollaborationMemberResult>;
+    /** The workspace's token spend over a window: who, when, which model, what it likely cost. */
+    queryUsage: (input: CollaborationUsageQueryInput) => Promise<CollaborationUsageQueryResult>;
     getConsent: (input: CollaborationConsentGetInput) => Promise<CollaborationConsentResult>;
     updateConsent: (input: CollaborationConsentUpdateInput) => Promise<CollaborationConsentResult>;
     subscribe: (

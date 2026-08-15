@@ -56,6 +56,8 @@ import type {
   CollaborationSharedPromptRecordResult,
   CollaborationStreamEvent,
   CollaborationStreamInput,
+  CollaborationUsageQueryInput,
+  CollaborationUsageQueryResult,
   CollaborationUsageRecordInput,
   TenantInvite,
   TenantMembership,
@@ -218,11 +220,26 @@ export interface CollaborationServiceShape {
   /**
    * Attributes a thread's token total to whoever is running it. Reports carry a
    * cumulative figure, so re-reporting the same total changes nothing.
+   *
+   * Also appends to the usage series, storing the change since the last report
+   * rather than the running total — otherwise every trend would count the same
+   * tokens once per report.
    */
   readonly recordUsage: (
     actor: CollaborationActor,
     input: CollaborationUsageRecordInput,
   ) => Effect.Effect<CollaborationMemberResult, CollaborationError>;
+
+  /**
+   * What the workspace spent over a window: a per-member leaderboard, a daily
+   * trend, an hour-of-day histogram, provider and model splits, and a cost
+   * estimate. Members who opted out of sharing usage contribute to nothing the
+   * caller can see, except their own row.
+   */
+  readonly queryUsage: (
+    actor: CollaborationActor,
+    input: CollaborationUsageQueryInput,
+  ) => Effect.Effect<CollaborationUsageQueryResult, CollaborationError>;
 
   readonly getConsent: (
     actor: CollaborationActor,

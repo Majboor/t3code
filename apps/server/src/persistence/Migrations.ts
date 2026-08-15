@@ -62,6 +62,7 @@ import Migration0046 from "./Migrations/046_FileTouchesPerPerson.ts";
 import Migration0047 from "./Migrations/047_InviteAcceptedBy.ts";
 import Migration0048 from "./Migrations/048_ThreadMessageAuthor.ts";
 import Migration0049 from "./Migrations/049_DeploymentRegistry.ts";
+import Migration0050 from "./Migrations/050_CollaborationUsageSamples.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -123,6 +124,7 @@ export const migrationEntries = [
   [47, "InviteAcceptedBy", Migration0047],
   [48, "ThreadMessageAuthor", Migration0048],
   [49, "DeploymentRegistry", Migration0049],
+  [50, "CollaborationUsageSamples", Migration0050],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

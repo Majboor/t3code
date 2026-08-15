@@ -10,8 +10,12 @@ import {
   type CollaborationPresence,
   type CollaborationPromptApproval,
   type CollaborationStreamEvent,
+  type CollaborationUsageCostEstimate,
+  type CollaborationUsageQueryResult,
+  type CollaborationUsageTotals,
   type CollaborationViewPreferences,
   type CollaborationWorkspaceSettings,
+  type ProviderKind,
   type TenantInvite,
   type TenantMembership,
   type TenantRole,
@@ -25,10 +29,33 @@ import {
   type CollaborationServiceShape,
   type CollaborationState,
 } from "../Services/CollaborationService.ts";
-import { TenancyRepository } from "../../persistence/Services/Tenancy.ts";
+import {
+  type CollaborationMemberUsageRecord,
+  type CollaborationUsageBucketRecord,
+  TenancyRepository,
+} from "../../persistence/Services/Tenancy.ts";
 
 const DEFAULT_ACTIVITY_LIMIT = 100;
 const MAX_ACTIVITY_LIMIT = 500;
+
+/** How far back `queryUsage` looks when the caller does not say. */
+const DEFAULT_USAGE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * The widest window anyone may ask for. The daily series has one entry per day
+ * whether or not anything happened, so an unbounded window is an unbounded
+ * response; a year is more history than any panel draws.
+ */
+const MAX_USAGE_WINDOW_MS = 366 * 24 * 60 * 60 * 1000;
+
+/**
+ * An email address is personal, so it stays private until someone offers it.
+ * Usage is the opposite, and deliberately so: a shared workspace that cannot
+ * see what it is collectively spending cannot manage it, so an undecided member
+ * shares and the settings toggle is how you stop. These two defaults disagree
+ * on purpose — do not "tidy" them into one flag.
+ */
+const DEFAULT_SHARE_PROFILE = false;
+const DEFAULT_SHARE_USAGE = true;
 
 /**
  * Read-only is the absence of any role that grants writing, which is what
@@ -62,6 +89,288 @@ function scopedKey(tenantId: string, workspaceId: string, suffix: string): strin
 
 function usageKey(tenantId: string, workspaceId: string, userId: string, threadId: string): string {
   return `${tenantId}:${workspaceId}:${userId}:${threadId}`;
+}
+
+export interface ModelTokenRate {
+  readonly inputPerMillionUsd: number;
+  readonly outputPerMillionUsd: number;
+}
+
+/**
+ * List prices per million tokens, in USD, keyed by the canonical model ids in
+ * `contracts/model.ts`.
+ *
+ * Sources, both read on 2026-08-15:
+ *   - platform.claude.com/docs/en/pricing (the `claude-*` rows)
+ *   - developers.openai.com/api/docs/pricing (the `gpt-*` and `o3` rows)
+ *
+ * This is a snapshot and it will go stale. It exists so the panel can show an
+ * order of magnitude, not an invoice: it knows nothing about negotiated rates,
+ * subscription plans, batch or flex tiers, or the fast-mode premium, and every
+ * field computed from it is named an estimate for that reason. A model missing
+ * from this table is reported as unpriced rather than free — see `priceBucket`.
+ * When adding a model, add the rate here or accept that it shows as unpriced;
+ * do not guess.
+ */
+export const MODEL_TOKEN_RATES_USD: Readonly<Record<string, ModelTokenRate>> = {
+  // Anthropic
+  "claude-fable-5": { inputPerMillionUsd: 10, outputPerMillionUsd: 50 },
+  "claude-mythos-5": { inputPerMillionUsd: 10, outputPerMillionUsd: 50 },
+  "claude-opus-5": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
+  "claude-opus-4-8": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
+  "claude-opus-4-7": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
+  "claude-opus-4-6": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
+  "claude-opus-4-5": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
+  "claude-sonnet-5": { inputPerMillionUsd: 3, outputPerMillionUsd: 15 },
+  "claude-sonnet-4-6": { inputPerMillionUsd: 3, outputPerMillionUsd: 15 },
+  "claude-sonnet-4-5": { inputPerMillionUsd: 3, outputPerMillionUsd: 15 },
+  "claude-haiku-4-5": { inputPerMillionUsd: 1, outputPerMillionUsd: 5 },
+  // OpenAI
+  "gpt-5.4": { inputPerMillionUsd: 2.5, outputPerMillionUsd: 15 },
+  "gpt-5.4-mini": { inputPerMillionUsd: 0.75, outputPerMillionUsd: 4.5 },
+  "gpt-5.4-nano": { inputPerMillionUsd: 0.2, outputPerMillionUsd: 1.25 },
+  "gpt-5.3-codex": { inputPerMillionUsd: 1.75, outputPerMillionUsd: 14 },
+  "gpt-5.2": { inputPerMillionUsd: 1.75, outputPerMillionUsd: 14 },
+  "gpt-5.1": { inputPerMillionUsd: 1.25, outputPerMillionUsd: 10 },
+  "gpt-5": { inputPerMillionUsd: 1.25, outputPerMillionUsd: 10 },
+  "gpt-5-mini": { inputPerMillionUsd: 0.25, outputPerMillionUsd: 2 },
+  "gpt-5-nano": { inputPerMillionUsd: 0.05, outputPerMillionUsd: 0.4 },
+  o3: { inputPerMillionUsd: 2, outputPerMillionUsd: 8 },
+  "o3-mini": { inputPerMillionUsd: 1.1, outputPerMillionUsd: 4.4 },
+};
+
+/** Both providers bill a cache read at roughly a tenth of the input rate. */
+const CACHED_INPUT_RATE_MULTIPLIER = 0.1;
+
+/** A running total while buckets are folded together. */
+interface UsageAccumulator {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  estimatedInputCost: number;
+  estimatedOutputCost: number;
+  unpricedTokens: number;
+  readonly unpricedModels: Set<string>;
+}
+
+function emptyUsage(): UsageAccumulator {
+  return {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 0,
+    estimatedInputCost: 0,
+    estimatedOutputCost: 0,
+    unpricedTokens: 0,
+    unpricedModels: new Set(),
+  };
+}
+
+/**
+ * Adds one grouped row to a running total, pricing it where that is possible.
+ *
+ * Two things make a row unpriceable, and both land in `unpricedTokens` rather
+ * than quietly costing nothing: a model the rate table has never heard of, and
+ * a provider that reported a total but no input/output split, which leaves
+ * nothing to multiply a rate by.
+ */
+function addBucket(accumulator: UsageAccumulator, bucket: CollaborationUsageBucketRecord): void {
+  accumulator.inputTokens += bucket.inputTokens;
+  accumulator.cachedInputTokens += bucket.cachedInputTokens;
+  accumulator.outputTokens += bucket.outputTokens;
+  accumulator.reasoningOutputTokens += bucket.reasoningOutputTokens;
+  accumulator.totalTokens += bucket.totalTokens;
+
+  const rate = bucket.model === null ? undefined : MODEL_TOKEN_RATES_USD[bucket.model];
+  const hasSplit = bucket.inputTokens > 0 || bucket.outputTokens > 0;
+  if (rate === undefined || !hasSplit) {
+    accumulator.unpricedTokens += Math.max(
+      bucket.totalTokens,
+      bucket.inputTokens + bucket.outputTokens,
+    );
+    if (bucket.model !== null && rate === undefined) {
+      accumulator.unpricedModels.add(bucket.model);
+    }
+    return;
+  }
+
+  // Cached input is a subset of input, charged at a discount. Clamped because
+  // a provider that reports them independently would otherwise make the
+  // uncached remainder negative.
+  const uncachedInput = Math.max(0, bucket.inputTokens - bucket.cachedInputTokens);
+  accumulator.estimatedInputCost +=
+    (uncachedInput * rate.inputPerMillionUsd +
+      bucket.cachedInputTokens * rate.inputPerMillionUsd * CACHED_INPUT_RATE_MULTIPLIER) /
+    1_000_000;
+  accumulator.estimatedOutputCost += (bucket.outputTokens * rate.outputPerMillionUsd) / 1_000_000;
+}
+
+/** Fractions of a cent are noise; six places is past anything meaningful. */
+function roundUsd(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function toTotals(accumulator: UsageAccumulator): CollaborationUsageTotals {
+  return {
+    inputTokens: accumulator.inputTokens,
+    cachedInputTokens: accumulator.cachedInputTokens,
+    outputTokens: accumulator.outputTokens,
+    reasoningOutputTokens: accumulator.reasoningOutputTokens,
+    totalTokens: accumulator.totalTokens,
+  };
+}
+
+function toCostEstimate(accumulator: UsageAccumulator): CollaborationUsageCostEstimate {
+  return {
+    currency: "USD",
+    estimatedInputCost: roundUsd(accumulator.estimatedInputCost),
+    estimatedOutputCost: roundUsd(accumulator.estimatedOutputCost),
+    estimatedTotalCost: roundUsd(accumulator.estimatedInputCost + accumulator.estimatedOutputCost),
+    unpricedTokens: accumulator.unpricedTokens,
+    unpricedModels: [...accumulator.unpricedModels].toSorted(),
+  };
+}
+
+/** Only these two runtimes exist; anything else was written by an older build. */
+function toProviderKind(value: string | null): ProviderKind | null {
+  return value === "codex" || value === "claudeAgent" ? value : null;
+}
+
+/** The cumulative figures a provider reports for one thread. */
+export interface ThreadTokenSnapshot {
+  readonly totalTokens: number;
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningOutputTokens: number;
+}
+
+export interface UsageObservation {
+  /** What to append to the series, or null when this report adds nothing. */
+  readonly delta: ThreadTokenSnapshot | null;
+  /** Whether the stored record moved and therefore has to be written. */
+  readonly changed: boolean;
+  /** The figures to store back: a high-water total plus the new baseline. */
+  readonly highWaterTotal: number;
+  readonly baseline: ThreadTokenSnapshot;
+}
+
+/**
+ * Turns one cumulative report into the change since the last one.
+ *
+ * Providers re-send a thread's running total many times per turn, so storing
+ * what arrives would count the same tokens once per report and make every trend
+ * chart meaningless. Every case below is a real thing providers do:
+ *
+ *   - No record at all — a thread's first report. The whole snapshot is the
+ *     first sample; there is nothing earlier for it to be relative to.
+ *   - A record with no baseline. Only rows written before migration 050 look
+ *     like this. Their accumulated total is real but has no history behind it,
+ *     so the report is adopted as the baseline and nothing is emitted: one
+ *     skipped observation per existing thread, rather than months of spend
+ *     arriving as a single spike on the day this ships.
+ *   - An identical report. Emits nothing and touches nothing — this is the
+ *     common case, several times a turn.
+ *   - A lower figure. Compaction drops the reported total, and a provider that
+ *     restarts drops it to near zero. Never a negative sample: the baseline
+ *     follows the provider down so growth is measured from where it actually
+ *     resumed, and the tokens spent climbing back are counted as they are
+ *     reported, because re-processing that context does cost them again.
+ *   - Anything else — the positive difference on each axis independently.
+ *
+ * The axes are not required to add up to `totalTokens`. `totalTokens` follows
+ * the provider's headline figure, which is context occupancy for some runtimes
+ * and cumulative spend for others; the split follows its own counters.
+ *
+ * The high-water total only ever climbs, which is what `buildMembers` sums, so
+ * a member's displayed total can never go backwards.
+ */
+export function deriveUsageObservation(
+  previous: CollaborationMemberUsageRecord | undefined,
+  snapshot: ThreadTokenSnapshot,
+): UsageObservation {
+  if (previous === undefined) {
+    const hasAny =
+      snapshot.totalTokens > 0 || snapshot.inputTokens > 0 || snapshot.outputTokens > 0;
+    return {
+      delta: hasAny ? snapshot : null,
+      changed: true,
+      highWaterTotal: snapshot.totalTokens,
+      baseline: snapshot,
+    };
+  }
+
+  const highWaterTotal = Math.max(previous.totalTokens, snapshot.totalTokens);
+
+  if (previous.lastTotalTokens === undefined || previous.lastTotalTokens === null) {
+    return { delta: null, changed: true, highWaterTotal, baseline: snapshot };
+  }
+
+  const baseline: ThreadTokenSnapshot = {
+    totalTokens: previous.lastTotalTokens,
+    inputTokens: previous.lastInputTokens ?? 0,
+    cachedInputTokens: previous.lastCachedInputTokens ?? 0,
+    outputTokens: previous.lastOutputTokens ?? 0,
+    reasoningOutputTokens: previous.lastReasoningOutputTokens ?? 0,
+  };
+
+  const isIdentical =
+    snapshot.totalTokens === baseline.totalTokens &&
+    snapshot.inputTokens === baseline.inputTokens &&
+    snapshot.cachedInputTokens === baseline.cachedInputTokens &&
+    snapshot.outputTokens === baseline.outputTokens &&
+    snapshot.reasoningOutputTokens === baseline.reasoningOutputTokens;
+  if (isIdentical) {
+    return { delta: null, changed: false, highWaterTotal, baseline };
+  }
+
+  if (snapshot.totalTokens < baseline.totalTokens) {
+    return { delta: null, changed: true, highWaterTotal, baseline: snapshot };
+  }
+
+  const delta: ThreadTokenSnapshot = {
+    totalTokens: Math.max(0, snapshot.totalTokens - baseline.totalTokens),
+    inputTokens: Math.max(0, snapshot.inputTokens - baseline.inputTokens),
+    cachedInputTokens: Math.max(0, snapshot.cachedInputTokens - baseline.cachedInputTokens),
+    outputTokens: Math.max(0, snapshot.outputTokens - baseline.outputTokens),
+    reasoningOutputTokens: Math.max(
+      0,
+      snapshot.reasoningOutputTokens - baseline.reasoningOutputTokens,
+    ),
+  };
+  const isEmpty =
+    delta.totalTokens === 0 &&
+    delta.inputTokens === 0 &&
+    delta.cachedInputTokens === 0 &&
+    delta.outputTokens === 0 &&
+    delta.reasoningOutputTokens === 0;
+
+  return {
+    delta: isEmpty ? null : delta,
+    changed: true,
+    highWaterTotal,
+    baseline: snapshot,
+  };
+}
+
+/** `YYYY-MM-DD` in UTC, matching how the SQL rollup slices `observed_at`. */
+function utcDay(instant: number): string {
+  return new Date(instant).toISOString().slice(0, 10);
+}
+
+/** Every UTC day the window touches, so a quiet day is a zero and not a gap. */
+function enumerateDays(sinceMs: number, untilMs: number): ReadonlyArray<string> {
+  const days: string[] = [];
+  const dayMs = 24 * 60 * 60 * 1000;
+  let cursor = Date.parse(`${utcDay(sinceMs)}T00:00:00.000Z`);
+  while (cursor < untilMs) {
+    days.push(utcDay(cursor));
+    cursor += dayMs;
+  }
+  return days.length > 0 ? days : [utcDay(sinceMs)];
 }
 
 const DEFAULT_APPROVAL_MODE = "open" as const;
@@ -1033,9 +1342,12 @@ const makeCollaborationService = Effect.gen(function* () {
         (candidate) => candidate.tenantId === input.tenantId && candidate.userId === userId,
       );
       const displayName = profile?.displayName ?? presence?.displayName ?? userId;
-      // Silence is not consent: until asked, nothing extra is shared.
-      const sharesProfile = profile?.shareProfile ?? false;
-      const sharesUsage = profile?.shareUsage ?? false;
+      // Silence is not consent where it exposes the person: an email address
+      // stays private until offered. Usage is the other way round by product
+      // decision — see DEFAULT_SHARE_USAGE — so an undecided member is counted
+      // and the settings toggle is how they stop being counted.
+      const sharesProfile = profile?.shareProfile ?? DEFAULT_SHARE_PROFILE;
+      const sharesUsage = profile?.shareUsage ?? DEFAULT_SHARE_USAGE;
       const isViewer = input.viewerUserId === userId;
 
       return {
@@ -1232,12 +1544,19 @@ const makeCollaborationService = Effect.gen(function* () {
   const recordUsage: CollaborationServiceShape["recordUsage"] = (actor, input) =>
     Effect.gen(function* () {
       const key = usageKey(input.tenantId, input.workspaceId, actor.userId, input.threadId);
-      const changed = yield* Ref.modify(stateRef, (state) => {
-        const existing = state.memberUsage.get(key);
-        // A thread's total only ever climbs, so a stale or repeated report is
-        // ignored rather than counted twice.
-        if (existing && existing.totalTokens >= input.totalTokens) {
-          return [false, state] as const;
+      const observedAt = nowIso();
+      const snapshot: ThreadTokenSnapshot = {
+        totalTokens: input.totalTokens,
+        inputTokens: input.inputTokens ?? 0,
+        cachedInputTokens: input.cachedInputTokens ?? 0,
+        outputTokens: input.outputTokens ?? 0,
+        reasoningOutputTokens: input.reasoningOutputTokens ?? 0,
+      };
+
+      const observation = yield* Ref.modify(stateRef, (state) => {
+        const result = deriveUsageObservation(state.memberUsage.get(key), snapshot);
+        if (!result.changed) {
+          return [result, state] as const;
         }
         const memberUsage = new Map(state.memberUsage);
         memberUsage.set(key, {
@@ -1245,11 +1564,48 @@ const makeCollaborationService = Effect.gen(function* () {
           workspaceId: input.workspaceId,
           userId: actor.userId,
           threadId: input.threadId,
-          totalTokens: input.totalTokens,
-          updatedAt: nowIso(),
+          totalTokens: result.highWaterTotal,
+          updatedAt: observedAt,
+          lastTotalTokens: result.baseline.totalTokens,
+          lastInputTokens: result.baseline.inputTokens,
+          lastCachedInputTokens: result.baseline.cachedInputTokens,
+          lastOutputTokens: result.baseline.outputTokens,
+          lastReasoningOutputTokens: result.baseline.reasoningOutputTokens,
         });
-        return [true, { ...state, memberUsage }] as const;
+        return [result, { ...state, memberUsage }] as const;
       });
+
+      const changed = observation.changed;
+      if (observation.delta !== null && repository.appendCollaborationUsageSamples) {
+        // Appended before the baseline is written, so a failure here loses
+        // nothing: the stored baseline has not moved and the next report
+        // derives the same delta again.
+        yield* repository
+          .appendCollaborationUsageSamples([
+            {
+              sampleId: `usage:${crypto.randomUUID()}`,
+              tenantId: input.tenantId,
+              workspaceId: input.workspaceId,
+              userId: actor.userId,
+              threadId: input.threadId,
+              turnId: input.turnId ?? null,
+              observedAt,
+              provider: input.provider ?? null,
+              model: input.model ?? null,
+              ...observation.delta,
+            },
+          ])
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new CollaborationError({
+                  code: "invalid-membership-rule",
+                  message: "Failed to record a token usage sample.",
+                  cause,
+                }),
+            ),
+          );
+      }
 
       if (changed) {
         yield* persist;
@@ -1276,24 +1632,188 @@ const makeCollaborationService = Effect.gen(function* () {
       return { member };
     });
 
+  const queryUsage: CollaborationServiceShape["queryUsage"] = (actor, input) =>
+    Effect.gen(function* () {
+      const untilMs = input.until === undefined ? Date.now() : Date.parse(input.until);
+      const requestedSinceMs =
+        input.since === undefined ? untilMs - DEFAULT_USAGE_WINDOW_MS : Date.parse(input.since);
+      if (Number.isNaN(untilMs) || Number.isNaN(requestedSinceMs)) {
+        return yield* new CollaborationError({
+          code: "invalid-membership-rule",
+          message: "Usage window bounds must be ISO-8601 timestamps.",
+        });
+      }
+      // Clamped rather than rejected: an over-wide window is a UI mistake, not
+      // a caller error, and returning a year of days is friendlier than a
+      // failure. An inverted window collapses to empty rather than reversing.
+      const sinceMs = Math.max(Math.min(requestedSinceMs, untilMs), untilMs - MAX_USAGE_WINDOW_MS);
+      const since = new Date(sinceMs).toISOString();
+      const until = new Date(untilMs).toISOString();
+
+      // The same consent gate the People panel uses, applied before anything is
+      // summed: a member who opted out contributes to no total, no chart and no
+      // cost figure that anyone else can see. Their own row still works,
+      // because nobody is hidden from themselves.
+      const members = yield* buildMembers({
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        viewerUserId: actor.userId,
+      });
+      const visibleMembers = new Map(
+        members
+          .filter((member) => member.sharesUsage || member.userId === actor.userId)
+          .map((member) => [member.userId as string, member]),
+      );
+
+      const readBuckets = repository.readCollaborationUsageBuckets;
+      const allBuckets = readBuckets
+        ? yield* readBuckets({
+            tenantId: input.tenantId,
+            workspaceId: input.workspaceId,
+            since,
+            until,
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new CollaborationError({
+                  code: "invalid-membership-rule",
+                  message: "Failed to read the workspace usage history.",
+                  cause,
+                }),
+            ),
+          )
+        : [];
+
+      const buckets = allBuckets.filter((bucket) => visibleMembers.has(bucket.userId));
+      const hiddenMemberCount = new Set(
+        allBuckets
+          .filter((bucket) => !visibleMembers.has(bucket.userId))
+          .map((bucket) => bucket.userId),
+      ).size;
+
+      const overall = emptyUsage();
+      const byUser = new Map<string, UsageAccumulator>();
+      const byDay = new Map<string, UsageAccumulator>();
+      const byHour = new Map<number, UsageAccumulator>();
+      const byProvider = new Map<string, UsageAccumulator>();
+      const byModel = new Map<string, UsageAccumulator>();
+
+      const into = <K>(map: Map<K, UsageAccumulator>, key: K): UsageAccumulator => {
+        const existing = map.get(key);
+        if (existing) {
+          return existing;
+        }
+        const created = emptyUsage();
+        map.set(key, created);
+        return created;
+      };
+
+      for (const bucket of buckets) {
+        addBucket(overall, bucket);
+        addBucket(into(byUser, bucket.userId), bucket);
+        addBucket(into(byDay, bucket.day), bucket);
+        addBucket(into(byHour, bucket.hour), bucket);
+        addBucket(into(byProvider, bucket.provider ?? ""), bucket);
+        addBucket(into(byModel, `${bucket.provider ?? ""} ${bucket.model ?? ""}`), bucket);
+      }
+
+      const leaderboard = [...byUser.entries()]
+        .flatMap(([userId, accumulator]) => {
+          const member = visibleMembers.get(userId);
+          return member
+            ? [
+                {
+                  userId: member.userId,
+                  displayName: member.displayName,
+                  totals: toTotals(accumulator),
+                  estimatedCost: toCostEstimate(accumulator),
+                  isViewer: member.userId === actor.userId,
+                },
+              ]
+            : [];
+        })
+        .toSorted((left, right) => right.totals.totalTokens - left.totals.totalTokens);
+
+      const days = enumerateDays(sinceMs, untilMs).map((day) => {
+        const accumulator = byDay.get(day) ?? emptyUsage();
+        return {
+          day,
+          totals: toTotals(accumulator),
+          estimatedCost: toCostEstimate(accumulator),
+        };
+      });
+
+      // Always 24, so the histogram has a fixed shape whatever the window.
+      const hours = Array.from({ length: 24 }, (_unused, hour) => ({
+        hour,
+        totals: toTotals(byHour.get(hour) ?? emptyUsage()),
+      }));
+
+      const providers = [...byProvider.entries()]
+        .map(([provider, accumulator]) => ({
+          provider: toProviderKind(provider === "" ? null : provider),
+          totals: toTotals(accumulator),
+          estimatedCost: toCostEstimate(accumulator),
+        }))
+        .toSorted((left, right) => right.totals.totalTokens - left.totals.totalTokens);
+
+      const modelRows = [...byModel.entries()]
+        .map(([key, accumulator]) => {
+          const [provider = "", model = ""] = key.split(" ");
+          return {
+            provider: toProviderKind(provider === "" ? null : provider),
+            model: model === "" ? null : model,
+            totals: toTotals(accumulator),
+            estimatedCost: toCostEstimate(accumulator),
+            isPriced: model !== "" && MODEL_TOKEN_RATES_USD[model] !== undefined,
+          };
+        })
+        .toSorted((left, right) => right.totals.totalTokens - left.totals.totalTokens);
+
+      return {
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        since,
+        until,
+        totals: toTotals(overall),
+        estimatedCost: toCostEstimate(overall),
+        leaderboard,
+        byDay: days,
+        byHourOfDay: hours,
+        byProvider: providers,
+        byModel: modelRows,
+        hiddenMemberCount,
+        viewerUserId: actor.userId,
+      } satisfies CollaborationUsageQueryResult;
+    });
+
   const getConsent: CollaborationServiceShape["getConsent"] = (actor, input) =>
     Ref.get(stateRef).pipe(
       Effect.map((state) => {
         const profile = state.memberProfiles.get(
           scopedKey(input.tenantId, input.workspaceId, actor.userId),
         );
-        if (!profile || profile.consentAt === null) {
-          return { consent: null };
+        // `consentAt` is the only record that someone actually decided, and it
+        // stays the thing that distinguishes "never asked" from "asked and said
+        // yes" — the two now produce the same `shareUsage`, so a settings
+        // toggle needs `effective.isDecided` to tell them apart.
+        const isDecided = profile !== undefined && profile.consentAt !== null;
+        const shareProfile = profile?.shareProfile ?? DEFAULT_SHARE_PROFILE;
+        const shareUsage = profile?.shareUsage ?? DEFAULT_SHARE_USAGE;
+        const effective = { shareProfile, shareUsage, isDecided };
+        if (!isDecided || profile?.consentAt == null) {
+          return { consent: null, effective };
         }
         return {
           consent: {
             tenantId: input.tenantId,
             workspaceId: input.workspaceId,
             userId: actor.userId,
-            shareProfile: profile.shareProfile ?? false,
-            shareUsage: profile.shareUsage ?? false,
+            shareProfile,
+            shareUsage,
             decidedAt: profile.consentAt,
           },
+          effective,
         };
       }),
     );
@@ -1334,6 +1854,11 @@ const makeCollaborationService = Effect.gen(function* () {
           shareProfile: input.shareProfile,
           shareUsage: input.shareUsage,
           decidedAt,
+        },
+        effective: {
+          shareProfile: input.shareProfile,
+          shareUsage: input.shareUsage,
+          isDecided: true,
         },
       };
     });
@@ -1520,6 +2045,7 @@ const makeCollaborationService = Effect.gen(function* () {
     updateMember,
     removeMember,
     recordUsage,
+    queryUsage,
     getConsent,
     updateConsent,
   } satisfies CollaborationServiceShape;

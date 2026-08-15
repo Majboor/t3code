@@ -36,6 +36,7 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   type OrchestrationThread,
+  type ThreadTokenUsageSnapshot,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
   OrchestrationGetTurnDiffError,
@@ -3005,7 +3006,13 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       /**
        * Attributes a thread's tokens to whoever asked for the turn. Providers
        * report a running total many times over, so the collaboration service
-       * keeps the highest figure rather than summing what it is sent.
+       * keeps the highest figure rather than summing what it is sent, and
+       * derives the change since the last report for the usage series.
+       *
+       * The whole snapshot is forwarded, not just `usedTokens`: the token split
+       * is what makes a cost estimate possible, and the thread lookup below is
+       * already being done for ownership, so the model it is running costs
+       * nothing extra to read.
        */
       const recordThreadTokenUsage = (event: OrchestrationEvent): Effect.Effect<void> =>
         Effect.gen(function* () {
@@ -3016,8 +3023,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           if (activity.kind !== "context-window.updated") {
             return;
           }
-          const usedTokens = (activity.payload as { readonly usedTokens?: unknown } | null)
-            ?.usedTokens;
+          const usage = activity.payload as Partial<ThreadTokenUsageSnapshot> | null;
+          const usedTokens = usage?.usedTokens;
           if (typeof usedTokens !== "number" || usedTokens <= 0) {
             return;
           }
@@ -3029,8 +3036,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }
 
           const readModel = yield* orchestrationEngine.getReadModel();
-          const projectId =
-            readModel.threads.find((thread) => thread.id === threadId)?.projectId ?? null;
+          const thread = readModel.threads.find((candidate) => candidate.id === threadId) ?? null;
+          const projectId = thread?.projectId ?? null;
           const ownership = projectId
             ? (readModel.projects.find((project) => project.id === projectId)?.ownership ?? null)
             : null;
@@ -3038,12 +3045,30 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             return;
           }
 
+          // A non-negative whole number of tokens, or nothing. A provider that
+          // omits an axis must not be turned into a confident zero delta, which
+          // is why these stay undefined rather than defaulting.
+          const tokenCount = (value: unknown): number | undefined =>
+            typeof value === "number" && Number.isFinite(value) && value >= 0
+              ? NonNegativeInt.make(Math.trunc(value))
+              : undefined;
+
           const actor = yield* resolveCollaborationActor;
           yield* collaboration.recordUsage(actor, {
             tenantId: ownership.tenantId,
             workspaceId: ownership.workspaceId,
             threadId,
             totalTokens: NonNegativeInt.make(Math.trunc(usedTokens)),
+            inputTokens: tokenCount(usage?.inputTokens),
+            cachedInputTokens: tokenCount(usage?.cachedInputTokens),
+            outputTokens: tokenCount(usage?.outputTokens),
+            reasoningOutputTokens: tokenCount(usage?.reasoningOutputTokens),
+            turnId: activity.turnId ?? undefined,
+            // Raw provider and model ids, kept exactly as the thread declares
+            // them. Labelling is the UI's business, and a renamed label should
+            // not rewrite what history says was spent.
+            provider: thread?.modelSelection.provider,
+            model: thread?.modelSelection.model,
           });
         }).pipe(
           // Bookkeeping must never disturb the stream someone is watching their
@@ -4226,6 +4251,21 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
                 Effect.flatMap(() => resolveCollaborationActor),
                 Effect.flatMap((actor) => collaboration.recordUsage(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationUsageQuery]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationUsageQuery,
+            withRateLimit(
+              // Reading what a workspace spent is a workspace read, gated the
+              // same way the member list is; the per-member consent filter is
+              // applied inside the service, not here.
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.queryUsage(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),

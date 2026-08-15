@@ -40,6 +40,10 @@ export interface T3CollaborationApi {
   readonly recordUsage: (
     input: RpcInput<typeof WS_METHODS.collaborationUsageRecord>,
   ) => Promise<RpcSuccess<typeof WS_METHODS.collaborationUsageRecord>>;
+  /** The workspace's token spend over a window, respecting each member's consent. */
+  readonly queryUsage: (
+    input: RpcInput<typeof WS_METHODS.collaborationUsageQuery>,
+  ) => Promise<RpcSuccess<typeof WS_METHODS.collaborationUsageQuery>>;
 
   readonly getSettings: (
     input: RpcInput<typeof WS_METHODS.collaborationSettingsGet>,
@@ -121,6 +125,8 @@ export function makeCollaborationApi(transport: T3Transport): T3CollaborationApi
       transport.request((client) => client[WS_METHODS.collaborationMembersRemove](input)),
     recordUsage: (input) =>
       transport.request((client) => client[WS_METHODS.collaborationUsageRecord](input)),
+    queryUsage: (input) =>
+      transport.request((client) => client[WS_METHODS.collaborationUsageQuery](input)),
 
     getSettings: (input) =>
       transport.request((client) => client[WS_METHODS.collaborationSettingsGet](input)),

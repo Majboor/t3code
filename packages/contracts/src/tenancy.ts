@@ -22,6 +22,7 @@ import {
   TenantRuntimeId,
   ThreadId,
   TrimmedNonEmptyString,
+  TurnId,
   UserId,
   WorkspaceId,
 } from "./baseSchemas.ts";
@@ -1015,12 +1016,14 @@ export const CollaborationMember = Schema.Struct({
   lastSeenAt: Schema.NullOr(IsoDateTime),
   joinedAt: Schema.NullOr(IsoDateTime),
   /**
-   * What this person agreed to share when they joined. Until they accept,
-   * their email and usage are withheld from everyone else in the workspace.
+   * What this person shares with the workspace. The two default differently on
+   * purpose: an email address is personal and stays private until offered,
+   * while usage is shared unless switched off, because a workspace has to be
+   * able to see what it is collectively spending.
    */
   sharesProfile: Schema.Boolean,
   sharesUsage: Schema.Boolean,
-  /** Null when this person has not agreed to share their usage. */
+  /** Null when this person has opted out of sharing their usage. */
   promptCount: Schema.NullOr(NonNegativeInt),
   pendingApprovalCount: Schema.NullOr(NonNegativeInt),
   tokensUsed: Schema.NullOr(NonNegativeInt),
@@ -1083,8 +1086,158 @@ export const CollaborationUsageRecordInput = Schema.Struct({
    * sum of the highest figure each of their threads has reached.
    */
   totalTokens: NonNegativeInt,
+  /**
+   * The rest of the provider's snapshot, all cumulative in the same way as
+   * `totalTokens`. The server subtracts the previous report before storing a
+   * sample, so a caller never has to work out the difference itself.
+   *
+   * Every field is optional because providers disagree about what they report:
+   * codex sends a token split, some claudeAgent turns send only a total. An
+   * absent split is recorded as zero on that axis while `totalTokens` still
+   * counts, so a member's total is never understated by a thin report.
+   */
+  inputTokens: Schema.optional(NonNegativeInt),
+  cachedInputTokens: Schema.optional(NonNegativeInt),
+  outputTokens: Schema.optional(NonNegativeInt),
+  reasoningOutputTokens: Schema.optional(NonNegativeInt),
+  /** The turn the report arrived during, when it arrived during one. */
+  turnId: Schema.optional(TurnId),
+  /**
+   * Which runtime produced the tokens, and on which model. Raw provider ids —
+   * `codex` and `claudeAgent` — because a label is a presentation decision and
+   * renaming one should not rewrite history.
+   */
+  provider: Schema.optional(ProviderKind),
+  model: Schema.optional(TrimmedNonEmptyString),
 });
 export type CollaborationUsageRecordInput = typeof CollaborationUsageRecordInput.Type;
+
+/**
+ * A window over the usage series. Both bounds are ISO-8601 UTC instants;
+ * `since` is inclusive and `until` exclusive, so consecutive windows tile
+ * without double-counting the instant they meet.
+ */
+export const CollaborationUsageQueryInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  /** Defaults to 30 days before `until`. */
+  since: Schema.optional(IsoDateTime),
+  /** Defaults to now. */
+  until: Schema.optional(IsoDateTime),
+});
+export type CollaborationUsageQueryInput = typeof CollaborationUsageQueryInput.Type;
+
+/** The token split every row of the usage report carries. */
+export const CollaborationUsageTotals = Schema.Struct({
+  inputTokens: NonNegativeInt,
+  /** Included in `inputTokens`; broken out because it is priced differently. */
+  cachedInputTokens: NonNegativeInt,
+  outputTokens: NonNegativeInt,
+  /** Included in `outputTokens` where the provider distinguishes them. */
+  reasoningOutputTokens: NonNegativeInt,
+  totalTokens: NonNegativeInt,
+});
+export type CollaborationUsageTotals = typeof CollaborationUsageTotals.Type;
+
+/**
+ * What the tokens are guessed to have cost, from a rate table the server keeps.
+ *
+ * Named an estimate throughout because that is what it is: rates change, this
+ * table is a snapshot, discounts and plan pricing are invisible here, and a
+ * model the table has never heard of is not priced at all. `unpricedTokens`
+ * says how much of the window is missing from the figure, and `unpricedModels`
+ * names what is missing — a zero-priced model would otherwise read as free.
+ *
+ * There is deliberately no "quota remaining" or "resets in N days" field. That
+ * lives in the provider's own billing API, behind the credentials of whoever
+ * owns the account; T3 sees token reports, not entitlements, and inventing a
+ * number for it would be a guess dressed up as a fact.
+ */
+export const CollaborationUsageCostEstimate = Schema.Struct({
+  currency: Schema.Literal("USD"),
+  estimatedInputCost: Schema.Number,
+  estimatedOutputCost: Schema.Number,
+  estimatedTotalCost: Schema.Number,
+  /** Tokens from models absent from the rate table, excluded from the costs above. */
+  unpricedTokens: NonNegativeInt,
+  /** The model ids those tokens came from; empty when everything was priced. */
+  unpricedModels: Schema.Array(TrimmedNonEmptyString),
+});
+export type CollaborationUsageCostEstimate = typeof CollaborationUsageCostEstimate.Type;
+
+/** One member's share of the window. Only members who share usage appear. */
+export const CollaborationUsageLeaderboardEntry = Schema.Struct({
+  userId: UserId,
+  displayName: TrimmedNonEmptyString,
+  totals: CollaborationUsageTotals,
+  estimatedCost: CollaborationUsageCostEstimate,
+  /** True for the person asking, who always sees their own figures. */
+  isViewer: Schema.Boolean,
+});
+export type CollaborationUsageLeaderboardEntry = typeof CollaborationUsageLeaderboardEntry.Type;
+
+/** One UTC calendar day of the window; days with no usage are still present. */
+export const CollaborationUsageDayBucket = Schema.Struct({
+  /** `YYYY-MM-DD`, UTC. */
+  day: TrimmedNonEmptyString,
+  totals: CollaborationUsageTotals,
+  estimatedCost: CollaborationUsageCostEstimate,
+});
+export type CollaborationUsageDayBucket = typeof CollaborationUsageDayBucket.Type;
+
+/**
+ * Usage summed by hour of day across the whole window, for a peak-hours view.
+ * Always 24 entries, `hour` 0-23, in UTC — the server has no way to know which
+ * timezone the reader is in, so the UI relabels these.
+ */
+export const CollaborationUsageHourBucket = Schema.Struct({
+  hour: NonNegativeInt,
+  totals: CollaborationUsageTotals,
+});
+export type CollaborationUsageHourBucket = typeof CollaborationUsageHourBucket.Type;
+
+/** The window split by runtime. `provider` is null for unattributable samples. */
+export const CollaborationUsageProviderBreakdown = Schema.Struct({
+  provider: Schema.NullOr(ProviderKind),
+  totals: CollaborationUsageTotals,
+  estimatedCost: CollaborationUsageCostEstimate,
+});
+export type CollaborationUsageProviderBreakdown = typeof CollaborationUsageProviderBreakdown.Type;
+
+/** The window split by model, so an unpriced or expensive model is findable. */
+export const CollaborationUsageModelBreakdown = Schema.Struct({
+  provider: Schema.NullOr(ProviderKind),
+  /** Null when the thread's model could not be resolved when it was recorded. */
+  model: Schema.NullOr(TrimmedNonEmptyString),
+  totals: CollaborationUsageTotals,
+  estimatedCost: CollaborationUsageCostEstimate,
+  /** False when this model is absent from the rate table. */
+  isPriced: Schema.Boolean,
+});
+export type CollaborationUsageModelBreakdown = typeof CollaborationUsageModelBreakdown.Type;
+
+export const CollaborationUsageQueryResult = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  /** The resolved window, echoed back so the UI can label what it drew. */
+  since: IsoDateTime,
+  until: IsoDateTime,
+  totals: CollaborationUsageTotals,
+  estimatedCost: CollaborationUsageCostEstimate,
+  leaderboard: Schema.Array(CollaborationUsageLeaderboardEntry),
+  byDay: Schema.Array(CollaborationUsageDayBucket),
+  byHourOfDay: Schema.Array(CollaborationUsageHourBucket),
+  byProvider: Schema.Array(CollaborationUsageProviderBreakdown),
+  byModel: Schema.Array(CollaborationUsageModelBreakdown),
+  /**
+   * How many members' usage was left out because they opted out. Reported as a
+   * count rather than names, so the panel can say the totals are partial
+   * without disclosing who chose not to be counted.
+   */
+  hiddenMemberCount: NonNegativeInt,
+  viewerUserId: UserId,
+});
+export type CollaborationUsageQueryResult = typeof CollaborationUsageQueryResult.Type;
 
 /**
  * What a workspace is allowed to see about someone, agreed to when they join.
@@ -1095,13 +1248,33 @@ export const CollaborationConsent = Schema.Struct({
   tenantId: TenantId,
   workspaceId: WorkspaceId,
   userId: UserId,
-  /** Name and email visible to the rest of the workspace. */
+  /** Name and email visible to the rest of the workspace. Off unless chosen. */
   shareProfile: Schema.Boolean,
-  /** Prompt and approval counts visible to the rest of the workspace. */
+  /**
+   * Prompt counts, approval counts and token spend visible to the rest of the
+   * workspace. On unless switched off — a shared workspace that cannot see what
+   * it is collectively spending cannot manage it.
+   */
   shareUsage: Schema.Boolean,
   decidedAt: IsoDateTime,
 });
 export type CollaborationConsent = typeof CollaborationConsent.Type;
+
+/**
+ * What currently applies to this person, whether or not they ever chose it.
+ *
+ * `consent` on the result below stays null until someone actually decides, so
+ * "never asked" is still tellable from "asked and said yes". A settings toggle
+ * needs both: this says where to draw the switch, `isDecided` says whether to
+ * describe it as their choice or as the workspace default.
+ */
+export const CollaborationConsentEffective = Schema.Struct({
+  shareProfile: Schema.Boolean,
+  shareUsage: Schema.Boolean,
+  /** False when these are defaults rather than a decision this person made. */
+  isDecided: Schema.Boolean,
+});
+export type CollaborationConsentEffective = typeof CollaborationConsentEffective.Type;
 
 export const CollaborationConsentGetInput = Schema.Struct({
   tenantId: TenantId,
@@ -1120,6 +1293,8 @@ export type CollaborationConsentUpdateInput = typeof CollaborationConsentUpdateI
 export const CollaborationConsentResult = Schema.Struct({
   /** Null until this person has been asked. */
   consent: Schema.NullOr(CollaborationConsent),
+  /** Always present: what applies right now, decided or defaulted. */
+  effective: CollaborationConsentEffective,
 });
 export type CollaborationConsentResult = typeof CollaborationConsentResult.Type;
 

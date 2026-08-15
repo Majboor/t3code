@@ -50,6 +50,7 @@ import {
   type CollaborationMemberProfileRecord,
   type CollaborationMemberUsageRecord,
   type CollaborationPersistenceSnapshot,
+  type CollaborationUsageBucketRecord,
   type OrganizationPersistenceSnapshot,
   type ProviderIsolationPersistenceSnapshot,
   TenancyRepository,
@@ -71,6 +72,11 @@ function parseArray(value: string | null): ReadonlyArray<unknown> | undefined {
 
 function parseObject(value: string): unknown {
   return JSON.parse(value);
+}
+
+/** Keeps a NULL column null instead of turning it into a confident zero. */
+function nullableNumber(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
 }
 
 function toDecodeError(operation: string) {
@@ -425,6 +431,14 @@ const makeTenancyRepository = Effect.gen(function* () {
             threadId: row.thread_id,
             totalTokens: Number(row.total_tokens),
             updatedAt: row.updated_at,
+            // Null here is meaningful: the row predates the sample series and
+            // has no delta baseline yet. Coercing it to 0 would make the next
+            // report look like the thread's whole history arriving at once.
+            lastTotalTokens: nullableNumber(row.last_total_tokens),
+            lastInputTokens: nullableNumber(row.last_input_tokens),
+            lastCachedInputTokens: nullableNumber(row.last_cached_input_tokens),
+            lastOutputTokens: nullableNumber(row.last_output_tokens),
+            lastReasoningOutputTokens: nullableNumber(row.last_reasoning_output_tokens),
           }),
         ),
       } satisfies CollaborationPersistenceSnapshot;
@@ -652,10 +666,15 @@ const makeTenancyRepository = Effect.gen(function* () {
             for (const usage of snapshot.memberUsage) {
               yield* sql`
                 INSERT INTO collaboration_member_usage (
-                  tenant_id, workspace_id, user_id, thread_id, total_tokens, updated_at
+                  tenant_id, workspace_id, user_id, thread_id, total_tokens, updated_at,
+                  last_total_tokens, last_input_tokens, last_cached_input_tokens,
+                  last_output_tokens, last_reasoning_output_tokens
                 ) VALUES (
                   ${usage.tenantId}, ${usage.workspaceId}, ${usage.userId}, ${usage.threadId},
-                  ${usage.totalTokens}, ${usage.updatedAt}
+                  ${usage.totalTokens}, ${usage.updatedAt},
+                  ${usage.lastTotalTokens ?? null}, ${usage.lastInputTokens ?? null},
+                  ${usage.lastCachedInputTokens ?? null}, ${usage.lastOutputTokens ?? null},
+                  ${usage.lastReasoningOutputTokens ?? null}
                 )
               `;
             }
@@ -674,6 +693,85 @@ const makeTenancyRepository = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.mapError(toSqlError("TenancyRepository.saveCollaboration:query")));
+
+  const appendCollaborationUsageSamples: NonNullable<
+    TenancyRepositoryShape["appendCollaborationUsageSamples"]
+  > = (samples) =>
+    (samples.length === 0
+      ? Effect.void
+      : sql.withTransaction(
+          Effect.gen(function* () {
+            for (const sample of samples) {
+              // Named columns, always: later ALTER TABLE appends land at the
+              // end, and a positional insert would then start writing values
+              // into the wrong ones. That has already broken invite
+              // acceptance in this repository once.
+              yield* sql`
+                  INSERT INTO collaboration_usage_samples (
+                    sample_id, tenant_id, workspace_id, user_id, thread_id, turn_id,
+                    observed_at, provider, model,
+                    input_tokens, cached_input_tokens, output_tokens,
+                    reasoning_output_tokens, total_tokens
+                  ) VALUES (
+                    ${sample.sampleId}, ${sample.tenantId}, ${sample.workspaceId},
+                    ${sample.userId}, ${sample.threadId}, ${sample.turnId},
+                    ${sample.observedAt}, ${sample.provider}, ${sample.model},
+                    ${sample.inputTokens}, ${sample.cachedInputTokens}, ${sample.outputTokens},
+                    ${sample.reasoningOutputTokens}, ${sample.totalTokens}
+                  )
+                `;
+            }
+          }),
+        )
+    ).pipe(Effect.mapError(toSqlError("TenancyRepository.appendCollaborationUsageSamples:query")));
+
+  const readCollaborationUsageBuckets: NonNullable<
+    TenancyRepositoryShape["readCollaborationUsageBuckets"]
+  > = (query) =>
+    Effect.gen(function* () {
+      // Timestamps are ISO-8601 UTC, so the day and hour are fixed-width
+      // substrings — no date functions, and the ordering the index provides is
+      // the ordering the range scan wants.
+      const rows = yield* sql`
+        SELECT
+          user_id,
+          provider,
+          model,
+          substr(observed_at, 1, 10) AS day,
+          substr(observed_at, 12, 2) AS hour,
+          SUM(input_tokens) AS input_tokens,
+          SUM(cached_input_tokens) AS cached_input_tokens,
+          SUM(output_tokens) AS output_tokens,
+          SUM(reasoning_output_tokens) AS reasoning_output_tokens,
+          SUM(total_tokens) AS total_tokens,
+          COUNT(*) AS sample_count
+        FROM collaboration_usage_samples
+        WHERE tenant_id = ${query.tenantId}
+          AND workspace_id = ${query.workspaceId}
+          AND observed_at >= ${query.since}
+          AND observed_at < ${query.until}
+        GROUP BY user_id, provider, model, day, hour
+        ORDER BY day ASC, hour ASC
+      `.pipe(Effect.mapError(toSqlError("TenancyRepository.readCollaborationUsageBuckets:query")));
+
+      return (rows as any[]).map(
+        (row): CollaborationUsageBucketRecord => ({
+          userId: row.user_id,
+          provider: row.provider,
+          model: row.model,
+          day: row.day,
+          hour: Number(row.hour),
+          inputTokens: Number(row.input_tokens),
+          cachedInputTokens: Number(row.cached_input_tokens),
+          outputTokens: Number(row.output_tokens),
+          reasoningOutputTokens: Number(row.reasoning_output_tokens),
+          totalTokens: Number(row.total_tokens),
+          sampleCount: Number(row.sample_count),
+        }),
+      );
+    }).pipe(
+      Effect.mapError(toDecodeError("TenancyRepository.readCollaborationUsageBuckets:decode")),
+    );
 
   const saveWorkspaces: TenancyRepositoryShape["saveWorkspaces"] = (snapshot) =>
     sql
@@ -898,6 +996,8 @@ const makeTenancyRepository = Effect.gen(function* () {
     saveOrganizations,
     loadCollaboration,
     saveCollaboration,
+    appendCollaborationUsageSamples,
+    readCollaborationUsageBuckets,
     loadWorkspaces,
     saveWorkspaces,
     loadProviderIsolation,
