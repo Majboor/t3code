@@ -283,6 +283,12 @@ async function waitForFileOnDisk(name, timeoutMs) {
   return false;
 }
 
+/** The thread a URL points at, ignoring the query string the routes differ in. */
+function threadKeyOf(url) {
+  const path = new URL(url).pathname.replace(/^\/+|\/+$/g, "");
+  return path.split("/").at(-1) ?? path;
+}
+
 // ── the run ─────────────────────────────────────────────────────────────────
 
 // Without this the first navigation just times out inside Playwright, which
@@ -447,14 +453,6 @@ try {
   check("A writes into the shared thread", await sendAgentMessage(accountA2.page, markerFromA));
   await sleep(UI_SETTLE_MS);
   check("B reaches the shared project", await openProject(accountB.page));
-  // Asserted, not assumed. Two people opening one project could land in two
-  // different threads, and a transcript holding one message would prove nothing
-  // about telling authors apart.
-  check(
-    "both people are in the same thread",
-    accountB.page.url() === accountA2.page.url(),
-    `A on ${accountA2.page.url()}, B on ${accountB.page.url()}`,
-  );
   check("B writes into the same thread", await sendAgentMessage(accountB.page, markerFromB));
   await sleep(UI_SETTLE_MS);
 
@@ -463,6 +461,27 @@ try {
   // bare reload of a thread route lands on a placeholder instead.
   await openProject(accountA2.page);
   await sleep(UI_SETTLE_MS);
+
+  // Asserted, not assumed. Two people opening one project could land in two
+  // different threads, and a transcript holding one message would prove nothing
+  // about telling authors apart.
+  //
+  // Checked here rather than before B writes, and it has to be here. Until A
+  // walks back in, A is still on the `/draft/<id>` route it composed from —
+  // sending does not rewrite the sender's URL — so the two hold different
+  // strings for one conversation and comparing them fails on a difference that
+  // is not real. Walking A in early to make them comparable is worse: it moves
+  // both people onto another thread and empties the transcript this phase
+  // exists to read, which turns every check below into one that passes on an
+  // empty room.
+  const urlOfA = accountA2.page.url();
+  const urlOfB = accountB.page.url();
+  check(
+    "both people are in the same thread",
+    threadKeyOf(urlOfA) === threadKeyOf(urlOfB),
+    `A on ${urlOfA}, B on ${urlOfB}`,
+  );
+
   const asARereads = await userMessages(accountA2.page);
   const aOwnMessage = asARereads.find((message) => message.text.includes(markerFromA)) ?? null;
   const bMessageAsASeesIt = asARereads.find((message) => message.text.includes(markerFromB)) ?? null;
