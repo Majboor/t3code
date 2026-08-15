@@ -20,6 +20,7 @@ import {
   type ModelUsage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
+import { T3_AGENT_INSTRUCTIONS } from "../agentInstructions.ts";
 import {
   ApprovalRequestId,
   type CanonicalItemType,
@@ -2854,6 +2855,11 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
         settingSources: [...CLAUDE_SETTING_SOURCES],
+        // Appended rather than replacing the preset: Claude Code's own system
+        // prompt is what makes the tools work, and T3 only has house rules to
+        // add on top of it. Codex receives the same words as
+        // `developer_instructions`.
+        systemPrompt: { type: "preset", preset: "claude_code", append: T3_AGENT_INSTRUCTIONS },
         ...(effectiveEffort ? { effort: effectiveEffort } : {}),
         ...(permissionMode ? { permissionMode } : {}),
         ...(permissionMode === "bypassPermissions"

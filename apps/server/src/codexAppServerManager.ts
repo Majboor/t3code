@@ -36,6 +36,7 @@ import {
   type CodexAccountSnapshot,
 } from "./provider/codexAccount.ts";
 import { buildCodexInitializeParams, killCodexChildProcess } from "./provider/codexAppServer.ts";
+import { T3_AGENT_INSTRUCTIONS } from "./provider/agentInstructions.ts";
 
 export { buildCodexInitializeParams } from "./provider/codexAppServer.ts";
 export { readCodexAccountSnapshot, resolveCodexModelForAccount } from "./provider/codexAccount.ts";
@@ -294,34 +295,7 @@ The \`request_user_input\` tool is unavailable in Default mode. If you call it w
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 </collaboration_mode>`;
 
-/**
- * Told to the agent in every mode: the packs exist and here is how to get one.
- *
- * Deliberately a pointer and not the packs themselves. Pushing every pack into
- * the context would spend it on knowledge that is usually irrelevant, and would
- * go stale the moment a pack is updated. The agent has a shell; it can go and
- * look when the task suggests one might help.
- *
- * Saying which pack it is following is part of it. A pack that silently changes
- * what the agent does is indistinguishable, from the outside, from the agent
- * making it up — which is exactly how this gap was noticed.
- */
-export const PACK_DISCOVERY_INSTRUCTIONS = `<packs># Packs
-
-This workspace keeps packs: recorded knowledge from work that has gone wrong before — deploying a project, publishing or hosting something, shipping a document, wiring up analytics, sending mail. A pack carries what actually broke on real runs and how it was fixed.
-
-**When the request involves any of those, run this before your first action:**
-
-\`\`\`
-t3 pack search <what you are about to do>
-\`\`\`
-
-Do it even when the task looks routine and you are confident you know how. That confidence is the case packs were written for: they exist because the obvious approach is the one that failed, and the failure is usually silent — the deploy reports success and serves the old version, the program ships with nothing able to reach it.
-
-\`search\` prints a one-line summary; that is not the pack. If anything looks relevant, run \`t3 pack show <name>\` and read the failure modes and integration notes **before** you start the work. Then tell the user which pack you are following.
-
-If a pack says to check something with the user first, do that rather than deciding for them. If nothing matches, say so in a sentence and carry on as you normally would — this is a look-up, not an approval step.
-</packs>`;
+export { PACK_DISCOVERY_INSTRUCTIONS } from "./provider/agentInstructions.ts";
 
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: "untrusted" | "on-request" | "never";
@@ -394,7 +368,7 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions: `${PACK_DISCOVERY_INSTRUCTIONS}\n\n${
+      developer_instructions: `${T3_AGENT_INSTRUCTIONS}\n\n${
         input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
           : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS
