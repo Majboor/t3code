@@ -65,6 +65,8 @@ import {
   PackListEnablementsResult,
 } from "./packEnablement.ts";
 import {
+  AnalyticsDeclareStreamInput,
+  AnalyticsDeclareStreamResult,
   AnalyticsError,
   AnalyticsListStreamsInput,
   AnalyticsListStreamsResult,
@@ -344,6 +346,7 @@ export const WS_METHODS = {
   deployRun: "deploy.run",
   deployListRuns: "deploy.runs.list",
   analyticsListStreams: "analytics.streams.list",
+  analyticsDeclareStream: "analytics.streams.declare",
   analyticsQuery: "analytics.query",
   packsEnable: "packs.enable",
   packsDisable: "packs.disable",
@@ -575,6 +578,18 @@ export const WsPacksListEnablementsRpc = Rpc.make(WS_METHODS.packsListEnablement
 export const WsAnalyticsListStreamsRpc = Rpc.make(WS_METHODS.analyticsListStreams, {
   payload: AnalyticsListStreamsInput,
   success: AnalyticsListStreamsResult,
+  error: AnalyticsError,
+});
+
+/**
+ * Declaring was reachable only from the CLI, so an agent inside a session could
+ * not open a stream for the thing it had just built without shelling out —
+ * and nothing told it the option existed. The ingest key comes back here for
+ * the same reason it does on the CLI: this is the only moment it exists.
+ */
+export const WsAnalyticsDeclareStreamRpc = Rpc.make(WS_METHODS.analyticsDeclareStream, {
+  payload: AnalyticsDeclareStreamInput,
+  success: AnalyticsDeclareStreamResult,
   error: AnalyticsError,
 });
 
@@ -1242,6 +1257,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeployRunRpc,
   WsDeployListRunsRpc,
   WsAnalyticsListStreamsRpc,
+  WsAnalyticsDeclareStreamRpc,
   WsAnalyticsQueryRpc,
   WsPacksEnableRpc,
   WsPacksDisableRpc,

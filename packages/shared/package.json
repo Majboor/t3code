@@ -72,6 +72,10 @@
       "types": "./src/tenancy.ts",
       "import": "./src/tenancy.ts"
     },
+    "./analyticsStreamTemplates": {
+      "types": "./src/analyticsStreamTemplates.ts",
+      "import": "./src/analyticsStreamTemplates.ts"
+    },
     "./packSigning": {
       "types": "./src/packSigning.ts",
       "import": "./src/packSigning.ts"

@@ -154,6 +154,7 @@ export interface WsRpcClient {
   };
   readonly analytics: {
     readonly listStreams: RpcUnaryMethod<typeof WS_METHODS.analyticsListStreams>;
+    readonly declareStream: RpcUnaryMethod<typeof WS_METHODS.analyticsDeclareStream>;
     readonly query: RpcUnaryMethod<typeof WS_METHODS.analyticsQuery>;
   };
   readonly packs: {
@@ -398,6 +399,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
     analytics: {
       listStreams: (input) =>
         transport.request((client) => client[WS_METHODS.analyticsListStreams](input)),
+      declareStream: (input) =>
+        transport.request((client) => client[WS_METHODS.analyticsDeclareStream](input)),
       query: (input) => transport.request((client) => client[WS_METHODS.analyticsQuery](input)),
     },
     packs: {

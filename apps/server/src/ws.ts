@@ -4459,6 +4459,22 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "analytics" },
           ),
+        [WS_METHODS.analyticsDeclareStream]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.analyticsDeclareStream,
+            withRateLimit(
+              // Declaring opens a write path into a project's numbers, so it
+              // asks for edit rather than the view the read methods take.
+              ensureDeployProjectAccess(input.projectId, "project.edit").pipe(
+                Effect.mapError(
+                  (error) => new AnalyticsError({ code: "storage-failed", message: error.message }),
+                ),
+                Effect.flatMap(() => analyticsStore.declareStream(input)),
+              ),
+              (message) => new AnalyticsError({ code: "storage-failed", message }),
+            ),
+            { "rpc.aggregate": "analytics" },
+          ),
         [WS_METHODS.analyticsQuery]: (input) =>
           observeRpcEffect(
             WS_METHODS.analyticsQuery,
