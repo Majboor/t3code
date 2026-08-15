@@ -1,13 +1,15 @@
-import type {
-  OrchestrationCommand,
-  OrchestrationProject,
-  OrchestrationReadModel,
-  OrchestrationThread,
-  ProjectId,
-  ThreadId,
+import {
+  formatWorkspaceRootAlreadyClaimedDetail,
+  type OrchestrationCommand,
+  type OrchestrationProject,
+  type OrchestrationReadModel,
+  type OrchestrationThread,
+  type ProjectId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { Effect } from "effect";
 
+import { workspaceRootComparisonKey } from "../workspace/Layers/WorkspacePaths.ts";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 
 function invariantError(commandType: string, detail: string): OrchestrationCommandInvariantError {
@@ -29,6 +31,21 @@ export function findProjectById(
   projectId: ProjectId,
 ): OrchestrationProject | undefined {
   return readModel.projects.find((project) => project.id === projectId);
+}
+
+export function findActiveProjectByWorkspaceRoot(
+  readModel: OrchestrationReadModel,
+  workspaceRoot: string,
+): OrchestrationProject | undefined {
+  const comparisonKey = workspaceRootComparisonKey(workspaceRoot);
+  if (comparisonKey.length === 0) {
+    return undefined;
+  }
+  return readModel.projects.find(
+    (project) =>
+      project.deletedAt === null &&
+      workspaceRootComparisonKey(project.workspaceRoot) === comparisonKey,
+  );
 }
 
 export function listThreadsByProjectId(
@@ -67,6 +84,39 @@ export function requireProjectAbsent(input: {
     invariantError(
       input.command.type,
       `Project '${input.projectId}' already exists and cannot be created twice.`,
+    ),
+  );
+}
+
+/**
+ * One folder, one project.
+ *
+ * This is where the uniqueness of `projection_projects.workspace_root` is
+ * enforced — deliberately not as a UNIQUE index in a migration, because
+ * installs in the wild already carry duplicate rows and such a migration would
+ * fail on boot and take the server down. The decider is the only writer, so
+ * refusing here is what keeps new duplicates out.
+ *
+ * The failure names the existing project id (see
+ * `formatWorkspaceRootAlreadyClaimedDetail`) so a caller can open that project
+ * instead of guessing or minting yet another row.
+ */
+export function requireWorkspaceRootUnclaimed(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly workspaceRoot: string;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  const existingProject = findActiveProjectByWorkspaceRoot(input.readModel, input.workspaceRoot);
+  if (!existingProject) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      formatWorkspaceRootAlreadyClaimedDetail({
+        workspaceRoot: input.workspaceRoot,
+        projectId: existingProject.id,
+      }),
     ),
   );
 }

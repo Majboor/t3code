@@ -8,6 +8,7 @@ import {
   getBrowseLeafPathSegment,
   getBrowseParentPath,
   hasTrailingPathSeparator,
+  inferHomePathFromResolvedPath,
   inferProjectTitleFromPath,
   isExplicitRelativeProjectPath,
   isFilesystemBrowseQuery,
@@ -38,6 +39,48 @@ describe("projectPaths", () => {
     );
 
     expect(existing?.id).toBe("project-2");
+  });
+
+  it("expands a leading tilde for comparison when the home path is known", () => {
+    expect(normalizeProjectPathForComparison(" ~/aero-build/ ", { homePath: "/Users/hico" })).toBe(
+      "/Users/hico/aero-build",
+    );
+    expect(normalizeProjectPathForComparison("~", { homePath: "/Users/hico/" })).toBe(
+      "/Users/hico",
+    );
+    expect(
+      normalizeProjectPathForComparison("~\\aero-build", { homePath: "C:\\Users\\hico" }),
+    ).toBe("c:\\users\\hico\\aero-build");
+    // Without a home path there is nothing to expand against, so the raw form stands.
+    expect(normalizeProjectPathForComparison("~/aero-build")).toBe("~/aero-build");
+  });
+
+  it("matches a tilde path against an already-registered absolute project root", () => {
+    const existing = findProjectByPath(
+      [{ id: "project-1", cwd: "/Users/hico/aero-build" }],
+      "~/aero-build/",
+      { homePath: "/Users/hico" },
+    );
+
+    expect(existing?.id).toBe("project-1");
+  });
+
+  it("recovers the home path from a resolved browse answer", () => {
+    expect(inferHomePathFromResolvedPath("~/", "/Users/hico")).toBe("/Users/hico");
+    expect(inferHomePathFromResolvedPath("~", "/Users/hico")).toBe("/Users/hico");
+    expect(inferHomePathFromResolvedPath("~/dev/work/", "/Users/hico/dev/work")).toBe(
+      "/Users/hico",
+    );
+    expect(inferHomePathFromResolvedPath("~\\dev\\", "C:\\Users\\hico\\dev")).toBe(
+      "C:\\Users\\hico",
+    );
+  });
+
+  it("declines to guess a home path when the answer does not match the typed suffix", () => {
+    expect(inferHomePathFromResolvedPath("/Users/hico/dev/", "/Users/hico/dev")).toBeNull();
+    expect(inferHomePathFromResolvedPath("~/dev/", null)).toBeNull();
+    expect(inferHomePathFromResolvedPath("~/dev/", "/Users/hico/other")).toBeNull();
+    expect(inferHomePathFromResolvedPath("~/a/b/c/", "/a")).toBeNull();
   });
 
   it("infers project titles from normalized paths", () => {

@@ -155,25 +155,101 @@ export function resolveProjectPathForDispatch(value: string, cwd?: string | null
   return normalizeProjectPathForDispatch(`${absoluteBase.root}${joinedPath}`);
 }
 
-export function normalizeProjectPathForComparison(value: string): string {
-  const normalized = normalizeProjectPathForDispatch(value);
+export interface ProjectPathComparisonOptions {
+  /** Absolute home directory of the environment, used to expand a leading `~`. */
+  readonly homePath?: string | null;
+}
+
+function expandHomeProjectPath(value: string, homePath: string | null | undefined): string {
+  if (!homePath) {
+    return value;
+  }
+
+  const home = trimTrailingPathSeparators(homePath.trim());
+  if (home.length === 0) {
+    return value;
+  }
+  if (value === "~") {
+    return home;
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return `${home}${preferredPathSeparator(home)}${value.slice(2)}`;
+  }
+
+  return value;
+}
+
+/**
+ * The server expands `~` and trims before it stores a workspace root, so the
+ * duplicate-project pre-flight has to do the same or it compares `~/app`
+ * against the stored `/home/user/app` and concludes the folder is new.
+ */
+export function normalizeProjectPathForComparison(
+  value: string,
+  options?: ProjectPathComparisonOptions,
+): string {
+  const normalized = normalizeProjectPathForDispatch(
+    expandHomeProjectPath(value.trim(), options?.homePath),
+  );
   if (isWindowsDrivePath(normalized) || normalized.startsWith("\\\\")) {
     return normalized.replaceAll("/", "\\").toLowerCase();
   }
   return normalized;
 }
 
+/**
+ * The web client never learns the environment's home directory directly, but
+ * the browse endpoint answers a `~/...` query with the absolute path it
+ * resolved to. Peeling the typed suffix back off that answer recovers the home
+ * directory, which is what lets `~` be expanded client-side.
+ */
+export function inferHomePathFromResolvedPath(
+  rawPath: string,
+  resolvedPath: string | null | undefined,
+): string | null {
+  const trimmedRaw = rawPath.trim();
+  if (trimmedRaw !== "~" && !trimmedRaw.startsWith("~/") && !trimmedRaw.startsWith("~\\")) {
+    return null;
+  }
+  if (!resolvedPath) {
+    return null;
+  }
+
+  const resolved = splitAbsolutePath(trimTrailingPathSeparators(resolvedPath.trim()));
+  if (!resolved) {
+    return null;
+  }
+
+  const typedSegments = trimmedRaw
+    .slice(1)
+    .split(/[\\/]+/)
+    .filter(Boolean);
+  const homeSegmentCount = resolved.segments.length - typedSegments.length;
+  if (homeSegmentCount < 0) {
+    return null;
+  }
+  const matchesTypedSuffix = typedSegments.every(
+    (segment, index) => resolved.segments[homeSegmentCount + index] === segment,
+  );
+  if (!matchesTypedSuffix) {
+    return null;
+  }
+
+  return `${resolved.root}${resolved.segments.slice(0, homeSegmentCount).join(resolved.separator)}`;
+}
+
 export function findProjectByPath<T extends { cwd: string }>(
   projects: ReadonlyArray<T>,
   candidatePath: string,
+  options?: ProjectPathComparisonOptions,
 ): T | undefined {
-  const normalizedCandidate = normalizeProjectPathForComparison(candidatePath);
+  const normalizedCandidate = normalizeProjectPathForComparison(candidatePath, options);
   if (normalizedCandidate.length === 0) {
     return undefined;
   }
 
   return projects.find(
-    (project) => normalizeProjectPathForComparison(project.cwd) === normalizedCandidate,
+    (project) => normalizeProjectPathForComparison(project.cwd, options) === normalizedCandidate,
   );
 }
 

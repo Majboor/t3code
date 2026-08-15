@@ -3,7 +3,7 @@ import { it, describe, expect } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path } from "effect";
 
 import { WorkspacePaths } from "../Services/WorkspacePaths.ts";
-import { WorkspacePathsLive } from "./WorkspacePaths.ts";
+import { WorkspacePathsLive, workspaceRootComparisonKey } from "./WorkspacePaths.ts";
 
 const TestLayer = Layer.empty.pipe(
   Layer.provideMerge(WorkspacePathsLive),
@@ -33,14 +33,46 @@ const writeTextFile = Effect.fn("writeTextFile")(function* (
 
 it.layer(TestLayer)("WorkspacePathsLive", (it) => {
   describe("normalizeWorkspaceRoot", () => {
-    it.effect("resolves an existing directory", () =>
+    it.effect("resolves an existing directory to its canonical path", () =>
       Effect.gen(function* () {
         const workspacePaths = yield* WorkspacePaths;
+        const fileSystem = yield* FileSystem.FileSystem;
         const cwd = yield* makeTempDir();
 
         const resolved = yield* workspacePaths.normalizeWorkspaceRoot(cwd);
 
-        expect(resolved).toBe(cwd);
+        expect(resolved).toBe(yield* fileSystem.realPath(cwd));
+      }),
+    );
+
+    it.effect("normalizes a symlinked root and its target to the same path", () =>
+      Effect.gen(function* () {
+        const workspacePaths = yield* WorkspacePaths;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir();
+        const target = path.join(cwd, "real-project");
+        const link = path.join(cwd, "linked-project");
+        yield* fileSystem.makeDirectory(target, { recursive: true }).pipe(Effect.orDie);
+        yield* fileSystem.symlink(target, link).pipe(Effect.orDie);
+
+        const viaTarget = yield* workspacePaths.normalizeWorkspaceRoot(target);
+        const viaLink = yield* workspacePaths.normalizeWorkspaceRoot(link);
+
+        // Registering the same folder under two names must not look like two
+        // folders, or project.create cannot refuse the duplicate.
+        expect(viaLink).toBe(viaTarget);
+      }),
+    );
+
+    it.effect("normalizes trailing separators away", () =>
+      Effect.gen(function* () {
+        const workspacePaths = yield* WorkspacePaths;
+        const cwd = yield* makeTempDir();
+
+        const resolved = yield* workspacePaths.normalizeWorkspaceRoot(` ${cwd}/ `);
+
+        expect(resolved).toBe(yield* workspacePaths.normalizeWorkspaceRoot(cwd));
       }),
     );
 
@@ -71,7 +103,7 @@ it.layer(TestLayer)("WorkspacePathsLive", (it) => {
         });
         const stat = yield* fileSystem.stat(resolved);
 
-        expect(resolved).toBe(missingPath);
+        expect(resolved).toBe(yield* fileSystem.realPath(missingPath));
         expect(stat.type).toBe("Directory");
       }),
     );
@@ -127,5 +159,26 @@ it.layer(TestLayer)("WorkspacePathsLive", (it) => {
         );
       }),
     );
+  });
+});
+
+describe("workspaceRootComparisonKey", () => {
+  it("folds case on filesystems that are case-insensitive by default", () => {
+    expect(workspaceRootComparisonKey("/Users/Hico/Aero-Build", "darwin")).toBe(
+      workspaceRootComparisonKey("/users/hico/aero-build", "darwin"),
+    );
+    expect(workspaceRootComparisonKey("C:\\Work\\Repo", "win32")).toBe(
+      workspaceRootComparisonKey("c:\\work\\repo", "win32"),
+    );
+  });
+
+  it("keeps case significant on case-sensitive filesystems", () => {
+    expect(workspaceRootComparisonKey("/repo/Foo", "linux")).not.toBe(
+      workspaceRootComparisonKey("/repo/foo", "linux"),
+    );
+  });
+
+  it("ignores surrounding whitespace", () => {
+    expect(workspaceRootComparisonKey("  /repo/app  ", "linux")).toBe("/repo/app");
   });
 });

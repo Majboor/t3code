@@ -85,7 +85,10 @@ import {
   readPersistedServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { WorkspacePaths } from "./workspace/Services/WorkspacePaths.ts";
-import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
+import {
+  WorkspacePathsLive,
+  workspaceRootComparisonKey,
+} from "./workspace/Layers/WorkspacePaths.ts";
 
 const PortSchema = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
 
@@ -676,10 +679,15 @@ const findActiveProjectTarget = Effect.fn("findActiveProjectTarget")(function* (
     ? normalizedWorkspaceRootResult.value
     : null;
 
+  const normalizedWorkspaceRootKey =
+    normalizedWorkspaceRoot === null ? null : workspaceRootComparisonKey(normalizedWorkspaceRoot);
   const exactWorkspaceMatch =
-    normalizedWorkspaceRoot === null
+    normalizedWorkspaceRootKey === null
       ? undefined
-      : activeProjects.find((project) => project.workspaceRoot === normalizedWorkspaceRoot);
+      : activeProjects.find(
+          (project) =>
+            workspaceRootComparisonKey(project.workspaceRoot) === normalizedWorkspaceRootKey,
+        );
 
   const resolved = exactWorkspaceMatch;
   if (!resolved) {
@@ -1074,12 +1082,20 @@ const projectAddCommand = Command.make("add", {
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
       }) {
         const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot);
+        // Same folder-identity rule the decider enforces, so `project add` says
+        // which project already owns the folder instead of leaving the user to
+        // hunt for it in the snapshot.
+        const workspaceRootKey = workspaceRootComparisonKey(workspaceRoot);
         const existingProject = snapshot.projects.find(
-          (project) => project.deletedAt === null && project.workspaceRoot === workspaceRoot,
+          (project) =>
+            project.deletedAt === null &&
+            workspaceRootComparisonKey(project.workspaceRoot) === workspaceRootKey,
         );
         if (existingProject) {
           return yield* Effect.fail(
-            new Error(`An active project already exists for '${workspaceRoot}'.`),
+            new Error(
+              `An active project already exists for '${workspaceRoot}': ${existingProject.id} (${existingProject.title}).`,
+            ),
           );
         }
 

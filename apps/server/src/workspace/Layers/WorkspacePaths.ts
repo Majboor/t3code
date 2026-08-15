@@ -24,6 +24,25 @@ function expandHomePath(input: string, path: Path.Path): string {
   return input;
 }
 
+const CASE_INSENSITIVE_PLATFORMS: ReadonlySet<string> = new Set(["darwin", "win32"]);
+
+/**
+ * Key for "is this the same folder?" comparisons.
+ *
+ * Normalization stores the realpath so the persisted workspace root stays the
+ * human-readable path the user recognises; case is folded only here, in the
+ * comparison, and only on filesystems that are case-insensitive by default.
+ * Folding everywhere would make `/repo/Foo` and `/repo/foo` collide on Linux,
+ * where they really are two different folders.
+ */
+export function workspaceRootComparisonKey(
+  workspaceRoot: string,
+  platform: string = process.platform,
+): string {
+  const trimmed = workspaceRoot.trim();
+  return CASE_INSENSITIVE_PLATFORMS.has(platform) ? trimmed.toLowerCase() : trimmed;
+}
+
 export const makeWorkspacePaths = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -61,7 +80,16 @@ export const makeWorkspacePaths = Effect.gen(function* () {
         normalizedWorkspaceRoot,
       });
     }
-    return normalizedWorkspaceRoot;
+
+    // Two names for one folder must normalize to one string, or project.create
+    // cannot see that a folder is already registered. realpath collapses
+    // symlinked ancestors (/tmp -> /private/tmp, a symlinked home, a symlinked
+    // checkout). It cannot fail here now that the directory is known to exist,
+    // but a racing unlink or a permission error must not turn a working
+    // registration into an error, so fall back to the resolved path.
+    return yield* fileSystem
+      .realPath(normalizedWorkspaceRoot)
+      .pipe(Effect.catch(() => Effect.succeed(normalizedWorkspaceRoot)));
   });
 
   const resolveRelativePathWithinRoot: WorkspacePathsShape["resolveRelativePathWithinRoot"] =

@@ -26,9 +26,14 @@ const TestLayer = Layer.empty.pipe(
 const makeTempDir = Effect.fn(function* (opts?: { prefix?: string; git?: boolean }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const gitCore = yield* GitCore;
-  const dir = yield* fileSystem.makeTempDirectoryScoped({
-    prefix: opts?.prefix ?? "t3code-workspace-entries-",
-  });
+  // Workspace roots are normalized to their realpath, so hand tests the
+  // canonical form; on macOS the temp dir sits behind the /var -> /private/var
+  // symlink and assertions on the walked paths would not line up otherwise.
+  const dir = yield* fileSystem
+    .makeTempDirectoryScoped({
+      prefix: opts?.prefix ?? "t3code-workspace-entries-",
+    })
+    .pipe(Effect.flatMap((tempDir) => fileSystem.realPath(tempDir)));
   if (opts?.git) {
     yield* gitCore.initRepo({ cwd: dir });
   }

@@ -5,6 +5,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   type EnvironmentId,
   type FilesystemBrowseResult,
+  parseWorkspaceRootAlreadyClaimedProjectId,
   type ProjectId,
 } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -54,6 +55,7 @@ import {
   getBrowseLeafPathSegment,
   getBrowseParentPath,
   hasTrailingPathSeparator,
+  inferHomePathFromResolvedPath,
   inferProjectTitleFromPath,
   isExplicitRelativeProjectPath,
   isFilesystemBrowseQuery,
@@ -370,6 +372,12 @@ function OpenCommandPaletteDialog() {
       !relativePathNeedsActiveProject,
   });
   const browseEntries = browseResult?.entries ?? EMPTY_BROWSE_ENTRIES;
+  // Recovered from the browse answer so a typed `~/...` path can be compared
+  // against stored project roots without a round trip.
+  const browseHomePath = useMemo(
+    () => inferHomePathFromResolvedPath(browseDirectoryPath, browseResult?.parentPath),
+    [browseDirectoryPath, browseResult?.parentPath],
+  );
   const {
     filteredEntries: filteredBrowseEntries,
     highlightedEntry: highlightedBrowseEntry,
@@ -733,6 +741,37 @@ function OpenCommandPaletteDialog() {
     threadSearchItems: allThreadItems,
   });
 
+  const openExistingProject = useCallback(
+    async (environmentId: EnvironmentId, projectId: ProjectId) => {
+      const latestThread = getLatestThreadForProject(
+        threads.filter((thread) => thread.environmentId === environmentId),
+        projectId,
+        settings.sidebarThreadSortOrder,
+      );
+      if (latestThread) {
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(latestThread.environmentId, latestThread.id),
+          ),
+        });
+      } else {
+        await handleNewThread(scopeProjectRef(environmentId, projectId), {
+          envMode: settings.defaultThreadEnvMode,
+        }).catch(() => undefined);
+      }
+      setOpen(false);
+    },
+    [
+      handleNewThread,
+      navigate,
+      setOpen,
+      settings.defaultThreadEnvMode,
+      settings.sidebarThreadSortOrder,
+      threads,
+    ],
+  );
+
   const handleAddProject = useCallback(
     async (rawCwd: string) => {
       if (!browseEnvironmentId) return;
@@ -763,26 +802,10 @@ function OpenCommandPaletteDialog() {
       const existing = findProjectByPath(
         projects.filter((project) => project.environmentId === browseEnvironmentId),
         cwd,
+        { homePath: browseHomePath },
       );
       if (existing) {
-        const latestThread = getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === existing.environmentId),
-          existing.id,
-          settings.sidebarThreadSortOrder,
-        );
-        if (latestThread) {
-          await navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(
-              scopeThreadRef(latestThread.environmentId, latestThread.id),
-            ),
-          });
-        } else {
-          await handleNewThread(scopeProjectRef(existing.environmentId, existing.id), {
-            envMode: settings.defaultThreadEnvMode,
-          }).catch(() => undefined);
-        }
-        setOpen(false);
+        await openExistingProject(existing.environmentId, existing.id);
         return;
       }
 
@@ -809,6 +832,15 @@ function OpenCommandPaletteDialog() {
         }).catch(() => undefined);
         setOpen(false);
       } catch (error) {
+        // The server refuses a folder that is already a project and names the
+        // one that owns it. The user asked to open that folder; opening the
+        // project that exists is the outcome they wanted, not an error toast.
+        const claimedProjectId = parseWorkspaceRootAlreadyClaimedProjectId(error);
+        if (claimedProjectId) {
+          await openExistingProject(browseEnvironmentId, claimedProjectId);
+          return;
+        }
+
         toastManager.add({
           type: "error",
           title: "Failed to add project",
@@ -819,15 +851,14 @@ function OpenCommandPaletteDialog() {
     [
       browseEnvironmentId,
       browseEnvironmentPlatform,
+      browseHomePath,
       addProjectWorkspaceContext,
       currentProjectCwdForBrowse,
       handleNewThread,
-      navigate,
+      openExistingProject,
       projects,
       setOpen,
       settings.defaultThreadEnvMode,
-      settings.sidebarThreadSortOrder,
-      threads,
     ],
   );
 

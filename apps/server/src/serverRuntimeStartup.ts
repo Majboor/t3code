@@ -34,6 +34,7 @@ import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
 import { TenantRuntimeLifecycleOwner } from "./tenancy/Services/TenantRuntimeLifecycleOwner.ts";
+import { makeWorkspacePaths } from "./workspace/Layers/WorkspacePaths.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -175,29 +176,37 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const path = yield* Path.Path;
+  const workspacePaths = yield* makeWorkspacePaths;
 
   let bootstrapProjectId: ProjectId | undefined;
   let bootstrapThreadId: ThreadId | undefined;
 
   if (serverConfig.autoBootstrapProjectFromCwd) {
     yield* Effect.gen(function* () {
-      const existingProject = yield* projectionReadModelQuery.getActiveProjectByWorkspaceRoot(
-        serverConfig.cwd,
-      );
+      // Look up and register under the same normalized root that a dispatched
+      // project.create would store. Querying with the raw cwd used to miss the
+      // project this server booted last time and mint a fresh duplicate on
+      // every restart. If normalization fails the cwd is unusable anyway, so
+      // fall through with it and let the dispatch report the real problem.
+      const bootstrapWorkspaceRoot = yield* workspacePaths
+        .normalizeWorkspaceRoot(serverConfig.cwd)
+        .pipe(Effect.catch(() => Effect.succeed(serverConfig.cwd)));
+      const existingProject =
+        yield* projectionReadModelQuery.getActiveProjectByWorkspaceRoot(bootstrapWorkspaceRoot);
       let nextProjectId: ProjectId;
       let nextProjectDefaultModelSelection: ModelSelection;
 
       if (Option.isNone(existingProject)) {
         const createdAt = new Date().toISOString();
         nextProjectId = ProjectId.make(crypto.randomUUID());
-        const bootstrapProjectTitle = path.basename(serverConfig.cwd) || "project";
+        const bootstrapProjectTitle = path.basename(bootstrapWorkspaceRoot) || "project";
         nextProjectDefaultModelSelection = getAutoBootstrapDefaultModelSelection();
         yield* orchestrationEngine.dispatch({
           type: "project.create",
           commandId: CommandId.make(crypto.randomUUID()),
           projectId: nextProjectId,
           title: bootstrapProjectTitle,
-          workspaceRoot: serverConfig.cwd,
+          workspaceRoot: bootstrapWorkspaceRoot,
           defaultModelSelection: nextProjectDefaultModelSelection,
           createdAt,
         });

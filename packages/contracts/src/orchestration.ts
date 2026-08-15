@@ -1236,6 +1236,50 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
   },
 ) {}
 
+/**
+ * `project.create` is refused when an active project already owns the workspace
+ * root. The RPC boundary flattens command-invariant failures into an untyped
+ * cause chain, so the existing project id rides along inside the failure text
+ * instead of a typed field: this marker is what makes it machine-readable, and
+ * `parseWorkspaceRootAlreadyClaimedProjectId` is the only sanctioned reader.
+ */
+export const WORKSPACE_ROOT_ALREADY_CLAIMED_MARKER = "workspace-root-already-claimed";
+
+export function formatWorkspaceRootAlreadyClaimedDetail(input: {
+  readonly workspaceRoot: string;
+  readonly projectId: ProjectId;
+}): string {
+  return `Workspace root '${input.workspaceRoot}' is already registered as project '${input.projectId}'. [${WORKSPACE_ROOT_ALREADY_CLAIMED_MARKER}:${input.projectId}]`;
+}
+
+const WORKSPACE_ROOT_ALREADY_CLAIMED_PATTERN = new RegExp(
+  `\\[${WORKSPACE_ROOT_ALREADY_CLAIMED_MARKER}:([^\\]]+)\\]`,
+);
+
+/**
+ * Pull the already-claimed project id out of a dispatch failure, walking the
+ * `cause` chain because the server wraps invariant failures in a generic
+ * dispatch error. Returns null for every other failure.
+ */
+export function parseWorkspaceRootAlreadyClaimedProjectId(error: unknown): ProjectId | null {
+  let current: unknown = error;
+  for (let depth = 0; current !== null && current !== undefined && depth < 8; depth += 1) {
+    const candidate = current as { readonly message?: unknown; readonly cause?: unknown };
+    const message =
+      typeof current === "string"
+        ? current
+        : typeof candidate.message === "string"
+          ? candidate.message
+          : null;
+    const match = message === null ? null : WORKSPACE_ROOT_ALREADY_CLAIMED_PATTERN.exec(message);
+    if (match?.[1]) {
+      return ProjectId.make(match[1]);
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
+
 export class OrchestrationGetTurnDiffError extends Schema.TaggedErrorClass<OrchestrationGetTurnDiffError>()(
   "OrchestrationGetTurnDiffError",
   {

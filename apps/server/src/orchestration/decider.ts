@@ -13,6 +13,7 @@ import {
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
+  requireWorkspaceRootUnclaimed,
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
@@ -63,6 +64,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         readModel,
         command,
         projectId: command.projectId,
+      });
+      // The workspace root is normalized before it reaches the decider, so the
+      // comparison here is against the same string the projection stores.
+      yield* requireWorkspaceRootUnclaimed({
+        readModel,
+        command,
+        workspaceRoot: command.workspaceRoot,
       });
 
       return {
