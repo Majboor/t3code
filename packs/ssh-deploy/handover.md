@@ -22,18 +22,22 @@ connection — `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_REMOTE_DIR`,
 password, marked secret and read from the server secret store. The last,
 `DEPLOY_START_COMMAND`, belongs to the project rather than to this pack.
 
-It deploys to either of two targets, chosen in `deploy.config.json` at the
-project root: `local` runs the start command on the machine you are on, `ssh`
-ships it to the node. Both publish with a cloudflare quick tunnel, which needs
-no account and prints a `*.trycloudflare.com` address that changes on every
-restart. `deploy.config.example.json` is the shape; the config names the secret
-holding the password and never holds the password itself, which is what makes it
-safe to commit beside a project.
+It deploys to either of two targets: `local` runs the start command on the
+machine you are on, `ssh` ships it to the node. Both publish with a cloudflare
+quick tunnel, which needs no account and prints a `*.trycloudflare.com` address
+that changes on every restart.
 
-The integration prompt — the thing an agent actually reads — tells it to read
-that config first and, when it is absent, to ask for the values and write it
-before deploying anything. That is what makes first-run configuration happen
-rather than merely be documented.
+Which target a project uses is not written beside the project — it is the
+project's deploy targets, which T3 already stores and `t3 deploy list --project
+<id>` reads back, with the start command and, for `ssh`, the host, user and
+remote path. A target names the secret holding the password and never holds the
+password itself.
+
+The integration prompt — the thing an agent actually reads — tells it to consult
+that listing first and, when the project has no target yet, to ask for the
+values and register one before deploying anything. That is what makes first-run
+configuration happen rather than merely be documented, and it is why the answers
+survive to the next deploy without a file to keep in step.
 
 ## What was tried and rejected
 
@@ -55,18 +59,52 @@ systemd units per pack — and cites evidence captured from this very IP on
 `/srv/lp-workspaces`, no `lp-*` units, nothing listening in that port range. The
 README here describes what is actually there instead.
 
+## What was closed on 2026-08-15
+
+- **A hand-run deploy was invisible.** An agent following this pack shelled out
+  `rsync` and `gunicorn` directly, which serves the app but tells T3 nothing:
+  no row on the project's Infrastructure page, and no deployment for analytics
+  to attach to. The prompt now registers the start command as a deploy target
+  and runs it through `t3 deploy run`, which records the run and registers what
+  went live. `t3 deploy run` also grew `--analytics-stream` and friends, because
+  until then the CLI — the only surface an agent drives — could start a deploy
+  but could not wire it to analytics at all.
+- **Nothing retired what it replaced.** Steps 5 and 6 stop the previous process
+  and delete its directory, and check `app.pid` is non-empty and live. The six
+  orphaned gunicorns and five directories on the node were cleared by hand the
+  same day.
+- **AppleDouble litter.** The ship step is now
+  `rsync -a --delete --exclude='._*'`, in the README and in the prompt.
+- **The two deploy stories.** `infra/deploy/README.md` now opens with a banner
+  saying it describes a host that no longer exists; re-verified against the node
+  that day.
+- **Content digests and the scaffold interface.** `contents` carries a digest
+  per file, and the placeholder `install` export is gone — a deploy pack exports
+  nothing, and the format allows saying so.
+
+Two claims in the earlier version of this file were wrong and are worth
+recording as such: the five stale directories totalled **400K**, not a
+meaningful share of the node's 78% disk (that is `/var` at 80G and `/root` at
+63G, neither of them ours); and their `app.pid` files were **empty**, so the
+gunicorns still listening were not reachable through them — one was running
+from a directory that had already been deleted.
+
 ## What is unfinished
 
-- **Content digests.** `t3-pack validate` reports one warning:
-  `contents-digest-missing`, so an extractor cannot check what it got before
-  running it. Pre-existing, and worth closing before this is published anywhere.
-- **The two deploy stories are not reconciled.** Either the `lp-*` tooling
-  should be reinstalled on the node, or `infra/deploy/README.md` should say it
-  describes a host that no longer exists. Right now they contradict each other
-  and both look authoritative.
-- **Nothing reaps old deployments.** Five `t3-pack-*` directories are on the
-  node from previous runs, the oldest from 2026-08-09, with their gunicorn
-  processes still listening. The disk is 78% full. There is no cleanup step in
-  the deploy and no record of which deployments are still wanted.
-- **AppleDouble litter.** Deploys from macOS carry `._*` files across; `rsync`
-  should exclude them and currently does not.
+- **The health check can still be fooled, in principle.** `/healthz` must read
+  its build id **once at import**. Read per request, a process left over from
+  the previous deploy serves the new id straight off disk, and a deploy that
+  never restarted anything looks like a success. This is failure mode
+  `health-check-answered-by-the-previous-deployment`, and it is easy to
+  reintroduce in any app written against this pack.
+- **The deploy still has no opinion about ports.** `DEPLOY_PORT` is picked by
+  whoever writes the config, and the only protection against taking a port
+  someone else is on is the preflight check. On a host running other people's
+  services that is thin.
+- **Target names are chosen by the agent, and they are load-bearing.** A
+  deployment is identified by name, so the name decides whether a deploy
+  replaces what is live or stands up a rival beside it. Registering a name that
+  already exists now re-registers that target rather than adding a second, which
+  makes re-registering on every deploy safe — but nothing stops an agent
+  choosing a _different_ name each time, and that still splits one deployment
+  into two.

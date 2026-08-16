@@ -64,19 +64,19 @@ const seed = Effect.gen(function* () {
 
 describe("resolveStreamIds", () => {
   it("refuses a name nobody declared rather than dropping it", () => {
-    const result = resolveStreamIds([{ id: "a" as never, name: "page.view" as never }], [
-      "page.view",
-      "checkout.done",
-    ]);
+    const result = resolveStreamIds(
+      [{ id: "a" as never, name: "page.view" as never }],
+      ["page.view", "checkout.done"],
+    );
     assert.strictEqual(result.ok, false);
     assert.deepStrictEqual(result.ok === false ? result.missing : [], ["checkout.done"]);
   });
 
   it("counts the same stream named twice as one link", () => {
-    const result = resolveStreamIds([{ id: "a" as never, name: "page.view" as never }], [
-      "page.view",
-      "page.view",
-    ]);
+    const result = resolveStreamIds(
+      [{ id: "a" as never, name: "page.view" as never }],
+      ["page.view", "page.view"],
+    );
     assert.strictEqual(result.ok, true);
     assert.deepStrictEqual(result.ok === true ? [...result.ids].map(String) : [], ["a"]);
   });
@@ -126,6 +126,54 @@ describe("DeploymentRegistry", () => {
 
       const listed = yield* registry.list({ projectId });
       assert.strictEqual(listed.length, 1);
+    }).pipe(Effect.provide(makeLayer())),
+  );
+
+  // What a redeploy that wires no analytics must not do. `DeployService`
+  // registers every successful run, including ones with no analytics, so this
+  // is the difference between a plain redeploy and one that silently unwires
+  // the numbers an earlier run attached.
+  it.effect("re-registering without naming streams leaves the existing ones alone", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const registry = yield* DeploymentRegistry;
+
+      yield* registry.register({
+        projectId,
+        targetId,
+        name: "staging",
+        streams: ["page.view" as never],
+      });
+      const redeployed = yield* registry.register({
+        projectId,
+        targetId,
+        name: "staging",
+        status: "live",
+      });
+
+      assert.deepStrictEqual([...redeployed.analyticsStreamIds], ["astream_pageview"]);
+    }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect("naming an empty set of streams clears them, which is not the same", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const registry = yield* DeploymentRegistry;
+
+      yield* registry.register({
+        projectId,
+        targetId,
+        name: "staging",
+        streams: ["page.view" as never],
+      });
+      const cleared = yield* registry.register({
+        projectId,
+        targetId,
+        name: "staging",
+        streams: [],
+      });
+
+      assert.deepStrictEqual([...cleared.analyticsStreamIds], []);
     }).pipe(Effect.provide(makeLayer())),
   );
 

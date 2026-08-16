@@ -84,7 +84,9 @@ export function planIngestKey(input: {
   readonly streamExists: boolean;
   /** Live deployments reporting to the stream, excluding the one being deployed. */
   readonly otherReporters: ReadonlyArray<string>;
-}): { readonly action: "declare" | "reissue" } | { readonly action: "refuse"; readonly why: string } {
+}):
+  | { readonly action: "declare" | "reissue" }
+  | { readonly action: "refuse"; readonly why: string } {
   if (!input.streamExists) {
     return { action: "declare" };
   }
@@ -186,15 +188,28 @@ const makeDeployService = Effect.gen(function* () {
       }
       const now = yield* DateTime.now;
       const timestamp = DateTime.formatIso(DateTime.toUtc(now));
+
+      // Registering the same name twice re-registers one target rather than
+      // adding a second. An agent re-runs `deploy add` on every deploy — it has
+      // no memory of the last one — and a fresh row each time meant two targets
+      // racing for one port, and, worse, a second *deployment*: the registry
+      // identifies a deployment by name, so a duplicate target starts a rival
+      // that already reports to the stream, and the next deploy is refused for
+      // taking numbers away from what is really its own previous self.
+      const siblings = yield* repository
+        .listTargets({ projectId: input.projectId })
+        .pipe(Effect.mapError(repositoryError("Failed to read deploy targets.")));
+      const existing = siblings.find((candidate) => candidate.name === input.name);
+
       const target: DeployTarget = {
-        id: DeployTargetId.make(`deploy-target:${crypto.randomUUID()}`),
+        id: existing?.id ?? DeployTargetId.make(`deploy-target:${crypto.randomUUID()}`),
         projectId: input.projectId,
-        tenantId: null,
+        tenantId: existing?.tenantId ?? null,
         name: input.name,
         kind: input.kind,
         command: input.command,
         ssh: input.ssh ?? null,
-        createdAt: timestamp,
+        createdAt: existing?.createdAt ?? timestamp,
         updatedAt: timestamp,
         archivedAt: null,
       };
@@ -339,15 +354,25 @@ const makeDeployService = Effect.gen(function* () {
 
       // Only a run that worked put something live. A failed one leaves the
       // previous deployment recorded as it was, which is still true of the world.
-      if (input.analytics !== undefined && completed.status === "succeeded") {
+      //
+      // Registered whether or not this run wired analytics. Deploying and then
+      // deciding to measure is the normal order, and gating registration on
+      // analytics meant the usual case — deploy, look at the project, then ask
+      // for numbers — left nothing recorded to attach those numbers to, so the
+      // infrastructure page had nothing to show for a project that was live.
+      if (completed.status === "succeeded") {
         yield* deploymentRegistry.register({
           projectId: target.projectId,
           targetId: target.id,
           name: deploymentName,
-          ...(input.analytics.url !== undefined ? { url: input.analytics.url } : {}),
+          ...(input.analytics?.url !== undefined ? { url: input.analytics.url } : {}),
           status: "live",
           lastRunId: completed.id,
-          streams: [input.analytics.stream],
+          // Omitted, not empty, when this run wired nothing: `register` reads an
+          // absent `streams` as "leave them alone" and an empty one as "clear
+          // them", so passing [] would make a plain redeploy silently unwire the
+          // analytics an earlier run had attached.
+          ...(input.analytics !== undefined ? { streams: [input.analytics.stream] } : {}),
         });
       }
 

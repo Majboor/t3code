@@ -5,8 +5,10 @@ import { Link } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime";
 import type { ProjectId } from "@t3tools/contracts";
 
+import { describeLoad, orderDeployments, summariseLoad, totalEvents } from "./deploymentLoad.logic";
 import { describeReadiness, orderForAttention } from "./infra.logic";
 import { resolveInfraScope } from "./infraScope.logic";
+import { describeAddress } from "../analytics/deploymentLinks.logic";
 import { readEnvironmentApi } from "../../environmentApi";
 import { usePrimaryEnvironmentId } from "../../environments/primary/context";
 import { selectProjectByRef, useStore } from "../../store";
@@ -38,6 +40,19 @@ function Shell({ children }: { children: React.ReactNode }) {
       </div>
     </SidebarInset>
   );
+}
+
+/**
+ * The window load is counted over, floored to the hour.
+ *
+ * Rounded rather than exact so the value is stable across renders: it is part
+ * of a query key, and a timestamp that moves every millisecond would refetch
+ * every count on every paint.
+ */
+function loadWindowStart(): string {
+  const start = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  start.setMinutes(0, 0, 0);
+  return start.toISOString();
 }
 
 /**
@@ -85,6 +100,40 @@ export function InfraPage({ projectId }: { projectId: ProjectId }) {
     },
   });
 
+  // What this project has live, and whether anything is reaching it. Kept
+  // independent of the workspace scope above: a deployment belongs to the
+  // project, so it can be listed even when the pack scope cannot be resolved.
+  const deployments = useQuery({
+    enabled: environmentId !== null,
+    queryKey: ["infra", "deployments", environmentId, projectId],
+    queryFn: async () => {
+      const api = environmentId === null ? undefined : readEnvironmentApi(environmentId);
+      if (!api) throw new Error("This window is not connected to an environment.");
+      const [live, declared] = await Promise.all([
+        api.deploys.listDeployments({ projectId }),
+        api.analytics.listStreams({ projectId }),
+      ]);
+      const streams = declared.streams ?? [];
+
+      // One count per declared stream, over the window below. Queried by name
+      // because that is the handle a query takes and echoes back.
+      const counts = new Map<string, number>();
+      await Promise.all(
+        streams.map(async (stream) => {
+          const result = await api.analytics.query({
+            projectId,
+            stream: stream.name,
+            aggregate: "count",
+            since: loadWindowStart(),
+          });
+          counts.set(stream.name, totalEvents(result));
+        }),
+      );
+
+      return orderDeployments(summariseLoad(live.deployments ?? [], streams, counts));
+    },
+  });
+
   const disable = useMutation({
     mutationFn: async (packId: string) => {
       const api = environmentId === null ? undefined : readEnvironmentApi(environmentId);
@@ -129,8 +178,90 @@ export function InfraPage({ projectId }: { projectId: ProjectId }) {
 
   const ordered = orderForAttention(enablements.data?.enablements ?? []);
 
+  const loads = deployments.data ?? [];
+
   return (
     <Shell>
+      <section className="grid gap-2" data-testid="infra-deployments">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Deployments
+        </h2>
+        {deployments.isLoading ? (
+          <Spinner />
+        ) : deployments.error ? (
+          <div
+            className="rounded-lg border border-border p-4 text-sm"
+            data-testid="infra-deployments-error"
+          >
+            {deployments.error instanceof Error
+              ? deployments.error.message
+              : "Could not read this project's deployments."}
+          </div>
+        ) : loads.length === 0 ? (
+          <div
+            className="rounded-lg border border-border p-4"
+            data-testid="infra-deployments-empty"
+          >
+            <div className="text-sm font-medium text-foreground">Nothing deployed yet</div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              A deploy registers what it put live and where it answers. Once one reports to a
+              declared stream, the traffic reaching it shows up here.
+            </p>
+          </div>
+        ) : (
+          loads.map((load) => (
+            <div
+              key={load.deployment.id}
+              className="rounded-lg border border-border p-4"
+              data-testid="infra-deployment"
+              data-name={load.deployment.name}
+              data-status={load.deployment.status}
+              // Null and 0 are different states; an absent attribute is the
+              // "could not be measured" one.
+              {...(load.events === null ? {} : { "data-events": String(load.events) })}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="text-sm font-medium text-foreground">
+                    {load.deployment.name}
+                  </span>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {describeAddress(load.deployment)}
+                  </p>
+                </div>
+                <span
+                  className="text-[11px] text-muted-foreground"
+                  data-testid="infra-deployment-status"
+                >
+                  {load.deployment.status}
+                </span>
+              </div>
+
+              <div className="mt-2 flex items-center gap-1.5 text-xs">
+                {load.events !== null && load.events > 0 ? (
+                  <CircleCheckIcon className="size-3.5 shrink-0 text-emerald-500" />
+                ) : (
+                  <CircleDashedIcon className="size-3.5 shrink-0 text-amber-500" />
+                )}
+                <span className="text-foreground" data-testid="infra-deployment-load">
+                  {describeLoad(load)}
+                </span>
+              </div>
+
+              {load.streamNames.length > 0 ? (
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  reporting to{" "}
+                  <code className="text-foreground">{load.streamNames.join(", ")}</code>
+                </p>
+              ) : null}
+            </div>
+          ))
+        )}
+      </section>
+
+      <h2 className="mt-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        Packs
+      </h2>
       {ordered.length === 0 ? (
         <div className="rounded-lg border border-border p-4" data-testid="infra-empty">
           <div className="text-sm font-medium text-foreground">No packs turned on</div>

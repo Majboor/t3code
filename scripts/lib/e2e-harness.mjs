@@ -136,7 +136,31 @@ export function createHarness({
     await session.page.goto(`${baseUrl}/pair`, { waitUntil: "domcontentloaded", timeout: 120_000 });
     await sleep(4_000);
     await submitCredentials(session.page, email, mode);
-    return !session.page.url().includes("/pair");
+
+    // Waited for rather than sampled once. Signing in is a round trip through
+    // the identity provider and then a tenant provision, and on a loaded
+    // machine that lands after the fixed settle above — which read as "signing
+    // up failed" for an account that was in fact created and usable a moment
+    // later.
+    //
+    // Being signed in is the thing worth asserting, and leaving /pair is only
+    // the usual sign of it: the first account after a server restart consumes
+    // the owner-bootstrap pairing link and stays on /pair while being perfectly
+    // authenticated — every later step passed, so the URL alone reported a
+    // false failure. So accept either signal, and fail only when neither
+    // arrives, which is still what a genuinely rejected credential looks like.
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (!session.page.url().includes("/pair")) return true;
+      const signedIn = await session.page
+        .locator('button:has-text("Add project")')
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (signedIn) return true;
+      await sleep(1_000);
+    }
+    return false;
   }
 
   const signUp = (session, email) => authenticate(session, email, "signup");

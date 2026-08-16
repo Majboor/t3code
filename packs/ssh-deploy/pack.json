@@ -3,7 +3,7 @@
   "identity": {
     "id": "pack_c7f9cb58f6a544e7b16c",
     "name": "ssh-deploy",
-    "version": "1.3.1",
+    "version": "1.5.0",
     "displayName": "ssh-deploy",
     "summary": "Deploy a thing to a server over SSH, whatever shape the thing is",
     "publisher": {
@@ -229,6 +229,164 @@
             "signal": "deploy.run.completed"
           },
           "recordedAt": "2026-08-09T01:55:00.000Z"
+        }
+      },
+      {
+        "id": "appledouble-files-ride-along-from-macos",
+        "symptom": "Deployed directories fill with `._app.py`, `._BUILD` and friends that no redeploy ever clears.",
+        "trigger": "rsync from a macOS working copy carries the resource-fork sidecar files across. `--delete` does not remove them, because every deploy re-sends them, so they accumulate on a host whose disk is already shared.",
+        "attributedTo": {
+          "kind": "host",
+          "detail": "macOS writes AppleDouble sidecars beside files on non-native filesystems, and rsync treats them as ordinary files to ship."
+        },
+        "severity": "low",
+        "silent": true,
+        "detection": {
+          "signal": "log-pattern",
+          "match": "._ prefixed files listed in the deploy's rsync output"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "1.4.0",
+          "change": "The ship step excludes them: `rsync -a --delete --exclude='._*'`. Deployments made before this still hold theirs, because no later deploy will clear them."
+        },
+        "firstSeenAt": "2026-08-15T06:53:00.000Z",
+        "lastSeenAt": "2026-08-15T06:53:00.000Z",
+        "deploymentsAffected": 5,
+        "conditions": {
+          "observedAt": "2026-08-15T06:53:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            },
+            {
+              "axis": "deployment-target",
+              "value": "macOS author machine"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "1.4.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-15T19:45:00.000Z"
+        }
+      },
+      {
+        "id": "nothing-retires-the-previous-deployment",
+        "symptom": "A shared host accumulates deployment directories and detached processes holding loopback ports, with no record of which are still wanted.",
+        "trigger": "The deploy only ever adds: it ships a new directory and starts a new process without stopping or removing the one it replaces. The `app.pid` files it writes were empty, so even a cleanup that trusted them had no handle to use.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "medium",
+        "silent": true,
+        "detection": {
+          "signal": "healthcheck",
+          "match": "more directories under the remote dir than deployments anyone can name"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "1.4.0",
+          "change": "The deploy retires what it replaces: stop the previous process by pid (falling back to the process whose cwd is the old directory), delete the old directory, and verify app.pid is non-empty and live before reporting success."
+        },
+        "firstSeenAt": "2026-08-09T02:22:00.000Z",
+        "lastSeenAt": "2026-08-15T20:00:00.000Z",
+        "deploymentsAffected": 6,
+        "conditions": {
+          "observedAt": "2026-08-15T20:00:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Ubuntu 24.04.2 shared host"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "1.4.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-15T20:10:00.000Z"
+        }
+      },
+      {
+        "id": "a-hand-run-deploy-is-invisible-to-the-project",
+        "symptom": "The app is live and serving, but the project's Infrastructure page says nothing is deployed and analytics has nothing to attach numbers to.",
+        "trigger": "Following the deploy steps literally by shelling out rsync and gunicorn. That puts the process on the host without telling T3, which only learns about a deployment through `t3 deploy run`.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "high",
+        "silent": true,
+        "detection": {
+          "signal": "reconciliation-mismatch",
+          "match": "a reachable deployment with no row on the project's infrastructure page"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "1.4.0",
+          "change": "The prompt registers the start command as a deploy target and runs it through `t3 deploy run`, which records the run and registers the deployment, and wires analytics with --analytics-stream rather than by hand."
+        },
+        "firstSeenAt": "2026-08-15T20:20:00.000Z",
+        "lastSeenAt": "2026-08-15T20:20:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-15T20:20:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "local loopback"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "1.4.0",
+          "source": {
+            "kind": "install-report",
+            "target": "local"
+          },
+          "recordedAt": "2026-08-15T20:35:00.000Z"
+        }
+      },
+      {
+        "id": "a-foreground-quick-tunnel-never-returns-an-address",
+        "symptom": "The deploy finishes with the app listening on loopback, and the reply names no trycloudflare address — so nothing outside the machine can reach what was just deployed.",
+        "trigger": "Running `cloudflared tunnel --url` in the foreground. It never exits, so it holds the turn open until something gives up and kills it, and the address it printed is never read back.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "high",
+        "silent": true,
+        "detection": {
+          "signal": "log-pattern",
+          "match": "no https://<name>.trycloudflare.com address in the deploy's reply while the port answers on 127.0.0.1"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "1.5.0",
+          "change": "The prompt runs the tunnel detached with its output redirected, polls that file for the trycloudflare line, and requires the address to be reported and passed to `t3 deploy run --url`."
+        },
+        "firstSeenAt": "2026-08-15T22:45:00.000Z",
+        "lastSeenAt": "2026-08-15T22:45:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-08-15T22:45:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "local machine, published by a cloudflare quick tunnel"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-08-15T22:45:00.000Z"
         }
       }
     ],
@@ -477,21 +635,6 @@
     ],
     "preflightCommand": "command -v sshpass ssh tar >/dev/null && ssh -o BatchMode=no -o StrictHostKeyChecking=no \"$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST\" \"command -v gunicorn python3 >/dev/null && ! ss -ltn | grep -q ':$DEPLOY_PORT '\""
   },
-  "interfaces": [
-    {
-      "kind": "library",
-      "id": "ssh-deploy",
-      "title": "ssh-deploy",
-      "language": "typescript",
-      "exports": [
-        {
-          "name": "install",
-          "kind": "function",
-          "summary": "Replace with what this pack actually exports."
-        }
-      ]
-    }
-  ],
   "runtime": {
     "target": "none",
     "commands": {
@@ -532,14 +675,29 @@
     "workspaceKeyId": "wsk_2fadd5dfb56c40d6bd28"
   },
   "integration": {
-    "prompt": "Deploy this project, either to this machine or to a host over SSH.\n\nRead `deploy.config.json` from the project root first. If it is not there this is the first deploy: ask for what you need — which target, and for an ssh target the host, user, remote directory, port range and the *name* of the secret holding the password — then write the file. Never write the password into it. Every deploy after this one reads the file and asks nothing.\n\nTwo targets:\n- `local` -> run the start command on this machine.\n- `ssh` -> ship it to the host and start it there.\n\nEither way, publish with a cloudflare quick tunnel once it is listening:\n`cloudflared tunnel --url http://127.0.0.1:$DEPLOY_PORT`. It prints the address on startup — capture it, because it is the deployment's address and it changes every time the tunnel restarts.\n\nFirst work out what the project is, because that decides everything after:\n- It already serves HTTP -> ship it and start it.\n- It produces a document -> build the document, then serve the file.\n- It is a terminal program -> it has no port and cannot pass a health check. Stop and talk to the person: offer a small web front end over the same functionality, say which commands become which screens and what will not survive the move, and agree that shape before building it. Do not ship a front end nobody asked for.\n\nThen, whatever the shape:\n1. Preflight before shipping anything: the tools exist locally, the host has what the start command needs, and nothing is already on DEPLOY_PORT.\n2. Stamp a build id, and serve it from /healthz.\n3. Ship the directory and start the process detached, with its pid written down.\n4. Verify from a separate session, and require the build id you just shipped — not merely that something answers, which the previous deployment will happily do.\n\nBind loopback and let the tunnel publish it. Read the SSH password from the server secret store, never from a command line."
+    "prompt": "Deploy this project, either to this machine or to a host over SSH.\n\nAsk T3 what it already knows before you ask the person anything: `t3 deploy list --project <projectId>` names every target this project has, each with the start command it runs and, for an ssh target, its host, user and remote path. That listing is the memory of the last deploy — there is no config file beside the project to read, and one written there would only be a second copy of this to disagree with.\n\nIf a target is listed, this is a redeploy: reuse it by name and ask nothing. If none is, this is the first deploy: ask for what you need — which target, and for an ssh target the host, user, remote directory, port range and the *name* of the secret holding the password — then register it as a target (step 7) so the next deploy finds it. Never write the password into a file or pass it on a command line.\n\nTwo targets:\n- `local` -> run the start command on this machine.\n- `ssh` -> ship it to the host and start it there.\n\nEither way, publish with a cloudflare quick tunnel once it is listening:\n`cloudflared tunnel --url http://127.0.0.1:$DEPLOY_PORT`.\n\nRun it **detached, with its output redirected to a file**, and read the address back out of that file — `nohup cloudflared tunnel --url http://127.0.0.1:$DEPLOY_PORT > tunnel.log 2>&1 &`, then poll `tunnel.log` for the `https://….trycloudflare.com` line. The command never exits: run it in the foreground and it holds the session open until something gives up and kills it, which is how a deploy ends with the app listening on loopback and no address to hand back. Capture the address, because it *is* the deployment's address and it changes every time the tunnel restarts. Pass it to `t3 deploy run --url`, and say it in your reply — a tunnel nobody wrote down is a deployment nobody can reach.\n\nFirst work out what the project is, because that decides everything after:\n- It already serves HTTP -> ship it and start it.\n- It produces a document -> build the document, then serve the file.\n- It is a terminal program -> it has no port and cannot pass a health check. Stop and talk to the person: offer a small web front end over the same functionality, say which commands become which screens and what will not survive the move, and agree that shape before building it. Do not ship a front end nobody asked for.\n\nThen, whatever the shape:\n1. Preflight before shipping anything: the tools exist locally, the host has what the start command needs, and nothing is already on DEPLOY_PORT — *including anything you started yourself*. If you ran the server by hand to try it, stop it before the deploy: the port it is holding is the one the deploy needs, and the deploy is the thing that fails.\n   Capture the start command's errors while you are at it. `gunicorn --daemon` detaches its own stdio, so a bind failure is written nowhere: the run exits non-zero with an empty log and nothing to say why. Add `--error-logfile <file>` (or start it without `--daemon` and redirect), or you will be debugging a silent failure.\n2. Stamp a build id, and serve it from /healthz.\n3. Ship the directory with `rsync -a --delete --exclude='._*'` — macOS resource forks otherwise ride along and `--delete` will never clear them — and start the process detached, with its pid written down.\n4. Verify from a separate session, and require the build id you just shipped — not merely that something answers, which the previous deployment will happily do.\n5. Retire what you replaced. Stop the previous deployment of this project *before* starting the new one — by the pid in its `app.pid`, and if that file is empty or missing, by finding the process whose working directory is the old deployment directory (`ls -l /proc/*/cwd`) rather than by `pkill -f`, which matches the deploy session itself. Then delete the old directory. A deploy that only adds leaves a shared host accumulating directories and detached processes holding ports nobody can account for, and that is exactly what happened before this step existed.\n6. Write the pid down and check you wrote it. An empty `app.pid` is the same as no handle at all: verify the file is non-empty and names a live process before reporting success.\n\n7. Record it, or the project cannot see it. A deploy you ran by hand is invisible to T3: nothing appears on the project's Infrastructure page and there is no deployment for numbers to attach to. Register the start command once as a target and run it through T3 rather than executing it yourself:\n     `t3 deploy add --project <projectId> --name <name> --command '<the whole start command>'`\n     `t3 deploy run <targetId> --url <the address it is reachable on>`\n   Run it that way every time. `deploy run` executes the command from the project directory, records the run, and registers what went live.\n   Keep the name stable across deploys — it is how this deployment is identified. Registering a name that is already there re-registers that same target, so a redeploy replaces what is live; inventing a new name each time stands up a rival deployment beside it, and the next deploy that wires analytics is refused for taking the stream away from what is really its own past self.\n8. When it should report numbers, let the deploy wire them. Add `--analytics-stream <name>` (with `--analytics-purpose` and `--analytics-properties` the first time) to `t3 deploy run`. The deploy declares the stream if needed, mints its ingest key, injects it into the process it starts as `T3_ANALYTICS_INGEST_KEY`, and links the deployment to the stream. Read the key from the environment in the deployed code and never write one into a file — a key committed beside the project is a key anybody can post with.\n\nBind loopback and let the tunnel publish it. Read the SSH password from the server secret store, never from a command line."
+  },
+  "contents": {
+    "readmePath": "README.md",
+    "files": [
+      {
+        "path": "README.md",
+        "sha256": "64ac0b2007aa2447b63898647a2224071f3886e0e7f09a4cd8795dec860fbbf9",
+        "bytes": 9174
+      },
+      {
+        "path": "handover.md",
+        "sha256": "f44dff5f361a80d2c36f9dd51c085e6337d18a7ca111ca16caa0f3d43a316463",
+        "bytes": 6193
+      }
+    ]
   },
   "signature": {
     "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
     "algorithm": "ed25519",
     "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
-    "manifestSha256": "2efa42c29c2c4ae533adf4f4fdb74d48e105308990c51e594c033b7761b41b40",
-    "signature": "2dFjLHZgCHLsdihQW0Fh2a26oLYC0mW4SGMg4BC9CdJc8rUIb1YbxaZNis2217f2DgmXN0j6S5QEGxt6k3eDDQ==",
-    "signedAt": "2026-08-15T18:51:31.251Z"
+    "manifestSha256": "7fd1b6f7afad141b9bd6f3ed69c63b4ca548862f068cc3fe38cc28f77db0fc3a",
+    "signature": "Mo6wfv2r97yOCWfaz3V4KE6cMaC1GYkx/etve6+q/rrM+xdwEcu1mtXA0XPQnAHnYHO41KGvLKZ1ieklfa7nBg==",
+    "signedAt": "2026-08-15T22:52:09.299Z"
   }
 }

@@ -1,5 +1,19 @@
 # Deploy runner
 
+> **Status: this describes a host that no longer exists.** Nothing in this
+> document is installed on the LogicPacks node (`164.68.117.31`). Verified there
+> on 2026-08-15: no `lp-*` scripts under `/usr/local/bin` or `/opt`, no
+> `/srv/lp-workspaces`, no `lp-*` systemd units, and nothing listening in the
+> 21000–21999 range. The evidence this file cites was captured from the same IP
+> on 2026-08-08, so either the host was rebuilt or the tooling was never
+> installed there.
+>
+> Deployments to that node today are flat directories under `/srv/t3-pack-<id>`
+> running detached gunicorn behind a cloudflared tunnel — a different scheme with
+> none of the sandboxing described below. **`packs/ssh-deploy/README.md` is the
+> accurate account; read that one to deploy.** Keep this file as the design for
+> the runner, not as a description of anything running.
+
 Takes a workspace id and a `.pack` directory, and turns them into a running,
 network-restricted service with a reachable local URL — and an event stream that
 says what happened to it.

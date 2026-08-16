@@ -1337,28 +1337,84 @@ const deployRunCommand = Command.make("run", {
   baseDir: baseDirFlag,
   devUrl: devUrlFlag,
   target: Argument.string("target").pipe(Argument.withDescription("Deploy target id to run.")),
+  // Without these the CLI could start a deploy but never wire it to analytics,
+  // so the one path an agent actually drives could not do the thing the deploy
+  // service was built to do: mint the key, inject it, and record what went live
+  // against the stream it reports to.
+  analyticsStream: Flag.string("analytics-stream").pipe(
+    Flag.withDescription("Stream this deployment reports to; declared if it does not exist."),
+    Flag.optional,
+  ),
+  analyticsKeyVariable: Flag.string("analytics-key-var").pipe(
+    Flag.withDescription("Environment variable the ingest key arrives as."),
+    Flag.optional,
+  ),
+  analyticsPurpose: Flag.string("analytics-purpose").pipe(
+    Flag.withDescription("What the stream is for, used only when declaring it."),
+    Flag.optional,
+  ),
+  analyticsProperties: Flag.string("analytics-properties").pipe(
+    Flag.withDescription("Comma separated name:type:required, used only when declaring."),
+    Flag.optional,
+  ),
+  deploymentName: Flag.string("deployment-name").pipe(
+    Flag.withDescription("Register the deployment under this name. Defaults to the target's."),
+    Flag.optional,
+  ),
+  url: Flag.string("url").pipe(
+    Flag.withDescription("Where the deployment is reachable, when known up front."),
+    Flag.optional,
+  ),
 }).pipe(
   Command.withDescription("Run a deploy target from the current working directory."),
   Command.withHandler((flags) =>
     runDeployCommand(flags, (deploy) =>
-      deploy
-        .run({
-          targetId: DeployTargetId.make(flags.target),
-          actor: { label: "cli" },
-          workspaceRoot: process.cwd(),
-        })
-        .pipe(
-          Effect.mapError((error) => new Error(error.message)),
-          Effect.flatMap((deployRun) =>
-            deployRun.status === "succeeded"
-              ? Effect.succeed(`Deploy ${deployRun.id} succeeded.\n${deployRun.output}`.trimEnd())
-              : Effect.fail(
-                  new Error(
-                    `Deploy ${deployRun.id} failed (exit ${deployRun.exitCode ?? "unknown"}).\n${deployRun.output}`.trimEnd(),
-                  ),
-                ),
-          ),
+      Effect.try({
+        try: () =>
+          Option.match(flags.analyticsProperties, {
+            onNone: () => undefined,
+            onSome: (value) => parseAnalyticsProperties(value),
+          }),
+        catch: (cause) => new AnalyticsPropertiesError({ cause }),
+      }).pipe(
+        Effect.mapError((error) => new Error(String(error.cause))),
+        Effect.flatMap((properties) =>
+          deploy
+            .run({
+              targetId: DeployTargetId.make(flags.target),
+              actor: { label: "cli" },
+              workspaceRoot: process.cwd(),
+              ...(Option.isSome(flags.analyticsStream)
+                ? {
+                    analytics: {
+                      stream: flags.analyticsStream.value as never,
+                      ...(Option.isSome(flags.analyticsKeyVariable)
+                        ? { keyVariable: flags.analyticsKeyVariable.value }
+                        : {}),
+                      ...(Option.isSome(flags.analyticsPurpose)
+                        ? { purpose: flags.analyticsPurpose.value }
+                        : {}),
+                      ...(properties === undefined ? {} : { properties: properties as never }),
+                      ...(Option.isSome(flags.deploymentName)
+                        ? { deploymentName: flags.deploymentName.value }
+                        : {}),
+                      ...(Option.isSome(flags.url) ? { url: flags.url.value } : {}),
+                    },
+                  }
+                : {}),
+            })
+            .pipe(Effect.mapError((error) => new Error(error.message))),
         ),
+        Effect.flatMap((deployRun) =>
+          deployRun.status === "succeeded"
+            ? Effect.succeed(`Deploy ${deployRun.id} succeeded.\n${deployRun.output}`.trimEnd())
+            : Effect.fail(
+                new Error(
+                  `Deploy ${deployRun.id} failed (exit ${deployRun.exitCode ?? "unknown"}).\n${deployRun.output}`.trimEnd(),
+                ),
+              ),
+        ),
+      ),
     ),
   ),
 );
@@ -1622,7 +1678,9 @@ const readSecretFromStdin = Effect.tryPromise({
     // Only a trailing newline is stripped: a password may legitimately end in
     // a space, and trimming it would store something the host will reject with
     // an error that says nothing about why.
-    return Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+    return Buffer.concat(chunks)
+      .toString("utf8")
+      .replace(/\r?\n$/, "");
   },
   catch: (cause) =>
     new SecretInputError({ message: "Failed to read the secret from stdin.", cause }),
@@ -1664,7 +1722,9 @@ const secretListCommand = Command.make("list", {
   Command.withHandler((flags) =>
     runSecretMutation(flags, (store) =>
       Effect.gen(function* () {
-        const names = yield* store.list().pipe(Effect.mapError((cause) => new Error(cause.message)));
+        const names = yield* store
+          .list()
+          .pipe(Effect.mapError((cause) => new Error(cause.message)));
         return names.length === 0 ? "No secrets stored." : names.join("\n");
       }),
     ),

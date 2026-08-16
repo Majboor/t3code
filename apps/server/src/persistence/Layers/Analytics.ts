@@ -80,6 +80,13 @@ const makeAnalyticsRepository = Effect.gen(function* () {
         DO UPDATE SET
           purpose = excluded.purpose,
           properties_json = excluded.properties_json,
+          -- Reissuing is the only thing that updates an existing row, and a
+          -- new key is the whole point of it. Left out, the caller was handed a
+          -- key whose digest was never stored: the deploy carried it into the
+          -- process, every event was refused 403, and because the route will
+          -- not say which of project, stream or key was wrong, it looked
+          -- exactly like reporting silently doing nothing.
+          ingest_key_name = excluded.ingest_key_name,
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at
       `,

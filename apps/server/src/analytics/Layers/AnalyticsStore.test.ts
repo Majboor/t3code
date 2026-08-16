@@ -198,6 +198,57 @@ describe("the analytics store", () => {
     }).pipe(Effect.provide(makeLayer())),
   );
 
+  it.effect("accepts events posted with a reissued key", () =>
+    Effect.gen(function* () {
+      const analytics = yield* AnalyticsStore;
+      yield* analytics.declareStream(pageView);
+
+      // Every redeploy that wires analytics takes this path — the stream is
+      // already declared, so the deploy reissues rather than declares. The key
+      // handed back has to be the one the stream now answers to; when the
+      // digest was not written, this was a 403 on every event forever after
+      // the first deploy.
+      const reissued = yield* analytics.reissueIngestKey({
+        projectId,
+        stream: "page.view" as never,
+      });
+
+      yield* analytics.record({
+        projectId,
+        stream: "page.view" as never,
+        ingestKey: reissued.ingestKey,
+        properties: { path: "/a" },
+      });
+
+      const counted = yield* analytics.query({
+        projectId,
+        stream: "page.view" as never,
+        aggregate: "count",
+      });
+      assert.strictEqual(counted.buckets[0]?.value ?? 0, 1);
+    }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect("stops the key a reissue replaced from writing any more", () =>
+    Effect.gen(function* () {
+      const analytics = yield* AnalyticsStore;
+      const declared = yield* analytics.declareStream(pageView);
+      yield* analytics.reissueIngestKey({ projectId, stream: "page.view" as never });
+
+      // The other half of the same guarantee: rotating has to actually retire
+      // the old key, or a replaced deployment keeps writing to the stream.
+      const error = yield* Effect.flip(
+        analytics.record({
+          projectId,
+          stream: "page.view" as never,
+          ingestKey: declared.ingestKey,
+          properties: { path: "/a" },
+        }),
+      );
+      assert.strictEqual(error.code, "invalid-key");
+    }).pipe(Effect.provide(makeLayer())),
+  );
+
   it.effect("refuses to sum something that was declared as text", () =>
     Effect.gen(function* () {
       const analytics = yield* AnalyticsStore;

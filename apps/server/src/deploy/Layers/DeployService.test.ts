@@ -227,6 +227,69 @@ it.layer(TestLayer)("DeployService", (it) => {
     }),
   );
 
+  it.effect("re-registering a name updates that target instead of adding a rival", () =>
+    Effect.gen(function* () {
+      const deploy = yield* DeployService;
+
+      const first = yield* deploy.createTarget({
+        projectId,
+        name: "Reused",
+        kind: "command",
+        command: "echo first",
+      });
+      const second = yield* deploy.createTarget({
+        projectId,
+        name: "Reused",
+        kind: "command",
+        command: "echo second",
+      });
+
+      expect(second.id).toBe(first.id);
+      expect(second.command).toBe("echo second");
+      expect(second.createdAt).toBe(first.createdAt);
+
+      const targets = yield* deploy.listTargets({ projectId });
+      expect(targets.filter((target) => target.name === "Reused").length).toBe(1);
+    }),
+  );
+
+  it.effect("lets an agent that re-registers before every deploy keep reporting", () =>
+    Effect.gen(function* () {
+      const deploy = yield* DeployService;
+      const registry = yield* DeploymentRegistry;
+
+      // The agent has no memory of the last deploy, so it registers the target
+      // again each time. That used to mint a second target, whose deployment was
+      // a stranger to the first — and the redeploy was refused for taking the
+      // stream away from what was really its own previous self.
+      const deployTwice = (command: string) =>
+        Effect.gen(function* () {
+          const target = yield* deploy.createTarget({
+            projectId,
+            name: "Rebuilt",
+            kind: "command",
+            command,
+          });
+          return yield* deploy.run({
+            targetId: target.id,
+            actor: { label: "test" },
+            workspaceRoot: process.cwd(),
+            analytics: { stream: "rebuilt.view" as never, properties: [] },
+          });
+        });
+
+      yield* deployTwice("echo one");
+      const redeploy = yield* deployTwice("echo two");
+
+      expect(redeploy.status).toBe("succeeded");
+
+      const deployments = yield* registry.list({ projectId });
+      const rebuilt = deployments.filter((deployment) => deployment.name === "Rebuilt");
+      expect(rebuilt.length).toBe(1);
+      expect(rebuilt[0]?.lastRunId).toBe(redeploy.id);
+    }),
+  );
+
   it.effect("marks a failing command as a failed run without raising an error", () =>
     Effect.gen(function* () {
       const deploy = yield* DeployService;
