@@ -278,7 +278,13 @@ const capturedTokens = new Map<ProviderName, string>();
 const CLAUDE_TOKEN_PATTERN = /sk-ant-[A-Za-z0-9_\-]+/;
 
 function captureToken(run: LoginRun): void {
-  const found = CLAUDE_TOKEN_PATTERN.exec(stripAnsi(run.output).replace(/\s+/g, ""));
+  // Read with the whitespace left in. Squeezing it out first glued the
+  // sentence that follows onto the end of the token — "…Storethistokensecurely"
+  // is made of perfectly good token characters — and the provider rejected the
+  // result as invalid while this reported a token captured. The terminal is
+  // wide enough that the token is never wrapped, so its own whitespace is
+  // exactly the boundary that ends it.
+  const found = CLAUDE_TOKEN_PATTERN.exec(stripAnsi(run.output));
   if (found) {
     capturedTokens.set(run.provider, found[0]);
   }

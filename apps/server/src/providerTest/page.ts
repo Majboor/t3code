@@ -203,7 +203,15 @@ async function status(provider) {
   cell.textContent = "checking…";
   const r = await getJson("/api/provider-test/status?provider=" + provider);
   const d = r.data || {};
-  cell.textContent = d.status ? d.status.slice(0, 400) : (d.error || "no answer");
+  // `claude auth status` reads a shared credential file that setup-token never
+  // writes, so it says "not logged in" about a login that worked. Lead with
+  // whether this flow holds a token, and keep the CLI's own words underneath.
+  const held = d.tokenCaptured
+    ? '<span class="ok">connected — token held for this session</span><br>'
+    : "";
+  cell.innerHTML = held + '<span class="muted">' +
+    ((d.status || d.error || "no answer") + "").slice(0, 400).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])) +
+    "</span>";
 }
 $("refresh").onclick = () => { status("claude"); status("codex"); };
 $("logoutClaude").onclick = async () => { await post("/api/provider-test/logout", { provider: "claude" }); status("claude"); };
