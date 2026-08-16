@@ -133,22 +133,39 @@ function startLogin(provider: ProviderName): LoginRun {
 }
 
 /** Runs a short command and returns what it said. */
-function runOnce(command: string, args: ReadonlyArray<string>): Promise<string> {
+/**
+ * Bounded well under the ~100s a proxied request gets: a CLI waiting on
+ * credentials it does not have would otherwise hang until the tunnel gave up,
+ * which reaches the browser as a failed fetch rather than an answer.
+ */
+function runOnce(
+  command: string,
+  args: ReadonlyArray<string>,
+  timeoutMs = 45_000,
+): Promise<string> {
   return new Promise((resolve) => {
     const child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
+    let timedOut = false;
     const absorb = (chunk: Buffer | string): void => {
       output = `${output}${String(chunk)}`.slice(-40_000);
     };
     child.stdout.on("data", absorb);
     child.stderr.on("data", absorb);
     child.once("close", () => {
-      resolve(stripAnsi(output));
+      resolve(
+        timedOut
+          ? `${stripAnsi(output)}\n[gave up after ${Math.round(timeoutMs / 1000)}s — the command was still waiting]`
+          : stripAnsi(output),
+      );
     });
     child.once("error", (error) => {
       resolve(`${output}\n${String(error)}`);
     });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
     child.once("close", () => clearTimeout(timer));
   });
 }
@@ -157,7 +174,9 @@ function runOnce(command: string, args: ReadonlyArray<string>): Promise<string> 
 async function waitForPrompt(run: LoginRun): Promise<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (run.done) return;
-    if (run.url !== null && (run.code !== null || !PROVIDERS[run.provider].wantsCode)) return;
+    // A URL is all Claude ever prints before it blocks on stdin, so waiting
+    // for a code it does not emit only cost twenty seconds every time.
+    if (run.url !== null) return;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }

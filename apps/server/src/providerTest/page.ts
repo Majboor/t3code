@@ -97,13 +97,34 @@ export const PROVIDER_TEST_PAGE = `<!doctype html>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+// Every call goes through here so a dropped request shows up as words on the
+// page. Left to reject on its own it surfaced as "Unhandled Promise Rejection:
+// TypeError: Load failed" in the console and nothing at all in the interface.
 const post = async (path, body) => {
-  const res = await fetch(path, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify(body || {}), credentials: "include",
-  });
-  return { ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) };
+  try {
+    const res = await fetch(path, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {}), credentials: "include",
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  } catch (error) {
+    return { ok: false, status: 0, data: { error: "could not reach the server (" + error + ")" } };
+  }
 };
+const getJson = async (path) => {
+  try {
+    const res = await fetch(path, { credentials: "include" });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+  } catch (error) {
+    return { ok: false, data: { error: "could not reach the server (" + error + ")" } };
+  }
+};
+window.addEventListener("unhandledrejection", (event) => {
+  const box = $("promptMsg");
+  if (box) box.textContent = "unexpected error: " + (event.reason && event.reason.message || event.reason);
+});
 
 async function auth(mode) {
   const email = $("email").value.trim(), password = $("password").value;
@@ -165,8 +186,8 @@ $("connectCodex").onclick = () => connect("codex");
 async function status(provider) {
   const cell = provider === "claude" ? $("claudeWho") : $("codexWho");
   cell.textContent = "checking…";
-  const res = await fetch("/api/provider-test/status?provider=" + provider, { credentials: "include" });
-  const d = await res.json().catch(() => ({}));
+  const r = await getJson("/api/provider-test/status?provider=" + provider);
+  const d = r.data || {};
   cell.textContent = d.status ? d.status.slice(0, 400) : (d.error || "no answer");
 }
 $("refresh").onclick = () => { status("claude"); status("codex"); };
@@ -174,7 +195,7 @@ $("logoutClaude").onclick = async () => { await post("/api/provider-test/logout"
 $("logoutCodex").onclick = async () => { await post("/api/provider-test/logout", { provider: "codex" }); status("codex"); };
 
 async function prompt(provider) {
-  $("promptMsg").textContent = "running…";
+  $("promptMsg").textContent = "running… (up to 45s)";
   $("promptOut").classList.remove("hidden");
   $("promptOut").textContent = "";
   const r = await post("/api/provider-test/prompt", { provider, text: $("prompt").value });
