@@ -33,7 +33,12 @@ const PROVIDERS = {
     auth: ["codex", ["login", "--device-auth"]],
     status: ["codex", ["login", "status"]],
     logout: ["codex", ["logout"]],
-    prompt: (text: string): readonly [string, ReadonlyArray<string>] => ["codex", ["exec", text]],
+    prompt: (text: string): readonly [string, ReadonlyArray<string>] => [
+      "codex",
+      // It refuses to run outside a checkout it trusts, which has nothing to do
+      // with whether the credential works — the point of this call.
+      ["exec", "--skip-git-repo-check", text],
+    ],
     /** Codex shows the code itself; nothing is typed back to it. */
     wantsCode: false,
     needsTerminal: false,

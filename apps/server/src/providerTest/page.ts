@@ -187,12 +187,45 @@ function renderStep(d) {
   }
 }
 
+// Codex finishes on its own once the browser is done — nothing is typed back —
+// so without watching for it the page sat on the original screen through a
+// login that had already succeeded.
+async function watchUntilSignedIn(provider) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const r = await getJson("/api/provider-test/status?provider=" + provider);
+    const d = r.data || {};
+    await status(provider);
+    const said = (d.status || "") + " " + (d.loginOutput || "");
+    if (d.tokenCaptured || /Logged in|logged in|success/i.test(said)) {
+      const msg = $("codeMsg") || $("promptMsg");
+      if (msg) msg.innerHTML = '<span class="ok">signed in</span>';
+      return true;
+    }
+    if (d.loginDone) return false;
+  }
+  return false;
+}
+
 async function connect(provider) {
   const btn = provider === "claude" ? $("connectClaude") : $("connectCodex");
   const label = btn.textContent; btn.disabled = true; btn.textContent = "starting…";
   const r = await post("/api/provider-test/start", { provider });
   btn.disabled = false; btn.textContent = label;
-  if (r.ok) renderStep(r.data);
+  if (r.ok) {
+    renderStep(r.data);
+    if (!r.data.wantsCode) {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.id = "watchNote";
+      note.textContent = "waiting for you to finish in the browser…";
+      $("stepBody").prepend(note);
+      const ok = await watchUntilSignedIn(provider);
+      note.innerHTML = ok
+        ? '<span class="ok">signed in — you can prompt it now</span>'
+        : '<span class="bad">did not complete; press Connect again for a fresh code</span>';
+    }
+  }
   else { $("stepCard").classList.remove("hidden"); $("stepBody").innerHTML = '<p class="bad">' + (r.data.error || "failed") + "</p>"; }
 }
 $("connectClaude").onclick = () => connect("claude");
