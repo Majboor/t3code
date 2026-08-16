@@ -17,6 +17,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  MembershipId,
   ProviderAccountId,
   ProviderSessionId,
   TenantId,
@@ -170,6 +171,8 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     /** Given, the project belongs to a workspace with sharing rules. */
     readonly projectOwnership?: OrchestrationProjectOwnership;
+    /** Who is on the workspace roster. Both harness users unless narrowed. */
+    readonly members?: ReadonlyArray<UserId>;
     readonly shares?: ReadonlyArray<ProviderAccountShareRecord>;
     readonly policies?: ReadonlyArray<ProviderWorkspacePolicyRecord>;
     readonly grants?: ReadonlyArray<ProviderMemberGrantRecord>;
@@ -345,7 +348,21 @@ describe("ProviderCommandReactor", () => {
         Effect.succeed({
           presence: [],
           invites: [],
-          memberships: [],
+          // Sharing only applies to people actually on the roster, so a harness
+          // that seeded none would exercise the non-member path in every test
+          // rather than the rules it means to check.
+          memberships: (input?.members ?? [HARNESS_USER_ID, MEMBER_USER_ID]).map(
+            (userId, index) =>
+              ({
+                id: MembershipId.make(`membership-${index}`),
+                tenantId: HARNESS_TENANT_ID,
+                userId,
+                organizationId: null,
+                roles: ["developer"],
+                createdAt: "2026-08-16T00:00:00.000Z",
+                disabledAt: null,
+              }) as never,
+          ),
           activities: [],
         }),
       saveCollaboration: () => Effect.void,
@@ -595,6 +612,31 @@ describe("ProviderCommandReactor", () => {
     });
 
     expect(await waitForTurnStartFailure(harness)).toContain("is no longer shared");
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.touchedAccounts).toEqual([]);
+  });
+
+  /**
+   * The turn itself is not gated on membership — someone with no membership
+   * recorded is let through deliberately — so this is the only thing standing
+   * between a shared subscription and anyone who can reach the project.
+   */
+  it("refuses to spend the workspace account on someone who was never a member", async () => {
+    const harness = await createHarness({
+      projectOwnership: HARNESS_OWNERSHIP,
+      members: [HARNESS_USER_ID],
+      shares: [shareRow({ ownerUserId: HARNESS_USER_ID, enabled: true })],
+      policies: [sharedPolicyRow(HARNESS_USER_ID)],
+    });
+
+    await startTurnAs({
+      harness,
+      commandId: "cmd-turn-start-non-member",
+      messageId: "user-message-non-member",
+      authorUserId: MEMBER_USER_ID,
+    });
+
+    expect(await waitForTurnStartFailure(harness)).toContain("No Codex account is connected");
     expect(harness.startSession).not.toHaveBeenCalled();
     expect(harness.touchedAccounts).toEqual([]);
   });

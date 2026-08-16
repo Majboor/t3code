@@ -52,6 +52,14 @@ code problem and neither was resolved by building this.
 - **Index and policy** — migration `051_ProviderAccountSharing.ts`, four tables, served by
   `persistence/{Services,Layers}/ProviderSharing.ts`. The index exists because the directory slugs
   are SHA-256 digests: nothing on disk can enumerate "every account in this workspace".
+- **Who may be lent anything** — `resolveProviderAccount.ts` refuses to apply any sharing to
+  someone who is not an active member of the tenant. This is load-bearing and easy to remove by
+  accident: a turn is *not* gated on membership (`checkWriteAccessForTurn` deliberately allows a
+  user with no membership recorded, and the whole check falls open on a failed read), and the
+  orchestration read model is not scoped per user, so without this guard a workspace set to a
+  shared account would fund anyone who could address a thread in the project. A member-level grant
+  is separately membership-gated at write time, but a grant row outlives the membership, so the
+  guard covers that too.
 - **The decision** — `providerAuth/decideProviderAccount.ts`, pure and IO-free, 14 tests. The
   precedence is: a contributor's off switch wins; then the member's grant, defaulting to the
   workspace policy; then their own account; then a refusal that offers both routes out.

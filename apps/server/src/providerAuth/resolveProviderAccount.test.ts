@@ -5,7 +5,10 @@ import path from "node:path";
 import { Effect, Layer, Option } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { MembershipId, TenantId, UserId } from "@t3tools/contracts";
+
 import { PersistenceSqlError } from "../persistence/Errors.ts";
+import { TenancyRepository } from "../persistence/Services/Tenancy.ts";
 import {
   ProviderSharingRepository,
   type ProviderAccountShareRecord,
@@ -103,6 +106,38 @@ interface StubOptions {
   readonly policies?: ReadonlyArray<ProviderWorkspacePolicyRecord>;
   readonly grants?: ReadonlyArray<ProviderMemberGrantRecord>;
   readonly failReads?: boolean;
+  /** Who is on the roster. Everyone the other tests use, unless narrowed. */
+  readonly members?: ReadonlyArray<string>;
+  readonly failMembershipReads?: boolean;
+}
+
+/**
+ * The roster the sharing rules are read against. Only membership matters here,
+ * so the rest of the snapshot is empty rather than fabricated.
+ */
+function makeTenancyStub(options: StubOptions) {
+  const memberUserIds = options.members ?? [OWNER_ID, MEMBER_ID];
+  return Layer.mock(TenancyRepository, {
+    loadCollaboration: () =>
+      options.failMembershipReads
+        ? (Effect.fail(
+            new PersistenceSqlError({ operation: "stub", detail: "memberships unavailable" }),
+          ) as Effect.Effect<never, PersistenceSqlError>)
+        : Effect.succeed({
+            presence: [],
+            invites: [],
+            activities: [],
+            memberships: memberUserIds.map((userId, index) => ({
+              id: MembershipId.make(`membership-${index}`),
+              tenantId: TenantId.make(TENANT_ID),
+              userId: UserId.make(userId),
+              organizationId: null,
+              roles: ["developer"] as const,
+              createdAt: "2026-08-16T00:00:00.000Z",
+              disabledAt: null,
+            })),
+          } as never),
+  });
 }
 
 function makeRepositoryStub(options: StubOptions = {}) {
@@ -138,7 +173,7 @@ function makeRepositoryStub(options: StubOptions = {}) {
       }),
   });
 
-  return { layer, touched };
+  return { layer: Layer.merge(layer, makeTenancyStub(options)), touched };
 }
 
 function resolve(
@@ -317,5 +352,76 @@ describe("resolveProviderAccount", () => {
     const resolved = await resolve({ stateDir, userId: MEMBER_ID, provider: "claude" }, stub);
 
     expect(resolved).toMatchObject({ outcome: "refused" });
+  });
+
+  /**
+   * Nothing upstream stops a stranger reaching a thread: a turn is refused only
+   * for an explicit `viewer`, and someone with no membership at all is let
+   * through on purpose. Sharing must therefore do its own checking, or a
+   * workspace switched to a shared account funds anyone who can find it.
+   */
+  it("does not lend the workspace account to someone who is not a member", async () => {
+    const stateDir = makeStateDir();
+    connect(stateDir, OWNER_ID, "codex");
+    const stub = makeRepositoryStub({
+      members: [OWNER_ID],
+      shares: [shareRow()],
+      policies: [sharedPolicyRow()],
+    });
+
+    const resolved = await resolve({ stateDir, userId: "user-stranger" }, stub);
+
+    expect(resolved).toMatchObject({ outcome: "refused" });
+    expect(stub.touched).toEqual([]);
+  });
+
+  it("does not honour a grant left behind after someone was removed from the workspace", async () => {
+    const stateDir = makeStateDir();
+    connect(stateDir, OWNER_ID, "codex");
+    const stub = makeRepositoryStub({
+      members: [OWNER_ID],
+      shares: [shareRow()],
+      policies: [sharedPolicyRow()],
+      grants: [grantRow({ access: "workspace" })],
+    });
+
+    const resolved = await resolve({ stateDir, userId: MEMBER_ID }, stub);
+
+    expect(resolved).toMatchObject({ outcome: "refused" });
+  });
+
+  it("still runs a non-member on their own account", async () => {
+    const stateDir = makeStateDir();
+    connect(stateDir, OWNER_ID, "codex");
+    connect(stateDir, "user-stranger", "codex");
+    const stub = makeRepositoryStub({
+      members: [OWNER_ID],
+      shares: [shareRow()],
+      policies: [sharedPolicyRow()],
+    });
+
+    const resolved = await resolve({ stateDir, userId: "user-stranger" }, stub);
+
+    expect(resolved).toMatchObject({
+      outcome: "launch",
+      ownerUserId: "user-stranger",
+      source: "own",
+    });
+  });
+
+  // Losing the roster must cost sharing, not everybody's turn.
+  it("falls back to the sender's own account when membership cannot be read", async () => {
+    const stateDir = makeStateDir();
+    connect(stateDir, OWNER_ID, "codex");
+    connect(stateDir, MEMBER_ID, "codex");
+    const stub = makeRepositoryStub({
+      failMembershipReads: true,
+      shares: [shareRow()],
+      policies: [sharedPolicyRow()],
+    });
+
+    const resolved = await resolve({ stateDir, userId: MEMBER_ID }, stub);
+
+    expect(resolved).toMatchObject({ outcome: "launch", ownerUserId: MEMBER_ID, source: "own" });
   });
 });

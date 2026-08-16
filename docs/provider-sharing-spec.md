@@ -108,6 +108,11 @@ decideProviderAccount(input: {
 
 Precedence, strictest first:
 
+0. **Only members of the workspace are lent anything.** Applied in the resolver, not the decision
+   function: a non-member is given `NO_SHARING` and so runs on their own account or not at all.
+   Nothing upstream enforces this — `checkWriteAccessForTurn` lets a user with *no* membership run
+   a turn on purpose, so without this a shared workspace would fund anyone who could address a
+   thread in the project. The predicate is the same one that check uses, so the two agree.
 1. A contributor's **off** switch always wins — a share with `enabled === false` is invisible.
 2. Effective access = `grant?.access ?? (policy?.mode === "shared" ? "workspace" : "own")`.
 3. `workspace` → the policy's named account, only if still shared and still connected.
