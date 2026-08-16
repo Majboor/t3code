@@ -64,7 +64,37 @@ function loadWindowStart(): string {
  * what is missing, because nothing here can see whether an environment
  * variable is set on the machine that will run it.
  */
+/**
+ * Deploying and the infrastructure it produces are held back from production
+ * while they are finished, so a build can ship the rest of the product without
+ * offering a half-built one. Set VITE_T3_INFRA=off for that build; anything
+ * else — including unset, which is every development build — leaves it on.
+ */
+const INFRA_ENABLED = import.meta.env.VITE_T3_INFRA !== "off";
+
+function ComingSoon() {
+  return (
+    <Shell>
+      <section className="rounded-lg border border-border p-6 text-center">
+        <h2 className="text-base font-medium text-foreground">Infrastructure is coming soon</h2>
+        <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+          Deploying a project from here, and the record of what it put live, are still being built.
+          Nothing here is wired up yet — when it is, this page will show what is running and the
+          traffic it is serving.
+        </p>
+      </section>
+    </Shell>
+  );
+}
+
 export function InfraPage({ projectId }: { projectId: ProjectId }) {
+  if (!INFRA_ENABLED) {
+    return <ComingSoon />;
+  }
+  return <InfraPageContent projectId={projectId} />;
+}
+
+function InfraPageContent({ projectId }: { projectId: ProjectId }) {
   const environmentId = usePrimaryEnvironmentId();
   const queryClient = useQueryClient();
   const ownership = useStore(
