@@ -9,6 +9,7 @@ import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { Effect } from "effect";
 
+import { ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { PROVIDER_TEST_PAGE } from "./page.ts";
 
 /**
@@ -333,6 +334,23 @@ async function waitForAnswer(
   return "unknown";
 }
 
+/**
+ * Signed in, or nothing.
+ *
+ * These start logins, discard credentials and run prompts on the machine. Left
+ * open — which is how this began, as a test page — anyone who found the URL
+ * could log the providers out from under everybody. Signup is open on this
+ * deployment, so "public" and "harmless" are not the same thing.
+ */
+const requireSignedIn = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const serverAuth = yield* ServerAuth;
+  const session = yield* serverAuth
+    .getSessionState(request)
+    .pipe(Effect.orElseSucceed(() => ({ authenticated: false }) as { authenticated: boolean }));
+  return session.authenticated === true;
+});
+
 /** An unreadable body is the same as an empty one here: the handlers validate. */
 const jsonBody = (request: HttpServerRequest.HttpServerRequest) =>
   request.json.pipe(Effect.orElseSucceed(() => ({}) as unknown));
@@ -357,6 +375,9 @@ export const providerTestStartRouteLayer = HttpRouter.add(
   "/api/provider-test/start",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    if (!(yield* requireSignedIn)) {
+      return HttpServerResponse.jsonUnsafe({ error: "sign in first" }, { status: 401 });
+    }
     const provider = providerOf(yield* jsonBody(request));
     if (provider === null) {
       return HttpServerResponse.jsonUnsafe({ error: "unknown provider" }, { status: 400 });
@@ -380,6 +401,9 @@ export const providerTestCodeRouteLayer = HttpRouter.add(
   "/api/provider-test/code",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    if (!(yield* requireSignedIn)) {
+      return HttpServerResponse.jsonUnsafe({ error: "sign in first" }, { status: 401 });
+    }
     const body = yield* jsonBody(request);
     const provider = providerOf(body);
     const code = (body as { code?: unknown } | null)?.code;
@@ -418,6 +442,9 @@ export const providerTestStatusRouteLayer = HttpRouter.add(
   "/api/provider-test/status",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    if (!(yield* requireSignedIn)) {
+      return HttpServerResponse.jsonUnsafe({ error: "sign in first" }, { status: 401 });
+    }
     const requestUrl = Array.isArray(request.url) ? request.url[0] : request.url;
     const provider = new URL(requestUrl ?? "/", "http://localhost").searchParams.get("provider");
     if (!isProvider(provider)) {
@@ -445,6 +472,9 @@ export const providerTestLogoutRouteLayer = HttpRouter.add(
   "/api/provider-test/logout",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    if (!(yield* requireSignedIn)) {
+      return HttpServerResponse.jsonUnsafe({ error: "sign in first" }, { status: 401 });
+    }
     const provider = providerOf(yield* jsonBody(request));
     if (provider === null) {
       return HttpServerResponse.jsonUnsafe({ error: "unknown provider" }, { status: 400 });
@@ -462,6 +492,9 @@ export const providerTestPromptRouteLayer = HttpRouter.add(
   "/api/provider-test/prompt",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    if (!(yield* requireSignedIn)) {
+      return HttpServerResponse.jsonUnsafe({ error: "sign in first" }, { status: 401 });
+    }
     const body = yield* jsonBody(request);
     const provider = providerOf(body);
     const rawText = (body as { text?: unknown } | null)?.text;
@@ -488,7 +521,8 @@ export const providerTestPromptRouteLayer = HttpRouter.add(
       flag === undefined
         ? null
         : path.join(os.tmpdir(), `t3-provider-test-${provider}-${process.pid}.txt`);
-    const fullArgs = replyPath === null ? args : [...args, flag, replyPath];
+    const fullArgs: ReadonlyArray<string> =
+      replyPath === null || flag === undefined ? args : [...args, flag, replyPath];
 
     const raw = yield* Effect.promise(() => runOnce(command, fullArgs, 45_000, extraEnv));
     const reply =
