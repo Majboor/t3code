@@ -203,9 +203,10 @@ async function status(provider) {
   cell.textContent = "checking…";
   const r = await getJson("/api/provider-test/status?provider=" + provider);
   const d = r.data || {};
-  // `claude auth status` reads a shared credential file that setup-token never
+  // "claude auth status" reads a shared credential file that setup-token never
   // writes, so it says "not logged in" about a login that worked. Lead with
   // whether this flow holds a token, and keep the CLI's own words underneath.
+  // (No backticks in here: this whole page is one template literal.)
   const held = d.tokenCaptured
     ? '<span class="ok">connected — token held for this session</span><br>'
     : "";
