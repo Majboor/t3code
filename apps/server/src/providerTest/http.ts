@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -22,6 +23,9 @@ import { PROVIDER_TEST_PAGE } from "./page.ts";
  * look at the reported account, log out, connect as somebody else, look again.
  */
 
+const requirePty = (): typeof import("node-pty") =>
+  createRequire(import.meta.url)("node-pty") as typeof import("node-pty");
+
 /** Only these run. Nothing here takes a command from the request. */
 const PROVIDERS = {
   codex: {
@@ -32,15 +36,23 @@ const PROVIDERS = {
     prompt: (text: string): readonly [string, ReadonlyArray<string>] => ["codex", ["exec", text]],
     /** Codex shows the code itself; nothing is typed back to it. */
     wantsCode: false,
+    needsTerminal: false,
   },
   claude: {
     label: "Claude",
-    auth: ["claude", ["auth", "login"]],
+    auth: ["claude", ["setup-token"]],
     status: ["claude", ["auth", "status", "--json"]],
     logout: ["claude", ["auth", "logout"]],
     prompt: (text: string): readonly [string, ReadonlyArray<string>] => ["claude", ["-p", text]],
     /** Claude's browser hands back a code that has to be typed into it. */
     wantsCode: true,
+    /**
+     * `claude auth login` prints a link and offers nowhere to put the code —
+     * pasting into it does nothing, which is where this got stuck. The prompt
+     * lives in `setup-token`, and only renders on a real terminal, so this one
+     * is driven through a pty.
+     */
+    needsTerminal: true,
   },
 } as const;
 
@@ -96,7 +108,6 @@ function startLogin(provider: ProviderName): LoginRun {
   }
 
   const [command, args] = PROVIDERS[provider].auth;
-  const child = spawn(command, [...args], { stdio: ["pipe", "pipe", "pipe"] });
   const run: LoginRun = {
     provider,
     output: "",
@@ -104,29 +115,52 @@ function startLogin(provider: ProviderName): LoginRun {
     code: null,
     done: false,
     exitCode: null,
-    write: (text) => {
-      child.stdin.write(text);
-    },
-    stop: () => {
-      child.kill("SIGTERM");
-    },
+    write: () => {},
+    stop: () => {},
   };
-
   const absorb = (chunk: Buffer | string): void => {
     run.output = `${run.output}${String(chunk)}`.slice(-20_000);
     parse(run);
   };
-  child.stdout.on("data", absorb);
-  child.stderr.on("data", absorb);
-  child.once("close", (code) => {
-    run.done = true;
-    run.exitCode = code;
-  });
-  child.once("error", (error) => {
-    run.output = `${run.output}\n${String(error)}`;
-    run.done = true;
-    run.exitCode = -1;
-  });
+
+  if (PROVIDERS[provider].needsTerminal) {
+    // A terminal, not a pipe: the prompt is drawn by a full-screen interface
+    // that renders nothing without TERM and a window size, and reads keys
+    // rather than lines. Written to a pipe the code simply vanished.
+    const pty = requirePty();
+    const session = pty.spawn(command, [...args], {
+      name: "xterm-256color",
+      cols: 120,
+      rows: 40,
+      env: { ...process.env, TERM: "xterm-256color" },
+    });
+    run.write = (text) => session.write(text);
+    run.stop = () => session.kill();
+    session.onData(absorb);
+    session.onExit(({ exitCode }) => {
+      run.done = true;
+      run.exitCode = exitCode;
+    });
+  } else {
+    const child = spawn(command, [...args], { stdio: ["pipe", "pipe", "pipe"] });
+    run.write = (text) => {
+      child.stdin.write(text);
+    };
+    run.stop = () => {
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", absorb);
+    child.stderr.on("data", absorb);
+    child.once("close", (code) => {
+      run.done = true;
+      run.exitCode = code;
+    });
+    child.once("error", (error) => {
+      run.output = `${run.output}\n${String(error)}`;
+      run.done = true;
+      run.exitCode = -1;
+    });
+  }
 
   runs.set(provider, run);
   return run;
@@ -242,7 +276,7 @@ export const providerTestCodeRouteLayer = HttpRouter.add(
       return HttpServerResponse.jsonUnsafe({ error: "no login in progress" }, { status: 409 });
     }
     // Written to the process's stdin, never to a shell.
-    run.write(`${code.trim()}\n`);
+    run.write(`${code.trim()}\r`);
     yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 4_000)));
     return HttpServerResponse.jsonUnsafe({
       done: run.done,
