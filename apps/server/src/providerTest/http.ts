@@ -193,9 +193,13 @@ function runOnce(
   command: string,
   args: ReadonlyArray<string>,
   timeoutMs = 45_000,
+  extraEnv: Readonly<Record<string, string>> = {},
 ): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, [...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...extraEnv },
+    });
     let output = "";
     let timedOut = false;
     const absorb = (chunk: Buffer | string): void => {
@@ -251,6 +255,35 @@ async function type(run: LoginRun, text: string): Promise<void> {
   run.write("\r");
 }
 
+/**
+ * Anything that looks like a credential, hidden before it can be shown.
+ *
+ * `claude setup-token` does not sign the machine in — it prints a token and
+ * expects it to be kept. Echoing the terminal verbatim therefore published a
+ * year-long credential onto a public page, which is how the first successful
+ * login leaked one. Nothing that comes back from a command is shown raw again.
+ */
+const SECRET_PATTERNS = [/sk-ant-[A-Za-z0-9_\-]+/g, /sk-[A-Za-z0-9_\-]{20,}/g];
+
+function redactSecrets(text: string): string {
+  return SECRET_PATTERNS.reduce(
+    (carried, pattern) => carried.replace(pattern, "«token hidden»"),
+    text,
+  );
+}
+
+/** The token the interface printed, kept out of every reply. */
+const capturedTokens = new Map<ProviderName, string>();
+
+const CLAUDE_TOKEN_PATTERN = /sk-ant-[A-Za-z0-9_\-]+/;
+
+function captureToken(run: LoginRun): void {
+  const found = CLAUDE_TOKEN_PATTERN.exec(stripAnsi(run.output).replace(/\s+/g, ""));
+  if (found) {
+    capturedTokens.set(run.provider, found[0]);
+  }
+}
+
 /** The words the interface uses when it has finished with the code. */
 const FAILURE_PATTERN = /(error|invalid|failed|expired|try again|retry)/i;
 const SUCCESS_PATTERN = /(success|logged in|signed in|token (created|saved)|you can now)/i;
@@ -262,7 +295,7 @@ const SUCCESS_PATTERN = /(success|logged in|signed in|token (created|saved)|you 
  * width, so the raw stream is mostly spaces and escape codes.
  */
 function readable(raw: string): string {
-  return stripAnsi(raw)
+  return redactSecrets(stripAnsi(raw))
     .split("\n")
     .map((line) => line.replace(/\s+$/, ""))
     .filter((line) => line.trim().length > 0)
@@ -352,10 +385,13 @@ export const providerTestCodeRouteLayer = HttpRouter.add(
     // pause reported "submitted" while the answer arrived seconds later and
     // was never shown.
     const settled = yield* Effect.promise(() => waitForAnswer(run, before));
+    captureToken(run);
     return HttpServerResponse.jsonUnsafe({
       done: run.done,
       accepted: settled === "accepted",
       failed: settled === "failed",
+      // Whether a credential was obtained, never the credential.
+      tokenCaptured: capturedTokens.has(provider),
       output: readable(run.output).slice(-4_000),
     });
   }),
@@ -379,6 +415,9 @@ export const providerTestStatusRouteLayer = HttpRouter.add(
       label: PROVIDERS[provider].label,
       // The words the CLI used, so the page never claims more than it was told.
       status: output.trim().slice(0, 4_000),
+      // `claude auth status` reports the shared credential file, which
+      // setup-token never writes — so say separately whether this flow got one.
+      tokenCaptured: capturedTokens.has(provider),
       loginDone: run?.done ?? true,
       loginOutput: run ? readable(run.output).slice(-4_000) : "",
     });
@@ -417,7 +456,14 @@ export const providerTestPromptRouteLayer = HttpRouter.add(
     }
     // Passed as one argument, not through a shell, so its content stays content.
     const [command, args] = PROVIDERS[provider].prompt(text.slice(0, 2_000));
-    const output = yield* Effect.promise(() => runOnce(command, args));
+    // `setup-token` hands back a token rather than signing the machine in, so
+    // the credential has to be given to the command that uses it. This is the
+    // shape per-user access wants anyway: a token belonging to one person,
+    // handed to one process, rather than a file every user of the box shares.
+    const token = capturedTokens.get(provider);
+    const extraEnv =
+      provider === "claude" && token !== undefined ? { CLAUDE_CODE_OAUTH_TOKEN: token } : {};
+    const output = yield* Effect.promise(() => runOnce(command, args, 45_000, extraEnv));
     return HttpServerResponse.jsonUnsafe({
       provider,
       prompt: text,
