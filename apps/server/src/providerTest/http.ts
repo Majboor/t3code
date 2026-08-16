@@ -86,14 +86,28 @@ interface LoginRun {
 /** One login at a time per provider: a second would race the first for the file. */
 const runs = new Map<ProviderName, LoginRun>();
 
+/**
+ * Rejoins a link the terminal broke across lines.
+ *
+ * A full-screen interface wraps at the terminal width, so a long URL arrives
+ * split, and each piece on its own is a URL that does not work. Wrapping puts
+ * the break at a column rather than at anything meaningful, so a continuation
+ * is simply the next line with no space before it.
+ */
+function unwrapUrls(text: string): string {
+  return text.replace(/(https:\/\/[^\s"'<>]*)\r?\n(?=[^\s"'<>]+)/g, "$1");
+}
+
 function parse(run: LoginRun): void {
-  const clean = stripAnsi(run.output);
+  const clean = unwrapUrls(stripAnsi(run.output));
   if (run.url === null) {
     // The last URL wins: Codex prints its device page after a preamble, and
     // Claude's authorize link is the only one it prints.
     const found = clean.match(URL_PATTERN);
     if (found && found.length > 0) {
-      run.url = found[found.length - 1] ?? null;
+      // Longest wins rather than last: if a fragment does slip through, the
+      // whole link is always the longer of the two.
+      run.url = found.toSorted((left, right) => right.length - left.length)[0] ?? null;
     }
   }
   if (run.code === null) {
@@ -130,8 +144,11 @@ function startLogin(provider: ProviderName): LoginRun {
     const pty = requirePty();
     const session = pty.spawn(command, [...args], {
       name: "xterm-256color",
-      cols: 120,
-      rows: 40,
+      // Wide on purpose: the interface hard-wraps at the terminal width, and
+      // a wrapped link is a broken link — the first attempt handed out a URL cut
+      // off before redirect_uri, which OAuth rejected outright.
+      cols: 1000,
+      rows: 50,
       env: { ...process.env, TERM: "xterm-256color" },
     });
     run.write = (text) => session.write(text);
