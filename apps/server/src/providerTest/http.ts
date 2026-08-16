@@ -232,6 +232,25 @@ async function waitForPrompt(run: LoginRun): Promise<void> {
   }
 }
 
+/**
+ * Types a code in, the way a keyboard would.
+ *
+ * The interface reads keys and redraws on each one, so a hundred characters
+ * and a carriage return delivered as a single write outrun it: the characters
+ * arrive, the return is swallowed while it is still catching up, and the code
+ * sits in the box unsubmitted looking exactly like a hang. Sent in small
+ * pieces, with the return on its own once the interface has settled, it takes.
+ */
+async function type(run: LoginRun, text: string): Promise<void> {
+  const size = 24;
+  for (let at = 0; at < text.length; at += size) {
+    run.write(text.slice(at, at + size));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  run.write("\r");
+}
+
 /** The words the interface uses when it has finished with the code. */
 const FAILURE_PATTERN = /(error|invalid|failed|expired|try again|retry)/i;
 const SUCCESS_PATTERN = /(success|logged in|signed in|token (created|saved)|you can now)/i;
@@ -327,7 +346,7 @@ export const providerTestCodeRouteLayer = HttpRouter.add(
     }
     // Sent as keystrokes to the terminal, never to a shell.
     const before = run.output;
-    run.write(`${code.trim()}\r`);
+    yield* Effect.promise(() => type(run, code.trim()));
     // The exchange is a round trip to the provider, so wait for the interface
     // to actually say something rather than guessing at a delay — a fixed
     // pause reported "submitted" while the answer arrived seconds later and
