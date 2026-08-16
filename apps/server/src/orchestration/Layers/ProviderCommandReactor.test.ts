@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type {
   ModelSelection,
+  OrchestrationProjectOwnership,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderAccount,
@@ -22,8 +23,9 @@ import {
   ThreadId,
   TurnId,
   UserId,
+  WorkspaceId,
 } from "@t3tools/contracts";
-import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
+import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
@@ -53,6 +55,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { codexHomeFor, providerAuthUserDir } from "../../providerAuth/store.ts";
 import {
+  ProviderSharingRepository,
+  type ProviderAccountShareRecord,
+  type ProviderMemberGrantRecord,
+  type ProviderWorkspacePolicyRecord,
+} from "../../persistence/Services/ProviderSharing.ts";
+import {
   TenancyRepository,
   type ProviderIsolationPersistenceSnapshot,
   type TenancyRepositoryShape,
@@ -66,6 +74,29 @@ import {
  * otherwise all be testing the refusal rather than the behaviour they name.
  */
 const HARNESS_USER_ID = UserId.make("user-reactor-harness");
+
+/**
+ * A colleague with nothing connected of their own.
+ *
+ * Every sharing case is about this person: whether the workspace lets them
+ * spend somebody else's subscription, and what they are told when it does not.
+ */
+const MEMBER_USER_ID = UserId.make("user-reactor-member");
+
+const HARNESS_TENANT_ID = TenantId.make("tenant-reactor");
+const HARNESS_WORKSPACE_ID = WorkspaceId.make("workspace-reactor");
+
+/** A project the sharing tables can be keyed against. */
+const HARNESS_OWNERSHIP: OrchestrationProjectOwnership = {
+  tenantId: HARNESS_TENANT_ID,
+  tenantDisplayName: "Reactor Tenant",
+  workspaceId: HARNESS_WORKSPACE_ID,
+  workspaceTitle: "Reactor Workspace",
+  organizationId: null,
+  organizationDisplayName: null,
+  ownerUserId: HARNESS_USER_ID,
+  ownerDisplayName: "Reactor Harness",
+};
 
 /** Both providers connected for the harness user, in the shape the store reads. */
 function seedProviderCredentials(stateDir: string, userId: string): void {
@@ -137,6 +168,11 @@ describe("ProviderCommandReactor", () => {
     readonly providerIsolation?: ProviderIsolationPersistenceSnapshot;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
+    /** Given, the project belongs to a workspace with sharing rules. */
+    readonly projectOwnership?: OrchestrationProjectOwnership;
+    readonly shares?: ReadonlyArray<ProviderAccountShareRecord>;
+    readonly policies?: ReadonlyArray<ProviderWorkspacePolicyRecord>;
+    readonly grants?: ReadonlyArray<ProviderMemberGrantRecord>;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -144,6 +180,21 @@ describe("ProviderCommandReactor", () => {
     const { stateDir } = deriveServerPathsSync(baseDir, undefined);
     createdStateDirs.add(stateDir);
     seedProviderCredentials(stateDir, HARNESS_USER_ID);
+    const touchedAccounts: Array<{ userId: string; accountId: string }> = [];
+    const providerSharingLayer = Layer.mock(ProviderSharingRepository, {
+      listSharesForWorkspace: () => Effect.succeed(input?.shares ?? []),
+      listPoliciesForWorkspace: () => Effect.succeed(input?.policies ?? []),
+      getGrant: (grantInput) => {
+        const grant = (input?.grants ?? []).find(
+          (entry) => entry.userId === grantInput.userId && entry.provider === grantInput.provider,
+        );
+        return Effect.succeed(grant === undefined ? Option.none() : Option.some(grant));
+      },
+      touchAccountUsed: (used) =>
+        Effect.sync(() => {
+          touchedAccounts.push({ userId: used.userId, accountId: used.accountId });
+        }),
+    });
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
@@ -326,6 +377,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
       Layer.provideMerge(Layer.succeed(TenancyRepository, tenancyRepository)),
+      Layer.provideMerge(providerSharingLayer),
       Layer.provideMerge(Layer.succeed(GitCore, { renameBranch } as unknown as GitCoreShape)),
       Layer.provideMerge(
         Layer.succeed(GitStatusBroadcaster, {
@@ -361,6 +413,7 @@ describe("ProviderCommandReactor", () => {
         projectId: asProjectId("project-1"),
         title: "Provider Project",
         workspaceRoot: "/tmp/provider-project",
+        ...(input?.projectOwnership !== undefined ? { ownership: input.projectOwnership } : {}),
         defaultModelSelection: modelSelection,
         createdAt: now,
       }),
@@ -394,9 +447,174 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       stateDir,
+      touchedAccounts,
       drain,
     };
   }
+
+  /** The detail the reactor put on the thread when a turn could not start. */
+  async function waitForTurnStartFailure(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+  ): Promise<string> {
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+        false
+      );
+    });
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    const failure = thread?.activities.find(
+      (activity) => activity.kind === "provider.turn.start.failed",
+    );
+    return String((failure?.payload as Record<string, unknown> | undefined)?.detail ?? "");
+  }
+
+  const shareRow = (input: {
+    readonly ownerUserId: string;
+    readonly enabled: boolean;
+  }): ProviderAccountShareRecord => ({
+    tenantId: HARNESS_TENANT_ID,
+    workspaceId: HARNESS_WORKSPACE_ID,
+    ownerUserId: input.ownerUserId,
+    provider: "codex",
+    accountId: "default",
+    enabled: input.enabled,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  const sharedPolicyRow = (ownerUserId: string): ProviderWorkspacePolicyRecord => ({
+    tenantId: HARNESS_TENANT_ID,
+    workspaceId: HARNESS_WORKSPACE_ID,
+    provider: "codex",
+    mode: "shared",
+    sharedOwnerUserId: ownerUserId,
+    sharedAccountId: "default",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  const workspaceGrantRow = (userId: string): ProviderMemberGrantRecord => ({
+    tenantId: HARNESS_TENANT_ID,
+    workspaceId: HARNESS_WORKSPACE_ID,
+    userId,
+    provider: "codex",
+    access: "workspace",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  const startTurnAs = (input: {
+    readonly harness: Awaited<ReturnType<typeof createHarness>>;
+    readonly commandId: string;
+    readonly messageId: string;
+    readonly authorUserId: UserId;
+  }) =>
+    Effect.runPromise(
+      input.harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(input.commandId),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId(input.messageId),
+          role: "user",
+          authorUserId: input.authorUserId,
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+  it("runs a sender who has their own account on their own credential", async () => {
+    const harness = await createHarness();
+
+    await startTurnAs({
+      harness,
+      commandId: "cmd-turn-start-own-account",
+      messageId: "user-message-own-account",
+      authorUserId: HARNESS_USER_ID,
+    });
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerLaunchEnvironment: {
+        env: {
+          HOME: providerAuthUserDir(harness.stateDir, HARNESS_USER_ID),
+          CODEX_HOME: codexHomeFor(harness.stateDir, HARNESS_USER_ID),
+        },
+      },
+    });
+    expect(harness.touchedAccounts).toEqual([{ userId: HARNESS_USER_ID, accountId: "default" }]);
+  });
+
+  it("runs a member granted workspace access on the owner's credential and home", async () => {
+    const harness = await createHarness({
+      projectOwnership: HARNESS_OWNERSHIP,
+      shares: [shareRow({ ownerUserId: HARNESS_USER_ID, enabled: true })],
+      policies: [sharedPolicyRow(HARNESS_USER_ID)],
+      grants: [workspaceGrantRow(MEMBER_USER_ID)],
+    });
+
+    await startTurnAs({
+      harness,
+      commandId: "cmd-turn-start-shared-account",
+      messageId: "user-message-shared-account",
+      authorUserId: MEMBER_USER_ID,
+    });
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    // The whole point: the member has connected nothing, and the turn runs
+    // under the owner's directories so the provider bills and logs the owner.
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerLaunchEnvironment: {
+        env: {
+          HOME: providerAuthUserDir(harness.stateDir, HARNESS_USER_ID),
+          CODEX_HOME: codexHomeFor(harness.stateDir, HARNESS_USER_ID),
+        },
+      },
+    });
+    expect(harness.touchedAccounts).toEqual([{ userId: HARNESS_USER_ID, accountId: "default" }]);
+  });
+
+  it("stops the next turn once the owner switches sharing off", async () => {
+    const harness = await createHarness({
+      projectOwnership: HARNESS_OWNERSHIP,
+      shares: [shareRow({ ownerUserId: HARNESS_USER_ID, enabled: false })],
+      policies: [sharedPolicyRow(HARNESS_USER_ID)],
+      grants: [workspaceGrantRow(MEMBER_USER_ID)],
+    });
+
+    await startTurnAs({
+      harness,
+      commandId: "cmd-turn-start-share-withdrawn",
+      messageId: "user-message-share-withdrawn",
+      authorUserId: MEMBER_USER_ID,
+    });
+
+    expect(await waitForTurnStartFailure(harness)).toContain("is no longer shared");
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.touchedAccounts).toEqual([]);
+  });
+
+  it("offers both routes when the sender has no account and nothing is shared", async () => {
+    const harness = await createHarness({ projectOwnership: HARNESS_OWNERSHIP });
+
+    await startTurnAs({
+      harness,
+      commandId: "cmd-turn-start-no-account",
+      messageId: "user-message-no-account",
+      authorUserId: MEMBER_USER_ID,
+    });
+
+    const detail = await waitForTurnStartFailure(harness);
+    expect(detail).toContain("No Codex account is connected for you.");
+    expect(detail).toContain("Connect one in Settings → Connections");
+    expect(detail).toContain("ask a workspace admin to share one");
+    expect(harness.startSession).not.toHaveBeenCalled();
+  });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();

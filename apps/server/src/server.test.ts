@@ -122,6 +122,17 @@ import { PackEnablementRepositoryLive } from "./persistence/Layers/PackEnablemen
 import { AnalyticsStore, type AnalyticsStoreShape } from "./analytics/Services/AnalyticsStore.ts";
 import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
+import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderSharing.ts";
+import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSharingService.ts";
+import {
+  ProviderSharingRepository,
+  type ProviderSharingRepositoryShape,
+} from "./persistence/Services/ProviderSharing.ts";
+import {
+  createProviderAccount,
+  writeClaudeToken,
+  type ProviderAuthProvider,
+} from "./providerAuth/store.ts";
 import {
   ProjectSetupScriptRunner,
   type ProjectSetupScriptRunnerShape,
@@ -328,6 +339,17 @@ const threadPreferenceTestLayer = ProjectionThreadPreferenceRepositoryLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
 );
 
+const providerSharingTestLayer = ProviderSharingRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
+);
+
+// The sharing RPCs read the collaboration roster, so the test server needs the
+// same pairing the real one has rather than a repository on its own.
+const providerSharingServiceTestLayer = ProviderSharingServiceLive.pipe(
+  Layer.provide(providerSharingTestLayer),
+  Layer.provide(collaborationTestLayer),
+);
+
 const deploymentRegistryTestLayer = DeploymentRegistryLive.pipe(
   Layer.provide(DeploymentRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
   Layer.provide(DeployRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
@@ -479,6 +501,12 @@ const buildAppUnderTest = (options?: {
   seedTenancy?: (repository: TenancyRepositoryShape) => Effect.Effect<void>;
   /** Runs against the same store the routes use, which a test cannot otherwise reach. */
   seedAnalytics?: (store: AnalyticsStoreShape) => Effect.Effect<void>;
+  /**
+   * Hands the test the same account index the provider-auth routes write to.
+   * Nothing on disk can answer "which accounts exist", so this table is the only
+   * way to assert that the connect flow kept its half of the bargain.
+   */
+  withProviderSharing?: (repository: ProviderSharingRepositoryShape) => Effect.Effect<void>;
 }) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -562,6 +590,14 @@ const buildAppUnderTest = (options?: {
     const seedAnalyticsLayer = Layer.effectDiscard(
       options?.seedAnalytics
         ? Effect.service(AnalyticsStore).pipe(Effect.flatMap(options.seedAnalytics))
+        : Effect.void,
+    );
+
+    const providerSharingCaptureLayer = Layer.effectDiscard(
+      options?.withProviderSharing
+        ? Effect.service(ProviderSharingRepository).pipe(
+            Effect.flatMap(options.withProviderSharing),
+          )
         : Effect.void,
     );
 
@@ -704,14 +740,16 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provideMerge(authTestLayer),
       Layer.provideMerge(seedTenancyLayer),
-      Layer.provideMerge(seedAnalyticsLayer),
+      // Merged rather than given pipe entries of their own: `pipe` takes twenty
+      // arguments and this chain is already at twenty.
+      Layer.provideMerge(Layer.mergeAll(seedAnalyticsLayer, providerSharingCaptureLayer)),
       Layer.provideMerge(tenancyRepositoryTestLayer),
-      Layer.provideMerge(threadPreferenceTestLayer),
+      Layer.provideMerge(Layer.mergeAll(threadPreferenceTestLayer, providerSharingTestLayer)),
       Layer.provideMerge(deployTestLayer),
       Layer.provideMerge(analyticsTestLayer),
       Layer.provideMerge(deploymentRegistryTestLayer),
       Layer.provideMerge(packEnablementTestLayer),
-      Layer.provideMerge(collaborationTestLayer),
+      Layer.provideMerge(Layer.mergeAll(collaborationTestLayer, providerSharingServiceTestLayer)),
       Layer.provideMerge(organizationTestLayer),
       Layer.provideMerge(packRegistryTestLayer),
       Layer.provide(workspaceAndProjectServicesLayer),
@@ -1166,6 +1204,12 @@ const makePackManifestPayload = (version: string): PackManifest => ({
     prompt: "Install the stripe-checkout pack and call createCheckoutSession from your cart page.",
   },
 });
+
+/** One provider's row out of a `/api/provider-auth/connections` body. */
+const connectionFor = (data: Record<string, any>, provider: ProviderAuthProvider) =>
+  (data["connections"] as ReadonlyArray<Record<string, any>>).find(
+    (entry) => entry["provider"] === provider,
+  ) as Record<string, any>;
 
 const restoreProcessEnvValue = (name: string, value: string | undefined) => {
   if (value === undefined) {
@@ -4533,399 +4577,395 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect(
-    "browser shows both providers unconnected with a direct sign-in button each",
-    () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const runId = crypto.randomUUID();
-        const uniqueSubject = `provider-browser-${runId}`;
-        const uniqueEmail = `provider-browser-${runId}@example.test`;
-        const uniqueName = `Provider Browser ${runId.slice(0, 8)}`;
-        const userId = UserId.make(`supabase:${uniqueSubject}`);
-        const tenantId = TenantId.make(`tenant-provider-browser-${runId}`);
-        const organizationId = OrganizationId.make(`org-provider-browser-${runId}`);
-        const membership = makeSupabaseMembership({
-          tenantId,
-          userId,
-          organizationId,
-          roles: ["admin"],
-        });
-        const fixture = makeSignedSupabaseFixture({
-          sub: uniqueSubject,
-          email: uniqueEmail,
-          user_metadata: {
-            full_name: uniqueName,
-          },
-        });
-        let capturedRepository: TenancyRepositoryShape | undefined;
-        const baseReadModel = makeDefaultOrchestrationReadModel();
-        const tenantOwnership = {
-          tenantId,
-          tenantDisplayName: `Provider Browser ${runId}`,
-          workspaceId: WorkspaceId.make(`workspace-provider-browser-${runId}`),
-          workspaceTitle: `Provider Browser Workspace ${runId}`,
-          organizationId,
-          organizationDisplayName: `Provider Browser ${runId}`,
-          ownerUserId: userId,
-          ownerDisplayName: uniqueName,
-        };
-        const readModel = {
-          ...baseReadModel,
-          projects: baseReadModel.projects.map((project) => ({
-            ...project,
-            ownership: tenantOwnership,
-          })),
-        };
-        const terminalOpenInputs: TerminalOpenInput[] = [];
-        const terminalWriteInputs: TerminalWriteInput[] = [];
+  it.effect("browser shows both providers unconnected with a direct sign-in button each", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const runId = crypto.randomUUID();
+      const uniqueSubject = `provider-browser-${runId}`;
+      const uniqueEmail = `provider-browser-${runId}@example.test`;
+      const uniqueName = `Provider Browser ${runId.slice(0, 8)}`;
+      const userId = UserId.make(`supabase:${uniqueSubject}`);
+      const tenantId = TenantId.make(`tenant-provider-browser-${runId}`);
+      const organizationId = OrganizationId.make(`org-provider-browser-${runId}`);
+      const membership = makeSupabaseMembership({
+        tenantId,
+        userId,
+        organizationId,
+        roles: ["admin"],
+      });
+      const fixture = makeSignedSupabaseFixture({
+        sub: uniqueSubject,
+        email: uniqueEmail,
+        user_metadata: {
+          full_name: uniqueName,
+        },
+      });
+      let capturedRepository: TenancyRepositoryShape | undefined;
+      const baseReadModel = makeDefaultOrchestrationReadModel();
+      const tenantOwnership = {
+        tenantId,
+        tenantDisplayName: `Provider Browser ${runId}`,
+        workspaceId: WorkspaceId.make(`workspace-provider-browser-${runId}`),
+        workspaceTitle: `Provider Browser Workspace ${runId}`,
+        organizationId,
+        organizationDisplayName: `Provider Browser ${runId}`,
+        ownerUserId: userId,
+        ownerDisplayName: uniqueName,
+      };
+      const readModel = {
+        ...baseReadModel,
+        projects: baseReadModel.projects.map((project) => ({
+          ...project,
+          ownership: tenantOwnership,
+        })),
+      };
+      const terminalOpenInputs: TerminalOpenInput[] = [];
+      const terminalWriteInputs: TerminalWriteInput[] = [];
 
-        yield* buildAppUnderTest({
-          config: {
-            supabaseProjectUrl: new URL(supabaseProjectUrl),
-            supabaseAnonKey: "public-anon-key",
-            supabaseJwtAudience: "authenticated",
+      yield* buildAppUnderTest({
+        config: {
+          supabaseProjectUrl: new URL(supabaseProjectUrl),
+          supabaseAnonKey: "public-anon-key",
+          supabaseJwtAudience: "authenticated",
+        },
+        layers: {
+          projectionSnapshotQuery: {
+            getSnapshot: () => Effect.succeed(readModel),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: readModel.snapshotSequence,
+                projects: readModel.projects,
+                threads: [makeDefaultOrchestrationThreadShell()],
+                updatedAt: readModel.updatedAt,
+              }),
+            getProjectShellById: (projectId) =>
+              Effect.succeed(
+                (() => {
+                  const project = readModel.projects.find(
+                    (candidate) => candidate.id === projectId,
+                  );
+                  return project ? Option.some(project) : Option.none();
+                })(),
+              ),
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                threadId === defaultThreadId
+                  ? Option.some(makeDefaultOrchestrationThreadShell())
+                  : Option.none(),
+              ),
           },
-          layers: {
-            projectionSnapshotQuery: {
-              getSnapshot: () => Effect.succeed(readModel),
-              getShellSnapshot: () =>
-                Effect.succeed({
-                  snapshotSequence: readModel.snapshotSequence,
-                  projects: readModel.projects,
-                  threads: [makeDefaultOrchestrationThreadShell()],
-                  updatedAt: readModel.updatedAt,
-                }),
-              getProjectShellById: (projectId) =>
-                Effect.succeed(
-                  (() => {
-                    const project = readModel.projects.find(
-                      (candidate) => candidate.id === projectId,
-                    );
-                    return project ? Option.some(project) : Option.none();
-                  })(),
-                ),
-              getThreadShellById: (threadId) =>
-                Effect.succeed(
-                  threadId === defaultThreadId
-                    ? Option.some(makeDefaultOrchestrationThreadShell())
-                    : Option.none(),
-                ),
-            },
-            terminalManager: {
-              open: (input) => {
-                terminalOpenInputs.push(input);
-                return Effect.succeed({
-                  threadId: input.threadId,
-                  terminalId: input.terminalId ?? "terminal-default",
-                  cwd: input.cwd,
-                  worktreePath: input.worktreePath ?? null,
-                  status: "running" as const,
-                  pid: 12345,
-                  history: "",
-                  exitCode: null,
-                  exitSignal: null,
-                  updatedAt: "2026-05-09T01:02:00.000Z",
-                });
-              },
-              write: (input) => {
-                terminalWriteInputs.push(input);
-                return Effect.void;
-              },
-            },
-          },
-          seedTenancy: (repository) => {
-            capturedRepository = repository;
-            return Effect.all(
-              [
-                repository.saveOrganizations({
-                  organizations: [
-                    {
-                      id: organizationId,
-                      slug: `provider-browser-${runId}`,
-                      displayName: `Provider Browser ${runId}`,
-                      createdAt: "2026-05-09T01:00:00.000Z",
-                      archivedAt: null,
-                    },
-                  ],
-                  tenants: [
-                    {
-                      id: tenantId,
-                      slug: `provider-browser-${runId}`,
-                      displayName: `Provider Browser ${runId}`,
-                      kind: "corporate",
-                      organizationId,
-                      runtimeId: TenantRuntimeId.make(`runtime-provider-browser-${runId}`),
-                      createdAt: "2026-05-09T01:00:00.000Z",
-                      archivedAt: null,
-                    },
-                  ],
-                  employees: [
-                    {
-                      membership,
-                      email: uniqueEmail,
-                      displayName: uniqueName,
-                      status: "active",
-                    },
-                  ],
-                  invites: [],
-                  memberships: [membership],
-                  teams: [],
-                  departments: [],
-                  grants: [],
-                  reviews: [],
-                  auditEvents: [],
-                }),
-                repository.saveCollaboration({
-                  presence: [],
-                  invites: [],
-                  memberships: [membership],
-                  activities: [],
-                }),
-              ],
-              { discard: true },
-            ).pipe(Effect.orDie);
-          },
-        });
-
-        const serverHttpBaseUrl = yield* getHttpServerUrl("/");
-        const serverWsBaseUrl = yield* getWsServerUrl("/", { authenticated: false });
-        const webRoot = path.resolve(import.meta.dirname, "../../web");
-        const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
-
-        const withAccountSettingsBrowser = <A>(
-          run: (page: import("playwright").Page, appUrl: string) => Promise<A>,
-        ) =>
-          Effect.promise(async () => {
-            const originalViteHttpUrl = process.env.VITE_HTTP_URL;
-            const originalViteWsUrl = process.env.VITE_WS_URL;
-            const originalViteDevServerUrl = process.env.VITE_DEV_SERVER_URL;
-            const originalPort = process.env.PORT;
-            const originalHost = process.env.HOST;
-            const originalCwd = process.cwd();
-            const vitePort = await reserveTcpPort();
-            const appUrl = `http://127.0.0.1:${vitePort}/`;
-            process.env.VITE_HTTP_URL = serverHttpBaseUrl;
-            process.env.VITE_WS_URL = serverWsBaseUrl;
-            process.env.VITE_DEV_SERVER_URL = appUrl;
-            process.env.PORT = String(vitePort);
-            process.env.HOST = "127.0.0.1";
-
-            const [{ createServer }, { chromium }] = await Promise.all([
-              import("vite"),
-              import("playwright"),
-            ]);
-            process.chdir(webRoot);
-            const viteServer = await createServer({
-              root: webRoot,
-              configFile: path.join(webRoot, "vite.config.ts"),
-              server: {
-                host: "127.0.0.1",
-                port: vitePort,
-                strictPort: true,
-              },
-              clearScreen: false,
-              logLevel: "error",
-            });
-            const browser = await chromium.launch({ headless: true });
-            try {
-              await viteServer.listen();
-              return await withCleanBrowserContext(browser, appUrl, null, async (page) => {
-                await page.goto(appUrl, { waitUntil: "domcontentloaded" });
-                await page.evaluate(async (token) => {
-                  localStorage.clear();
-                  sessionStorage.clear();
-                  const browserGlobal = globalThis as typeof globalThis & {
-                    caches?: {
-                      keys: () => Promise<string[]>;
-                      delete: (cacheName: string) => Promise<boolean>;
-                    };
-                    indexedDB?: {
-                      databases?: () => Promise<Array<{ name?: string | undefined }>>;
-                      deleteDatabase: (name: string) => {
-                        addEventListener: (type: string, listener: () => void) => void;
-                      };
-                    };
-                  };
-                  if (browserGlobal.caches) {
-                    const cacheNames = await browserGlobal.caches.keys();
-                    await Promise.all(
-                      cacheNames.map((cacheName) => browserGlobal.caches?.delete(cacheName)),
-                    );
-                  }
-                  if (typeof browserGlobal.indexedDB?.databases === "function") {
-                    const databases = await browserGlobal.indexedDB.databases();
-                    await Promise.all(
-                      databases
-                        .map((database) => database.name)
-                        .filter(
-                          (name): name is string => typeof name === "string" && name.length > 0,
-                        )
-                        .map(
-                          (name) =>
-                            new Promise<void>((resolve) => {
-                              const request = browserGlobal.indexedDB?.deleteDatabase(name);
-                              if (!request) {
-                                resolve();
-                                return;
-                              }
-                              request.addEventListener("success", () => resolve());
-                              request.addEventListener("error", () => resolve());
-                              request.addEventListener("blocked", () => resolve());
-                            }),
-                        ),
-                    );
-                  }
-                  localStorage.setItem("t3code.supabase.accessToken", token);
-                }, fixture.jwt);
-                return await run(page, appUrl);
+          terminalManager: {
+            open: (input) => {
+              terminalOpenInputs.push(input);
+              return Effect.succeed({
+                threadId: input.threadId,
+                terminalId: input.terminalId ?? "terminal-default",
+                cwd: input.cwd,
+                worktreePath: input.worktreePath ?? null,
+                status: "running" as const,
+                pid: 12345,
+                history: "",
+                exitCode: null,
+                exitSignal: null,
+                updatedAt: "2026-05-09T01:02:00.000Z",
               });
-            } finally {
-              await Promise.race([
-                browser.close().catch(() => undefined),
-                new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
-              ]);
-              await Promise.race([
-                viteServer.close().catch(() => undefined),
-                new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
-              ]);
-              restoreProcessEnvValue("VITE_HTTP_URL", originalViteHttpUrl);
-              restoreProcessEnvValue("VITE_WS_URL", originalViteWsUrl);
-              restoreProcessEnvValue("VITE_DEV_SERVER_URL", originalViteDevServerUrl);
-              restoreProcessEnvValue("PORT", originalPort);
-              restoreProcessEnvValue("HOST", originalHost);
-              process.chdir(originalCwd);
-            }
+            },
+            write: (input) => {
+              terminalWriteInputs.push(input);
+              return Effect.void;
+            },
+          },
+        },
+        seedTenancy: (repository) => {
+          capturedRepository = repository;
+          return Effect.all(
+            [
+              repository.saveOrganizations({
+                organizations: [
+                  {
+                    id: organizationId,
+                    slug: `provider-browser-${runId}`,
+                    displayName: `Provider Browser ${runId}`,
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                tenants: [
+                  {
+                    id: tenantId,
+                    slug: `provider-browser-${runId}`,
+                    displayName: `Provider Browser ${runId}`,
+                    kind: "corporate",
+                    organizationId,
+                    runtimeId: TenantRuntimeId.make(`runtime-provider-browser-${runId}`),
+                    createdAt: "2026-05-09T01:00:00.000Z",
+                    archivedAt: null,
+                  },
+                ],
+                employees: [
+                  {
+                    membership,
+                    email: uniqueEmail,
+                    displayName: uniqueName,
+                    status: "active",
+                  },
+                ],
+                invites: [],
+                memberships: [membership],
+                teams: [],
+                departments: [],
+                grants: [],
+                reviews: [],
+                auditEvents: [],
+              }),
+              repository.saveCollaboration({
+                presence: [],
+                invites: [],
+                memberships: [membership],
+                activities: [],
+              }),
+            ],
+            { discard: true },
+          ).pipe(Effect.orDie);
+        },
+      });
+
+      const serverHttpBaseUrl = yield* getHttpServerUrl("/");
+      const serverWsBaseUrl = yield* getWsServerUrl("/", { authenticated: false });
+      const webRoot = path.resolve(import.meta.dirname, "../../web");
+      const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+
+      const withAccountSettingsBrowser = <A>(
+        run: (page: import("playwright").Page, appUrl: string) => Promise<A>,
+      ) =>
+        Effect.promise(async () => {
+          const originalViteHttpUrl = process.env.VITE_HTTP_URL;
+          const originalViteWsUrl = process.env.VITE_WS_URL;
+          const originalViteDevServerUrl = process.env.VITE_DEV_SERVER_URL;
+          const originalPort = process.env.PORT;
+          const originalHost = process.env.HOST;
+          const originalCwd = process.cwd();
+          const vitePort = await reserveTcpPort();
+          const appUrl = `http://127.0.0.1:${vitePort}/`;
+          process.env.VITE_HTTP_URL = serverHttpBaseUrl;
+          process.env.VITE_WS_URL = serverWsBaseUrl;
+          process.env.VITE_DEV_SERVER_URL = appUrl;
+          process.env.PORT = String(vitePort);
+          process.env.HOST = "127.0.0.1";
+
+          const [{ createServer }, { chromium }] = await Promise.all([
+            import("vite"),
+            import("playwright"),
+          ]);
+          process.chdir(webRoot);
+          const viteServer = await createServer({
+            root: webRoot,
+            configFile: path.join(webRoot, "vite.config.ts"),
+            server: {
+              host: "127.0.0.1",
+              port: vitePort,
+              strictPort: true,
+            },
+            clearScreen: false,
+            logLevel: "error",
           });
-
-        try {
-          yield* withAccountSettingsBrowser(async (page, appUrl) => {
-            const pageMessages: string[] = [];
-            page.on("console", (message) => {
-              pageMessages.push(`${message.type()}: ${message.text()}`);
-            });
-            page.on("pageerror", (error) => {
-              pageMessages.push(`pageerror: ${error.message}`);
-            });
-            await page.goto(`${appUrl}settings/account`, { waitUntil: "domcontentloaded" });
-            await page
-              .getByText(uniqueSubject)
-              .waitFor({ timeout: 20_000 })
-              .catch(async (error) => {
-                const bodyText = await page
-                  .locator("body")
-                  .innerText()
-                  .catch(() => "");
-                throw new Error(
-                  [
-                    error instanceof Error ? error.message : String(error),
-                    `url=${page.url()}`,
-                    `body=${bodyText}`,
-                    `console=${pageMessages.join(" | ")}`,
-                  ].join("\n"),
-                );
-              });
-            await page.evaluate(
-              async ({ environmentId, projectId, threadId }) => {
-                const { useStore } = (await new Function('return import("/src/store.ts")')()) as {
-                  useStore: {
-                    setState: (state: unknown) => void;
+          const browser = await chromium.launch({ headless: true });
+          try {
+            await viteServer.listen();
+            return await withCleanBrowserContext(browser, appUrl, null, async (page) => {
+              await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+              await page.evaluate(async (token) => {
+                localStorage.clear();
+                sessionStorage.clear();
+                const browserGlobal = globalThis as typeof globalThis & {
+                  caches?: {
+                    keys: () => Promise<string[]>;
+                    delete: (cacheName: string) => Promise<boolean>;
+                  };
+                  indexedDB?: {
+                    databases?: () => Promise<Array<{ name?: string | undefined }>>;
+                    deleteDatabase: (name: string) => {
+                      addEventListener: (type: string, listener: () => void) => void;
+                    };
                   };
                 };
-                useStore.setState({
-                  activeEnvironmentId: environmentId,
-                  environmentStateById: {
-                    [environmentId]: {
-                      projectIds: [projectId],
-                      projectById: {
-                        [projectId]: {
-                          id: projectId,
-                          environmentId,
-                          name: "Default Project",
-                          cwd: "/tmp/default-project",
-                          defaultModelSelection: null,
-                          scripts: [],
-                        },
-                      },
-                      threadIds: [threadId],
-                      threadIdsByProjectId: { [projectId]: [threadId] },
-                      threadShellById: {
-                        [threadId]: {
-                          id: threadId,
-                          environmentId,
-                          codexThreadId: null,
-                          projectId,
-                          title: "Default Thread",
-                          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-                          runtimeMode: "full-access",
-                          interactionMode: "default",
-                          error: null,
-                          createdAt: "2026-05-09T00:00:00.000Z",
-                          updatedAt: "2026-05-09T00:05:00.000Z",
-                          archivedAt: null,
-                          branch: null,
-                          worktreePath: null,
-                        },
-                      },
-                      threadSessionById: {},
-                      threadTurnStateById: {},
-                      messageIdsByThreadId: {},
-                      messageByThreadId: {},
-                      activityIdsByThreadId: {},
-                      activityByThreadId: {},
-                      proposedPlanIdsByThreadId: {},
-                      proposedPlanByThreadId: {},
-                      turnDiffIdsByThreadId: {},
-                      turnDiffSummaryByThreadId: {},
-                      sidebarThreadSummaryById: {},
-                      bootstrapComplete: true,
-                    },
-                  },
-                });
-              },
-              {
-                environmentId: testEnvironmentDescriptor.environmentId,
-                projectId: defaultProjectId,
-                threadId: defaultThreadId,
-              },
-            );
-            // Both providers, each offering one button, each reported by the
-            // server as this account's own rather than the machine's. Pressing
-            // the button is deliberately not exercised here: it runs the real
-            // `codex` and `claude` binaries, which a test machine does not have
-            // and which no assertion about the panel needs.
-            await page
-              .getByText("Codex turns will not run until you connect an account.")
-              .waitFor({ timeout: 20_000 })
-              .catch(async (error) => {
-                const bodyText = await page
-                  .locator("body")
-                  .innerText()
-                  .catch(() => "");
-                throw new Error(
-                  [
-                    error instanceof Error ? error.message : String(error),
-                    `url=${page.url()}`,
-                    `body=${bodyText}`,
-                    `console=${pageMessages.join(" | ")}`,
-                  ].join("\n"),
-                );
-              });
-            await page
-              .getByText("Claude turns will not run until you connect an account.")
-              .waitFor({ timeout: 20_000 });
-            await page.getByRole("button", { name: "Open Codex sign-in" }).waitFor();
-            await page.getByRole("button", { name: "Open Claude sign-in" }).waitFor();
-          });
+                if (browserGlobal.caches) {
+                  const cacheNames = await browserGlobal.caches.keys();
+                  await Promise.all(
+                    cacheNames.map((cacheName) => browserGlobal.caches?.delete(cacheName)),
+                  );
+                }
+                if (typeof browserGlobal.indexedDB?.databases === "function") {
+                  const databases = await browserGlobal.indexedDB.databases();
+                  await Promise.all(
+                    databases
+                      .map((database) => database.name)
+                      .filter((name): name is string => typeof name === "string" && name.length > 0)
+                      .map(
+                        (name) =>
+                          new Promise<void>((resolve) => {
+                            const request = browserGlobal.indexedDB?.deleteDatabase(name);
+                            if (!request) {
+                              resolve();
+                              return;
+                            }
+                            request.addEventListener("success", () => resolve());
+                            request.addEventListener("error", () => resolve());
+                            request.addEventListener("blocked", () => resolve());
+                          }),
+                      ),
+                  );
+                }
+                localStorage.setItem("t3code.supabase.accessToken", token);
+              }, fixture.jwt);
+              return await run(page, appUrl);
+            });
+          } finally {
+            await Promise.race([
+              browser.close().catch(() => undefined),
+              new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+            ]);
+            await Promise.race([
+              viteServer.close().catch(() => undefined),
+              new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+            ]);
+            restoreProcessEnvValue("VITE_HTTP_URL", originalViteHttpUrl);
+            restoreProcessEnvValue("VITE_WS_URL", originalViteWsUrl);
+            restoreProcessEnvValue("VITE_DEV_SERVER_URL", originalViteDevServerUrl);
+            restoreProcessEnvValue("PORT", originalPort);
+            restoreProcessEnvValue("HOST", originalHost);
+            process.chdir(originalCwd);
+          }
+        });
 
-          // Connecting no longer runs through a thread's terminal, so nothing
-          // should have been opened or typed into one to render this panel.
-          assert.equal(terminalOpenInputs.length, 0);
-          assert.equal(terminalWriteInputs.length, 0);
-        } finally {
-          fetchSpy.mockRestore();
-        }
-      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      try {
+        yield* withAccountSettingsBrowser(async (page, appUrl) => {
+          const pageMessages: string[] = [];
+          page.on("console", (message) => {
+            pageMessages.push(`${message.type()}: ${message.text()}`);
+          });
+          page.on("pageerror", (error) => {
+            pageMessages.push(`pageerror: ${error.message}`);
+          });
+          await page.goto(`${appUrl}settings/account`, { waitUntil: "domcontentloaded" });
+          await page
+            .getByText(uniqueSubject)
+            .waitFor({ timeout: 20_000 })
+            .catch(async (error) => {
+              const bodyText = await page
+                .locator("body")
+                .innerText()
+                .catch(() => "");
+              throw new Error(
+                [
+                  error instanceof Error ? error.message : String(error),
+                  `url=${page.url()}`,
+                  `body=${bodyText}`,
+                  `console=${pageMessages.join(" | ")}`,
+                ].join("\n"),
+              );
+            });
+          await page.evaluate(
+            async ({ environmentId, projectId, threadId }) => {
+              const { useStore } = (await new Function('return import("/src/store.ts")')()) as {
+                useStore: {
+                  setState: (state: unknown) => void;
+                };
+              };
+              useStore.setState({
+                activeEnvironmentId: environmentId,
+                environmentStateById: {
+                  [environmentId]: {
+                    projectIds: [projectId],
+                    projectById: {
+                      [projectId]: {
+                        id: projectId,
+                        environmentId,
+                        name: "Default Project",
+                        cwd: "/tmp/default-project",
+                        defaultModelSelection: null,
+                        scripts: [],
+                      },
+                    },
+                    threadIds: [threadId],
+                    threadIdsByProjectId: { [projectId]: [threadId] },
+                    threadShellById: {
+                      [threadId]: {
+                        id: threadId,
+                        environmentId,
+                        codexThreadId: null,
+                        projectId,
+                        title: "Default Thread",
+                        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+                        runtimeMode: "full-access",
+                        interactionMode: "default",
+                        error: null,
+                        createdAt: "2026-05-09T00:00:00.000Z",
+                        updatedAt: "2026-05-09T00:05:00.000Z",
+                        archivedAt: null,
+                        branch: null,
+                        worktreePath: null,
+                      },
+                    },
+                    threadSessionById: {},
+                    threadTurnStateById: {},
+                    messageIdsByThreadId: {},
+                    messageByThreadId: {},
+                    activityIdsByThreadId: {},
+                    activityByThreadId: {},
+                    proposedPlanIdsByThreadId: {},
+                    proposedPlanByThreadId: {},
+                    turnDiffIdsByThreadId: {},
+                    turnDiffSummaryByThreadId: {},
+                    sidebarThreadSummaryById: {},
+                    bootstrapComplete: true,
+                  },
+                },
+              });
+            },
+            {
+              environmentId: testEnvironmentDescriptor.environmentId,
+              projectId: defaultProjectId,
+              threadId: defaultThreadId,
+            },
+          );
+          // Both providers, each offering one button, each reported by the
+          // server as this account's own rather than the machine's. Pressing
+          // the button is deliberately not exercised here: it runs the real
+          // `codex` and `claude` binaries, which a test machine does not have
+          // and which no assertion about the panel needs.
+          await page
+            .getByText("Codex turns will not run until you connect an account.")
+            .waitFor({ timeout: 20_000 })
+            .catch(async (error) => {
+              const bodyText = await page
+                .locator("body")
+                .innerText()
+                .catch(() => "");
+              throw new Error(
+                [
+                  error instanceof Error ? error.message : String(error),
+                  `url=${page.url()}`,
+                  `body=${bodyText}`,
+                  `console=${pageMessages.join(" | ")}`,
+                ].join("\n"),
+              );
+            });
+          await page
+            .getByText("Claude turns will not run until you connect an account.")
+            .waitFor({ timeout: 20_000 });
+          await page.getByRole("button", { name: "Open Codex sign-in" }).waitFor();
+          await page.getByRole("button", { name: "Open Claude sign-in" }).waitFor();
+        });
+
+        // Connecting no longer runs through a thread's terminal, so nothing
+        // should have been opened or typed into one to render this panel.
+        assert.equal(terminalOpenInputs.length, 0);
+        assert.equal(terminalWriteInputs.length, 0);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("rejects provider account disconnects without connect permission", () =>
@@ -8882,6 +8922,201 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assertFailure(result, terminalError);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  /**
+   * The provider-auth routes, exercised without ever starting a login.
+   *
+   * `/start`, `/code` and a connected `/prompt` all spawn a provider CLI and
+   * wait on a human in a browser, so what is asserted here is the state a
+   * finished login leaves behind — credentials written through the same store
+   * the connect flow writes through — plus every path that refuses before it
+   * would have spawned anything.
+   */
+  const providerAuthRequest = (
+    path: string,
+    options?: { readonly cookie?: string; readonly body?: unknown },
+  ) =>
+    Effect.gen(function* () {
+      const url = yield* getHttpServerUrl(`/api/provider-auth/${path}`);
+      const response = yield* Effect.promise(() =>
+        fetch(url, {
+          ...(options?.body === undefined
+            ? {}
+            : { method: "POST", body: JSON.stringify(options.body) }),
+          headers: {
+            "content-type": "application/json",
+            ...(options?.cookie === undefined ? {} : { cookie: options.cookie }),
+          },
+        }),
+      );
+      const text = yield* Effect.promise(() => response.text());
+      return {
+        status: response.status,
+        text,
+        // Tolerant on purpose: a route that failed answers with nothing at all,
+        // and a status assertion says far more about that than a parse error.
+        data: (text.length > 0 ? JSON.parse(text) : {}) as Record<string, any>,
+      };
+    });
+
+  const authenticatedUserId = (cookie: string) =>
+    Effect.gen(function* () {
+      const profileUrl = yield* getHttpServerUrl("/api/auth/profile");
+      const response = yield* Effect.promise(() => fetch(profileUrl, { headers: { cookie } }));
+      const profile = (yield* Effect.promise(() => response.json())) as { readonly userId: string };
+      return String(profile.userId);
+    });
+
+  it.effect("connects a second provider account beside the first and indexes both", () =>
+    Effect.gen(function* () {
+      let index!: ProviderSharingRepositoryShape;
+      const config = yield* buildAppUnderTest({
+        config: { localPasswordAuth: true },
+        withProviderSharing: (repository) => {
+          index = repository;
+          return Effect.void;
+        },
+      });
+      const cookie = yield* signUpLocalMemberSessionCookie({
+        email: "provider-accounts@example.test",
+        displayName: "Provider Owner",
+      });
+      const userId = yield* authenticatedUserId(cookie);
+
+      // What a finished Claude login leaves for somebody who connected before
+      // accounts had ids: the legacy file, adopted as "default".
+      yield* Effect.promise(() =>
+        writeClaudeToken(config.stateDir, userId, "sk-ant-first-account-token-value"),
+      );
+
+      const first = yield* providerAuthRequest("connections", { cookie });
+      assert.equal(first.status, 200);
+      const firstClaude = connectionFor(first.data, "claude");
+      assert.equal(firstClaude["connected"], true);
+      assert.equal(firstClaude["defaultAccountId"], "default");
+      assert.equal((firstClaude["accounts"] as ReadonlyArray<unknown>).length, 1);
+      assert.notInclude(first.text, "sk-ant");
+
+      const indexedFirst = yield* index.listAccountsForUser({ userId });
+      assert.deepEqual(
+        indexedFirst.map((row) => row.accountId),
+        ["default"],
+      );
+
+      const secondId = yield* Effect.promise(() =>
+        createProviderAccount(config.stateDir, userId, "claude", "second subscription"),
+      );
+      yield* Effect.promise(() =>
+        writeClaudeToken(config.stateDir, userId, "sk-ant-second-account-token-value", secondId),
+      );
+
+      const both = yield* providerAuthRequest("connections", { cookie });
+      const bothClaude = connectionFor(both.data, "claude");
+      const bothAccounts = bothClaude["accounts"] as ReadonlyArray<Record<string, any>>;
+      assert.equal(bothAccounts.length, 2);
+      assert.equal(
+        bothAccounts.filter((account) => account["connected"] === true).length,
+        2,
+        "connecting a second account must not disturb the first",
+      );
+      assert.notInclude(both.text, "sk-ant");
+      assert.deepEqual(
+        (yield* index.listAccountsForUser({ userId })).map((row) => row.accountId).toSorted(),
+        ["default", secondId].toSorted(),
+      );
+
+      const named = yield* providerAuthRequest("account", {
+        cookie,
+        body: { provider: "claude", accountId: secondId, label: "billing", makeDefault: true },
+      });
+      assert.equal(
+        named.status,
+        200,
+        "a 404 here means providerAuthAccountRouteLayer is not registered in makeRoutesLayer",
+      );
+      const renamed = (named.data["accounts"] as ReadonlyArray<Record<string, any>>).find(
+        (account) => account["accountId"] === secondId,
+      );
+      assert.equal(renamed?.["label"], "billing");
+      assert.equal(renamed?.["isDefault"], true);
+      const indexedLabel = (yield* index.listAccountsForUser({ userId })).find(
+        (row) => row.accountId === secondId,
+      );
+      assert.equal(indexedLabel?.label, "billing");
+
+      const loggedOut = yield* providerAuthRequest("logout", {
+        cookie,
+        body: { provider: "claude", accountId: secondId },
+      });
+      assert.equal(loggedOut.status, 200);
+      assert.notInclude(loggedOut.text, "sk-ant");
+      assert.equal(
+        loggedOut.data["connected"],
+        true,
+        "disconnecting one account must leave the other usable",
+      );
+      assert.deepEqual(
+        (yield* index.listAccountsForUser({ userId })).map((row) => row.accountId),
+        ["default"],
+      );
+
+      const after = yield* providerAuthRequest("connections", { cookie });
+      const survivor = (
+        connectionFor(after.data, "claude")["accounts"] as ReadonlyArray<Record<string, any>>
+      ).find((account) => account["accountId"] === "default");
+      assert.equal(survivor?.["connected"], true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses provider-auth requests that name another user's account", () =>
+    Effect.gen(function* () {
+      const config = yield* buildAppUnderTest({ config: { localPasswordAuth: true } });
+      const ownerCookie = yield* signUpLocalMemberSessionCookie({
+        email: "provider-owner@example.test",
+        displayName: "Provider Owner",
+      });
+      const ownerId = yield* authenticatedUserId(ownerCookie);
+      const strangerCookie = yield* signUpLocalMemberSessionCookie({
+        email: "provider-stranger@example.test",
+        displayName: "Provider Stranger",
+      });
+
+      const ownerAccountId = yield* Effect.promise(() =>
+        createProviderAccount(config.stateDir, ownerId, "claude", "owner only"),
+      );
+      yield* Effect.promise(() =>
+        writeClaudeToken(
+          config.stateDir,
+          ownerId,
+          "sk-ant-owner-account-token-value",
+          ownerAccountId,
+        ),
+      );
+
+      // Every one of these refuses before it would have spawned a CLI, which is
+      // why naming somebody else's account cannot even start a login on it.
+      for (const route of ["start", "logout", "prompt", "account"] as const) {
+        const refused = yield* providerAuthRequest(route, {
+          cookie: strangerCookie,
+          body: { provider: "claude", accountId: ownerAccountId },
+        });
+        assert.equal(refused.status, 404, `${route} must not accept another user's account`);
+        assert.notInclude(refused.text, "sk-ant");
+      }
+
+      const unauthenticated = yield* providerAuthRequest("logout", {
+        body: { provider: "claude", accountId: ownerAccountId },
+      });
+      assert.equal(unauthenticated.status, 401);
+
+      const owned = yield* providerAuthRequest("connections", { cookie: ownerCookie });
+      const ownedAccount = (
+        connectionFor(owned.data, "claude")["accounts"] as ReadonlyArray<Record<string, any>>
+      ).find((account) => account["accountId"] === ownerAccountId);
+      assert.equal(ownedAccount?.["connected"], true);
+      assert.notInclude(owned.text, "sk-ant");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 });

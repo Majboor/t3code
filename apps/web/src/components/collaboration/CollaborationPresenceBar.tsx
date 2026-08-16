@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
 import { useCollaborationGovernance } from "../../hooks/useCollaborationGovernance";
+import { useProviderSharing } from "../../hooks/useProviderSharing";
 import { useGitStatus } from "../../lib/gitStatusState";
 import { cn } from "../../lib/utils";
 import { selectProjectByRef, useStore } from "../../store";
@@ -22,6 +23,8 @@ import {
   CollaborationGovernancePanel,
   CollaborationWorkingPills,
 } from "./CollaborationGovernancePanel";
+import { ProviderSharingDialog } from "./ProviderSharingDialog";
+import { ProviderSharingSection } from "./ProviderSharingSection";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
@@ -68,6 +71,7 @@ export function CollaborationPresenceBar({
   const [activities, setActivities] = useState<readonly CollaborationActivity[]>([]);
   const [prompt, setPrompt] = useState("");
   const [panelOpen, setPanelOpen] = useState(false);
+  const [sharingDialogOpen, setSharingDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -138,6 +142,9 @@ export function CollaborationPresenceBar({
 
   const visiblePresence = presence.filter((entry) => entry.status !== "offline").slice(0, 5);
   const governance = useCollaborationGovernance({ environmentId, tenantId, workspaceId });
+  // Held here rather than inside the popover so the dialog keeps its data after
+  // the popover that opened it has closed.
+  const sharing = useProviderSharing({ environmentId, tenantId, workspaceId });
   const project = useStore((store) =>
     selectProjectByRef(store, projectId ? { environmentId, projectId } : null),
   );
@@ -226,6 +233,16 @@ export function CollaborationPresenceBar({
               governance={governance}
               environmentId={environmentId}
               workspaceRoot={project?.cwd ?? null}
+            />
+          </div>
+          <div className="mt-3">
+            <ProviderSharingSection
+              sharing={sharing}
+              workspaceTitle={ownership?.workspaceTitle ?? project?.name ?? null}
+              onManage={() => {
+                setPanelOpen(false);
+                setSharingDialogOpen(true);
+              }}
             />
           </div>
           <div className="mt-3 border-t border-border pt-3">
@@ -328,6 +345,15 @@ export function CollaborationPresenceBar({
           </div>
         </PopoverPopup>
       </Popover>
+      <ProviderSharingDialog
+        environmentId={environmentId}
+        tenantId={tenantId}
+        workspaceId={workspaceId}
+        workspaceTitle={ownership?.workspaceTitle ?? project?.name ?? null}
+        sharing={sharing}
+        open={sharingDialogOpen}
+        onOpenChange={setSharingDialogOpen}
+      />
     </div>
   );
 }

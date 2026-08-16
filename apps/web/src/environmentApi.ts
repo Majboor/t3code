@@ -1,11 +1,43 @@
-import type { EnvironmentId, EnvironmentApi } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  EnvironmentApi,
+  ProviderSharingMemberUpdateInput,
+  ProviderSharingMemberUpdateResult,
+  ProviderSharingOverviewGetInput,
+  ProviderSharingOverviewResult,
+  ProviderSharingPolicyUpdateInput,
+  ProviderSharingPolicyUpdateResult,
+  ProviderSharingShareUpdateInput,
+  ProviderSharingShareUpdateResult,
+} from "@t3tools/contracts";
 
 import type { WsRpcClient } from "./rpc/wsRpcClient";
 import { readEnvironmentConnection } from "./environments/runtime";
 
+/**
+ * Provider sharing rides on `EnvironmentApi` rather than being spelled into it:
+ * the shared contract is owned elsewhere, so the extra group is declared here
+ * and everything the app resolves is typed as this, not the bare contract.
+ */
+export interface WebEnvironmentApi extends EnvironmentApi {
+  providerSharing: {
+    getOverview: (input: ProviderSharingOverviewGetInput) => Promise<ProviderSharingOverviewResult>;
+    /** The caller is always the owner; the server takes it from the session. */
+    updateShare: (
+      input: ProviderSharingShareUpdateInput,
+    ) => Promise<ProviderSharingShareUpdateResult>;
+    updatePolicy: (
+      input: ProviderSharingPolicyUpdateInput,
+    ) => Promise<ProviderSharingPolicyUpdateResult>;
+    updateMember: (
+      input: ProviderSharingMemberUpdateInput,
+    ) => Promise<ProviderSharingMemberUpdateResult>;
+  };
+}
+
 const environmentApiOverridesForTests = new Map<EnvironmentId, EnvironmentApi>();
 
-export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
+export function createEnvironmentApi(rpcClient: WsRpcClient): WebEnvironmentApi {
   return {
     terminal: {
       open: (input) => rpcClient.terminal.open(input as never),
@@ -126,10 +158,16 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       confirm: rpcClient.providerAccounts.confirm,
       disconnect: rpcClient.providerAccounts.disconnect,
     },
+    providerSharing: {
+      getOverview: rpcClient.providerSharing.getOverview,
+      updateShare: rpcClient.providerSharing.updateShare,
+      updatePolicy: rpcClient.providerSharing.updatePolicy,
+      updateMember: rpcClient.providerSharing.updateMember,
+    },
   };
 }
 
-export function readEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi | undefined {
+export function readEnvironmentApi(environmentId: EnvironmentId): WebEnvironmentApi | undefined {
   if (typeof window === "undefined") {
     return undefined;
   }
@@ -140,14 +178,16 @@ export function readEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi
 
   const overriddenApi = environmentApiOverridesForTests.get(environmentId);
   if (overriddenApi) {
-    return overriddenApi;
+    // Overrides are hand-built partials that stub only what the test under
+    // examination calls, so they are trusted here rather than type-checked.
+    return overriddenApi as WebEnvironmentApi;
   }
 
   const connection = readEnvironmentConnection(environmentId);
   return connection ? createEnvironmentApi(connection.client) : undefined;
 }
 
-export function ensureEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi {
+export function ensureEnvironmentApi(environmentId: EnvironmentId): WebEnvironmentApi {
   const api = readEnvironmentApi(environmentId);
   if (!api) {
     throw new Error(`Environment API not found for environment ${environmentId}`);

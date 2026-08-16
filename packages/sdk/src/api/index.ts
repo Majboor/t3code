@@ -9,6 +9,7 @@ import { makeDeploysApi, type T3DeploysApi } from "./deploys.ts";
 import { makeHistoryApi, type T3HistoryApi } from "./history.ts";
 import { makeOrganizationsApi, type T3OrganizationsApi } from "./organizations.ts";
 import { makePacksApi, type T3PacksApi } from "./packs.ts";
+import { makeProviderSharingApi, type T3ProviderSharingApi } from "./providerSharing.ts";
 import {
   makeProvidersApi,
   makeServerApi,
@@ -26,6 +27,7 @@ export * from "./deploys.ts";
 export * from "./history.ts";
 export * from "./organizations.ts";
 export * from "./packs.ts";
+export * from "./providerSharing.ts";
 export * from "./server.ts";
 export * from "./terminals.ts";
 export * from "./threads.ts";
@@ -48,6 +50,8 @@ export interface T3Api {
   readonly deploys: T3DeploysApi;
   readonly terminals: T3TerminalsApi;
   readonly providers: T3ProvidersApi;
+  /** Which provider account a workspace's turns run on, and who contributed it. */
+  readonly providerSharing: T3ProviderSharingApi;
   readonly server: T3ServerApi;
 }
 
@@ -63,6 +67,7 @@ export function createT3Api(transport: T3Transport): T3Api {
     deploys: makeDeploysApi(transport),
     terminals: makeTerminalsApi(transport),
     providers: makeProvidersApi(transport),
+    providerSharing: makeProviderSharingApi(transport),
     server: makeServerApi(transport),
   };
 }

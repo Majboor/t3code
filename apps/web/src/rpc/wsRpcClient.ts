@@ -203,6 +203,12 @@ export interface WsRpcClient {
     readonly confirm: RpcUnaryMethod<typeof WS_METHODS.providerAccountsConfirm>;
     readonly disconnect: RpcUnaryMethod<typeof WS_METHODS.providerAccountsDisconnect>;
   };
+  readonly providerSharing: {
+    readonly getOverview: RpcUnaryMethod<typeof WS_METHODS.providerSharingOverviewGet>;
+    readonly updateShare: RpcUnaryMethod<typeof WS_METHODS.providerSharingShareUpdate>;
+    readonly updatePolicy: RpcUnaryMethod<typeof WS_METHODS.providerSharingPolicyUpdate>;
+    readonly updateMember: RpcUnaryMethod<typeof WS_METHODS.providerSharingMemberUpdate>;
+  };
   readonly orchestration: {
     readonly dispatchCommand: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.dispatchCommand>;
     readonly getTurnDiff: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.getTurnDiff>;
@@ -476,6 +482,16 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.providerAccountsConfirm](input)),
       disconnect: (input) =>
         transport.request((client) => client[WS_METHODS.providerAccountsDisconnect](input)),
+    },
+    providerSharing: {
+      getOverview: (input) =>
+        transport.request((client) => client[WS_METHODS.providerSharingOverviewGet](input)),
+      updateShare: (input) =>
+        transport.request((client) => client[WS_METHODS.providerSharingShareUpdate](input)),
+      updatePolicy: (input) =>
+        transport.request((client) => client[WS_METHODS.providerSharingPolicyUpdate](input)),
+      updateMember: (input) =>
+        transport.request((client) => client[WS_METHODS.providerSharingMemberUpdate](input)),
     },
     orchestration: {
       dispatchCommand: (input) =>

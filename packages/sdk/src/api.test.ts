@@ -360,6 +360,77 @@ describe("history and server", () => {
   });
 });
 
+describe("provider sharing", () => {
+  const scope = { tenantId: "tenant-1" as never, workspaceId: "workspace-1" as never };
+
+  it("reads the overview in one call", async () => {
+    const overview = { viewerUserId: "user-1", canManage: true, viewerAccounts: [] };
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerSharingOverviewGet]: overview,
+    });
+
+    const result = await createT3Api(transport).providerSharing.getOverview(scope);
+
+    expect(calls[0]).toEqual({ method: WS_METHODS.providerSharingOverviewGet, input: scope });
+    expect(result).toBe(overview);
+  });
+
+  it("shares an account without naming its owner", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerSharingShareUpdate]: { share: {} },
+    });
+
+    await createT3Api(transport).providerSharing.updateShare({
+      ...scope,
+      provider: "claude",
+      accountId: "account-1" as never,
+      enabled: true,
+    });
+
+    expect(calls[0]?.input).toEqual({
+      ...scope,
+      provider: "claude",
+      accountId: "account-1",
+      enabled: true,
+    });
+    expect(calls[0]?.input["ownerUserId"]).toBeUndefined();
+  });
+
+  it("clears the pinned account when a policy goes back to own", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerSharingPolicyUpdate]: { policy: {} },
+    });
+
+    await createT3Api(transport).providerSharing.updatePolicy({
+      ...scope,
+      provider: "codex",
+      mode: "own",
+      sharedOwnerUserId: null,
+      sharedAccountId: null,
+    });
+
+    expect(calls[0]?.input).toMatchObject({ sharedOwnerUserId: null, sharedAccountId: null });
+  });
+
+  it("grants a member the workspace credential", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerSharingMemberUpdate]: { grant: {} },
+    });
+
+    await createT3Api(transport).providerSharing.updateMember({
+      ...scope,
+      userId: "user-2" as never,
+      provider: "claude",
+      access: "workspace",
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.providerSharingMemberUpdate,
+      input: { ...scope, userId: "user-2", provider: "claude", access: "workspace" },
+    });
+  });
+});
+
 describe("connect", () => {
   it("refuses to connect without credentials or a token", async () => {
     await expect(connect({ baseUrl: "http://127.0.0.1:13773" })).rejects.toThrow(

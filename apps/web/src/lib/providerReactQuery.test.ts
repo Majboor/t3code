@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId, type EnvironmentApi } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkpointDiffQueryOptions, providerQueryKeys } from "./providerReactQuery";
@@ -16,7 +16,7 @@ function mockNativeApi(input: {
       getTurnDiff: input.getTurnDiff,
       getFullThreadDiff: input.getFullThreadDiff,
     },
-  } as unknown as EnvironmentApi);
+  } as unknown as environmentApi.WebEnvironmentApi);
 }
 
 afterEach(() => {

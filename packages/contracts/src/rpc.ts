@@ -228,6 +228,17 @@ import {
 } from "./server.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
+  ProviderSharingError,
+  ProviderSharingMemberUpdateInput,
+  ProviderSharingMemberUpdateResult,
+  ProviderSharingOverviewGetInput,
+  ProviderSharingOverviewResult,
+  ProviderSharingPolicyUpdateInput,
+  ProviderSharingPolicyUpdateResult,
+  ProviderSharingShareUpdateInput,
+  ProviderSharingShareUpdateResult,
+} from "./providerSharing.ts";
+import {
   IsoDateTime,
   TenantId,
   TrimmedNonEmptyString,
@@ -301,6 +312,12 @@ export const WS_METHODS = {
   providerAccountsOpenAuthTerminal: "providerAccounts.openAuthTerminal",
   providerAccountsConfirm: "providerAccounts.confirm",
   providerAccountsDisconnect: "providerAccounts.disconnect",
+
+  // Provider account sharing methods
+  providerSharingOverviewGet: "providerSharing.overview.get",
+  providerSharingShareUpdate: "providerSharing.share.update",
+  providerSharingPolicyUpdate: "providerSharing.policy.update",
+  providerSharingMemberUpdate: "providerSharing.member.update",
 
   // Streaming subscriptions
   subscribeGitStatus: "subscribeGitStatus",
@@ -446,6 +463,30 @@ export const WsProviderAccountsDisconnectRpc = Rpc.make(WS_METHODS.providerAccou
   payload: ProviderAccountDisconnectInput,
   success: ProviderAccountDisconnectResult,
   error: ProviderAccountError,
+});
+
+export const WsProviderSharingOverviewGetRpc = Rpc.make(WS_METHODS.providerSharingOverviewGet, {
+  payload: ProviderSharingOverviewGetInput,
+  success: ProviderSharingOverviewResult,
+  error: ProviderSharingError,
+});
+
+export const WsProviderSharingShareUpdateRpc = Rpc.make(WS_METHODS.providerSharingShareUpdate, {
+  payload: ProviderSharingShareUpdateInput,
+  success: ProviderSharingShareUpdateResult,
+  error: ProviderSharingError,
+});
+
+export const WsProviderSharingPolicyUpdateRpc = Rpc.make(WS_METHODS.providerSharingPolicyUpdate, {
+  payload: ProviderSharingPolicyUpdateInput,
+  success: ProviderSharingPolicyUpdateResult,
+  error: ProviderSharingError,
+});
+
+export const WsProviderSharingMemberUpdateRpc = Rpc.make(WS_METHODS.providerSharingMemberUpdate, {
+  payload: ProviderSharingMemberUpdateInput,
+  success: ProviderSharingMemberUpdateResult,
+  error: ProviderSharingError,
 });
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
@@ -1270,6 +1311,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderAccountsOpenAuthTerminalRpc,
   WsProviderAccountsConfirmRpc,
   WsProviderAccountsDisconnectRpc,
+  WsProviderSharingOverviewGetRpc,
+  WsProviderSharingShareUpdateRpc,
+  WsProviderSharingPolicyUpdateRpc,
+  WsProviderSharingMemberUpdateRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsListDirectoryRpc,
   WsProjectsReadFileRpc,

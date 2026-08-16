@@ -61,6 +61,12 @@ export const PROVIDER_AUTH_PAGE = `<!doctype html>
 
   <section id="connectCard">
     <h2>2 &middot; Connect a provider</h2>
+    <label for="accountLabel">Label for this account (optional)</label>
+    <input id="accountLabel" placeholder="work, personal, …" />
+    <label class="row" style="margin:0 0 12px">
+      <input type="checkbox" id="newAccount" style="width:auto;margin:0" />
+      <span>Connect as an extra account, leaving the ones below alone</span>
+    </label>
     <div class="grid">
       <div>
         <button id="connectClaude" style="width:100%">Connect Claude</button>
@@ -73,8 +79,6 @@ export const PROVIDER_AUTH_PAGE = `<!doctype html>
     </div>
     <div class="row" style="margin-top:14px">
       <button id="refresh">Check status</button>
-      <button id="logoutClaude">Log out Claude</button>
-      <button id="logoutCodex">Log out Codex</button>
     </div>
   </section>
 
@@ -87,6 +91,8 @@ export const PROVIDER_AUTH_PAGE = `<!doctype html>
     <h2>4 &middot; Prompt it</h2>
     <label for="prompt">Prompt</label>
     <input id="prompt" value="Reply with exactly: OK" />
+    <label for="promptAccount">Account id (blank runs the default one)</label>
+    <input id="promptAccount" placeholder="account id from the status above" />
     <div class="row">
       <button id="promptClaude">Prompt Claude</button>
       <button id="promptCodex">Prompt Codex</button>
@@ -121,6 +127,10 @@ const getJson = async (path) => {
     return { ok: false, data: { error: "could not reach the server (" + error + ")" } };
   }
 };
+// Labels are typed by a person and echoed back into this page, so they are
+// escaped rather than trusted. Nothing else here is ever interpolated raw.
+const esc = (value) => String(value == null ? "" : value)
+  .replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
 window.addEventListener("unhandledrejection", (event) => {
   const box = $("promptMsg");
   if (box) box.textContent = "unexpected error: " + (event.reason && event.reason.message || event.reason);
@@ -166,7 +176,7 @@ function renderStep(d) {
       if (!code) return;
       submit.disabled = true;
       $("codeMsg").textContent = "submitting — waiting for the provider…";
-      const r = await post("/api/provider-auth/code", { provider: d.provider, code });
+      const r = await post("/api/provider-auth/code", { provider: d.provider, accountId: d.accountId, code });
       submit.disabled = false;
       // The interface answers after a round trip to the provider, so show what
       // it actually said. Leaving the original output on screen made a refusal
@@ -189,14 +199,17 @@ function renderStep(d) {
 
 // Codex finishes on its own once the browser is done — nothing is typed back —
 // so without watching for it the page sat on the original screen through a
-// login that had already succeeded.
-async function watchUntilSignedIn(provider) {
+// login that had already succeeded. The wait is for the account being connected
+// and not for the provider: with a second account in flight, "something is
+// connected" was already true before the browser was even opened.
+async function watchUntilSignedIn(provider, accountId) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await new Promise((r) => setTimeout(r, 3000));
     const r = await getJson("/api/provider-auth/connections");
     await status(provider);
     const found = ((r.data || {}).connections || []).find((c) => c.provider === provider);
-    if (found && found.connected) {
+    const account = ((found || {}).accounts || []).find((a) => a.accountId === accountId);
+    if (account && account.connected) {
       const msg = $("codeMsg") || $("promptMsg");
       if (msg) msg.innerHTML = '<span class="ok">signed in</span>';
       return true;
@@ -208,7 +221,11 @@ async function watchUntilSignedIn(provider) {
 async function connect(provider) {
   const btn = provider === "claude" ? $("connectClaude") : $("connectCodex");
   const label = btn.textContent; btn.disabled = true; btn.textContent = "starting…";
-  const r = await post("/api/provider-auth/start", { provider });
+  const r = await post("/api/provider-auth/start", {
+    provider,
+    label: $("accountLabel").value.trim() || undefined,
+    newAccount: $("newAccount").checked,
+  });
   btn.disabled = false; btn.textContent = label;
   if (r.ok) {
     renderStep(r.data);
@@ -218,7 +235,7 @@ async function connect(provider) {
       note.id = "watchNote";
       note.textContent = "waiting for you to finish in the browser…";
       $("stepBody").prepend(note);
-      const ok = await watchUntilSignedIn(provider);
+      const ok = await watchUntilSignedIn(provider, r.data.accountId);
       note.innerHTML = ok
         ? '<span class="ok">signed in — you can prompt it now</span>'
         : '<span class="bad">did not complete; press Connect again for a fresh code</span>';
@@ -241,22 +258,49 @@ async function status(provider) {
   const r = await getJson("/api/provider-auth/connections");
   const found = ((r.data || {}).connections || []).find((c) => c.provider === provider);
   if (!found) {
-    cell.innerHTML = '<span class="muted">' + ((r.data || {}).error || "no answer") + "</span>";
+    cell.innerHTML = '<span class="muted">' + esc((r.data || {}).error || "no answer") + "</span>";
     return;
   }
-  cell.innerHTML = found.connected
-    ? '<span class="ok">connected as you</span>'
-    : '<span class="muted">not connected</span>';
+  const accounts = found.accounts || [];
+  if (accounts.length === 0) {
+    cell.innerHTML = '<span class="muted">not connected</span>';
+    return;
+  }
+  // One line per account, because "connected" stopped being a single fact the
+  // moment a person could hold two subscriptions. Only labels and ids are ever
+  // shown; the credential itself never leaves the server.
+  cell.innerHTML = accounts.map((a) => {
+    const state = a.connected
+      ? '<span class="ok">connected</span>'
+      : '<span class="muted">not connected</span>';
+    return '<div style="margin:4px 0">' + esc(a.label) + " &middot; " + state +
+      (a.isDefault ? ' <span class="muted">(default)</span>' : "") +
+      ' <button data-act="default" data-p="' + esc(provider) + '" data-a="' + esc(a.accountId) + '">make default</button>' +
+      ' <button data-act="logout" data-p="' + esc(provider) + '" data-a="' + esc(a.accountId) + '">log out</button>' +
+      '<div class="muted">' + esc(a.accountId) + "</div></div>";
+  }).join("");
+  for (const btn of cell.querySelectorAll("button")) {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      const body = { provider: btn.dataset.p, accountId: btn.dataset.a };
+      await (btn.dataset.act === "logout"
+        ? post("/api/provider-auth/logout", body)
+        : post("/api/provider-auth/account", Object.assign({ makeDefault: true }, body)));
+      status(btn.dataset.p);
+    };
+  }
 }
 $("refresh").onclick = () => { status("claude"); status("codex"); };
-$("logoutClaude").onclick = async () => { await post("/api/provider-auth/logout", { provider: "claude" }); status("claude"); };
-$("logoutCodex").onclick = async () => { await post("/api/provider-auth/logout", { provider: "codex" }); status("codex"); };
 
 async function prompt(provider) {
   $("promptMsg").textContent = "running… (up to 45s)";
   $("promptOut").classList.remove("hidden");
   $("promptOut").textContent = "";
-  const r = await post("/api/provider-auth/prompt", { provider, text: $("prompt").value });
+  const r = await post("/api/provider-auth/prompt", {
+    provider,
+    text: $("prompt").value,
+    accountId: $("promptAccount").value.trim() || undefined,
+  });
   $("promptMsg").textContent = r.ok ? "done" : "failed";
   $("promptOut").textContent = r.data.output || r.data.error || "(no output)";
 }

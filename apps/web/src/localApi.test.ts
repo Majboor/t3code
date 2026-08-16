@@ -106,6 +106,12 @@ const rpcClientMock = {
     listActivity: vi.fn(),
     subscribe: vi.fn(() => () => undefined),
   },
+  providerSharing: {
+    getOverview: vi.fn(),
+    updateShare: vi.fn(),
+    updatePolicy: vi.fn(),
+    updateMember: vi.fn(),
+  },
   analytics: {
     listStreams: vi.fn(),
     query: vi.fn(),

@@ -15,6 +15,7 @@ import {
   type RuntimeMode,
   type TurnId,
   type UserId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import {
@@ -26,10 +27,8 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
-import {
-  providerCredentialEnv,
-  type ProviderAuthProvider,
-} from "../../providerAuth/store.ts";
+import { resolveProviderAccount } from "../../providerAuth/resolveProviderAccount.ts";
+import type { ProviderAuthProvider } from "../../providerAuth/store.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitStatusBroadcaster } from "../../git/Services/GitStatusBroadcaster.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
@@ -330,14 +329,19 @@ const make = Effect.gen(function* () {
       thread.messages.findLast((message) => message.authorUserId !== null)?.authorUserId;
 
     /**
-     * The credential this person connected, and nothing else.
+     * A credential somebody has agreed to spend, and nothing else.
      *
      * Reached only when the hosted-tenant path above has no provider session to
      * offer, which on a single-box deployment is always. Returning undefined
      * here would let the adapter fall back to the environment the server runs
      * in — the machine's own CLI login — which is how one personal account came
-     * to answer for every user of the box. So a missing credential is refused,
+     * to answer for every user of the box. So an unanswered turn is refused,
      * and the refusal says what to do about it.
+     *
+     * Which credential is no longer a lookup but a decision, taken in
+     * `resolveProviderAccount`: the sender's own account normally, a colleague's
+     * only where that colleague has lent it and an admin has pointed this
+     * workspace at it.
      */
     const resolveConnectedLaunchEnvironment = (provider: ProviderKind) =>
       Effect.gen(function* () {
@@ -353,23 +357,45 @@ const make = Effect.gen(function* () {
             `This thread has no message attributed to an account, so T3 cannot tell whose ${providerAuthLabel(provider)} login to use. Send a message as a signed-in user and try again.`,
           );
         }
-        const credential = yield* Effect.promise(() =>
-          providerCredentialEnv(
-            config.stateDir,
-            String(actingUserId),
-            providerAuthProviderOf(provider),
-          ),
-        );
-        if (credential === null) {
-          return yield* refuse(
-            `No ${providerAuthLabel(provider)} account is connected for this user. Open Settings → Connections and press "Open ${providerAuthLabel(provider)} sign-in" to connect one.`,
-          );
+
+        /**
+         * Whose sharing rules apply: the workspace that owns the directory this
+         * turn runs in, found the same way the provider-session lookup below
+         * finds its tenant. A thread with no project, or a project nobody owns,
+         * has no workspace to hold an opinion — so tenant and workspace go null,
+         * the decision collapses to "this person's own account", and a user who
+         * was working yesterday is not locked out by a feature they never used.
+         */
+        const cwd = effectiveCwd;
+        const owningProject =
+          cwd === undefined
+            ? undefined
+            : readModel.projects.find((project) => isPathInsideRoot(cwd, project.workspaceRoot));
+        const ownership = owningProject?.ownership;
+        // A project can predate workspaces, in which case its own id stands in —
+        // the same substitution the collaboration panel makes, so both ends
+        // address one workspace by one name.
+        const workspaceId =
+          ownership?.workspaceId ??
+          (owningProject === undefined ? null : WorkspaceId.make(owningProject.id));
+
+        const resolved = yield* resolveProviderAccount({
+          stateDir: config.stateDir,
+          userId: String(actingUserId),
+          tenantId: ownership?.tenantId ?? null,
+          workspaceId: workspaceId === null ? null : String(workspaceId),
+          provider: providerAuthProviderOf(provider),
+          providerLabel: providerAuthLabel(provider),
+        });
+        if (resolved.outcome === "refused") {
+          return yield* refuse(resolved.refusal);
         }
         return {
           // The server's environment minus every credential in it, plus the one
-          // that belongs to this person. Without the strip, an inherited
-          // CODEX_HOME or CLAUDE_CODE_OAUTH_TOKEN would still be in scope.
-          env: { ...filterProviderLaunchBaseEnv(process.env), ...credential },
+          // that belongs to whoever is paying for this turn. Without the strip,
+          // an inherited CODEX_HOME or CLAUDE_CODE_OAUTH_TOKEN would still be in
+          // scope — and under sharing that would be the wrong person's.
+          env: { ...filterProviderLaunchBaseEnv(process.env), ...resolved.env },
         };
       });
 

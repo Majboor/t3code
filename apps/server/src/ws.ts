@@ -63,6 +63,7 @@ import {
   type ProviderKind,
   type ProviderSessionIsolation,
   ProviderSessionId,
+  ProviderSharingError,
   TenantId,
   TenantRuntimeId,
   type TenantPermission,
@@ -133,6 +134,7 @@ import { respondToAuthError } from "./auth/http.ts";
 import { CollaborationService } from "./collaboration/Services/CollaborationService.ts";
 import { OrganizationService } from "./organizations/Services/OrganizationService.ts";
 import { PackRegistryService } from "./packs/Services/PackRegistryService.ts";
+import { ProviderSharingService } from "./providerSharing/Services/ProviderSharingService.ts";
 import { TenancyRepository } from "./persistence/Services/Tenancy.ts";
 import { DeployService } from "./deploy/Services/DeployService.ts";
 import { DeploymentRegistry } from "./deploy/Services/DeploymentRegistry.ts";
@@ -757,6 +759,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const bootstrapCredentials = yield* BootstrapCredentialService;
       const sessions = yield* SessionCredentialService;
       const collaboration = yield* CollaborationService;
+      const providerSharing = yield* ProviderSharingService;
       const organizations = yield* OrganizationService;
       const packRegistry = yield* PackRegistryService;
       const tenancyRepository = yield* TenancyRepository;
@@ -1489,6 +1492,26 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             () =>
               new CollaborationError({
                 code: "invalid-membership-rule",
+                message: forbiddenMessage(permission),
+              }),
+          ),
+        );
+
+      /**
+       * The coarse half of the gate: may this session touch this workspace at
+       * all. Whether the caller may speak for other people's accounts is the
+       * service's own `canManage` check, which this deliberately does not
+       * duplicate — one of the two would eventually drift.
+       */
+      const ensureTenantPermissionForProviderSharing = (
+        tenantId: TenantId,
+        permission: TenantPermission,
+      ): Effect.Effect<void, ProviderSharingError> =>
+        ensureTenantPermission(tenantId, permission).pipe(
+          Effect.mapError(
+            () =>
+              new ProviderSharingError({
+                code: "forbidden",
                 message: forbiddenMessage(permission),
               }),
           ),
@@ -4326,6 +4349,57 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             {
               "rpc.aggregate": "collaboration",
             },
+          ),
+        [WS_METHODS.providerSharingOverviewGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerSharingOverviewGet,
+            withRateLimit(
+              ensureTenantPermissionForProviderSharing(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => providerSharing.getOverview(actor, input)),
+              ),
+              (message) => new ProviderSharingError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "provider-sharing" },
+          ),
+        [WS_METHODS.providerSharingShareUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerSharingShareUpdate,
+            withRateLimit(
+              // Lending an account is a statement about the caller's own
+              // credential, so it needs no more than the right to be in the
+              // workspace; the service takes the owner from the session.
+              ensureTenantPermissionForProviderSharing(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => providerSharing.updateShare(actor, input)),
+              ),
+              (message) => new ProviderSharingError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "provider-sharing" },
+          ),
+        [WS_METHODS.providerSharingPolicyUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerSharingPolicyUpdate,
+            withRateLimit(
+              ensureTenantPermissionForProviderSharing(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => providerSharing.updatePolicy(actor, input)),
+              ),
+              (message) => new ProviderSharingError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "provider-sharing" },
+          ),
+        [WS_METHODS.providerSharingMemberUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerSharingMemberUpdate,
+            withRateLimit(
+              ensureTenantPermissionForProviderSharing(input.tenantId, "membership.manage").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => providerSharing.updateMemberAccess(actor, input)),
+              ),
+              (message) => new ProviderSharingError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "provider-sharing" },
           ),
         [WS_METHODS.packsPublish]: (input) =>
           observeRpcEffect(

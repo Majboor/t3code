@@ -11,6 +11,12 @@ import {
   type EnvironmentApi,
   type Tenant,
 } from "@t3tools/contracts";
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -143,6 +149,13 @@ function makeEnvironmentApi(input: {
           },
         ],
       })),
+      // The roster is read directly rather than through a promise chain, so an
+      // override without it takes the whole panel down.
+      listMembers: vi.fn(async () => ({
+        members: [],
+        canManage: false,
+        viewerUserId: UserId.make("user-fresh-browser"),
+      })),
       createInvite: vi.fn(),
       listInvites: vi.fn(),
       acceptInvite: vi.fn(),
@@ -152,6 +165,23 @@ function makeEnvironmentApi(input: {
         input.onSubscribe?.(callback);
         return () => undefined;
       }),
+    },
+    // The bar reads sharing on mount, so an override without it is a TypeError
+    // rather than an empty panel.
+    providerSharing: {
+      getOverview: vi.fn(async () => ({
+        viewerUserId: UserId.make("user-fresh-browser"),
+        canManage: false,
+        viewerAccounts: [],
+        viewerShares: [],
+        viewerGrants: [],
+        policies: [],
+        grants: [],
+        workspaceAccounts: [],
+      })),
+      updateShare: vi.fn(),
+      updatePolicy: vi.fn(),
+      updateMember: vi.fn(),
     },
     organizations: {
       list: vi.fn(async () => ({
@@ -186,13 +216,22 @@ describe("CollaborationPresenceBar browser flow", () => {
     const api = makeEnvironmentApi({ freshUserName });
     __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, api);
 
-    const screen = await render(
-      <CollaborationPresenceBar
-        environmentId={ENVIRONMENT_ID}
-        projectId={PROJECT_ID}
-        threadId={THREAD_ID}
-      />,
-    );
+    // The panel links to Settings → Connections, and a router link outside a
+    // router throws, so the bar is mounted as a route rather than bare.
+    const rootRoute = createRootRoute({
+      component: () => (
+        <CollaborationPresenceBar
+          environmentId={ENVIRONMENT_ID}
+          projectId={PROJECT_ID}
+          threadId={THREAD_ID}
+        />
+      ),
+    });
+    const router = createRouter({
+      routeTree: rootRoute,
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    const screen = await render(<RouterProvider router={router} />);
 
     try {
       await expect

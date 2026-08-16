@@ -6,6 +6,7 @@ import type { Socket as NodeNetSocket } from "node:net";
 import { ServerConfig } from "./config.ts";
 import { analyticsIngestRouteLayer } from "./analytics/http.ts";
 import {
+  providerAuthAccountRouteLayer,
   providerAuthCodeRouteLayer,
   providerAuthConnectionsRouteLayer,
   providerAuthLogoutRouteLayer,
@@ -95,6 +96,8 @@ import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
 import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
+import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderSharing.ts";
+import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSharingService.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
@@ -282,6 +285,16 @@ const ThreadPreferenceLayerLive = ProjectionThreadPreferenceRepositoryLive.pipe(
 );
 const DeployRepositoryLayerLive = DeployRepositoryLive.pipe(Layer.provide(PersistenceLayerLive));
 
+/**
+ * Who lends a provider account to whom. Reached from three places that do not
+ * otherwise meet — the connect flow indexing an account, the panel reading the
+ * roster, and a turn deciding whose credential to run on — so it is registered
+ * once here rather than provided at each of them.
+ */
+const ProviderSharingRepositoryLayerLive = ProviderSharingRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 const AnalyticsRepositoryLayerLive = AnalyticsRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
@@ -307,6 +320,7 @@ const DeployLayerLive = DeployServiceLive.pipe(
 
 const PersistenceServicesLayerLive = Layer.mergeAll(
   TenancyRepositoryLayerLive,
+  ProviderSharingRepositoryLayerLive,
   ThreadPreferenceLayerLive,
   DeployLayerLive,
   AnalyticsLayerLive,
@@ -326,6 +340,17 @@ const OrganizationLayerLive = OrganizationServiceLive.pipe(
   Layer.provide(TenancyRepositoryLayerLive),
 );
 
+/**
+ * Reads the collaboration roster to answer "whose accounts are in this
+ * workspace", so it borrows the collaboration service rather than assembling a
+ * second member list that could disagree about who is a member or about whose
+ * name may be shown. Memoisation means both still see one instance.
+ */
+const ProviderSharingLayerLive = ProviderSharingServiceLive.pipe(
+  Layer.provide(ProviderSharingRepositoryLayerLive),
+  Layer.provide(CollaborationLayerLive),
+);
+
 const PackRegistryLayerLive = PackRegistryServiceLive.pipe(
   Layer.provide(PackRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
   Layer.provide(CollaborationLayerLive),
@@ -340,6 +365,7 @@ const PackEnablementLayerLive = PackEnablementServiceLive.pipe(
 /** Everything scoped to a tenant's people and what they publish. */
 const TenantServicesLayerLive = Layer.mergeAll(
   CollaborationLayerLive,
+  ProviderSharingLayerLive,
   OrganizationLayerLive,
   PackRegistryLayerLive,
   PackEnablementLayerLive,
@@ -397,6 +423,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   providerAuthStartRouteLayer,
   providerAuthCodeRouteLayer,
   providerAuthConnectionsRouteLayer,
+  providerAuthAccountRouteLayer,
   providerAuthLogoutRouteLayer,
   providerAuthPromptRouteLayer,
   orchestrationDispatchRouteLayer,
