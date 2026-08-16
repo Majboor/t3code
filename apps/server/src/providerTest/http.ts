@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createRequire } from "node:module";
 
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -39,6 +42,8 @@ const PROVIDERS = {
       // with whether the credential works — the point of this call.
       ["exec", "--skip-git-repo-check", text],
     ],
+    /** Writes only the reply to this file; its stdout is the whole session. */
+    lastMessageFlag: "--output-last-message",
     /** Codex shows the code itself; nothing is typed back to it. */
     wantsCode: false,
     needsTerminal: false,
@@ -474,11 +479,35 @@ export const providerTestPromptRouteLayer = HttpRouter.add(
     const token = capturedTokens.get(provider);
     const extraEnv =
       provider === "claude" && token !== undefined ? { CLAUDE_CODE_OAUTH_TOKEN: token } : {};
-    const output = yield* Effect.promise(() => runOnce(command, args, 45_000, extraEnv));
+
+    // Codex prints its entire session to stdout — system instructions, config,
+    // the lot — and the reply is buried in it. It will write just the reply to
+    // a file, which is the only part worth showing.
+    const flag = (PROVIDERS[provider] as { lastMessageFlag?: string }).lastMessageFlag;
+    const replyPath =
+      flag === undefined
+        ? null
+        : path.join(os.tmpdir(), `t3-provider-test-${provider}-${process.pid}.txt`);
+    const fullArgs = replyPath === null ? args : [...args, flag, replyPath];
+
+    const raw = yield* Effect.promise(() => runOnce(command, fullArgs, 45_000, extraEnv));
+    const reply =
+      replyPath === null
+        ? raw
+        : yield* Effect.promise(async () => {
+            try {
+              const body = await readFile(replyPath, "utf8");
+              await rm(replyPath, { force: true });
+              return body.trim().length > 0 ? body : raw;
+            } catch {
+              return raw;
+            }
+          });
+
     return HttpServerResponse.jsonUnsafe({
       provider,
       prompt: text,
-      output: output.trim().slice(0, 8_000),
+      output: redactSecrets(reply).trim().slice(0, 8_000),
     });
   }),
 );
