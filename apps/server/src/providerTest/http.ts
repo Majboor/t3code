@@ -232,6 +232,39 @@ async function waitForPrompt(run: LoginRun): Promise<void> {
   }
 }
 
+/** The words the interface uses when it has finished with the code. */
+const FAILURE_PATTERN = /(error|invalid|failed|expired|try again|retry)/i;
+const SUCCESS_PATTERN = /(success|logged in|signed in|token (created|saved)|you can now)/i;
+
+/**
+ * Collapses a redrawn terminal into something a person can read.
+ *
+ * The interface paints with cursor moves and pads every line to the terminal
+ * width, so the raw stream is mostly spaces and escape codes.
+ */
+function readable(raw: string): string {
+  return stripAnsi(raw)
+    .split("\n")
+    .map((line) => line.replace(/\s+$/, ""))
+    .filter((line) => line.trim().length > 0)
+    .join("\n");
+}
+
+/** Waits for the interface to answer the code, rather than for a fixed delay. */
+async function waitForAnswer(
+  run: LoginRun,
+  before: string,
+): Promise<"accepted" | "failed" | "unknown"> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const fresh = readable(run.output.slice(before.length));
+    if (SUCCESS_PATTERN.test(fresh)) return "accepted";
+    if (FAILURE_PATTERN.test(fresh)) return "failed";
+    if (run.done) return "unknown";
+  }
+  return "unknown";
+}
+
 /** An unreadable body is the same as an empty one here: the handlers validate. */
 const jsonBody = (request: HttpServerRequest.HttpServerRequest) =>
   request.json.pipe(Effect.orElseSucceed(() => ({}) as unknown));
@@ -269,7 +302,7 @@ export const providerTestStartRouteLayer = HttpRouter.add(
       code: run.code,
       wantsCode: PROVIDERS[provider].wantsCode,
       done: run.done,
-      output: stripAnsi(run.output).slice(-4_000),
+      output: readable(run.output).slice(-4_000),
     });
   }),
 );
@@ -292,12 +325,19 @@ export const providerTestCodeRouteLayer = HttpRouter.add(
     if (!run || run.done) {
       return HttpServerResponse.jsonUnsafe({ error: "no login in progress" }, { status: 409 });
     }
-    // Written to the process's stdin, never to a shell.
+    // Sent as keystrokes to the terminal, never to a shell.
+    const before = run.output;
     run.write(`${code.trim()}\r`);
-    yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 4_000)));
+    // The exchange is a round trip to the provider, so wait for the interface
+    // to actually say something rather than guessing at a delay — a fixed
+    // pause reported "submitted" while the answer arrived seconds later and
+    // was never shown.
+    const settled = yield* Effect.promise(() => waitForAnswer(run, before));
     return HttpServerResponse.jsonUnsafe({
       done: run.done,
-      output: stripAnsi(run.output).slice(-4_000),
+      accepted: settled === "accepted",
+      failed: settled === "failed",
+      output: readable(run.output).slice(-4_000),
     });
   }),
 );
@@ -321,7 +361,7 @@ export const providerTestStatusRouteLayer = HttpRouter.add(
       // The words the CLI used, so the page never claims more than it was told.
       status: output.trim().slice(0, 4_000),
       loginDone: run?.done ?? true,
-      loginOutput: run ? stripAnsi(run.output).slice(-4_000) : "",
+      loginOutput: run ? readable(run.output).slice(-4_000) : "",
     });
   }),
 );

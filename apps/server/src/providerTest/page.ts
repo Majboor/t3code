@@ -157,16 +157,31 @@ function renderStep(d) {
   if (!d.url && !d.code) {
     parts.push('<p class="bad">No sign-in link was printed. Raw output below.</p>');
   }
-  parts.push('<pre>' + (d.output || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])) + "</pre>");
+  parts.push('<pre id="stepOut">' + (d.output || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])) + "</pre>");
   $("stepBody").innerHTML = parts.join("");
   const submit = $("submitCode");
   if (submit) {
     submit.onclick = async () => {
       const code = $("pasteCode").value.trim();
       if (!code) return;
-      $("codeMsg").textContent = "submitting…";
+      submit.disabled = true;
+      $("codeMsg").textContent = "submitting — waiting for the provider…";
       const r = await post("/api/provider-test/code", { provider: d.provider, code });
-      $("codeMsg").textContent = r.ok ? "submitted — checking status" : (r.data.error || "failed");
+      submit.disabled = false;
+      // The interface answers after a round trip to the provider, so show what
+      // it actually said. Leaving the original output on screen made a refusal
+      // look identical to nothing happening at all.
+      if (r.data && typeof r.data.output === "string") {
+        const box = $("stepOut");
+        if (box) box.textContent = r.data.output;
+      }
+      $("codeMsg").innerHTML = !r.ok
+        ? '<span class="bad">' + (r.data.error || "failed") + "</span>"
+        : r.data.accepted
+          ? '<span class="ok">accepted</span>'
+          : r.data.failed
+            ? '<span class="bad">the provider refused that code — press Connect again for a fresh link</span>'
+            : "submitted — no clear answer yet, check status";
       await status(d.provider);
     };
   }
