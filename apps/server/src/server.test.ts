@@ -4534,7 +4534,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   );
 
   it.effect(
-    "browser verifies manual hosted provider connect, returning status, failed confirmation, and disconnect",
+    "browser shows both providers unconnected with a direct sign-in button each",
     () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
@@ -4889,10 +4889,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 threadId: defaultThreadId,
               },
             );
-            await page.getByText("No provider accounts connected.").waitFor({ timeout: 20_000 });
-            await page.getByRole("button", { name: "Connect Codex" }).click();
+            // Both providers, each offering one button, each reported by the
+            // server as this account's own rather than the machine's. Pressing
+            // the button is deliberately not exercised here: it runs the real
+            // `codex` and `claude` binaries, which a test machine does not have
+            // and which no assertion about the panel needs.
             await page
-              .getByText("provider-auth-codex")
+              .getByText("Codex turns will not run until you connect an account.")
               .waitFor({ timeout: 20_000 })
               .catch(async (error) => {
                 const bodyText = await page
@@ -4908,59 +4911,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   ].join("\n"),
                 );
               });
-            await page.getByText("codex login --device-auth", { exact: true }).waitFor();
-            await page.getByText("codex login status", { exact: true }).waitFor();
-            await page.getByLabel("Status output").fill("Device code expired");
-            await page.getByRole("button", { name: "Confirm status" }).click();
             await page
-              .getByText("Codex status output did not report an authenticated account.")
+              .getByText("Claude turns will not run until you connect an account.")
               .waitFor({ timeout: 20_000 });
-            await page.getByLabel("Status output").fill(`Logged in as ${uniqueEmail}`);
-            await page.getByRole("button", { name: "Confirm status" }).click();
-            await page
-              .getByText("Connected, 1 active session")
-              .waitFor({ timeout: 20_000 })
-              .catch(async (error) => {
-                const bodyText = await page
-                  .locator("body")
-                  .innerText()
-                  .catch(() => "");
-                throw new Error(
-                  [
-                    error instanceof Error ? error.message : String(error),
-                    `url=${page.url()}`,
-                    `body=${bodyText}`,
-                    `console=${pageMessages.join(" | ")}`,
-                  ].join("\n"),
-                );
-              });
-            await page.reload({ waitUntil: "domcontentloaded" });
-            await page.getByText("Connected, 1 active session").waitFor({ timeout: 20_000 });
-            await page.getByRole("button", { name: "Disconnect" }).click();
-            await page.getByText("Disconnected", { exact: true }).waitFor({ timeout: 20_000 });
+            await page.getByRole("button", { name: "Open Codex sign-in" }).waitFor();
+            await page.getByRole("button", { name: "Open Claude sign-in" }).waitFor();
           });
 
-          assert.equal(terminalOpenInputs.length, 1);
-          assert.equal(terminalOpenInputs[0]?.threadId, defaultThreadId);
-          assert.equal(terminalOpenInputs[0]?.terminalId, "provider-auth-codex");
-          assert.include(terminalOpenInputs[0]?.cwd ?? "", "/provider-homes/");
-          assert.equal(terminalWriteInputs.length, 1);
-          assert.equal(terminalWriteInputs[0]?.threadId, defaultThreadId);
-          assert.equal(terminalWriteInputs[0]?.terminalId, "provider-auth-codex");
-          assert.equal(terminalWriteInputs[0]?.data, "codex login --device-auth\n");
-
-          if (!capturedRepository) {
-            throw new Error("Tenancy repository was not captured.");
-          }
-          const providerIsolation = yield* capturedRepository.loadProviderIsolation();
-          const account = providerIsolation.providerAccounts.find(
-            (candidate) => candidate.id === `provider-account:${tenantId}:${userId}:codex`,
-          );
-          const providerSession = providerIsolation.providerSessions.find(
-            (candidate) => candidate.providerAccountId === account?.id,
-          );
-          assert.notEqual(account?.disabledAt, null);
-          assert.notEqual(providerSession?.endedAt, null);
+          // Connecting no longer runs through a thread's terminal, so nothing
+          // should have been opened or typed into one to render this panel.
+          assert.equal(terminalOpenInputs.length, 0);
+          assert.equal(terminalWriteInputs.length, 0);
         } finally {
           fetchSpy.mockRestore();
         }

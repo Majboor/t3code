@@ -1316,7 +1316,16 @@ function upsertProviderIsolationSnapshot(input: {
   };
 }
 
-function filterProviderLaunchBaseEnv(
+/**
+ * The server's own environment, with every credential taken out of it.
+ *
+ * A provider launch is supposed to run as one particular account, and the
+ * process it inherits from is signed in as the machine. Anything left in here
+ * that names an account is a way for that machine login to answer for a person
+ * who never connected, so the base is stripped of all of them and the caller
+ * puts back only the one credential it meant to use.
+ */
+export function filterProviderLaunchBaseEnv(
   baseEnv: Readonly<Record<string, string | undefined>>,
 ): Readonly<Record<string, string>> {
   const env: Record<string, string> = {};
@@ -1332,6 +1341,11 @@ function filterProviderLaunchBaseEnv(
 const PROVIDER_LAUNCH_DENIED_ENV_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
+  // `claude setup-token` hands back one of these, and it is a whole account for
+  // a year. Inherited from the server's environment it would quietly stand in
+  // for a person who never connected, which is the exact substitution this
+  // filter exists to prevent.
+  "CLAUDE_CODE_OAUTH_TOKEN",
   "CLAUDE_CONFIG_DIR",
   "CODEX_HOME",
   "HOME",

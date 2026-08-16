@@ -1,289 +1,273 @@
-import { LoaderIcon, PlusIcon, RefreshCwIcon, TerminalIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  type ProviderAccountConnectInstructions,
-  type ProviderAccountConnectScope,
-  type ProviderAccountId,
-  type ProviderAccountSummary,
-  type ProviderKind,
-  type ScopedThreadRef,
-  type TerminalSessionSnapshot,
-} from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime";
-import { useShallow } from "zustand/react/shallow";
+import { CheckIcon, ExternalLinkIcon, LoaderIcon, RefreshCwIcon } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { readEnvironmentApi } from "../../environmentApi";
-import { usePrimaryEnvironmentId } from "../../environments/primary";
+import { readSupabaseBrowserAccessToken } from "../../environments/primary/auth";
+import { resolvePrimaryEnvironmentHttpUrl } from "../../environments/primary/target";
 import { cn } from "../../lib/utils";
-import { selectThreadShellsAcrossEnvironments, useStore } from "../../store";
 import { Button } from "../ui/button";
-import { Textarea } from "../ui/textarea";
+import { Input } from "../ui/input";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
-type ProviderConnectSession = {
-  provider: ProviderKind;
-  accountScope: ProviderAccountConnectScope;
-  instructions: ProviderAccountConnectInstructions;
-  threadRef: ScopedThreadRef | null;
-  terminal: TerminalSessionSnapshot | null;
-  statusOutput: string;
+/**
+ * Connecting a provider account, in two buttons.
+ *
+ * This used to ask for a thread, open a terminal in it, and expect the person
+ * to read a CLI, run a status command and paste its output back. That is a lot
+ * to ask of someone who only wants to sign in, and one of the commands it told
+ * them to run could not actually be completed. The server drives both CLIs now
+ * and hands back only the two things a person needs — where to go, and what to
+ * type — so all that is left here is a button each.
+ */
+
+type ProviderName = "codex" | "claude";
+
+type Connection = {
+  readonly provider: ProviderName;
+  readonly label: string;
+  readonly connected: boolean;
 };
 
-function formatProviderAccountOwner(account: ProviderAccountSummary): string {
-  switch (account.owner.type) {
-    case "user":
-      return account.sharing === "private" ? "Private user account" : "Shared user account";
-    case "tenant":
-      return "Tenant shared account";
-    case "organization":
-      return "Organization shared account";
-  }
+/** What the server printed for a sign-in that is currently in progress. */
+type SignInSession = {
+  readonly provider: ProviderName;
+  readonly label: string;
+  readonly url: string | null;
+  readonly code: string | null;
+  readonly wantsCode: boolean;
+};
+
+const PROVIDER_LABELS: Record<ProviderName, string> = { codex: "Codex", claude: "Claude" };
+
+async function callProviderAuth(
+  path: string,
+  init?: { readonly method?: "GET" | "POST"; readonly body?: unknown },
+): Promise<{ readonly ok: boolean; readonly data: Record<string, unknown> }> {
+  // The cookie alone is not enough everywhere: a Supabase-backed deployment
+  // authenticates with a bearer token the cookie knows nothing about, and
+  // sending only the cookie there gets a 401 on every call.
+  const accessToken = readSupabaseBrowserAccessToken();
+  const headers: Record<string, string> = {
+    ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+    ...(init?.body === undefined ? {} : { "content-type": "application/json" }),
+  };
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl(`/api/provider-auth/${path}`), {
+    method: init?.method ?? "GET",
+    credentials: "include",
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    ...(init?.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+  });
+  const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  return { ok: response.ok, data };
 }
 
-function formatProviderAccountStatus(account: ProviderAccountSummary): string {
-  if (account.status === "disabled") {
-    return "Disconnected";
-  }
-  return account.activeSessionCount > 0
-    ? `Connected, ${account.activeSessionCount} active session${account.activeSessionCount === 1 ? "" : "s"}`
-    : "Connected";
-}
-
-function formatProviderAccountProvider(provider: ProviderKind): string {
-  switch (provider) {
-    case "codex":
-      return "Codex";
-    case "claudeAgent":
-      return "Claude";
-  }
-}
-
-function formatProviderAccountDate(value: string | null): string {
-  if (!value) {
-    return "Never";
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
-
-// Local loopback backends reject provider account RPCs with this guidance; surface it as an
-// informative state instead of an inline error.
-function isHostedTenantSessionError(message: string): boolean {
-  return message.includes("hosted tenant session");
+function errorFrom(data: Record<string, unknown>, fallback: string): string {
+  return typeof data["error"] === "string" ? data["error"] : fallback;
 }
 
 export function ProviderAccountsSection() {
-  const environmentId = usePrimaryEnvironmentId();
-  const [providerAccounts, setProviderAccounts] = useState<readonly ProviderAccountSummary[]>([]);
-  const [providerAccountErrorMessage, setProviderAccountErrorMessage] = useState<string | null>(
-    null,
-  );
-  const [providerConnectSession, setProviderConnectSession] =
-    useState<ProviderConnectSession | null>(null);
+  const [connections, setConnections] = useState<readonly Connection[] | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [requiresHostedTenant, setRequiresHostedTenant] = useState(false);
-  const [isRefreshingProviderAccounts, setIsRefreshingProviderAccounts] = useState(false);
-  const [connectingProvider, setConnectingProvider] = useState<ProviderKind | null>(null);
-  const [confirmingProvider, setConfirmingProvider] = useState<ProviderKind | null>(null);
-  const [providerAccountConnectScope, setProviderAccountConnectScope] =
-    useState<ProviderAccountConnectScope>("personal");
-  const [disconnectingProviderAccountId, setDisconnectingProviderAccountId] =
-    useState<ProviderAccountId | null>(null);
-  const threadShells = useStore(useShallow(selectThreadShellsAcrossEnvironments));
-  const providerAuthThreadRef = useMemo<ScopedThreadRef | null>(() => {
-    if (!environmentId) {
-      return null;
-    }
-    const environmentThreads = threadShells
-      .filter((thread) => thread.environmentId === environmentId)
-      .toSorted((left, right) => {
-        const leftUpdatedAt = left.updatedAt ?? left.createdAt;
-        const rightUpdatedAt = right.updatedAt ?? right.createdAt;
-        return rightUpdatedAt.localeCompare(leftUpdatedAt);
-      });
-    const thread = environmentThreads.find((candidate) => candidate.archivedAt === null);
-    return thread ? scopeThreadRef(thread.environmentId, thread.id) : null;
-  }, [environmentId, threadShells]);
-
-  const reportProviderAccountError = useCallback((error: unknown, fallback: string) => {
-    const message = error instanceof Error ? error.message : fallback;
-    if (isHostedTenantSessionError(message)) {
-      setRequiresHostedTenant(true);
-      setProviderAccountErrorMessage(null);
-      return;
-    }
-    setProviderAccountErrorMessage(message);
+  const [busyProvider, setBusyProvider] = useState<ProviderName | null>(null);
+  const [signInSession, setSignInSession] = useState<SignInSession | null>(null);
+  const [code, setCode] = useState("");
+  const [isSubmittingCode, setIsSubmittingCode] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  // Codex finishes on its own once the browser is done, so the page has to
+  // watch for it. The flag stops a watch outliving the panel that started it.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
-  const refreshProviderAccounts = useCallback(async () => {
-    setIsRefreshingProviderAccounts(true);
-    setProviderAccountErrorMessage(null);
-    setRequiresHostedTenant(false);
+  const refresh = useCallback(async (): Promise<readonly Connection[] | null> => {
+    setIsRefreshing(true);
     try {
-      if (!environmentId) {
-        setProviderAccounts([]);
-        return;
+      const { ok, data } = await callProviderAuth("connections");
+      if (!isMountedRef.current) {
+        return null;
       }
-      const api = readEnvironmentApi(environmentId);
-      if (!api) {
-        setProviderAccounts([]);
-        return;
+      if (!ok) {
+        setErrorMessage(errorFrom(data, "Failed to load provider connections."));
+        return null;
       }
-      const result = await api.providerAccounts.list();
-      setProviderAccounts(result.accounts);
-    } catch (error) {
-      reportProviderAccountError(error, "Failed to load provider accounts.");
+      const loaded = (data["connections"] ?? []) as readonly Connection[];
+      setConnections(loaded);
+      setErrorMessage(null);
+      return loaded;
+    } catch {
+      if (isMountedRef.current) {
+        setErrorMessage("Failed to reach the server.");
+      }
+      return null;
     } finally {
-      setIsRefreshingProviderAccounts(false);
-    }
-  }, [environmentId, reportProviderAccountError]);
-
-  const disconnectProviderAccount = useCallback(
-    async (providerAccountId: ProviderAccountId) => {
-      setDisconnectingProviderAccountId(providerAccountId);
-      setProviderAccountErrorMessage(null);
-      try {
-        if (!environmentId) {
-          throw new Error("Environment API not found.");
-        }
-        const api = readEnvironmentApi(environmentId);
-        if (!api) {
-          throw new Error("Environment API not found.");
-        }
-        const result = await api.providerAccounts.disconnect({ providerAccountId });
-        setProviderAccounts((accounts) =>
-          accounts.map((account) => (account.id === result.account.id ? result.account : account)),
-        );
-        setStatusMessage("Provider account disconnected.");
-      } catch (error) {
-        reportProviderAccountError(error, "Failed to disconnect provider account.");
-      } finally {
-        setDisconnectingProviderAccountId(null);
+      if (isMountedRef.current) {
+        setIsRefreshing(false);
       }
-    },
-    [environmentId, reportProviderAccountError],
-  );
-
-  const connectProviderAccount = useCallback(
-    async (provider: ProviderKind, accountScope: ProviderAccountConnectScope) => {
-      setConnectingProvider(provider);
-      setProviderAccountErrorMessage(null);
-      setStatusMessage(null);
-      try {
-        if (!environmentId) {
-          throw new Error("Environment API not found.");
-        }
-        const api = readEnvironmentApi(environmentId);
-        if (!api) {
-          throw new Error("Environment API not found.");
-        }
-        if (providerAuthThreadRef) {
-          const result = await api.providerAccounts.openAuthTerminal({
-            provider,
-            threadId: providerAuthThreadRef.threadId,
-            accountScope,
-          });
-          setProviderConnectSession({
-            provider,
-            accountScope,
-            instructions: result.instructions,
-            threadRef: providerAuthThreadRef,
-            terminal: result.terminal,
-            statusOutput: "",
-          });
-          setStatusMessage(`${formatProviderAccountProvider(provider)} auth terminal opened.`);
-        } else {
-          const result = await api.providerAccounts.connect({ provider, accountScope });
-          setProviderConnectSession({
-            provider,
-            accountScope,
-            instructions: result.instructions,
-            threadRef: null,
-            terminal: null,
-            statusOutput: "",
-          });
-          setStatusMessage(
-            `${formatProviderAccountProvider(provider)} connect flow prepared. Open a thread to launch the auth terminal.`,
-          );
-        }
-      } catch (error) {
-        reportProviderAccountError(error, "Failed to prepare provider connect flow.");
-      } finally {
-        setConnectingProvider(null);
-      }
-    },
-    [environmentId, providerAuthThreadRef, reportProviderAccountError],
-  );
-
-  const confirmProviderAccount = useCallback(async () => {
-    if (!providerConnectSession) {
-      return;
     }
-    const statusOutput = providerConnectSession.statusOutput.trim();
-    if (!statusOutput) {
-      setProviderAccountErrorMessage("Paste the provider status output before confirming.");
-      return;
-    }
-    if (!providerConnectSession.threadRef) {
-      setProviderAccountErrorMessage(
-        "Open a thread and start the auth terminal before confirming.",
-      );
-      return;
-    }
-    setConfirmingProvider(providerConnectSession.provider);
-    setProviderAccountErrorMessage(null);
-    setStatusMessage(null);
-    try {
-      if (!environmentId) {
-        throw new Error("Environment API not found.");
-      }
-      const api = readEnvironmentApi(environmentId);
-      if (!api) {
-        throw new Error("Environment API not found.");
-      }
-      const result = await api.providerAccounts.confirm({
-        provider: providerConnectSession.provider,
-        threadId: providerConnectSession.threadRef.threadId,
-        statusOutput,
-        accountScope: providerConnectSession.accountScope,
-      });
-      setProviderAccounts((accounts) => {
-        const existingIndex = accounts.findIndex((account) => account.id === result.account.id);
-        if (existingIndex === -1) {
-          return [result.account, ...accounts];
-        }
-        return accounts.map((account) =>
-          account.id === result.account.id ? result.account : account,
-        );
-      });
-      setProviderConnectSession(null);
-      setStatusMessage(
-        `${formatProviderAccountProvider(providerConnectSession.provider)} provider account connected.`,
-      );
-    } catch (error) {
-      reportProviderAccountError(error, "Failed to confirm provider account.");
-    } finally {
-      setConfirmingProvider(null);
-    }
-  }, [environmentId, providerConnectSession, reportProviderAccountError]);
+  }, []);
 
   useEffect(() => {
-    void refreshProviderAccounts();
-  }, [refreshProviderAccounts]);
+    void refresh();
+  }, [refresh]);
+
+  /**
+   * Codex has no submit step — it completes when the browser does. Polling is
+   * the only way to notice; without it the panel sat on the sign-in screen
+   * through a login that had already succeeded.
+   */
+  const watchUntilConnected = useCallback(
+    async (provider: ProviderName) => {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+        if (!isMountedRef.current) {
+          return;
+        }
+        const loaded = await refresh();
+        if (loaded?.find((entry) => entry.provider === provider)?.connected) {
+          setSignInSession(null);
+          setStatusMessage(`${PROVIDER_LABELS[provider]} connected.`);
+          return;
+        }
+      }
+      if (isMountedRef.current) {
+        setErrorMessage(
+          `${PROVIDER_LABELS[provider]} sign-in did not complete. Start it again for a fresh code.`,
+        );
+      }
+    },
+    [refresh],
+  );
+
+  const startSignIn = useCallback(
+    async (provider: ProviderName) => {
+      setBusyProvider(provider);
+      setErrorMessage(null);
+      setStatusMessage(null);
+      setSignInSession(null);
+      setCode("");
+      try {
+        const { ok, data } = await callProviderAuth("start", { method: "POST", body: { provider } });
+        if (!isMountedRef.current) {
+          return;
+        }
+        if (!ok) {
+          setErrorMessage(errorFrom(data, "Failed to start the sign-in."));
+          return;
+        }
+        const url = typeof data["url"] === "string" ? data["url"] : null;
+        if (url === null) {
+          setErrorMessage(
+            `${PROVIDER_LABELS[provider]} did not return a sign-in link. Try again in a moment.`,
+          );
+          return;
+        }
+        const wantsCode = data["wantsCode"] === true;
+        setSignInSession({
+          provider,
+          label: typeof data["label"] === "string" ? data["label"] : PROVIDER_LABELS[provider],
+          url,
+          code: typeof data["code"] === "string" ? data["code"] : null,
+          wantsCode,
+        });
+        if (!wantsCode) {
+          void watchUntilConnected(provider);
+        }
+      } catch {
+        if (isMountedRef.current) {
+          setErrorMessage("Failed to reach the server.");
+        }
+      } finally {
+        if (isMountedRef.current) {
+          setBusyProvider(null);
+        }
+      }
+    },
+    [watchUntilConnected],
+  );
+
+  const submitCode = useCallback(async () => {
+    if (!signInSession || code.trim().length === 0) {
+      return;
+    }
+    setIsSubmittingCode(true);
+    setErrorMessage(null);
+    try {
+      const { ok, data } = await callProviderAuth("code", {
+        method: "POST",
+        body: { provider: signInSession.provider, code: code.trim() },
+      });
+      if (!isMountedRef.current) {
+        return;
+      }
+      if (!ok) {
+        setErrorMessage(errorFrom(data, "The code was not accepted."));
+        return;
+      }
+      if (data["connected"] === true) {
+        setSignInSession(null);
+        setCode("");
+        setStatusMessage(`${signInSession.label} connected.`);
+        await refresh();
+        return;
+      }
+      setErrorMessage(
+        data["failed"] === true
+          ? `${signInSession.label} rejected that code. Start the sign-in again for a fresh one.`
+          : `${signInSession.label} did not return a token. Start the sign-in again.`,
+      );
+    } catch {
+      if (isMountedRef.current) {
+        setErrorMessage("Failed to reach the server.");
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsSubmittingCode(false);
+      }
+    }
+  }, [code, refresh, signInSession]);
+
+  const disconnect = useCallback(
+    async (provider: ProviderName) => {
+      setBusyProvider(provider);
+      setErrorMessage(null);
+      setStatusMessage(null);
+      try {
+        const { ok, data } = await callProviderAuth("logout", {
+          method: "POST",
+          body: { provider },
+        });
+        if (!isMountedRef.current) {
+          return;
+        }
+        if (!ok) {
+          setErrorMessage(errorFrom(data, "Failed to disconnect."));
+          return;
+        }
+        setStatusMessage(`${PROVIDER_LABELS[provider]} disconnected.`);
+        await refresh();
+      } catch {
+        if (isMountedRef.current) {
+          setErrorMessage("Failed to reach the server.");
+        }
+      } finally {
+        if (isMountedRef.current) {
+          setBusyProvider(null);
+        }
+      }
+    },
+    [refresh],
+  );
 
   return (
     <SettingsSection
       title="Provider Accounts"
       headerAction={
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={isRefreshingProviderAccounts}
-          onClick={refreshProviderAccounts}
-        >
-          {isRefreshingProviderAccounts ? (
+        <Button size="xs" variant="outline" disabled={isRefreshing} onClick={() => void refresh()}>
+          {isRefreshing ? (
             <LoaderIcon className="size-3.5 animate-spin" />
           ) : (
             <RefreshCwIcon className="size-3.5" />
@@ -294,197 +278,139 @@ export function ProviderAccountsSection() {
     >
       <SettingsRow
         title="Codex and Claude"
-        description="Bring your own provider logins. Accounts are scoped to the current tenant session."
+        description="Sign in with your own provider accounts. Agent runs use the account you connect here, and nobody else's."
         status={
-          providerAccountErrorMessage ? (
-            <span className="text-destructive">{providerAccountErrorMessage}</span>
+          errorMessage ? (
+            <span className="text-destructive">{errorMessage}</span>
           ) : statusMessage ? (
             <span className="text-success">{statusMessage}</span>
           ) : null
         }
       >
         <div className="space-y-3 border-t border-border/60 pt-3 pb-4">
-          {requiresHostedTenant ? (
+          {connections === null ? (
             <div className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
-              Provider account linking requires a hosted tenant session. This backend is running in
-              local loopback mode, so Codex and Claude use the local CLI logins configured on this
-              machine.
+              Loading connections…
             </div>
           ) : (
-            <>
-              <div className="inline-flex rounded-md border border-border bg-background p-0.5">
-                {(["personal", "organization"] as const).map((scope) => (
-                  <button
-                    key={scope}
-                    type="button"
-                    className={cn(
-                      "rounded-sm px-2.5 py-1 text-xs font-medium",
-                      providerAccountConnectScope === scope
-                        ? "bg-muted text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    onClick={() => setProviderAccountConnectScope(scope)}
-                  >
-                    {scope === "personal" ? "Personal" : "Organization shared"}
-                  </button>
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {(["codex", "claudeAgent"] as const).map((provider) => (
+            connections.map((connection) => (
+              <div
+                key={connection.provider}
+                className="flex flex-col gap-3 rounded-md border border-border bg-background px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-semibold text-foreground">{connection.label}</div>
+                    <span
+                      className={cn(
+                        "rounded-sm border px-1.5 py-0.5 text-[11px] font-medium",
+                        connection.connected
+                          ? "border-success/30 bg-success/10 text-success"
+                          : "border-border text-muted-foreground",
+                      )}
+                    >
+                      {connection.connected ? "Connected" : "Not connected"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {connection.connected
+                      ? `Turns on this account run as your ${connection.label} login.`
+                      : `${connection.label} turns will not run until you connect an account.`}
+                  </div>
+                </div>
+                {connection.connected ? (
                   <Button
-                    key={provider}
                     size="xs"
-                    variant="outline"
-                    disabled={connectingProvider !== null}
-                    onClick={() =>
-                      void connectProviderAccount(provider, providerAccountConnectScope)
-                    }
+                    variant="destructive-outline"
+                    disabled={busyProvider !== null}
+                    onClick={() => void disconnect(connection.provider)}
                   >
-                    {connectingProvider === provider ? (
+                    {busyProvider === connection.provider ? (
+                      <LoaderIcon className="size-3.5 animate-spin" />
+                    ) : null}
+                    Disconnect
+                  </Button>
+                ) : (
+                  <Button
+                    size="xs"
+                    disabled={busyProvider !== null}
+                    onClick={() => void startSignIn(connection.provider)}
+                  >
+                    {busyProvider === connection.provider ? (
                       <LoaderIcon className="size-3.5 animate-spin" />
                     ) : (
-                      <PlusIcon className="size-3.5" />
+                      <ExternalLinkIcon className="size-3.5" />
                     )}
-                    Connect {formatProviderAccountProvider(provider)}
+                    Open {connection.label} sign-in
                   </Button>
-                ))}
+                )}
               </div>
-              {providerConnectSession ? (
-                <div className="rounded-md border border-border bg-muted/30 px-3 py-3 text-xs">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="font-semibold text-foreground">
-                      {formatProviderAccountProvider(providerConnectSession.provider)}{" "}
-                      {providerConnectSession.accountScope === "organization"
-                        ? "organization setup"
-                        : "personal setup"}
-                    </div>
-                    {providerConnectSession.terminal ? (
-                      <span className="inline-flex items-center gap-1 text-muted-foreground">
-                        <TerminalIcon className="size-3" />
-                        {providerConnectSession.terminal.terminalId}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="mt-2 space-y-2 text-muted-foreground">
-                    {providerConnectSession.instructions.steps.map((step) => (
-                      <div key={step}>{step}</div>
-                    ))}
-                  </div>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    <div>
-                      <div className="mb-1 text-muted-foreground">Auth command</div>
-                      <code className="block overflow-x-auto rounded-sm border border-border bg-background px-2 py-1 text-foreground">
-                        {providerConnectSession.instructions.authCommand}
-                      </code>
-                    </div>
-                    <div>
-                      <div className="mb-1 text-muted-foreground">Status command</div>
-                      <code className="block overflow-x-auto rounded-sm border border-border bg-background px-2 py-1 text-foreground">
-                        {providerConnectSession.instructions.statusCommand}
-                      </code>
-                    </div>
-                  </div>
-                  <div className="mt-2 text-muted-foreground">
-                    {providerConnectSession.instructions.verificationHint}
-                  </div>
-                  <div className="mt-3 space-y-2">
-                    <label
-                      htmlFor={`provider-status-output-${providerConnectSession.provider}`}
-                      className="block text-xs font-medium text-foreground"
-                    >
-                      Status output
-                    </label>
-                    <Textarea
-                      id={`provider-status-output-${providerConnectSession.provider}`}
-                      value={providerConnectSession.statusOutput}
-                      onChange={(event) => {
-                        const statusOutput = event.target.value;
-                        setProviderConnectSession((current) =>
-                          current ? { ...current, statusOutput } : current,
-                        );
-                        if (providerAccountErrorMessage) {
-                          setProviderAccountErrorMessage(null);
-                        }
-                      }}
-                      placeholder={providerConnectSession.instructions.statusCommand}
-                      className="min-h-24 font-mono text-xs"
-                      spellCheck={false}
-                    />
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        size="xs"
-                        disabled={confirmingProvider !== null || !providerConnectSession.threadRef}
-                        onClick={() => void confirmProviderAccount()}
-                      >
-                        {confirmingProvider === providerConnectSession.provider ? (
-                          <LoaderIcon className="size-3.5 animate-spin" />
-                        ) : null}
-                        Confirm status
-                      </Button>
-                      {!providerConnectSession.threadRef ? (
-                        <span className="text-xs text-muted-foreground">
-                          Open a thread to launch the auth terminal before confirming.
-                        </span>
-                      ) : null}
-                    </div>
+            ))
+          )}
+
+          {signInSession ? (
+            <div className="space-y-3 rounded-md border border-border bg-muted/30 px-3 py-3 text-xs">
+              <div className="font-semibold text-foreground">
+                Finish signing in to {signInSession.label}
+              </div>
+              <a
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground"
+                href={signInSession.url ?? "#"}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <ExternalLinkIcon className="size-3.5" />
+                Open the {signInSession.label} sign-in page
+              </a>
+              {signInSession.code ? (
+                <div>
+                  <div className="mb-1 text-muted-foreground">Enter this code on that page</div>
+                  <div className="rounded-md border border-dashed border-primary bg-background px-3 py-2 text-center font-mono text-lg tracking-[0.2em] text-foreground">
+                    {signInSession.code}
                   </div>
                 </div>
               ) : null}
-              {providerAccounts.length === 0 ? (
-                <div className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
-                  No provider accounts connected.
+              {signInSession.wantsCode ? (
+                <div className="space-y-2">
+                  <label
+                    htmlFor="provider-auth-code"
+                    className="block text-xs font-medium text-foreground"
+                  >
+                    Paste the code the page gives you back
+                  </label>
+                  <Input
+                    id="provider-auth-code"
+                    value={code}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="font-mono text-xs"
+                    onChange={(event) => setCode(event.target.value)}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="xs"
+                      disabled={isSubmittingCode || code.trim().length === 0}
+                      onClick={() => void submitCode()}
+                    >
+                      {isSubmittingCode ? (
+                        <LoaderIcon className="size-3.5 animate-spin" />
+                      ) : (
+                        <CheckIcon className="size-3.5" />
+                      )}
+                      Finish sign-in
+                    </Button>
+                    <span className="text-muted-foreground">
+                      This can take a few seconds to come back.
+                    </span>
+                  </div>
                 </div>
               ) : (
-                providerAccounts.map((account) => {
-                  const providerLabel = formatProviderAccountProvider(account.provider);
-                  const isDisconnecting = disconnectingProviderAccountId === account.id;
-                  const isDisconnected = account.status === "disabled";
-                  return (
-                    <div
-                      key={account.id}
-                      className="flex flex-col gap-3 rounded-md border border-border bg-background px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="text-sm font-semibold text-foreground">
-                            {providerLabel}
-                          </div>
-                          <span
-                            className={cn(
-                              "rounded-sm border px-1.5 py-0.5 text-[11px] font-medium",
-                              isDisconnected
-                                ? "border-border text-muted-foreground"
-                                : "border-success/30 bg-success/10 text-success",
-                            )}
-                          >
-                            {formatProviderAccountStatus(account)}
-                          </span>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {formatProviderAccountOwner(account)}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Connected {formatProviderAccountDate(account.createdAt)}
-                          {account.disabledAt
-                            ? ` · Disconnected ${formatProviderAccountDate(account.disabledAt)}`
-                            : ""}
-                        </div>
-                      </div>
-                      <Button
-                        size="xs"
-                        variant="destructive-outline"
-                        disabled={isDisconnected || isDisconnecting}
-                        onClick={() => void disconnectProviderAccount(account.id)}
-                      >
-                        {isDisconnecting ? <LoaderIcon className="size-3.5 animate-spin" /> : null}
-                        Disconnect
-                      </Button>
-                    </div>
-                  );
-                })
+                <div className="text-muted-foreground">
+                  Waiting for you to finish in the browser…
+                </div>
               )}
-            </>
-          )}
+            </div>
+          ) : null}
         </div>
       </SettingsRow>
     </SettingsSection>

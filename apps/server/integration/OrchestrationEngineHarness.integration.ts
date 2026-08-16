@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ApprovalRequestId,
   ProviderKind,
+  UserId,
   type OrchestrationEvent,
   type OrchestrationThread,
 } from "@t3tools/contracts";
@@ -74,6 +75,7 @@ import {
   type TestProviderAdapterHarness,
 } from "./TestProviderAdapter.integration.ts";
 import { deriveServerPaths, ServerConfig } from "../src/config.ts";
+import { codexHomeFor, providerAuthUserDir } from "../src/providerAuth/store.ts";
 import { WorkspaceEntriesLive } from "../src/workspace/Layers/WorkspaceEntries.ts";
 import { WorkspacePathsLive } from "../src/workspace/Layers/WorkspacePaths.ts";
 
@@ -221,6 +223,14 @@ interface MakeOrchestrationIntegrationHarnessOptions {
   readonly realCodex?: boolean;
 }
 
+/**
+ * The person every turn in these integration cases is sent by.
+ *
+ * Turns are attributed to a sender and run on that sender's provider account,
+ * so the harness connects this one and the cases send as them.
+ */
+export const INTEGRATION_USER_ID = UserId.make("user-integration-harness");
+
 export const makeOrchestrationIntegrationHarness = (
   options?: MakeOrchestrationIntegrationHarnessOptions,
 ) =>
@@ -253,6 +263,22 @@ export const makeOrchestrationIntegrationHarness = (
     );
     yield* fileSystem.makeDirectory(workspaceDir, { recursive: true });
     yield* fileSystem.makeDirectory(stateDir, { recursive: true });
+    // A turn runs on the provider account of whoever sent the message and is
+    // refused when that person has not connected one. These cases are about
+    // orchestration rather than about connecting, so the harness user arrives
+    // already connected to both.
+    const codexHome = codexHomeFor(stateDir, INTEGRATION_USER_ID);
+    yield* fileSystem.makeDirectory(codexHome, { recursive: true });
+    yield* fileSystem.writeFileString(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({ tokens: "integration" }),
+    );
+    const claudeDir = path.join(providerAuthUserDir(stateDir, INTEGRATION_USER_ID), "claude");
+    yield* fileSystem.makeDirectory(claudeDir, { recursive: true });
+    yield* fileSystem.writeFileString(
+      path.join(claudeDir, "oauth-token"),
+      "sk-ant-integration-token",
+    );
     yield* initializeGitWorkspace(workspaceDir);
 
     const persistenceLayer = makeSqlitePersistenceLive(dbPath);

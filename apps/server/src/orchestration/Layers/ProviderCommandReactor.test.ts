@@ -51,11 +51,31 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { codexHomeFor, providerAuthUserDir } from "../../providerAuth/store.ts";
 import {
   TenancyRepository,
   type ProviderIsolationPersistenceSnapshot,
   type TenancyRepositoryShape,
 } from "../../persistence/Services/Tenancy.ts";
+
+/**
+ * The person every turn in this file is sent by.
+ *
+ * A turn runs on the provider account of whoever sent the message and is
+ * refused when that person has not connected one, so these cases would
+ * otherwise all be testing the refusal rather than the behaviour they name.
+ */
+const HARNESS_USER_ID = UserId.make("user-reactor-harness");
+
+/** Both providers connected for the harness user, in the shape the store reads. */
+function seedProviderCredentials(stateDir: string, userId: string): void {
+  const codexHome = codexHomeFor(stateDir, userId);
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "auth.json"), JSON.stringify({ tokens: "harness" }));
+  const claudeDir = path.join(providerAuthUserDir(stateDir, userId), "claude");
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, "oauth-token"), "sk-ant-harness-token");
+}
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -123,6 +143,7 @@ describe("ProviderCommandReactor", () => {
     createdBaseDirs.add(baseDir);
     const { stateDir } = deriveServerPathsSync(baseDir, undefined);
     createdStateDirs.add(stateDir);
+    seedProviderCredentials(stateDir, HARNESS_USER_ID);
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
@@ -389,7 +410,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-1"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "hello reactor",
           attachments: [],
         },
@@ -460,7 +481,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-env"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "hello isolated provider",
           attachments: [],
         },
@@ -510,7 +531,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-title"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "Please investigate reconnect failures after restarting the session.",
           attachments: [],
         },
@@ -560,7 +581,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-title-preserve"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "Please investigate reconnect failures after restarting the session.",
           attachments: [],
         },
@@ -606,7 +627,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-title-formatted"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "[effort:high]\\n\\nFix reconnect spinner on resume",
           attachments: [],
         },
@@ -668,7 +689,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-branch-model"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "Add a safer reconnect backoff.",
           attachments: [],
         },
@@ -698,7 +719,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-fast"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "hello fast mode",
           attachments: [],
         },
@@ -755,7 +776,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-claude-effort"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "hello with effort",
           attachments: [],
         },
@@ -809,7 +830,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-claude-fast-mode"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "hello with fast mode",
           attachments: [],
         },
@@ -871,7 +892,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-plan"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "plan this change",
           attachments: [],
         },
@@ -902,7 +923,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-first"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "hello claude",
           attachments: [],
         },
@@ -953,7 +974,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-unsupported-1"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "first",
           attachments: [],
         },
@@ -973,7 +994,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-unsupported-2"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "second",
           attachments: [],
         },
@@ -1006,7 +1027,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-unchanged-1"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "first",
           attachments: [],
         },
@@ -1027,7 +1048,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-unchanged-2"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "second",
           attachments: [],
         },
@@ -1056,7 +1077,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-claude-effort-1"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "first claude turn",
           attachments: [],
         },
@@ -1084,7 +1105,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-claude-effort-2"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "second claude turn",
           attachments: [],
         },
@@ -1137,7 +1158,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-runtime-mode-1"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "first",
           attachments: [],
         },
@@ -1174,7 +1195,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-runtime-mode-2"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "second",
           attachments: [],
         },
@@ -1208,42 +1229,60 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
+    // A turn first, so the thread has a sender. A restart runs on somebody's
+    // provider account, and a thread nobody has spoken in names nobody — that
+    // case is deliberately a no-op now, so it cannot carry this assertion.
     await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-runtime-mode-claude"),
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-claude-no-options"),
         threadId: ThreadId.make("thread-1"),
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
+        message: {
+          messageId: asMessageId("user-message-claude-no-options"),
+          role: "user",
+          authorUserId: HARNESS_USER_ID,
+          text: "first",
+          attachments: [],
         },
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.runtime-mode.set",
-        commandId: CommandId.make("cmd-runtime-mode-set-claude-no-options"),
-        threadId: ThreadId.make("thread-1"),
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        // The harness creates the thread in approval-required, so the turn
+        // matches it and the change below is a real one. Starting on a mode the
+        // thread is already in emits no event, and nothing restarts.
         runtimeMode: "approval-required",
         createdAt: now,
       }),
     );
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("cmd-runtime-mode-set-claude-no-options"),
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.runtimeMode === "full-access";
+    });
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       },
-      runtimeMode: "approval-required",
+      runtimeMode: "full-access",
     });
   });
 
@@ -1259,7 +1298,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-switch-1"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "first",
           attachments: [],
         },
@@ -1280,7 +1319,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-switch-2"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "second",
           attachments: [],
         },
@@ -1343,7 +1382,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-restart-failure-1"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "first",
           attachments: [],
         },
@@ -1455,7 +1494,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-stale"),
           role: "user",
-          authorUserId: null,
+          authorUserId: HARNESS_USER_ID,
           text: "resume codex",
           attachments: [],
         },

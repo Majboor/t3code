@@ -6,13 +6,13 @@ import type { Socket as NodeNetSocket } from "node:net";
 import { ServerConfig } from "./config.ts";
 import { analyticsIngestRouteLayer } from "./analytics/http.ts";
 import {
-  providerTestCodeRouteLayer,
-  providerTestLogoutRouteLayer,
-  providerTestPageRouteLayer,
-  providerTestPromptRouteLayer,
-  providerTestStartRouteLayer,
-  providerTestStatusRouteLayer,
-} from "./providerTest/http.ts";
+  providerAuthCodeRouteLayer,
+  providerAuthConnectionsRouteLayer,
+  providerAuthLogoutRouteLayer,
+  providerAuthPageRouteLayer,
+  providerAuthPromptRouteLayer,
+  providerAuthStartRouteLayer,
+} from "./providerAuth/http.ts";
 import {
   attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,
@@ -393,12 +393,12 @@ export const makeRoutesLayer = Layer.mergeAll(
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
-  providerTestPageRouteLayer,
-  providerTestStartRouteLayer,
-  providerTestCodeRouteLayer,
-  providerTestStatusRouteLayer,
-  providerTestLogoutRouteLayer,
-  providerTestPromptRouteLayer,
+  providerAuthPageRouteLayer,
+  providerAuthStartRouteLayer,
+  providerAuthCodeRouteLayer,
+  providerAuthConnectionsRouteLayer,
+  providerAuthLogoutRouteLayer,
+  providerAuthPromptRouteLayer,
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
   otlpTracesProxyRouteLayer,

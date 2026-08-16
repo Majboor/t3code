@@ -630,17 +630,26 @@ function buildProviderConnectInstructions(provider: ProviderKind) {
     } as const;
   }
 
+  // `claude auth login` is not the command for this. It prints a sign-in link
+  // and then offers nowhere to put the code the browser hands back, so the flow
+  // it describes cannot be finished. `setup-token` is the one with the prompt,
+  // and what it produces is a token belonging to a person rather than a login
+  // belonging to the machine — which is also the shape per-user access needs.
+  //
+  // Note that `claude auth status` is not the check here, and saying so matters:
+  // it reads a shared credential file that `setup-token` never writes, so it
+  // answers "not logged in" about a login that worked.
   return {
     provider,
-    authCommand: "claude auth login",
-    statusCommand: "claude auth status --json",
+    authCommand: "claude setup-token",
+    statusCommand: "claude setup-token",
     verificationHint:
-      "Run the command in the isolated hosted provider shell, complete the Claude prompts in order, then confirm `loggedIn: true` from the JSON status output.",
+      "Run the command in the isolated hosted provider shell, open the printed URL, and paste the code from the browser back into the prompt. It prints a token — paste that token here. Do not use `claude auth status`; it reports on a file this login does not write.",
     steps: [
       "Open a hosted provider shell for this account.",
-      "Run `claude auth login`.",
-      "Complete terminal theme, login method, OAuth URL, browser code, and workspace trust prompts in order.",
-      "Run `claude auth status --json` and confirm `loggedIn: true`.",
+      "Run `claude setup-token`.",
+      "Open the printed URL and authorize, then paste the returned code into the prompt.",
+      "Copy the token it prints and confirm it in T3 Code.",
     ],
   } as const;
 }
@@ -694,6 +703,14 @@ function parseProviderAuthConfirmation(input: {
     }
   } catch {
     // Fall back to text matching for older CLI output.
+  }
+
+  // What `claude setup-token` produces is the token itself, so the token is the
+  // proof. Checked before the "not logged in" wording below, because the same
+  // paste can carry both: the CLI prints the token under a shared-credential
+  // notice that says, wrongly for this flow, that nobody is logged in.
+  if (/sk-ant-[A-Za-z0-9_-]+/.test(output)) {
+    return { authenticated: true };
   }
 
   const lower = output.toLowerCase();

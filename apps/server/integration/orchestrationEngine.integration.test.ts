@@ -21,6 +21,7 @@ import {
   gitRefExists,
   gitShowFileAtRef,
   makeOrchestrationIntegrationHarness,
+  INTEGRATION_USER_ID,
   type OrchestrationIntegrationHarness,
 } from "./OrchestrationEngineHarness.integration.ts";
 import { checkpointRefForThreadTurn } from "../src/checkpointing/Utils.ts";
@@ -154,7 +155,7 @@ const startTurn = (input: {
     message: {
       messageId: asMessageId(input.messageId),
       role: "user",
-      authorUserId: null,
+      authorUserId: INTEGRATION_USER_ID,
       text: input.text,
       attachments: [],
     },
@@ -296,7 +297,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
           message: {
             messageId: asMessageId("msg-real-codex-1"),
             role: "user",
-            authorUserId: null,
+            authorUserId: INTEGRATION_USER_ID,
             text: "Reply with exactly ALPHA.",
             attachments: [],
           },
@@ -324,7 +325,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
           message: {
             messageId: asMessageId("msg-real-codex-2"),
             role: "user",
-            authorUserId: null,
+            authorUserId: INTEGRATION_USER_ID,
             text: "Reply with exactly BETA.",
             attachments: [],
           },

@@ -14,13 +14,22 @@ import {
   type TenantSessionContext,
   type RuntimeMode,
   type TurnId,
+  type UserId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
-import { deriveProviderLaunchEnvironment } from "@t3tools/shared/tenancy";
+import {
+  deriveProviderLaunchEnvironment,
+  filterProviderLaunchBaseEnv,
+} from "@t3tools/shared/tenancy";
 import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { ServerConfig } from "../../config.ts";
+import {
+  providerCredentialEnv,
+  type ProviderAuthProvider,
+} from "../../providerAuth/store.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitStatusBroadcaster } from "../../git/Services/GitStatusBroadcaster.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
@@ -157,6 +166,22 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
   );
 }
 
+/**
+ * The same two providers under the names the connect flow files them by.
+ *
+ * `ProviderKind` calls it `claudeAgent` because that is the agent T3 runs; the
+ * credential store calls it `claude` because that is what the person signed
+ * into. One translation, in one place, rather than a string literal at every
+ * lookup.
+ */
+function providerAuthProviderOf(provider: ProviderKind): ProviderAuthProvider {
+  return provider === "codex" ? "codex" : "claude";
+}
+
+function providerAuthLabel(provider: ProviderKind): string {
+  return provider === "codex" ? "Codex" : "Claude";
+}
+
 function tenantSessionFromProviderSession(input: {
   readonly account: ProviderAccount;
   readonly providerSession: ProviderSessionIsolation;
@@ -254,6 +279,7 @@ const make = Effect.gen(function* () {
     createdAt: string,
     options?: {
       readonly modelSelection?: ModelSelection;
+      readonly actingUserId?: UserId | null;
     },
   ) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -287,13 +313,73 @@ const make = Effect.gen(function* () {
       projects: readModel.projects,
     });
 
+    /**
+     * Whoever asked for this turn, and so whose provider account answers.
+     *
+     * The reactor is a background listener with no session attached, so the
+     * caller passes down the author of the message that started the turn. The
+     * transcript is the fallback for the paths that have no message to hand —
+     * a runtime-mode change restarting a session, say — where the newest
+     * attributed message is the best available answer to the same question.
+     *
+     * Getting this wrong is not a small matter: the wrong answer here runs
+     * somebody's turn on a colleague's provider account.
+     */
+    const actingUserId =
+      options?.actingUserId ??
+      thread.messages.findLast((message) => message.authorUserId !== null)?.authorUserId;
+
+    /**
+     * The credential this person connected, and nothing else.
+     *
+     * Reached only when the hosted-tenant path above has no provider session to
+     * offer, which on a single-box deployment is always. Returning undefined
+     * here would let the adapter fall back to the environment the server runs
+     * in — the machine's own CLI login — which is how one personal account came
+     * to answer for every user of the box. So a missing credential is refused,
+     * and the refusal says what to do about it.
+     */
+    const resolveConnectedLaunchEnvironment = (provider: ProviderKind) =>
+      Effect.gen(function* () {
+        const config = yield* Effect.service(ServerConfig);
+        const refuse = (detail: string) =>
+          new ProviderAdapterRequestError({
+            provider,
+            method: "thread.turn.start",
+            detail,
+          });
+        if (actingUserId === undefined || actingUserId === null) {
+          return yield* refuse(
+            `This thread has no message attributed to an account, so T3 cannot tell whose ${providerAuthLabel(provider)} login to use. Send a message as a signed-in user and try again.`,
+          );
+        }
+        const credential = yield* Effect.promise(() =>
+          providerCredentialEnv(
+            config.stateDir,
+            String(actingUserId),
+            providerAuthProviderOf(provider),
+          ),
+        );
+        if (credential === null) {
+          return yield* refuse(
+            `No ${providerAuthLabel(provider)} account is connected for this user. Open Settings → Connections and press "Open ${providerAuthLabel(provider)} sign-in" to connect one.`,
+          );
+        }
+        return {
+          // The server's environment minus every credential in it, plus the one
+          // that belongs to this person. Without the strip, an inherited
+          // CODEX_HOME or CLAUDE_CODE_OAUTH_TOKEN would still be in scope.
+          env: { ...filterProviderLaunchBaseEnv(process.env), ...credential },
+        };
+      });
+
     const resolveProviderLaunchEnvironment = (input: {
       readonly provider: ProviderKind;
       readonly cwd: string | undefined;
     }) =>
       Effect.gen(function* () {
         if (!input.cwd) {
-          return undefined;
+          return yield* resolveConnectedLaunchEnvironment(input.provider);
         }
 
         const snapshot = yield* tenancyRepository.loadProviderIsolation().pipe(
@@ -344,7 +430,7 @@ const make = Effect.gen(function* () {
             return leftShared - rightShared;
           })[0];
         if (!providerSession) {
-          return undefined;
+          return yield* resolveConnectedLaunchEnvironment(input.provider);
         }
 
         const account = snapshot.providerAccounts.find(
@@ -491,17 +577,18 @@ const make = Effect.gen(function* () {
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
+    /** Whose message started this turn, and so whose provider account answers. */
+    readonly actingUserId?: UserId | null;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
     }
-    yield* ensureSessionForThread(
-      input.threadId,
-      input.createdAt,
-      input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {},
-    );
+    yield* ensureSessionForThread(input.threadId, input.createdAt, {
+      ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+      ...(input.actingUserId !== undefined ? { actingUserId: input.actingUserId } : {}),
+    });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
@@ -701,6 +788,7 @@ const make = Effect.gen(function* () {
         ? { modelSelection: event.payload.modelSelection }
         : {}),
       interactionMode: event.payload.interactionMode,
+      actingUserId: message.authorUserId,
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.catchCause((cause) =>
@@ -874,6 +962,15 @@ const make = Effect.gen(function* () {
       case "thread.runtime-mode-set": {
         const thread = yield* resolveThread(event.payload.threadId);
         if (!thread?.session || thread.session.status === "stopped") {
+          return;
+        }
+        // Restarting needs a provider account to restart on, and an account
+        // belongs to a person. Nobody has spoken in this thread yet, so there is
+        // no answer to whose it should be — and no work waiting on the session
+        // either. The first message starts it properly, attributed to its
+        // sender; refusing here instead would only put an error on a thread
+        // whose owner has done nothing wrong.
+        if (!thread.messages.some((message) => message.authorUserId !== null)) {
           return;
         }
         const cachedModelSelection = threadModelSelections.get(event.payload.threadId);

@@ -2,7 +2,7 @@
  * The whole page, inline, because it is a test surface and a self-contained
  * file is easier to read, change and delete than one wired into the app build.
  */
-export const PROVIDER_TEST_PAGE = `<!doctype html>
+export const PROVIDER_AUTH_PAGE = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -166,7 +166,7 @@ function renderStep(d) {
       if (!code) return;
       submit.disabled = true;
       $("codeMsg").textContent = "submitting — waiting for the provider…";
-      const r = await post("/api/provider-test/code", { provider: d.provider, code });
+      const r = await post("/api/provider-auth/code", { provider: d.provider, code });
       submit.disabled = false;
       // The interface answers after a round trip to the provider, so show what
       // it actually said. Leaving the original output on screen made a refusal
@@ -193,16 +193,14 @@ function renderStep(d) {
 async function watchUntilSignedIn(provider) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await new Promise((r) => setTimeout(r, 3000));
-    const r = await getJson("/api/provider-test/status?provider=" + provider);
-    const d = r.data || {};
+    const r = await getJson("/api/provider-auth/connections");
     await status(provider);
-    const said = (d.status || "") + " " + (d.loginOutput || "");
-    if (d.tokenCaptured || /Logged in|logged in|success/i.test(said)) {
+    const found = ((r.data || {}).connections || []).find((c) => c.provider === provider);
+    if (found && found.connected) {
       const msg = $("codeMsg") || $("promptMsg");
       if (msg) msg.innerHTML = '<span class="ok">signed in</span>';
       return true;
     }
-    if (d.loginDone) return false;
   }
   return false;
 }
@@ -210,7 +208,7 @@ async function watchUntilSignedIn(provider) {
 async function connect(provider) {
   const btn = provider === "claude" ? $("connectClaude") : $("connectCodex");
   const label = btn.textContent; btn.disabled = true; btn.textContent = "starting…";
-  const r = await post("/api/provider-test/start", { provider });
+  const r = await post("/api/provider-auth/start", { provider });
   btn.disabled = false; btn.textContent = label;
   if (r.ok) {
     renderStep(r.data);
@@ -231,31 +229,34 @@ async function connect(provider) {
 $("connectClaude").onclick = () => connect("claude");
 $("connectCodex").onclick = () => connect("codex");
 
+// What this account has connected. The CLIs are not asked: "claude auth
+// status" reads a shared credential file that setup-token never writes, so it
+// says "not logged in" about a login that worked, and Codex would answer for
+// whatever home it happened to be pointed at. What the server stored for this
+// user is what decides whether a turn runs, so it is what gets shown.
+// (No backticks in here: this whole page is one template literal.)
 async function status(provider) {
   const cell = provider === "claude" ? $("claudeWho") : $("codexWho");
   cell.textContent = "checking…";
-  const r = await getJson("/api/provider-test/status?provider=" + provider);
-  const d = r.data || {};
-  // "claude auth status" reads a shared credential file that setup-token never
-  // writes, so it says "not logged in" about a login that worked. Lead with
-  // whether this flow holds a token, and keep the CLI's own words underneath.
-  // (No backticks in here: this whole page is one template literal.)
-  const held = d.tokenCaptured
-    ? '<span class="ok">connected — token held for this session</span><br>'
-    : "";
-  cell.innerHTML = held + '<span class="muted">' +
-    ((d.status || d.error || "no answer") + "").slice(0, 400).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])) +
-    "</span>";
+  const r = await getJson("/api/provider-auth/connections");
+  const found = ((r.data || {}).connections || []).find((c) => c.provider === provider);
+  if (!found) {
+    cell.innerHTML = '<span class="muted">' + ((r.data || {}).error || "no answer") + "</span>";
+    return;
+  }
+  cell.innerHTML = found.connected
+    ? '<span class="ok">connected as you</span>'
+    : '<span class="muted">not connected</span>';
 }
 $("refresh").onclick = () => { status("claude"); status("codex"); };
-$("logoutClaude").onclick = async () => { await post("/api/provider-test/logout", { provider: "claude" }); status("claude"); };
-$("logoutCodex").onclick = async () => { await post("/api/provider-test/logout", { provider: "codex" }); status("codex"); };
+$("logoutClaude").onclick = async () => { await post("/api/provider-auth/logout", { provider: "claude" }); status("claude"); };
+$("logoutCodex").onclick = async () => { await post("/api/provider-auth/logout", { provider: "codex" }); status("codex"); };
 
 async function prompt(provider) {
   $("promptMsg").textContent = "running… (up to 45s)";
   $("promptOut").classList.remove("hidden");
   $("promptOut").textContent = "";
-  const r = await post("/api/provider-test/prompt", { provider, text: $("prompt").value });
+  const r = await post("/api/provider-auth/prompt", { provider, text: $("prompt").value });
   $("promptMsg").textContent = r.ok ? "done" : "failed";
   $("promptOut").textContent = r.data.output || r.data.error || "(no output)";
 }
