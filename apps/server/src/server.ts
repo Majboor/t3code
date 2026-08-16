@@ -6,6 +6,14 @@ import type { Socket as NodeNetSocket } from "node:net";
 import { ServerConfig } from "./config.ts";
 import { analyticsIngestRouteLayer } from "./analytics/http.ts";
 import {
+  providerTestCodeRouteLayer,
+  providerTestLogoutRouteLayer,
+  providerTestPageRouteLayer,
+  providerTestPromptRouteLayer,
+  providerTestStartRouteLayer,
+  providerTestStatusRouteLayer,
+} from "./providerTest/http.ts";
+import {
   attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
@@ -385,6 +393,12 @@ export const makeRoutesLayer = Layer.mergeAll(
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
+  providerTestPageRouteLayer,
+  providerTestStartRouteLayer,
+  providerTestCodeRouteLayer,
+  providerTestStatusRouteLayer,
+  providerTestLogoutRouteLayer,
+  providerTestPromptRouteLayer,
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
   otlpTracesProxyRouteLayer,
