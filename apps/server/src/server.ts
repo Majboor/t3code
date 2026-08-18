@@ -101,6 +101,7 @@ import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
 import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderSharing.ts";
 import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
+import { CloudSyncRepositoryLive } from "./persistence/Layers/CloudSync.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
 import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSharingService.ts";
@@ -302,6 +303,11 @@ const ProviderSharingRepositoryLayerLive = ProviderSharingRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 
+/** Base revisions and conflicts for a project synced to the cloud. */
+const CloudSyncRepositoryLayerLive = CloudSyncRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 /** Public links: minted by the panel, redeemed with no session at all. */
 const ShareLinkRepositoryLayerLive = ShareLinkRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
@@ -340,6 +346,7 @@ const PersistenceServicesLayerLive = Layer.mergeAll(
   ProviderSharingRepositoryLayerLive,
   ProviderUsageRequestRepositoryLayerLive,
   ShareLinkRepositoryLayerLive,
+  CloudSyncRepositoryLayerLive,
   ThreadPreferenceLayerLive,
   DeployLayerLive,
   AnalyticsLayerLive,

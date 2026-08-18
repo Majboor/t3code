@@ -303,9 +303,7 @@ export interface CloudSyncRepositoryShape {
    *
    * `none` means no such conflict in this project.
    */
-  readonly resolveConflict: (
-    input: ResolveCloudSyncConflictInput,
-  ) => Effect.Effect<
+  readonly resolveConflict: (input: ResolveCloudSyncConflictInput) => Effect.Effect<
     Option.Option<{
       readonly record: CloudSyncConflictRecord;
       readonly alreadyResolved: boolean;

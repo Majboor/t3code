@@ -35,9 +35,7 @@ import {
  * Branded here rather than in `baseSchemas.ts` for the reason `ShareLinkId`
  * gives: this id never leaves this exchange.
  */
-export const CloudSyncConflictId = TrimmedNonEmptyString.pipe(
-  Schema.brand("CloudSyncConflictId"),
-);
+export const CloudSyncConflictId = TrimmedNonEmptyString.pipe(Schema.brand("CloudSyncConflictId"));
 export type CloudSyncConflictId = typeof CloudSyncConflictId.Type;
 
 /**
@@ -313,7 +311,9 @@ export const CloudSyncConflictListInput = Schema.Struct({
   /** Default is open conflicts only: what still needs a person. */
   includeResolved: Schema.optional(Schema.Boolean),
   afterId: Schema.optional(CloudSyncConflictId),
-  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(CLOUD_SYNC_CONFLICTS_MAX_LIMIT))),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(CLOUD_SYNC_CONFLICTS_MAX_LIMIT)),
+  ),
 });
 export type CloudSyncConflictListInput = typeof CloudSyncConflictListInput.Type;
 
