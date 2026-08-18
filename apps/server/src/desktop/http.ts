@@ -84,7 +84,7 @@ interface WorkspaceScope {
 }
 
 /** ISO-8601 UTC sorts lexicographically, so the widest window is a string compare. */
-function extendWindow(
+export function extendWindow(
   left: string | null,
   right: string | null,
   direction: "earliest" | "latest",
@@ -127,12 +127,13 @@ export const desktopActivityRouteLayer = HttpRouter.add(
     const shareLinks = yield* ShareLinkService;
     const collaboration = yield* CollaborationService;
 
-    const snapshot = yield* tenancy.loadWorkspaces().pipe(
-      Effect.mapError(
-        (cause) =>
-          new DesktopActivityError({ message: "Failed to load workspaces.", cause }),
-      ),
-    );
+    const snapshot = yield* tenancy
+      .loadWorkspaces()
+      .pipe(
+        Effect.mapError(
+          (cause) => new DesktopActivityError({ message: "Failed to load workspaces.", cause }),
+        ),
+      );
     const scopes: WorkspaceScope[] = snapshot.workspaces
       .filter(
         (workspace) =>

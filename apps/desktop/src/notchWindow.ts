@@ -26,6 +26,13 @@
  *    window must stay click-through, which makes DOM hover dependent on
  *    forwarded mouse messages. Polling the cursor is deterministic, needs no
  *    IPC surface, and keeps `sandbox`/`contextIsolation` on for the page.
+ *
+ * 4. The figures are fetched here and written into the page, for the same
+ *    reason: with no preload there is no channel the page could ask over, and
+ *    giving it one would mean handing a sandboxed surface a credential. Main
+ *    already holds the server's address, so the read stays on this side and the
+ *    page only ever receives three short strings. What it reads and how it
+ *    authenticates is `notchData.ts`.
  */
 
 import { app, BaseWindow, screen, WebContentsView } from "electron";
@@ -43,6 +50,7 @@ import {
   type NotchHoverState,
   reduceNotchHoverState,
 } from "./notchHover.ts";
+import { createNotchRefreshScheduler } from "./notchData.ts";
 import {
   buildNotchDataScript,
   buildNotchLayoutScript,
@@ -205,47 +213,17 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
   screen.on("display-added", applyLayout);
   screen.on("display-removed", applyLayout);
 
-  let refreshTimer: NodeJS.Timeout | null = null;
-  let refreshInFlight = false;
-
-  const refresh = (): void => {
-    const readView = options.readView;
-    // One request at a time. The read crosses a socket and a hover can outlive
-    // it, so without this a slow server would queue up work that all resolves
-    // into the same three strings.
-    if (!readView || destroyed || refreshInFlight) {
-      return;
-    }
-    refreshInFlight = true;
-    void readView()
-      .then((view) => {
-        evaluateInPanel(buildNotchDataScript(view));
-      })
-      .catch(() => {
-        // `readView` is written to answer with an explanatory dash rather than
-        // reject; a throw past that is a bug in it, and the panel keeps showing
-        // whatever it last knew instead of blanking on a transient fault.
-      })
-      .finally(() => {
-        refreshInFlight = false;
-      });
-  };
-
-  const stopRefreshing = (): void => {
-    if (refreshTimer !== null) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-    }
-  };
-
-  const startRefreshing = (): void => {
-    refresh();
-    if (refreshTimer !== null || !options.readView) {
-      return;
-    }
-    refreshTimer = setInterval(refresh, options.refreshIntervalMs ?? DATA_REFRESH_INTERVAL_MS);
-    refreshTimer.unref();
-  };
+  const readView = options.readView;
+  const refresher =
+    readView === undefined
+      ? null
+      : createNotchRefreshScheduler({
+          readView,
+          apply: (view) => {
+            evaluateInPanel(buildNotchDataScript(view));
+          },
+          intervalMs: options.refreshIntervalMs ?? DATA_REFRESH_INTERVAL_MS,
+        });
 
   const sampleHover = (): void => {
     if (destroyed || window.isDestroyed()) {
@@ -257,11 +235,7 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
       evaluateInPanel(buildNotchStateScript(next.expanded));
       // Refreshing is tied to visibility, not to a clock: a panel nobody has
       // open must not be a reason to talk to the server at all.
-      if (next.expanded) {
-        startRefreshing();
-      } else {
-        stopRefreshing();
-      }
+      refresher?.setExpanded(next.expanded);
     }
     hover = next;
   };
@@ -279,7 +253,7 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     window.showInactive();
     // One read on show, so the first hover lands on figures rather than on
     // three dashes waiting for a round trip.
-    refresh();
+    refresher?.readOnce();
   });
   void view.webContents.loadURL(buildNotchPanelDataUrl(layout));
 
@@ -289,7 +263,7 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     }
     destroyed = true;
     clearInterval(hoverTimer);
-    stopRefreshing();
+    refresher?.stop();
     screen.removeListener("display-metrics-changed", applyLayout);
     screen.removeListener("display-added", applyLayout);
     screen.removeListener("display-removed", applyLayout);

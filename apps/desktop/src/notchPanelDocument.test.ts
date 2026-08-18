@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import { type NotchDisplayMetrics, resolveNotchLayout } from "./notchGeometry.ts";
 import {
   buildNotchCssVariables,
+  buildNotchDataScript,
   buildNotchLayoutScript,
   buildNotchPanelDataUrl,
   buildNotchPanelHtml,
   buildNotchStateScript,
+  NOTCH_SLOTS,
+  type NotchPanelView,
 } from "./notchPanelDocument.ts";
 
 const notchedDisplay: NotchDisplayMetrics = {
@@ -103,5 +106,49 @@ describe("panel scripts", () => {
     expect(buildNotchStateScript(false)).toBe(
       'document.documentElement.dataset.notchState="collapsed";',
     );
+  });
+});
+
+describe("slot markup", () => {
+  const html = buildNotchPanelHtml(resolveNotchLayout(notchedDisplay));
+
+  it("gives every slot the hook the update script targets", () => {
+    for (const { key } of NOTCH_SLOTS) {
+      expect(html).toContain(`data-slot="${key}"`);
+    }
+  });
+
+  it("starts every slot as a dash, so nothing reads as zero before a read lands", () => {
+    expect(html.match(/&mdash;/g)).toHaveLength(NOTCH_SLOTS.length);
+  });
+});
+
+describe("buildNotchDataScript", () => {
+  const view: NotchPanelView = {
+    shareClicks: { value: "1,284", note: "", detail: "1,284 opens." },
+    tokenSpend: { value: "$12.50", note: "est.", detail: "Not a bill." },
+    activeSyncs: { value: "—", note: "not wired", detail: "Nothing reports this." },
+  };
+
+  it("writes value, note and detail for every slot", () => {
+    const script = buildNotchDataScript(view);
+
+    for (const { key } of NOTCH_SLOTS) {
+      const slot = view[key];
+      expect(script).toContain(
+        `w("${key}",${JSON.stringify(slot.value)},${JSON.stringify(slot.note)},${JSON.stringify(slot.detail)});`,
+      );
+    }
+  });
+
+  it("encodes text that would otherwise end the literal it sits in", () => {
+    const hostile = 'a" + alert(1) + "\nb';
+    const script = buildNotchDataScript({
+      ...view,
+      shareClicks: { value: hostile, note: "", detail: "x" },
+    });
+
+    expect(script).toContain(JSON.stringify(hostile));
+    expect(script).not.toContain("\n");
   });
 });

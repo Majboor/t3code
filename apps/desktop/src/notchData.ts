@@ -200,7 +200,9 @@ export async function readNotchActivity(
  * the storage key ever moves, this returns `null` and the panel says "sign in"
  * — the failure mode is a dash, never a wrong number.
  */
-export async function readSignedInAccessToken(host: NotchScriptHost | null): Promise<string | null> {
+export async function readSignedInAccessToken(
+  host: NotchScriptHost | null,
+): Promise<string | null> {
   if (!host || host.isDestroyed()) {
     return null;
   }
@@ -368,6 +370,96 @@ export interface NotchActivitySource {
   /** The app window, or `null` before one exists. */
   readonly host: () => NotchScriptHost | null;
   readonly fetchImpl?: typeof globalThis.fetch;
+}
+
+export interface NotchRefreshOptions {
+  readonly readView: () => Promise<NotchPanelView>;
+  readonly apply: (view: NotchPanelView) => void;
+  readonly intervalMs: number;
+  /** Injectable so the policy can be exercised without a real clock. */
+  readonly schedule?: (handler: () => void, ms: number) => unknown;
+  readonly cancel?: (handle: unknown) => void;
+}
+
+export interface NotchRefreshScheduler {
+  /** A single read with no cadence behind it: what a newly shown panel gets. */
+  readOnce(): void;
+  setExpanded(expanded: boolean): void;
+  stop(): void;
+}
+
+/**
+ * When the panel is allowed to ask the server.
+ *
+ * The rule is that a collapsed panel costs nothing: no timer exists while it is
+ * shut, so a machine left running all day makes no requests beyond the one at
+ * startup. Expanding reads immediately and then keeps a cadence only for as
+ * long as the cursor stays. Lives here rather than in `notchWindow.ts` so it can
+ * be tested without an Electron window.
+ */
+export function createNotchRefreshScheduler(options: NotchRefreshOptions): NotchRefreshScheduler {
+  const schedule =
+    options.schedule ??
+    ((handler: () => void, ms: number) => {
+      const timer = setInterval(handler, ms);
+      // The panel must never be the reason the process stays alive.
+      timer.unref();
+      return timer;
+    });
+  const cancel = options.cancel ?? ((handle: unknown) => clearInterval(handle as NodeJS.Timeout));
+
+  let handle: unknown = null;
+  let stopped = false;
+  let inFlight = false;
+
+  const refresh = (): void => {
+    // One request at a time: the read crosses a socket and a hover can outlive
+    // it, so without this a slow server would queue up work that all resolves
+    // into the same three strings.
+    if (stopped || inFlight) {
+      return;
+    }
+    inFlight = true;
+    void options
+      .readView()
+      .then(options.apply)
+      .catch(() => {
+        // `readView` answers with an explanatory dash rather than rejecting; a
+        // throw past that is a bug in it, and the panel keeps showing whatever
+        // it last knew instead of blanking on a transient fault.
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  };
+
+  const stopTimer = (): void => {
+    if (handle !== null) {
+      cancel(handle);
+      handle = null;
+    }
+  };
+
+  return {
+    readOnce: refresh,
+    setExpanded: (expanded) => {
+      if (stopped) {
+        return;
+      }
+      if (!expanded) {
+        stopTimer();
+        return;
+      }
+      refresh();
+      if (handle === null) {
+        handle = schedule(refresh, options.intervalMs);
+      }
+    },
+    stop: () => {
+      stopped = true;
+      stopTimer();
+    },
+  };
 }
 
 /** The single function the panel calls; everything above it is pure or mockable. */
