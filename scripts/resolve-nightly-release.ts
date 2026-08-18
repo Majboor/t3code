@@ -55,7 +55,7 @@ export const resolveNightlyReleaseMetadata = (
     baseVersion,
     version,
     tag: `nightly-v${version}`,
-    name: `T3 Code Nightly ${version} (${shortSha})`,
+    name: `LogicPacks Nightly ${version} (${shortSha})`,
     shortSha,
   };
 };

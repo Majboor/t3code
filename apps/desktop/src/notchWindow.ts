@@ -44,9 +44,11 @@ import {
   reduceNotchHoverState,
 } from "./notchHover.ts";
 import {
+  buildNotchDataScript,
   buildNotchLayoutScript,
   buildNotchPanelDataUrl,
   buildNotchStateScript,
+  type NotchPanelView,
 } from "./notchPanelDocument.ts";
 
 /**
@@ -56,8 +58,28 @@ import {
  */
 const HOVER_SAMPLE_INTERVAL_MS = 90;
 
+/**
+ * How often the figures are re-read *while the panel is open*.
+ *
+ * The panel is collapsed for almost all of the day it is running, and nobody is
+ * reading a number they cannot see, so there is no background poll at all: one
+ * read when the panel first appears, one the moment it expands, and this
+ * cadence only for as long as it stays expanded. A hover lasts seconds, so in
+ * practice most expansions cost exactly one request.
+ */
+const DATA_REFRESH_INTERVAL_MS = 15_000;
+
 export interface NotchPanelController {
   destroy(): void;
+}
+
+export interface NotchPanelOptions {
+  /**
+   * Reads the current figures. Omitted — as in tests, or before the app has an
+   * account — the panel keeps the dashes it was built with.
+   */
+  readonly readView?: () => Promise<NotchPanelView>;
+  readonly refreshIntervalMs?: number;
 }
 
 function toLayoutInput(display: Display): NotchLayout {
@@ -72,7 +94,7 @@ function toLayoutInput(display: Display): NotchLayout {
  * mean anything on — so this is a deliberate absence, not an unimplemented
  * branch.
  */
-export function createNotchPanel(): NotchPanelController | null {
+export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelController | null {
   if (process.platform !== "darwin") {
     return null;
   }
@@ -183,6 +205,48 @@ export function createNotchPanel(): NotchPanelController | null {
   screen.on("display-added", applyLayout);
   screen.on("display-removed", applyLayout);
 
+  let refreshTimer: NodeJS.Timeout | null = null;
+  let refreshInFlight = false;
+
+  const refresh = (): void => {
+    const readView = options.readView;
+    // One request at a time. The read crosses a socket and a hover can outlive
+    // it, so without this a slow server would queue up work that all resolves
+    // into the same three strings.
+    if (!readView || destroyed || refreshInFlight) {
+      return;
+    }
+    refreshInFlight = true;
+    void readView()
+      .then((view) => {
+        evaluateInPanel(buildNotchDataScript(view));
+      })
+      .catch(() => {
+        // `readView` is written to answer with an explanatory dash rather than
+        // reject; a throw past that is a bug in it, and the panel keeps showing
+        // whatever it last knew instead of blanking on a transient fault.
+      })
+      .finally(() => {
+        refreshInFlight = false;
+      });
+  };
+
+  const stopRefreshing = (): void => {
+    if (refreshTimer !== null) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  };
+
+  const startRefreshing = (): void => {
+    refresh();
+    if (refreshTimer !== null || !options.readView) {
+      return;
+    }
+    refreshTimer = setInterval(refresh, options.refreshIntervalMs ?? DATA_REFRESH_INTERVAL_MS);
+    refreshTimer.unref();
+  };
+
   const sampleHover = (): void => {
     if (destroyed || window.isDestroyed()) {
       return;
@@ -191,6 +255,13 @@ export function createNotchPanel(): NotchPanelController | null {
     const next = reduceNotchHoverState(hover, containsPoint(target, screen.getCursorScreenPoint()));
     if (next.expanded !== hover.expanded) {
       evaluateInPanel(buildNotchStateScript(next.expanded));
+      // Refreshing is tied to visibility, not to a clock: a panel nobody has
+      // open must not be a reason to talk to the server at all.
+      if (next.expanded) {
+        startRefreshing();
+      } else {
+        stopRefreshing();
+      }
     }
     hover = next;
   };
@@ -206,6 +277,9 @@ export function createNotchPanel(): NotchPanelController | null {
     // `showInactive` rather than `show`: revealing the panel must not steal the
     // active window from whatever the user is typing in.
     window.showInactive();
+    // One read on show, so the first hover lands on figures rather than on
+    // three dashes waiting for a round trip.
+    refresh();
   });
   void view.webContents.loadURL(buildNotchPanelDataUrl(layout));
 
@@ -215,6 +289,7 @@ export function createNotchPanel(): NotchPanelController | null {
     }
     destroyed = true;
     clearInterval(hoverTimer);
+    stopRefreshing();
     screen.removeListener("display-metrics-changed", applyLayout);
     screen.removeListener("display-added", applyLayout);
     screen.removeListener("display-removed", applyLayout);

@@ -13,6 +13,11 @@
 //   html   -> tunnel       started here, published by a cloudflare quick tunnel
 //   react  -> ssh          shipped to the deployment node and started there
 //
+// A deployment on the node binds the node's loopback, so nothing about it is
+// reachable from here. The checks read `http://127.0.0.1:<port>` all the same,
+// and what makes that true is an `ssh -L` this suite holds open for the length
+// of the artifact — the watching, not the deploying, and so the harness's job.
+//
 // The deploys are driven by prompting the agent with the ssh-deploy pack's own
 // integration prompt, not by calling the CLI: the pack exists to be handed to an
 // agent, so a suite that calls the CLI directly tests everything except the part
@@ -54,6 +59,7 @@ const BASE_URL = process.env["T3_E2E_BASE_URL"] ?? "http://localhost:5733";
 const ANALYTICS_URL =
   process.env["T3_ANALYTICS_URL"] ?? "http://127.0.0.1:13773/api/analytics/events";
 const SSH_HOST = process.env["T3_DEPLOY_SSH_HOST"] ?? "164.68.117.31";
+const SSH_USER = process.env["T3_DEPLOY_SSH_USER"] ?? "root";
 const RUN_ID = String(Date.now());
 const DESKTOP_DIR = path.join(os.homedir(), "Desktop");
 const ROOT_DIR = existsSync(DESKTOP_DIR) ? DESKTOP_DIR : os.tmpdir();
@@ -491,7 +497,16 @@ function deployInstruction({ artifact, dir, port, buildId, projectId, analytics 
     "- /healthz reads BUILD once at import, so a stale process from the last deploy cannot answer for the new one. If the port is still held the new build will simply never appear, which is the point.",
     // An agent that tries the server by hand and leaves it running is holding
     // the port its own deploy needs; the deploy is then the thing that fails.
-    `- Nothing may be left on ${port} when the deploy runs, including anything you started yourself to test. Stop it first.`,
+    //
+    // For an ssh target the port that has to be free is the *node's*. Said
+    // without that qualification it cost a whole artifact: this machine's
+    // 127.0.0.1:PORT is the loopback forward these checks read through, the
+    // collaborator's agent read "nothing may be left on the port" as an
+    // instruction to kill it, and every check afterwards was measuring a
+    // closed port rather than the deployment.
+    artifact.mode === "ssh"
+      ? `- Nothing may be left on ${port} *on the node* when the deploy runs, including anything you started there yourself to test. Stop it first. On this machine ${port} is a loopback forward owned by the person watching; leave it alone.`
+      : `- Nothing may be left on ${port} when the deploy runs, including anything you started yourself to test. Stop it first.`,
     "- Make the start command's failures readable: `gunicorn --daemon` detaches its stdio, so a bind failure lands nowhere and the run exits non-zero with an empty log. Pass `--error-logfile app.err` (or do not use `--daemon`) so there is something to read.",
     // Step 7 of the pack's own prompt. Restated because it is the step that
     // decides whether any of this is visible to the project afterwards.
@@ -547,16 +562,99 @@ function deployInstruction({ artifact, dir, port, buildId, projectId, analytics 
   return lines.join("\n");
 }
 
-/** Waits for the build id the deploy was told to stamp to be the one being served. */
-async function waitForBuild(healthUrl, buildId, timeoutMs = AGENT_TURN_MS) {
+/**
+ * Waits for the build id the deploy was told to stamp to be the one being
+ * served, keeping whatever makes that address reachable alive while it waits.
+ */
+async function waitForBuild(healthUrl, buildId, { timeoutMs = AGENT_TURN_MS, reach } = {}) {
   const deadline = Date.now() + timeoutMs;
   let seen = "";
   while (Date.now() < deadline) {
+    reach?.();
     seen = tryBody(healthUrl);
     if (seen.includes(buildId)) return { ok: true, seen };
     await sleep(8_000);
   }
   return { ok: false, seen };
+}
+
+/**
+ * Waits for the local port to answer at all before something is read through it.
+ *
+ * A forward that was put back a moment ago is alive before it is usable — ssh
+ * has to authenticate and bind first — and the reads after a deploy turn are
+ * single-shot: the marker route is read once, and the visits must be sent once
+ * each or the counts they are checked against stop adding up. So the settling
+ * happens against /healthz, which is the one route that can be asked twice for
+ * nothing.
+ */
+async function settleReach(port, reach, timeoutMs = 40_000) {
+  if (!reach) return true;
+  const deadline = Date.now() + timeoutMs;
+  do {
+    reach();
+    if (tryBody(`http://127.0.0.1:${port}/healthz`) !== "") return true;
+    await sleep(4_000);
+  } while (Date.now() < deadline);
+  return false;
+}
+
+/**
+ * Holds a loopback forward from this machine's port to the node's, and puts it
+ * back if anything closes it.
+ *
+ * An ssh deployment binds the *node's* 127.0.0.1, so nothing about it is
+ * reachable from here — and every check in this file reads
+ * `http://127.0.0.1:<port>`. That gap was papered over by luck: one agent,
+ * nudged that the local address was not serving, invented an `ssh -L` of its
+ * own; the next agent, told the port had to be free before deploying, killed
+ * it; and the two checks after that read a closed port and reported a redeploy
+ * that had in fact shipped, started and served the collaborator's change on the
+ * node. Reachability from the machine doing the watching is the harness's job,
+ * not something the pack ever promised, so the harness holds it open itself.
+ */
+function holdSshForward(port) {
+  let child = null;
+  const start = () => {
+    const next = spawn(
+      "ssh",
+      [
+        "-N",
+        "-o",
+        "StrictHostKeyChecking=no",
+        // Keys only: a forward that stops to ask for a password would hang the
+        // run rather than fail it.
+        "-o",
+        "BatchMode=yes",
+        // Without this ssh stays up having bound nothing, and the checks read a
+        // closed port with a live process to blame it on.
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=15",
+        "-L",
+        `127.0.0.1:${port}:127.0.0.1:${port}`,
+        `${SSH_USER}@${SSH_HOST}`,
+      ],
+      { stdio: "ignore" },
+    );
+    next.on("error", () => undefined);
+    return next;
+  };
+  return {
+    ensure() {
+      if (child && child.exitCode === null && child.signalCode === null) return;
+      child = start();
+    },
+    /** False once ssh has given up — a wrong key or a port already taken here. */
+    alive() {
+      return Boolean(child) && child.exitCode === null && child.signalCode === null;
+    },
+    close() {
+      child?.kill("SIGTERM");
+      child = null;
+    },
+  };
 }
 
 /**
@@ -581,9 +679,9 @@ const MAX_DEPLOY_NUDGES = 1;
  * The nudge count comes back and is reported, so a deploy that needed chasing
  * is never recorded as a clean one.
  */
-async function deployAndWait({ page, instruction, healthUrl, buildId }) {
+async function deployAndWait({ page, instruction, healthUrl, buildId, reach }) {
   const sent = await sendAgentMessage(page, instruction);
-  let result = await waitForBuild(healthUrl, buildId);
+  let result = await waitForBuild(healthUrl, buildId, { reach });
   let nudges = 0;
   while (!result.ok && nudges < MAX_DEPLOY_NUDGES) {
     nudges += 1;
@@ -594,7 +692,7 @@ async function deployAndWait({ page, instruction, healthUrl, buildId }) {
         "Finish it now, in this turn: register the target with `t3 deploy add` under the name you were given, run it with `t3 deploy run`, and then check /healthz reports that build id.",
       ].join("\n"),
     );
-    result = await waitForBuild(healthUrl, buildId);
+    result = await waitForBuild(healthUrl, buildId, { reach });
   }
   return { sent, result, nudges };
 }
@@ -747,6 +845,10 @@ async function runArtifact(browser, artifact, index) {
   const ownerEmail = `cd.${artifact.kind}.owner.${RUN_ID}@example.test`;
   const mateEmail = `cd.${artifact.kind}.mate.${RUN_ID}@example.test`;
   const tunnels = [];
+  // What makes `http://127.0.0.1:<port>` mean the deployment. For a local or
+  // tunnelled artifact it already does; for one on the node it is this.
+  const forward = artifact.mode === "ssh" ? holdSshForward(port) : null;
+  const reach = forward ? () => forward.ensure() : undefined;
   let address = `http://127.0.0.1:${port}`;
 
   try {
@@ -754,6 +856,20 @@ async function runArtifact(browser, artifact, index) {
     mkdirSync(dir, { recursive: true });
     artifact.build(dir);
     check(`${artifact.kind}: the source is written`, existsSync(path.join(dir, "app.py")), dir);
+
+    if (forward) {
+      // Established before anything is deployed, because a forward that cannot
+      // be established at all — no key on this machine, the port taken here —
+      // makes every check after it read a closed port, and that is a different
+      // fault from a deploy that did not happen.
+      forward.ensure();
+      await sleep(3_000);
+      check(
+        `${artifact.kind}: this machine can reach the node's loopback`,
+        forward.alive(),
+        `ssh -L 127.0.0.1:${port}:127.0.0.1:${port} ${SSH_USER}@${SSH_HOST}`,
+      );
+    }
 
     check(`${artifact.kind}: the owner signs up`, await signUp(owner, ownerEmail), ownerEmail);
     await addProject(owner.page, dir);
@@ -782,6 +898,7 @@ async function runArtifact(browser, artifact, index) {
       instruction: deployInstruction({ artifact, dir, port, buildId: firstBuild, projectId }),
       healthUrl: `http://127.0.0.1:${port}/healthz`,
       buildId: firstBuild,
+      reach,
     });
     check(`${artifact.kind}: the deploy prompt goes to the agent`, firstDeploy.sent);
 
@@ -815,6 +932,7 @@ async function runArtifact(browser, artifact, index) {
     }
 
     if (artifact.mode === "ssh") {
+      await settleReach(port, reach);
       const remote = tryBody(`http://127.0.0.1:${port}/healthz`);
       check(
         `${artifact.kind}: the node is serving it back through the local port`,
@@ -841,6 +959,7 @@ async function runArtifact(browser, artifact, index) {
       instruction: deployInstruction({ artifact, dir, port, buildId: secondBuild, projectId }),
       healthUrl: `http://127.0.0.1:${port}/healthz`,
       buildId: secondBuild,
+      reach,
     });
     check(`${artifact.kind}: the collaborator asks for a deploy`, secondDeploy.sent);
     const second = secondDeploy.result;
@@ -855,6 +974,9 @@ async function runArtifact(browser, artifact, index) {
       second.ok,
       describeDeploy(secondBuild, secondDeploy),
     );
+    // The deploy turn is over, and a turn is long enough for anything on this
+    // machine to have gone away since the last poll.
+    await settleReach(port, reach);
     const served = tryBody(`http://127.0.0.1:${port}${artifact.markerRoute}`);
     check(
       `${artifact.kind}: what it serves carries the collaborator's change`,
@@ -922,6 +1044,7 @@ async function runArtifact(browser, artifact, index) {
       }),
       healthUrl: `http://127.0.0.1:${port}/healthz`,
       buildId: thirdBuild,
+      reach,
     });
     check(`${artifact.kind}: the owner asks for analytics to be wired`, thirdDeploy.sent);
     const third = thirdDeploy.result;
@@ -937,6 +1060,9 @@ async function runArtifact(browser, artifact, index) {
     // What the deployment said when it was not 202. A count alone cannot tell
     // "no key reached the process" from "the key is for another stream".
     const refusals = new Map();
+    // Once, before the first visit: a visit that fails because the way in was
+    // being rebuilt is a visit that cannot be sent again without counting twice.
+    await settleReach(port, reach);
     for (const where of visits) {
       const answer = tryBody(`http://127.0.0.1:${port}/visit${where}`);
       if (/"reported":\s*202/.test(answer)) {
@@ -997,6 +1123,7 @@ async function runArtifact(browser, artifact, index) {
 
     console.log(`  ${artifact.kind}: ${address}`);
   } finally {
+    forward?.close();
     for (const child of tunnels) child.kill("SIGTERM");
     sh(
       `([ -f ${JSON.stringify(path.join(dir, "app.pid"))} ] && kill "$(cat ${JSON.stringify(path.join(dir, "app.pid"))})" 2>/dev/null) || true`,

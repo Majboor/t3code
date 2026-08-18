@@ -5,6 +5,7 @@ import type { Socket as NodeNetSocket } from "node:net";
 
 import { ServerConfig } from "./config.ts";
 import { analyticsIngestRouteLayer } from "./analytics/http.ts";
+import { desktopActivityRouteLayer } from "./desktop/http.ts";
 import { shareLinkRedeemRouteLayer } from "./shareLinks/http.ts";
 import {
   providerAuthAccountRouteLayer,
@@ -461,6 +462,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
+  desktopActivityRouteLayer,
   // Before the static catch-all: `/s/*` is a public route, not an app path.
   shareLinkRedeemRouteLayer,
   providerAuthPageRouteLayer,

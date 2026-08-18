@@ -137,11 +137,16 @@ this is what it means on this host specifically.
    served. A terminal program has no port and cannot pass a health check — stop
    and agree a shape with the person before building anything.
 2. **Preflight.** Confirm the start command's runtime exists on the host (node
-   and python3 both do), and that `DEPLOY_PORT` is free.
+   and python3 both do), and that `DEPLOY_PORT` is free **on the host**. The
+   same number on your own machine is a different port on a different computer
+   — often a forward somebody is watching the deployment through — and killing
+   what holds it there fixes nothing and breaks that.
 3. **Stamp a build id** into `BUILD` and serve it from `/healthz`.
-4. **Ship** the directory with `rsync -a --delete --exclude='._*'`, then start
-   the process detached, writing its pid to `app.pid` and its output to
-   `deploy.log`. The exclude is not optional on macOS; see the wart below.
+4. **Ship** the directory with
+   `rsync -a --delete --exclude='._*' --exclude='app.pid' --exclude='app.log' --exclude='app.err' --exclude='tunnel.*'`,
+   then start the process detached, writing its pid to `app.pid` and its output
+   to `deploy.log`. The first exclude is not optional on macOS and the rest are
+   not optional on any redeploy; see the two warts below.
 5. **Verify from a separate SSH session**, and require the build id you just
    shipped. "Something answers" is not a check — the previous deployment will
    answer perfectly well.
@@ -152,7 +157,14 @@ this is what it means on this host specifically.
    and check the new `app.pid` is non-empty and names a live process. An empty
    pid file is the same as no handle at all.
 
-## Two warts worth knowing
+   Put the stopping **inside the start command**, and do not let it end at
+   `app.pid`. Clear the port itself as well —
+   `lsof -tiTCP:$DEPLOY_PORT -sTCP:LISTEN` or `fuser -k -n tcp $DEPLOY_PORT` —
+   and wait for it to go before binding. A run that failed after writing the pid
+   file left it naming a process that never bound, and from then on every run
+   kills that corpse and leaves the real listener untouched.
+
+## Three warts worth knowing
 
 **AppleDouble files.** Existing deployments are full of `._app.py`,
 `._BUILD` and friends — rsync from macOS carrying resource forks across. They
@@ -160,6 +172,16 @@ are harmless but they are noise, and `--delete` will not remove them because
 they keep being re-sent, which is why step 4 excludes them rather than leaving
 it to taste. Deployments made before that exclude still hold theirs; clearing
 them means deleting them on the host, because no later deploy will.
+
+**`--delete` takes the pid file with it.** `app.pid`, `app.log`, `app.err` and
+`tunnel.*` are written on the host and exist nowhere in what you send, so a
+plain `rsync -a --delete` deletes them on the way in — and `app.pid` is the only
+handle on the process that is still running and still holding the port. The next
+start command then finds nothing to stop, the old process keeps the port, the
+new one dies on `Address already in use`, and the old build carries on answering
+a deploy that reported nothing wrong until the health check failed. Both
+redeploys of the run that found this went that way. Exclude those four paths, and
+clear the port as well as the pid.
 
 **`infra/deploy/README.md` does not describe this host.** That document details
 an `lp-deploy.sh` scheme — `/srv/lp-workspaces/lp-<id>`, a per-workspace unix

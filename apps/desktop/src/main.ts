@@ -75,6 +75,7 @@ import {
 } from "./updateMachine.ts";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch.ts";
 import { resolveDesktopAppBranding } from "./appBranding.ts";
+import { createNotchViewReader } from "./notchData.ts";
 import { createNotchPanel } from "./notchWindow.ts";
 
 syncShellEnvironment();
@@ -2219,7 +2220,17 @@ app
     // The notch panel is an independent always-on-top surface with its own
     // teardown, so it is created here rather than tied to the main window's
     // lifecycle. It no-ops off macOS and needs `screen`, hence after ready.
-    createNotchPanel();
+    //
+    // Both inputs to its read are resolved per call, not captured: the backend
+    // URL is empty until the server is up, and the app window comes and goes.
+    // Reading them late is what lets the panel start before either exists and
+    // start reporting once they do.
+    createNotchPanel({
+      readView: createNotchViewReader({
+        baseUrl: () => backendHttpUrl || null,
+        host: () => mainWindow?.webContents ?? null,
+      }),
+    });
     void bootstrap().catch((error) => {
       if (isBackendReadinessAborted(error) && isQuitting) {
         return;

@@ -10,12 +10,53 @@
  *
  * Collapsed/expanded state is driven from the main process by assigning a data
  * attribute on `<html>`; everything else is CSS. That keeps the page free of
- * script and means the morph runs on the compositor rather than over IPC.
+ * script and means the morph runs on the compositor rather than over IPC. The
+ * numbers arrive the same way: `buildNotchDataScript` writes text into slots
+ * the document already laid out, so the page never has to know where a figure
+ * came from or how to ask for it.
  */
 
 import { type NotchLayout, toWindowLocalRect } from "./notchGeometry.ts";
 
 export const NOTCH_STATE_ATTRIBUTE = "notchState";
+
+/**
+ * The slots, in the order they are drawn. The keys are also the selector the
+ * update script targets, so adding a row here is the only edit a fourth figure
+ * would need on this side.
+ */
+export const NOTCH_SLOTS = [
+  { key: "shareClicks", label: "Share clicks" },
+  { key: "tokenSpend", label: "Token spend" },
+  { key: "activeSyncs", label: "Active syncs" },
+] as const;
+
+export type NotchSlotKey = (typeof NOTCH_SLOTS)[number]["key"];
+
+export interface NotchSlotView {
+  /** Display-ready. An em dash whenever there is no number worth showing. */
+  readonly value: string;
+  /**
+   * A word or two set beside the value: a caveat on a real figure, or — when
+   * the value is a dash — the reason it is one. Carried next to the value
+   * rather than only in the tooltip, because a click-through overlay is a poor
+   * place to hide the difference between "nothing happened" and "we don't know".
+   */
+  readonly note: string;
+  /** The long form, for the tooltip and for assistive technology. */
+  readonly detail: string;
+}
+
+export type NotchPanelView = Readonly<Record<NotchSlotKey, NotchSlotView>>;
+
+export const EM_DASH = "—";
+
+/** What the page shows between being loaded and the first read landing. */
+export const initialNotchPanelView: NotchPanelView = {
+  shareClicks: { value: EM_DASH, note: "", detail: "Not read yet." },
+  tokenSpend: { value: EM_DASH, note: "", detail: "Not read yet." },
+  activeSyncs: { value: EM_DASH, note: "", detail: "Not read yet." },
+};
 
 /** Corner radius of the expanded panel, in CSS pixels. */
 const PANEL_RADIUS = 22;
@@ -25,8 +66,6 @@ const PILL_RADIUS = 12;
 
 const MORPH_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const MORPH_DURATION_MS = 260;
-
-const PLACEHOLDER_SLOTS = ["Share clicks", "Token spend", "Active syncs"] as const;
 
 /** Width of the small handle drawn on the collapsed pill. */
 const GRIP_WIDTH = 26;
@@ -59,11 +98,33 @@ function renderCssVariableBlock(layout: NotchLayout): string {
     .join("\n");
 }
 
+/**
+ * Values and details are generated here, but they still pass through this on
+ * the way into a template string — the day one of them starts carrying a
+ * server-supplied name, the escaping has to already be in place.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 function renderSlots(): string {
-  return PLACEHOLDER_SLOTS.map(
-    (label) =>
-      `        <div class="slot"><dt>${label}</dt><dd aria-label="no data yet">&mdash;</dd></div>`,
-  ).join("\n");
+  return NOTCH_SLOTS.map(({ key, label }) => {
+    const slot = initialNotchPanelView[key];
+    const detail = escapeHtml(slot.detail);
+    // The em dash is written as an entity so the initial markup carries no
+    // non-ASCII, which survives the `data:` URL round trip unambiguously.
+    const value = slot.value === EM_DASH ? "&mdash;" : escapeHtml(slot.value);
+    return (
+      `        <div class="slot"><dt>${label}</dt>` +
+      `<dd data-slot="${key}" title="${detail}" aria-label="${detail}">` +
+      `<span class="value">${value}</span><span class="note">${escapeHtml(slot.note)}</span>` +
+      `</dd></div>`
+    );
+  }).join("\n");
 }
 
 export function buildNotchPanelHtml(layout: NotchLayout): string {
@@ -211,10 +272,35 @@ ${renderCssVariableBlock(layout)}
       }
 
       .slot dd {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .slot dd .value {
         font-size: 15px;
         font-weight: 600;
         font-variant-numeric: tabular-nums;
         color: rgba(255, 255, 255, 0.9);
+      }
+
+      /*
+       * Deliberately quiet. It qualifies the number beside it — or explains a
+       * dash — and must never compete with the figure for the half-second of
+       * attention a hover panel gets.
+       */
+      .slot dd .note {
+        font-size: 11px;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.38);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .slot dd .note:empty {
+        display: none;
       }
 
       @media (prefers-reduced-motion: reduce) {
@@ -259,4 +345,25 @@ export function buildNotchLayoutScript(layout: NotchLayout): string {
 export function buildNotchStateScript(expanded: boolean): string {
   const state = JSON.stringify(expanded ? "expanded" : "collapsed");
   return `document.documentElement.dataset.${NOTCH_STATE_ATTRIBUTE}=${state};`;
+}
+
+/**
+ * Writes a whole reading into the page in one evaluation.
+ *
+ * All three slots are always rewritten, even the ones that did not move: the
+ * alternative is tracking what the page currently shows in a second place, and
+ * a panel that disagrees with itself about which figure is stale is worse than
+ * one that repaints three short strings.
+ */
+export function buildNotchDataScript(view: NotchPanelView): string {
+  const calls = NOTCH_SLOTS.map(({ key }) => {
+    const slot = view[key];
+    return `w(${JSON.stringify(key)},${JSON.stringify(slot.value)},${JSON.stringify(slot.note)},${JSON.stringify(slot.detail)});`;
+  }).join("");
+  return (
+    `(()=>{const w=(k,v,n,d)=>{` +
+    `const e=document.querySelector('[data-slot="'+k+'"]');if(!e)return;` +
+    `e.children[0].textContent=v;e.children[1].textContent=n;` +
+    `e.title=d;e.setAttribute("aria-label",d);};${calls}})();`
+  );
 }
