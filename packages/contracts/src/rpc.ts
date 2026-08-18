@@ -248,6 +248,21 @@ import {
   ShareLinkRevokeResult,
 } from "./shareLinks.ts";
 import {
+  CloudSyncConflictListInput,
+  CloudSyncConflictListResult,
+  CloudSyncConflictResolveInput,
+  CloudSyncConflictResolveResult,
+  CloudSyncError,
+  CloudSyncPauseInput,
+  CloudSyncPauseResult,
+  CloudSyncStartInput,
+  CloudSyncStartResult,
+  CloudSyncStatusGetInput,
+  CloudSyncStatusResult,
+  CloudSyncStopInput,
+  CloudSyncStopResult,
+} from "./cloudSync.ts";
+import {
   ProviderUsageError,
   ProviderUsageRequestCreateInput,
   ProviderUsageRequestCreateResult,
@@ -350,6 +365,15 @@ export const WS_METHODS = {
   shareLinksCreate: "shareLinks.create",
   shareLinksList: "shareLinks.list",
   shareLinksRevoke: "shareLinks.revoke",
+
+  // Syncing a project to the cloud. Control only: the bytes travel over the
+  // authenticated content-addressed upload route, not through these methods.
+  cloudSyncStatusGet: "cloudSync.status.get",
+  cloudSyncStart: "cloudSync.start",
+  cloudSyncPause: "cloudSync.pause",
+  cloudSyncStop: "cloudSync.stop",
+  cloudSyncConflictsList: "cloudSync.conflicts.list",
+  cloudSyncConflictsResolve: "cloudSync.conflicts.resolve",
 
   // Streaming subscriptions
   subscribeGitStatus: "subscribeGitStatus",
@@ -561,6 +585,42 @@ export const WsShareLinksRevokeRpc = Rpc.make(WS_METHODS.shareLinksRevoke, {
   payload: ShareLinkRevokeInput,
   success: ShareLinkRevokeResult,
   error: ShareLinkError,
+});
+
+export const WsCloudSyncStatusGetRpc = Rpc.make(WS_METHODS.cloudSyncStatusGet, {
+  payload: CloudSyncStatusGetInput,
+  success: CloudSyncStatusResult,
+  error: CloudSyncError,
+});
+
+export const WsCloudSyncStartRpc = Rpc.make(WS_METHODS.cloudSyncStart, {
+  payload: CloudSyncStartInput,
+  success: CloudSyncStartResult,
+  error: CloudSyncError,
+});
+
+export const WsCloudSyncPauseRpc = Rpc.make(WS_METHODS.cloudSyncPause, {
+  payload: CloudSyncPauseInput,
+  success: CloudSyncPauseResult,
+  error: CloudSyncError,
+});
+
+export const WsCloudSyncStopRpc = Rpc.make(WS_METHODS.cloudSyncStop, {
+  payload: CloudSyncStopInput,
+  success: CloudSyncStopResult,
+  error: CloudSyncError,
+});
+
+export const WsCloudSyncConflictsListRpc = Rpc.make(WS_METHODS.cloudSyncConflictsList, {
+  payload: CloudSyncConflictListInput,
+  success: CloudSyncConflictListResult,
+  error: CloudSyncError,
+});
+
+export const WsCloudSyncConflictsResolveRpc = Rpc.make(WS_METHODS.cloudSyncConflictsResolve, {
+  payload: CloudSyncConflictResolveInput,
+  success: CloudSyncConflictResolveResult,
+  error: CloudSyncError,
 });
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
@@ -1396,6 +1456,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsShareLinksCreateRpc,
   WsShareLinksListRpc,
   WsShareLinksRevokeRpc,
+  WsCloudSyncStatusGetRpc,
+  WsCloudSyncStartRpc,
+  WsCloudSyncPauseRpc,
+  WsCloudSyncStopRpc,
+  WsCloudSyncConflictsListRpc,
+  WsCloudSyncConflictsResolveRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsListDirectoryRpc,
   WsProjectsReadFileRpc,

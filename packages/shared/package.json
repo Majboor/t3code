@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./cloudSync/reconcile": {
+      "types": "./src/cloudSync/reconcile.ts",
+      "import": "./src/cloudSync/reconcile.ts"
+    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"
