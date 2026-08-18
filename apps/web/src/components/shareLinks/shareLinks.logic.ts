@@ -20,7 +20,7 @@ import type { ProjectId, ShareLink, ShareLinkError, ShareLinkScope } from "@t3to
  * so the path is the client's to know; keeping it in one place means a server
  * that later returns a path has one line to replace.
  */
-export const SHARE_LINK_PATH_PREFIX = "/share";
+export const SHARE_LINK_PATH_PREFIX = "/s";
 
 export function buildShareLinkUrl(token: string, origin: string): string {
   return `${origin.replace(/\/+$/, "")}${SHARE_LINK_PATH_PREFIX}/${encodeURIComponent(token)}`;

@@ -1,4 +1,7 @@
-import type { ServerAuthDescriptor, ServerAuthPolicy as ServerAuthPolicyName } from "@t3tools/contracts";
+import type {
+  ServerAuthDescriptor,
+  ServerAuthPolicy as ServerAuthPolicyName,
+} from "@t3tools/contracts";
 import { Effect, Layer } from "effect";
 
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";

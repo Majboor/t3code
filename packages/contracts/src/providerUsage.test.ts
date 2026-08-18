@@ -137,9 +137,7 @@ describe("provider usage request contracts", () => {
 
     expect(granted.accountId).toBe("acct-work");
     expect("accountId" in declined).toBe(false);
-    expect(() =>
-      decodeRespond({ tenantId, workspaceId, requestId, decision: "maybe" }),
-    ).toThrow();
+    expect(() => decodeRespond({ tenantId, workspaceId, requestId, decision: "maybe" })).toThrow();
   });
 
   it("reports whether the viewer can respond even with nothing to respond to", () => {

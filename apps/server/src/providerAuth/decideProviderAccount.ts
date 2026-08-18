@@ -87,8 +87,7 @@ const CONNECT_YOUR_OWN = "Connect one in Settings → Connections";
  * Telling them only to go and connect an account they may not have is a dead
  * end, and a dead end is what this used to be.
  */
-const ASK_THE_WORKSPACE =
-  "or open the collaboration panel and ask the workspace for usage";
+const ASK_THE_WORKSPACE = "or open the collaboration panel and ask the workspace for usage";
 
 export function decideProviderAccount(input: DecideProviderAccountInput): ProviderAccountDecision {
   const { providerLabel } = input;

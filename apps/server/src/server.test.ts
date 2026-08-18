@@ -126,6 +126,9 @@ import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderShar
 import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSharingService.ts";
 import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
 import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
+import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
+import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
+import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import {
   ProviderSharingRepository,
   type ProviderSharingRepositoryShape,
@@ -357,6 +360,14 @@ const providerUsageRequestTestLayer = ProviderUsageRequestRepositoryLive.pipe(
 );
 
 // Answering a request writes sharing rows too, so it needs both repositories.
+// Public links reach the project projection: a link names a project, and the
+// project row is the only thing that knows which workspace owns it.
+const shareLinkServiceTestLayer = ShareLinkServiceLive.pipe(
+  Layer.provide(ShareLinkRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(collaborationTestLayer),
+  Layer.provide(ProjectionProjectRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+);
+
 const providerUsageServiceTestLayer = ProviderUsageServiceLive.pipe(
   Layer.provide(providerUsageRequestTestLayer),
   Layer.provide(providerSharingTestLayer),
@@ -768,6 +779,7 @@ const buildAppUnderTest = (options?: {
           collaborationTestLayer,
           providerSharingServiceTestLayer,
           providerUsageServiceTestLayer,
+          shareLinkServiceTestLayer,
         ),
       ),
       Layer.provideMerge(organizationTestLayer),

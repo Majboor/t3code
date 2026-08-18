@@ -254,15 +254,33 @@ const makeShareLinkService = Effect.gen(function* () {
       : Effect.void;
   };
 
-  /** The project's root on disk, or nothing at all. */
-  const readProjectRoot = (projectId: ProjectId) =>
+  /**
+   * The project's root on disk, and proof it is this workspace's to hand out.
+   *
+   * A project id arrives on the wire from a member of *some* workspace, and
+   * project ids are global — without this, being in any workspace would be
+   * enough to publish any project on the server. Ownership is re-checked on
+   * every redemption rather than only at creation, so a project that moves to
+   * another workspace takes its old links dead with it.
+   *
+   * A project with no ownership at all is a purely local one, created before
+   * any tenancy existed and belonging to whoever is running the server. It is
+   * allowed, because refusing it would break sharing on every single-user
+   * install for the sake of a check that has nothing to compare against.
+   */
+  const readProject = (scope: LinkScope, projectId: ProjectId) =>
     projects.getById({ projectId }).pipe(
       Effect.mapError(storageFailure("Could not read the project this link points at.")),
-      Effect.flatMap((project) =>
-        Option.isNone(project) || project.value.deletedAt !== null
+      Effect.flatMap((project) => {
+        if (Option.isNone(project) || project.value.deletedAt !== null) {
+          return Effect.fail(notFound());
+        }
+        const ownership = project.value.ownership;
+        return ownership !== null &&
+          (ownership.tenantId !== scope.tenantId || ownership.workspaceId !== scope.workspaceId)
           ? Effect.fail(notFound())
-          : Effect.succeed(project.value),
-      ),
+          : Effect.succeed(project.value);
+      }),
     );
 
   const tryFs = <A>(run: () => Promise<A>) =>
@@ -433,11 +451,26 @@ const makeShareLinkService = Effect.gen(function* () {
 
   const create: ShareLinkServiceShape["create"] = (actor, input) =>
     Effect.gen(function* () {
-      yield* requireMember(actor, { tenantId: input.tenantId, workspaceId: input.workspaceId });
+      const scope: LinkScope = { tenantId: input.tenantId, workspaceId: input.workspaceId };
+      yield* requireMember(actor, scope);
 
       const projectId = input.projectId ?? null;
       const filePath = input.filePath ?? null;
       yield* validateTarget({ scope: input.scope, projectId, filePath });
+      if (projectId !== null) {
+        // A project that is missing and a project belonging to somebody else
+        // give the same answer, so this cannot be used to discover which
+        // project ids exist on the server.
+        yield* readProject(scope, projectId).pipe(
+          Effect.mapError(
+            () =>
+              new ShareLinkError({
+                code: "invalid-target",
+                message: "That project is not one this workspace can share.",
+              }),
+          ),
+        );
+      }
 
       const record = yield* repository
         .createLink({
@@ -511,17 +544,17 @@ const makeShareLinkService = Effect.gen(function* () {
         });
       }
 
-      // The UPDATE coalesces, so the row always comes back; a `revokedAt` other
-      // than the one just sent means somebody — or a second click — got there
-      // first, and the stored time is the one that matters.
-      if (record.value.revokedAt !== revokedAt) {
+      // Asked of the write itself rather than inferred from the timestamp it
+      // returned: two revokes inside one millisecond carry the same string, and
+      // the second used to report success.
+      if (record.value.alreadyRevoked) {
         return yield* new ShareLinkError({
           code: "revoked",
           message: "That link was already revoked.",
         });
       }
 
-      const link = toRedactedShareLink(record.value);
+      const link = toRedactedShareLink(record.value.record);
       return link === null ? yield* notFound() : { link };
     });
 
@@ -561,7 +594,10 @@ const makeShareLinkService = Effect.gen(function* () {
         if (link.projectId === null) {
           return yield* notFound();
         }
-        const project = yield* readProjectRoot(link.projectId);
+        const project = yield* readProject(
+          { tenantId: link.tenantId, workspaceId: link.workspaceId },
+          link.projectId,
+        );
 
         if (link.scope === "file") {
           // The stored path wins outright. A `file` link that honoured a

@@ -50,11 +50,7 @@ export type ProviderUsageRequestStatus = typeof ProviderUsageRequestStatus.Type;
  * `asked` is the catch-all: someone who could run turns but wants the
  * workspace's account anyway.
  */
-export const ProviderUsageRequestReason = Schema.Literals([
-  "no-account",
-  "limit-reached",
-  "asked",
-]);
+export const ProviderUsageRequestReason = Schema.Literals(["no-account", "limit-reached", "asked"]);
 export type ProviderUsageRequestReason = typeof ProviderUsageRequestReason.Type;
 
 /** grant contributes an account; decline closes the request without one. */

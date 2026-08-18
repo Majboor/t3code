@@ -464,6 +464,8 @@ describe("resolveMessageAuthor", () => {
   });
 
   it("draws nothing for an author who is no longer in the roster", () => {
-    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-departed") }, members)).toBeNull();
+    expect(
+      resolveMessageAuthor({ authorUserId: UserId.make("user-departed") }, members),
+    ).toBeNull();
   });
 });

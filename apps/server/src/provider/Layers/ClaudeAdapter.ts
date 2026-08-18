@@ -570,10 +570,7 @@ const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = new Set([
  * keychain, not from a settings source, so signing in still works and `claude`
  * in a terminal is unaffected.
  */
-const CLAUDE_SETTING_SOURCES = [
-  "project",
-  "local",
-] as const satisfies ReadonlyArray<SettingSource>;
+const CLAUDE_SETTING_SOURCES = ["project", "local"] as const satisfies ReadonlyArray<SettingSource>;
 
 function buildPromptText(input: ProviderSendTurnInput): string {
   const rawEffort =

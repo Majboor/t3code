@@ -6,104 +6,91 @@ import { HttpRouter, HttpServer } from "effect/unstable/http";
 
 import { ServerConfig, type ServerConfigShape } from "../config.ts";
 import { authSessionRouteLayer } from "./http.ts";
-import { resolveAdvertisedAuthPolicy } from "./Layers/ServerAuthPolicy.ts";
+import {
+  resolveAdvertisedAuthPolicy,
+  type ServerAuthPolicyConfig,
+} from "./Layers/ServerAuthPolicy.ts";
 import { ServerAuth } from "./Services/ServerAuth.ts";
 import { SessionCredentialService } from "./Services/SessionCredentialService.ts";
-import { resolveSessionCookieName } from "./utils.ts";
 
 const SESSION_TOKEN = "issued-owner-session-token";
+const SESSION_COOKIE_NAME = "t3_session";
+
+const LOOPBACK_WEB_SERVER: ServerAuthPolicyConfig = {
+  mode: "web",
+  host: "127.0.0.1",
+  unsafeNoAuth: false,
+  basicAuthUsername: undefined,
+  basicAuthPassword: undefined,
+  publishedBeyondLoopback: false,
+};
 
 /**
- * The route is the thing under test, so the services around it are stubbed down to
- * the two questions it actually asks: what does the session state look like, and
- * hand me an owner session. Standing up the real ServerAuth would drag in the
- * database and secret store without making the assertions any stronger.
+ * The route is what is under test, so the services around it answer only the two
+ * questions it asks: what does the session state look like, and hand me an owner
+ * session. Standing up the real ServerAuth would drag in the database and the
+ * secret store without making a single assertion stronger.
  */
-const makeSessionRouteApp = (overrides: Partial<ServerConfigShape>) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* Effect.service(ServerConfig).pipe(Effect.orDie, Effect.as(null));
-    void fileSystem;
-  }).pipe(Effect.as(null));
+const makeServerAuthLayer = (config: ServerAuthPolicyConfig) => {
+  const sessionState: AuthSessionState = {
+    authenticated: false,
+    auth: {
+      policy: resolveAdvertisedAuthPolicy(config),
+      bootstrapMethods: ["one-time-token"],
+      sessionMethods: ["browser-session-cookie", "bearer-session-token"],
+      sessionCookieName: SESSION_COOKIE_NAME,
+    },
+  };
+  const issued = {
+    response: {
+      authenticated: true,
+      role: "owner",
+      sessionMethod: "browser-session-cookie",
+      expiresAt: DateTime.makeUnsafe(new Date("2030-01-01T00:00:00.000Z")),
+    },
+    sessionToken: SESSION_TOKEN,
+  } as const;
 
-const makeConfigLayer = (overrides: Partial<ServerConfigShape>) =>
-  Layer.effect(
+  return Layer.mock(ServerAuth)({
+    getSessionState: () => Effect.succeed(sessionState),
+    issueLoopbackOwnerSession: () => Effect.succeed(issued),
+    issueUnsafeNoAuthOwnerSession: () => Effect.succeed(issued),
+  });
+};
+
+const sessionCredentialLayer = Layer.mock(SessionCredentialService)({
+  cookieName: SESSION_COOKIE_NAME,
+});
+
+const buildAppUnderTest = (overrides: Partial<ServerConfigShape> = {}) => {
+  const policyConfig: ServerAuthPolicyConfig = { ...LOOPBACK_WEB_SERVER, ...overrides };
+  const configLayer = Layer.effect(
     ServerConfig,
     Effect.gen(function* () {
       const config = yield* ServerConfig;
-      return { ...config, ...overrides } satisfies ServerConfigShape;
+      return { ...config, ...policyConfig, ...overrides } satisfies ServerConfigShape;
     }),
   ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-session-route-" })));
 
-const makeServerAuthLayer = Layer.effect(
-  ServerAuth,
-  Effect.gen(function* () {
-    const config = yield* ServerConfig;
-    const expiresAt = DateTime.makeUnsafe(new Date("2030-01-01T00:00:00.000Z"));
-    const sessionState: AuthSessionState = {
-      authenticated: false,
-      auth: {
-        policy: resolveAdvertisedAuthPolicy(config),
-        bootstrapMethods: ["one-time-token"],
-        sessionMethods: ["browser-session-cookie", "bearer-session-token"],
-        sessionCookieName: resolveSessionCookieName({ mode: config.mode, port: config.port }),
-      },
-    };
-    const issued = {
-      response: {
-        authenticated: true,
-        role: "owner",
-        sessionMethod: "browser-session-cookie",
-        expiresAt,
-      },
-      sessionToken: SESSION_TOKEN,
-    } as const;
-
-    return ServerAuth.makeUnsafe({
-      getSessionState: () => Effect.succeed(sessionState),
-      issueLoopbackOwnerSession: () => Effect.succeed(issued),
-      issueUnsafeNoAuthOwnerSession: () => Effect.succeed(issued),
-    });
-  }),
-);
-
-const sessionCredentialLayer = Layer.succeed(
-  SessionCredentialService,
-  SessionCredentialService.makeUnsafe({ cookieName: "t3_session" }),
-);
-
-const buildAppUnderTest = (overrides: Partial<ServerConfigShape> = {}) => {
-  const configLayer = makeConfigLayer({ mode: "web", host: "127.0.0.1", ...overrides });
   return Layer.build(
     HttpRouter.serve(authSessionRouteLayer, {
       disableListenLog: true,
       disableLogger: true,
     }).pipe(
-      Layer.provide(makeServerAuthLayer.pipe(Layer.provide(configLayer))),
+      Layer.provide(makeServerAuthLayer(policyConfig)),
       Layer.provide(sessionCredentialLayer),
-      Layer.provideMerge(configLayer),
+      Layer.provide(configLayer),
     ),
   );
 };
 
-const getSessionUrl = Effect.gen(function* () {
-  const server = yield* HttpServer.HttpServer;
-  const address = server.address as HttpServer.TcpAddress;
-  return `http://127.0.0.1:${address.port}/api/auth/session`;
-});
-
-interface SessionProbe {
-  readonly status: number;
-  readonly authenticated: boolean;
-  readonly policy: string;
-  readonly setCookie: string | null;
-  readonly refused: string | null;
-  readonly refusedReason: string | null;
-}
-
 const probeSession = (headers: Record<string, string> = {}) =>
   Effect.gen(function* () {
-    const url = yield* getSessionUrl;
-    const response = yield* Effect.promise(() => fetch(url, { headers }));
+    const server = yield* HttpServer.HttpServer;
+    const address = server.address as HttpServer.TcpAddress;
+    const response = yield* Effect.promise(() =>
+      fetch(`http://127.0.0.1:${address.port}/api/auth/session`, { headers }),
+    );
     const body = (yield* Effect.promise(() => response.json())) as AuthSessionState;
     return {
       status: response.status,
@@ -112,10 +99,8 @@ const probeSession = (headers: Record<string, string> = {}) =>
       setCookie: response.headers.get("set-cookie"),
       refused: response.headers.get("x-t3-auth-local-session-refused"),
       refusedReason: response.headers.get("x-t3-auth-local-session-refused-reason"),
-    } satisfies SessionProbe;
+    };
   });
-
-void makeSessionRouteApp;
 
 it.effect("signs in a browser talking straight to a loopback server", () =>
   Effect.gen(function* () {
@@ -142,12 +127,12 @@ it.effect("refuses, with a reason, once the server knows it is published", () =>
     assert.isNull(probe.setCookie);
     assert.equal(probe.refused, "server-published");
     assert.match(probe.refusedReason ?? "", /one-time token/i);
-    // A published server no longer claims a policy that promises loopback-only reach.
+    // A published server stops claiming a policy that promises loopback-only reach.
     assert.equal(probe.policy, "remote-reachable");
   }).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect("refuses a request a tunnel relayed, even on a loopback-only server", () =>
+it.effect("refuses a relayed request, even on a server that is only bound to loopback", () =>
   Effect.gen(function* () {
     yield* buildAppUnderTest();
 

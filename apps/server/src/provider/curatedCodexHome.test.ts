@@ -57,7 +57,7 @@ describe("curateCodexConfigToml", () => {
   it("drops the rest of the tool surface, not just the obvious two", () => {
     const curated = curateCodexConfigToml(
       [
-        '[apps.connector_abc.tools.gmail_send_email]',
+        "[apps.connector_abc.tools.gmail_send_email]",
         'approval_mode = "approve"',
         "",
         "[marketplaces.openai-bundled]",

@@ -188,9 +188,17 @@ export interface ShareLinkRepositoryShape {
    * untouched, so the service can report `revoked` rather than `not-found` and
    * the first revocation time survives a double click on the button.
    */
+  /**
+   * `none` means no such link here. Otherwise `alreadyRevoked` says whether this
+   * call is what ended access or whether it was already over — a distinction a
+   * returned timestamp cannot carry, since two revokes can share a millisecond.
+   */
   readonly revokeLink: (
     input: RevokeShareLinkInput,
-  ) => Effect.Effect<Option.Option<ShareLinkRecord>, PersistenceSqlError>;
+  ) => Effect.Effect<
+    Option.Option<{ readonly record: ShareLinkRecord; readonly alreadyRevoked: boolean }>,
+    PersistenceSqlError
+  >;
   /**
    * Bumps the running counters and appends the view row, in one transaction so
    * the summary and the series cannot disagree. `Option.none` means the link

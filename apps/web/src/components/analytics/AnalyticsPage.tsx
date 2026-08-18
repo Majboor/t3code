@@ -121,9 +121,7 @@ function LiveDeployments({
               <span className="text-muted-foreground">{describeAddress(deployment)}</span>
             )}
             <span className="text-muted-foreground">
-              {streamNames.length === 0
-                ? "reports nothing"
-                : `reports ${streamNames.join(", ")}`}
+              {streamNames.length === 0 ? "reports nothing" : `reports ${streamNames.join(", ")}`}
               {dangling === 0
                 ? ""
                 : ` — ${dangling} stream${dangling === 1 ? "" : "s"} no longer declared`}

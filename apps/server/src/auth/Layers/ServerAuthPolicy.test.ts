@@ -130,6 +130,87 @@ it.layer(NodeServices.layer)("ServerAuthPolicyLive", (it) => {
     ),
   );
 
+  it.effect("stops advertising loopback-browser once the server is published", () =>
+    Effect.gen(function* () {
+      const policy = yield* ServerAuthPolicy;
+      const descriptor = yield* policy.getDescriptor();
+
+      // Loopback reach is no longer true, and the pairing method is what a visitor
+      // now needs to be offered.
+      expect(descriptor.policy).toBe("remote-reachable");
+      expect(descriptor.bootstrapMethods).toEqual(["one-time-token"]);
+    }).pipe(
+      Effect.provide(
+        makeServerAuthPolicyLayer({
+          mode: "web",
+          host: "127.0.0.1",
+          publishedBeyondLoopback: true,
+        }),
+      ),
+    ),
+  );
+
+  it.effect("stops advertising unsafe-no-auth once the server is published", () =>
+    Effect.gen(function* () {
+      const policy = yield* ServerAuthPolicy;
+      const descriptor = yield* policy.getDescriptor();
+
+      expect(descriptor.policy).toBe("remote-reachable");
+      // Without this the server would advertise no way in at all after refusing
+      // to auto-issue.
+      expect(descriptor.bootstrapMethods).toEqual(["one-time-token"]);
+    }).pipe(
+      Effect.provide(
+        makeServerAuthPolicyLayer({
+          mode: "web",
+          host: "127.0.0.1",
+          unsafeNoAuth: true,
+          publishedBeyondLoopback: true,
+        }),
+      ),
+    ),
+  );
+
+  it.effect("leaves a published basic-auth server on its own policy", () =>
+    Effect.gen(function* () {
+      const policy = yield* ServerAuthPolicy;
+      const descriptor = yield* policy.getDescriptor();
+
+      // Basic auth checks a password in front of every route, so publishing it
+      // does not turn a loopback assumption into an open door.
+      expect(descriptor.policy).toBe("unsafe-no-auth");
+    }).pipe(
+      Effect.provide(
+        makeServerAuthPolicyLayer({
+          mode: "web",
+          host: "127.0.0.1",
+          basicAuthUsername: "someone",
+          basicAuthPassword: "a-password",
+          publishedBeyondLoopback: true,
+        }),
+      ),
+    ),
+  );
+
+  it.effect("leaves a desktop-managed server on its own policy when published", () =>
+    Effect.gen(function* () {
+      const policy = yield* ServerAuthPolicy;
+      const descriptor = yield* policy.getDescriptor();
+
+      // Nothing to escalate: this policy never auto-issued in the first place.
+      expect(descriptor.policy).toBe("desktop-managed-local");
+      expect(descriptor.bootstrapMethods).toEqual(["desktop-bootstrap"]);
+    }).pipe(
+      Effect.provide(
+        makeServerAuthPolicyLayer({
+          mode: "desktop",
+          host: "127.0.0.1",
+          publishedBeyondLoopback: true,
+        }),
+      ),
+    ),
+  );
+
   it.effect("advertises only public Supabase browser auth config", () =>
     Effect.gen(function* () {
       const policy = yield* ServerAuthPolicy;

@@ -5,6 +5,7 @@ import type { Socket as NodeNetSocket } from "node:net";
 
 import { ServerConfig } from "./config.ts";
 import { analyticsIngestRouteLayer } from "./analytics/http.ts";
+import { shareLinkRedeemRouteLayer } from "./shareLinks/http.ts";
 import {
   providerAuthAccountRouteLayer,
   providerAuthCodeRouteLayer,
@@ -99,6 +100,8 @@ import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
 import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderSharing.ts";
 import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
+import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
+import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
 import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSharingService.ts";
 import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
@@ -371,6 +374,17 @@ const ProviderSharingLayerLive = ProviderSharingServiceLive.pipe(
  * as well as its own: a request marked granted while nothing was actually lent
  * would be the feature failing quietly.
  */
+/**
+ * Public links. Reaches the project projection because a link points at a
+ * project and the project row is the only thing that knows which workspace owns
+ * it — the check that stops a member of one workspace publishing another's.
+ */
+const ShareLinkLayerLive = ShareLinkServiceLive.pipe(
+  Layer.provide(ShareLinkRepositoryLayerLive),
+  Layer.provide(CollaborationLayerLive),
+  Layer.provide(ProjectionProjectRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+);
+
 const ProviderUsageLayerLive = ProviderUsageServiceLive.pipe(
   Layer.provide(ProviderUsageRequestRepositoryLayerLive),
   Layer.provide(ProviderSharingRepositoryLayerLive),
@@ -393,6 +407,7 @@ const TenantServicesLayerLive = Layer.mergeAll(
   CollaborationLayerLive,
   ProviderSharingLayerLive,
   ProviderUsageLayerLive,
+  ShareLinkLayerLive,
   OrganizationLayerLive,
   PackRegistryLayerLive,
   PackEnablementLayerLive,
@@ -446,6 +461,8 @@ export const makeRoutesLayer = Layer.mergeAll(
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
+  // Before the static catch-all: `/s/*` is a public route, not an app path.
+  shareLinkRedeemRouteLayer,
   providerAuthPageRouteLayer,
   providerAuthStartRouteLayer,
   providerAuthCodeRouteLayer,

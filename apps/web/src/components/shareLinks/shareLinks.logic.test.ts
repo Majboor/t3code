@@ -41,13 +41,13 @@ function makeLink(overrides: Partial<ShareLink> = {}): ShareLink {
 describe("buildShareLinkUrl", () => {
   it("joins an origin and a token without doubling the slash", () => {
     expect(buildShareLinkUrl("token-1", "https://t3.example.com/")).toBe(
-      "https://t3.example.com/share/token-1",
+      "https://t3.example.com/s/token-1",
     );
   });
 
   it("escapes a token rather than trusting it to be URL-safe", () => {
     expect(buildShareLinkUrl("a/b+c", "https://t3.example.com")).toBe(
-      "https://t3.example.com/share/a%2Fb%2Bc",
+      "https://t3.example.com/s/a%2Fb%2Bc",
     );
   });
 });

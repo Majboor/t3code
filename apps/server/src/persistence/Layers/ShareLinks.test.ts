@@ -84,7 +84,8 @@ layer("ShareLinkRepository", (it) => {
         linkId: "link-revoked",
         revokedAt: "2026-08-18T10:00:00.000Z",
       });
-      assert.equal(Option.getOrUndefined(first)?.revokedAt, "2026-08-18T10:00:00.000Z");
+      assert.equal(Option.getOrUndefined(first)?.record.revokedAt, "2026-08-18T10:00:00.000Z");
+      assert.equal(Option.getOrUndefined(first)?.alreadyRevoked, false);
 
       const second = yield* repository.revokeLink({
         ...workspaceScope,
@@ -94,7 +95,8 @@ layer("ShareLinkRepository", (it) => {
       // Still `some`, so "already revoked" is not reported as "no such link",
       // and the original time — when access actually ended — has not moved.
       assert.equal(Option.isSome(second), true);
-      assert.equal(Option.getOrUndefined(second)?.revokedAt, "2026-08-18T10:00:00.000Z");
+      assert.equal(Option.getOrUndefined(second)?.alreadyRevoked, true);
+      assert.equal(Option.getOrUndefined(second)?.record.revokedAt, "2026-08-18T10:00:00.000Z");
 
       // A revoked link is still readable by token: the visitor has to be told
       // which kind of no they got.

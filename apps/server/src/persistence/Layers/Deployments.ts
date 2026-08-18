@@ -132,11 +132,15 @@ const makeDeploymentRepository = Effect.gen(function* () {
         Effect.mapError(toPersistenceSqlError("DeploymentRepository.upsert:query")),
       ),
     list: (input) =>
-      listRows(input).pipe(Effect.mapError(toPersistenceSqlError("DeploymentRepository.list:query"))),
+      listRows(input).pipe(
+        Effect.mapError(toPersistenceSqlError("DeploymentRepository.list:query")),
+      ),
     get: (input) =>
       getRow(input).pipe(Effect.mapError(toPersistenceSqlError("DeploymentRepository.get:query"))),
     find: (input) =>
-      findRow(input).pipe(Effect.mapError(toPersistenceSqlError("DeploymentRepository.find:query"))),
+      findRow(input).pipe(
+        Effect.mapError(toPersistenceSqlError("DeploymentRepository.find:query")),
+      ),
   } satisfies DeploymentRepositoryShape;
 });
 

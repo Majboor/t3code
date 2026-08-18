@@ -1,13 +1,17 @@
-import { describe, expect, it } from "vitest";
+import type { ServerAuthPolicy } from "@t3tools/contracts";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildQuickTunnelArgs,
   canStopWorkspaceShare,
   createWorkspaceShareState,
+  evaluateWorkspaceSharePreflight,
   formatQuickTunnelTimeoutReason,
   interpretCloudflaredVersionProbe,
   parseCloudflaredVersion,
   parseQuickTunnelUrl,
+  probeServerAuthPolicy,
+  QuickTunnelController,
   QuickTunnelOutputCollector,
   reduceWorkspaceShareOnFailure,
   reduceWorkspaceShareOnStartRequested,
@@ -283,5 +287,155 @@ describe("formatQuickTunnelTimeoutReason", () => {
     expect(formatQuickTunnelTimeoutReason(25_000)).toBe(
       "cloudflared did not publish a public URL within 25s.",
     );
+  });
+});
+
+describe("evaluateWorkspaceSharePreflight", () => {
+  it("lets a desktop-managed server be shared", () => {
+    expect(evaluateWorkspaceSharePreflight("desktop-managed-local")).toEqual({ allowed: true });
+  });
+
+  it("lets a server that already expects remote visitors be shared", () => {
+    expect(evaluateWorkspaceSharePreflight("remote-reachable")).toEqual({ allowed: true });
+  });
+
+  it("refuses a loopback-browser server and names the fix", () => {
+    const preflight = evaluateWorkspaceSharePreflight("loopback-browser");
+
+    expect(preflight.allowed).toBe(false);
+    expect(preflight.allowed === false && preflight.reason).toMatch(/network access/i);
+    expect(preflight.allowed === false && preflight.reason).toMatch(/pair/i);
+  });
+
+  it("refuses a server started with authentication turned off, and names the fix", () => {
+    const preflight = evaluateWorkspaceSharePreflight("unsafe-no-auth");
+
+    expect(preflight.allowed).toBe(false);
+    expect(preflight.allowed === false && preflight.reason).toMatch(/unsafe-no-auth/);
+    expect(preflight.allowed === false && preflight.reason).toMatch(/network access/i);
+  });
+
+  it("refuses when the policy could not be read at all", () => {
+    const preflight = evaluateWorkspaceSharePreflight(null);
+
+    expect(preflight.allowed).toBe(false);
+    expect(preflight.allowed === false && preflight.reason).toMatch(/could not read/i);
+  });
+});
+
+const jsonResponse = (body: unknown) =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
+describe("probeServerAuthPolicy", () => {
+  it("reads the policy without letting the probe mint a session of its own", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ auth: { policy: "loopback-browser" } }));
+
+    await expect(probeServerAuthPolicy(3773, fetchImpl as unknown as typeof fetch)).resolves.toBe(
+      "loopback-browser",
+    );
+
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:3773/api/auth/session");
+    expect((init.headers as Record<string, string>)["x-t3-auth-entry-path"]).toBe("/pair");
+  });
+
+  it("reports unknown rather than guessing when the server answers with nonsense", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ auth: { policy: "wide-open" } }));
+
+    await expect(
+      probeServerAuthPolicy(3773, fetchImpl as unknown as typeof fetch),
+    ).resolves.toBeNull();
+  });
+
+  it("reports unknown when the server is unreachable", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+
+    await expect(
+      probeServerAuthPolicy(3773, fetchImpl as unknown as typeof fetch),
+    ).resolves.toBeNull();
+  });
+});
+
+describe("QuickTunnelController security preflight", () => {
+  const makeController = (
+    policy: ServerAuthPolicy | null,
+    overrides?: { readonly resolveServerAuthPolicy?: () => Promise<ServerAuthPolicy | null> },
+  ) => {
+    const spawn = vi.fn();
+    const probeAvailability = vi.fn(async () => ({
+      available: true,
+      version: "2024.8.2",
+      reason: null,
+    }));
+    const controller = new QuickTunnelController({
+      spawn: spawn as unknown as typeof import("node:child_process").spawn,
+      probeAvailability,
+      resolveServerAuthPolicy: overrides?.resolveServerAuthPolicy ?? (async () => policy),
+    });
+    return { controller, spawn, probeAvailability };
+  };
+
+  it("never spawns cloudflared in front of a server that hands out owner sessions", async () => {
+    const { controller, spawn } = makeController("loopback-browser");
+
+    const state = await controller.start(3773);
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state.status).toBe("unavailable");
+    expect(state.url).toBeNull();
+    expect(state.failureReason).toMatch(/network access/i);
+  });
+
+  it("never spawns cloudflared in front of a server with authentication turned off", async () => {
+    const { controller, spawn } = makeController("unsafe-no-auth");
+
+    const state = await controller.start(3773);
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state.failureReason).toMatch(/unsafe-no-auth/);
+  });
+
+  it("refuses when the policy probe throws, rather than publishing an unknown server", async () => {
+    const { controller, spawn } = makeController(null, {
+      resolveServerAuthPolicy: () => Promise.reject(new Error("socket hang up")),
+    });
+
+    const state = await controller.start(3773);
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state.status).toBe("unavailable");
+    expect(state.failureReason).toMatch(/could not read/i);
+  });
+
+  it("checks the policy before spending time on cloudflared", async () => {
+    const { controller, probeAvailability } = makeController("loopback-browser");
+
+    await controller.start(3773);
+
+    expect(probeAvailability).not.toHaveBeenCalled();
+  });
+
+  it("goes ahead for a desktop-managed server", async () => {
+    const { controller, spawn } = makeController("desktop-managed-local");
+    spawn.mockImplementation(() => ({
+      stdout: { on: vi.fn() },
+      stderr: { on: vi.fn() },
+      on: vi.fn(),
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(),
+    }));
+
+    const state = await controller.start(3773);
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(state.status).toBe("starting");
+
+    controller.disposeSync();
   });
 });

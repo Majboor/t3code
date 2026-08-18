@@ -53,7 +53,10 @@ function tableHeaderName(line: string): string | null {
   if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
     return null;
   }
-  const inner = trimmed.startsWith("[[") && trimmed.endsWith("]]") ? trimmed.slice(2, -2) : trimmed.slice(1, -1);
+  const inner =
+    trimmed.startsWith("[[") && trimmed.endsWith("]]")
+      ? trimmed.slice(2, -2)
+      : trimmed.slice(1, -1);
   return inner.trim();
 }
 
@@ -120,7 +123,10 @@ export function curateCodexConfigToml(source: string): string {
     }
 
     const key = assignedKey(line);
-    if (key !== null && DROPPED_PREAMBLE_KEYS.includes(key as (typeof DROPPED_PREAMBLE_KEYS)[number])) {
+    if (
+      key !== null &&
+      DROPPED_PREAMBLE_KEYS.includes(key as (typeof DROPPED_PREAMBLE_KEYS)[number])
+    ) {
       droppingKeyDepth = bracketDelta(line);
       continue;
     }
@@ -188,9 +194,7 @@ export const ensureCuratedCodexHome = Effect.fn("ensureCuratedCodexHome")(functi
 
   yield* fileSystem.remove(targetAuthPath).pipe(Effect.catch(() => Effect.void));
   if (sourceAuthExists) {
-    yield* fileSystem
-      .symlink(sourceAuthPath, targetAuthPath)
-      .pipe(Effect.catch(() => Effect.void));
+    yield* fileSystem.symlink(sourceAuthPath, targetAuthPath).pipe(Effect.catch(() => Effect.void));
   }
 
   return {

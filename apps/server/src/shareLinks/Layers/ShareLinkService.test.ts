@@ -93,6 +93,39 @@ const makeProject = Effect.gen(function* () {
   return { workspaceRoot, outsideDir };
 });
 
+/** The same project, but belonging to a workspace the caller is not in. */
+const ownedElsewhere = Effect.gen(function* () {
+  const config = yield* ServerConfig;
+  const projects = yield* ProjectionProjectRepository;
+  const otherId = ProjectId.make("project-somebody-elses");
+  const workspaceRoot = path.join(config.stateDir, "other-project");
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "README.md"), "another workspace's project");
+
+  yield* projects.upsert({
+    projectId: otherId,
+    title: "Somebody Else's",
+    workspaceRoot,
+    ownership: {
+      tenantId,
+      tenantDisplayName: "Tenant",
+      workspaceId: WorkspaceId.make("workspace-somebody-elses"),
+      workspaceTitle: "Somebody Else's",
+      organizationId: null,
+      organizationDisplayName: null,
+      ownerUserId: null,
+      ownerDisplayName: null,
+    },
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    deletedAt: null,
+  });
+
+  return otherId;
+});
+
 it.effect("refuses everything to somebody who is not in the workspace", () =>
   Effect.gen(function* () {
     const shareLinks = yield* ShareLinkService;
@@ -358,6 +391,58 @@ it.effect("records a view when something was served, and not when it was refused
     // particular, and the address it came from is never written down.
     assert.strictEqual(views[0]?.viewerFingerprint, "salted-digest");
     assert.strictEqual(views[0]?.viewerUserId, null);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("will not share a project belonging to another workspace", () =>
+  Effect.gen(function* () {
+    const shareLinks = yield* ShareLinkService;
+    const projects = yield* ProjectionProjectRepository;
+    yield* beVisible(member);
+    const project = yield* makeProject;
+    const elsewhere = yield* ownedElsewhere;
+
+    // Project ids are global, so being in *some* workspace must not be enough
+    // to publish *any* project on the server.
+    for (const target of [
+      { scope: "project" as const, projectId: elsewhere },
+      { scope: "file" as const, projectId: elsewhere, filePath: "README.md" },
+      // A project that does not exist gives exactly the same answer, so this
+      // cannot be used to find out which ids are real.
+      { scope: "project" as const, projectId: ProjectId.make("no-such-project") },
+    ]) {
+      const refused = yield* shareLinks.create(member, { ...scope, ...target }).pipe(Effect.flip);
+      assert.strictEqual(refused.code, "invalid-target");
+    }
+
+    // Ownership is re-read on every visit, so a project that moves takes the
+    // links already handed out dead with it.
+    const minted = yield* shareLinks.create(member, { ...scope, scope: "project", projectId });
+    assert.strictEqual((yield* shareLinks.redeem({ token: minted.link.token })).kind, "project");
+
+    yield* projects.upsert({
+      projectId,
+      title: "Share Links",
+      workspaceRoot: project.workspaceRoot,
+      ownership: {
+        tenantId,
+        tenantDisplayName: "Tenant",
+        workspaceId: WorkspaceId.make("workspace-somebody-elses"),
+        workspaceTitle: "Somebody Else's",
+        organizationId: null,
+        organizationDisplayName: null,
+        ownerUserId: null,
+        ownerDisplayName: null,
+      },
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      deletedAt: null,
+    });
+
+    const stale = yield* shareLinks.redeem({ token: minted.link.token }).pipe(Effect.flip);
+    assert.strictEqual(stale.code, "not-found");
   }).pipe(Effect.provide(makeLayer())),
 );
 

@@ -145,22 +145,40 @@ const makeShareLinkRepository = Effect.gen(function* () {
           WHERE token = ${token}`,
   });
 
-  const revokeLinkRow = SqlSchema.findOneOption({
+  const findLinkRowById = SqlSchema.findOneOption({
     Request: RevokeShareLinkInput,
     Result: ShareLinkRow,
-    // COALESCE rather than a `revoked_at IS NULL` guard. A guard would make a
-    // second revoke return nothing, which is indistinguishable from the link
-    // not existing; this way the row always comes back and the caller compares
-    // the returned timestamp with the one it sent to tell "just revoked" from
-    // "already was". The original time is what an incident review asks for, so
-    // it must not move.
     execute: (input) =>
       sql`
-        UPDATE share_links
-        SET revoked_at = COALESCE(revoked_at, ${input.revokedAt})
+        SELECT ${sql.literal(linkColumns)}
+        FROM share_links
         WHERE link_id = ${input.linkId}
           AND tenant_id = ${input.tenantId}
           AND workspace_id = ${input.workspaceId}
+      `,
+  });
+
+  const revokeLinkRow = SqlSchema.findOneOption({
+    Request: RevokeShareLinkInput,
+    Result: ShareLinkRow,
+    // Guarded on `revoked_at IS NULL`, so this UPDATE touches a live link and
+    // nothing else — the first revocation time never moves, which is what an
+    // incident review asks for.
+    //
+    // It used to COALESCE and let the caller compare the returned timestamp
+    // with the one it sent to tell "just revoked" from "already was". That
+    // reads correctly and is wrong: `nowIso()` has millisecond resolution, so
+    // two revokes in the same millisecond produce the same string and the
+    // second one reports success. `revokeLink` therefore pairs this with a
+    // lookup and answers the question directly instead of inferring it.
+    execute: (input) =>
+      sql`
+        UPDATE share_links
+        SET revoked_at = ${input.revokedAt}
+        WHERE link_id = ${input.linkId}
+          AND tenant_id = ${input.tenantId}
+          AND workspace_id = ${input.workspaceId}
+          AND revoked_at IS NULL
         RETURNING ${sql.literal(linkColumns)}
       `,
   });
@@ -241,11 +259,28 @@ const makeShareLinkRepository = Effect.gen(function* () {
       Effect.map((row) => (Option.isSome(row) ? Option.some(toShareLink(row.value)) : row)),
     );
 
+  /**
+   * Three outcomes, told apart without guessing: no such link, a link this call
+   * revoked, and a link somebody else already had. The guarded UPDATE answers
+   * the middle one; the lookup that follows separates the other two, and only
+   * runs when the UPDATE changed nothing.
+   */
   const revokeLink: ShareLinkRepositoryShape["revokeLink"] = (input) =>
-    revokeLinkRow(input).pipe(
-      Effect.mapError(toPersistenceSqlError("ShareLinkRepository.revokeLink:query")),
-      Effect.map((row) => (Option.isSome(row) ? Option.some(toShareLink(row.value)) : row)),
-    );
+    Effect.gen(function* () {
+      const revoked = yield* revokeLinkRow(input).pipe(
+        Effect.mapError(toPersistenceSqlError("ShareLinkRepository.revokeLink:query")),
+      );
+      if (Option.isSome(revoked)) {
+        return Option.some({ record: toShareLink(revoked.value), alreadyRevoked: false });
+      }
+
+      const existing = yield* findLinkRowById(input).pipe(
+        Effect.mapError(toPersistenceSqlError("ShareLinkRepository.revokeLink:lookup")),
+      );
+      return Option.isSome(existing)
+        ? Option.some({ record: toShareLink(existing.value), alreadyRevoked: true })
+        : Option.none();
+    });
 
   // One transaction, because the counter and the series are two views of the
   // same click. Appending the row without the bump would make the list

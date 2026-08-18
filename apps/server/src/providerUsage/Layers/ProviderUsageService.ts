@@ -157,12 +157,10 @@ const makeProviderUsageService = Effect.gen(function* () {
     actor: ProviderUsageActor,
     scope: UsageScope,
   ): Effect.Effect<ReadonlyArray<CollaborationMember>, ProviderUsageError> =>
-    collaboration
-      .listMembers(actor, scope)
-      .pipe(
-        Effect.mapError(storageFailure("Could not read who belongs to this workspace.")),
-        Effect.map((result) => result.members),
-      );
+    collaboration.listMembers(actor, scope).pipe(
+      Effect.mapError(storageFailure("Could not read who belongs to this workspace.")),
+      Effect.map((result) => result.members),
+    );
 
   /**
    * Membership, and the name the workspace knows the caller by. Asking a
@@ -225,23 +223,21 @@ const makeProviderUsageService = Effect.gen(function* () {
    * missing rather than forbidden, so an id cannot be probed for existence.
    */
   const readRequestInScope = (requestId: ProviderUsageRequestId, scope: UsageScope) =>
-    repository
-      .getRequest({ requestId })
-      .pipe(
-        Effect.mapError(storageFailure("Could not read this request.")),
-        Effect.flatMap((found) =>
-          Option.isSome(found) &&
-          found.value.tenantId === scope.tenantId &&
-          found.value.workspaceId === scope.workspaceId
-            ? Effect.succeed(found.value)
-            : Effect.fail(
-                new ProviderUsageError({
-                  code: "request-not-found",
-                  message: "That request no longer exists.",
-                }),
-              ),
-        ),
-      );
+    repository.getRequest({ requestId }).pipe(
+      Effect.mapError(storageFailure("Could not read this request.")),
+      Effect.flatMap((found) =>
+        Option.isSome(found) &&
+        found.value.tenantId === scope.tenantId &&
+        found.value.workspaceId === scope.workspaceId
+          ? Effect.succeed(found.value)
+          : Effect.fail(
+              new ProviderUsageError({
+                code: "request-not-found",
+                message: "That request no longer exists.",
+              }),
+            ),
+      ),
+    );
 
   const alreadyDecided = () =>
     new ProviderUsageError({
