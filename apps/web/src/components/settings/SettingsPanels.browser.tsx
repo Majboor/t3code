@@ -10,6 +10,7 @@ import {
   type DesktopBridge,
   type DesktopUpdateChannel,
   type DesktopUpdateState,
+  type DesktopWorkspaceShareState,
   type LocalApi,
   ProjectId,
   type ServerConfig,
@@ -325,6 +326,13 @@ const createDesktopBridgeStub = (overrides?: {
     canRetry: false,
   };
 
+  const idleWorkspaceShareState: DesktopWorkspaceShareState = {
+    status: "not-shared",
+    url: null,
+    failureReason: null,
+    diagnostics: null,
+  };
+
   return {
     getAppBranding: vi.fn().mockReturnValue(null),
     getLocalEnvironmentBootstrap: () => ({
@@ -354,11 +362,16 @@ const createDesktopBridgeStub = (overrides?: {
         endpointUrl: mode === "network-accessible" ? "http://192.168.1.44:3773" : null,
         advertisedHost: mode === "network-accessible" ? "192.168.1.44" : null,
       })),
+    getWorkspaceShareState: vi.fn().mockResolvedValue(idleWorkspaceShareState),
+    startWorkspaceShare: vi.fn().mockResolvedValue(idleWorkspaceShareState),
+    stopWorkspaceShare: vi.fn().mockResolvedValue(idleWorkspaceShareState),
+    onWorkspaceShareState: vi.fn().mockReturnValue(() => undefined),
     pickFolder: vi.fn().mockResolvedValue(null),
     confirm: vi.fn().mockResolvedValue(false),
     setTheme: vi.fn().mockResolvedValue(undefined),
     showContextMenu: vi.fn().mockResolvedValue(null),
     openExternal: vi.fn().mockResolvedValue(true),
+    writeClipboardText: vi.fn().mockResolvedValue(true),
     onMenuAction: () => () => {},
     getUpdateState: vi.fn().mockResolvedValue(idleUpdateState),
     setUpdateChannel:

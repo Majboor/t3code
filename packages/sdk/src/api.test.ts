@@ -431,6 +431,147 @@ describe("provider sharing", () => {
   });
 });
 
+describe("provider usage requests", () => {
+  const scope = { tenantId: "tenant-1" as never, workspaceId: "workspace-1" as never };
+
+  it("asks without naming the requester", async () => {
+    const request = { id: "request-1", status: "pending" };
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerUsageRequestCreate]: { request },
+    });
+
+    const result = await createT3Api(transport).providerUsage.createRequest({
+      ...scope,
+      provider: "claude",
+      reason: "no-account",
+      note: "just for the migration" as never,
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.providerUsageRequestCreate,
+      input: { ...scope, provider: "claude", reason: "no-account", note: "just for the migration" },
+    });
+    expect(calls[0]?.input["requesterUserId"]).toBeUndefined();
+    expect(result).toEqual({ request });
+  });
+
+  it("lists a workspace's requests alongside whether the caller may answer", async () => {
+    const listed = { requests: [], canRespond: false };
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerUsageRequestList]: listed,
+    });
+
+    const result = await createT3Api(transport).providerUsage.listRequests(scope);
+
+    expect(calls[0]).toEqual({ method: WS_METHODS.providerUsageRequestList, input: scope });
+    expect(result).toBe(listed);
+  });
+
+  it("grants a request with the account that will be contributed", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerUsageRequestRespond]: { request: {} },
+    });
+
+    await createT3Api(transport).providerUsage.respondToRequest({
+      ...scope,
+      requestId: "request-1" as never,
+      decision: "grant",
+      accountId: "account-1" as never,
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.providerUsageRequestRespond,
+      input: { ...scope, requestId: "request-1", decision: "grant", accountId: "account-1" },
+    });
+  });
+
+  it("declines without naming an account", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerUsageRequestRespond]: { request: {} },
+    });
+
+    await createT3Api(transport).providerUsage.respondToRequest({
+      ...scope,
+      requestId: "request-1" as never,
+      decision: "decline",
+    });
+
+    expect(calls[0]?.input["accountId"]).toBeUndefined();
+  });
+
+  it("withdraws a request by id", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.providerUsageRequestWithdraw]: { request: {} },
+    });
+
+    await createT3Api(transport).providerUsage.withdrawRequest({
+      ...scope,
+      requestId: "request-1" as never,
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.providerUsageRequestWithdraw,
+      input: { ...scope, requestId: "request-1" },
+    });
+  });
+});
+
+describe("share links", () => {
+  const scope = { tenantId: "tenant-1" as never, workspaceId: "workspace-1" as never };
+
+  it("mints a file link with both halves of its target", async () => {
+    const link = { id: "link-1", token: "tok-1", scope: "file" };
+    const { transport, calls } = makeStub({ [WS_METHODS.shareLinksCreate]: { link } });
+
+    const result = await createT3Api(transport).shareLinks.create({
+      ...scope,
+      scope: "file",
+      projectId: "project-1" as never,
+      filePath: "src/index.ts" as never,
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.shareLinksCreate,
+      input: { ...scope, scope: "file", projectId: "project-1", filePath: "src/index.ts" },
+    });
+    expect(result).toEqual({ link });
+  });
+
+  it("never asks for a token or an author — the server mints both", async () => {
+    const { transport, calls } = makeStub({ [WS_METHODS.shareLinksCreate]: { link: {} } });
+
+    await createT3Api(transport).shareLinks.create({
+      ...scope,
+      scope: "workspace",
+      label: "For the design review" as never,
+    });
+
+    expect(calls[0]?.input["token"]).toBeUndefined();
+    expect(calls[0]?.input["createdByUserId"]).toBeUndefined();
+  });
+
+  it("lists a whole workspace when no project narrows it", async () => {
+    const listed = { links: [] };
+    const { transport, calls } = makeStub({ [WS_METHODS.shareLinksList]: listed });
+
+    const result = await createT3Api(transport).shareLinks.list(scope);
+
+    expect(calls[0]).toEqual({ method: WS_METHODS.shareLinksList, input: scope });
+    expect(result).toBe(listed);
+  });
+
+  it("revokes by id rather than by token", async () => {
+    const { transport, calls } = makeStub({ [WS_METHODS.shareLinksRevoke]: { link: {} } });
+
+    await createT3Api(transport).shareLinks.revoke({ ...scope, linkId: "link-1" as never });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.shareLinksRevoke,
+      input: { ...scope, linkId: "link-1" },
+    });
+  });
+});
+
 describe("connect", () => {
   it("refuses to connect without credentials or a token", async () => {
     await expect(connect({ baseUrl: "http://127.0.0.1:13773" })).rejects.toThrow(

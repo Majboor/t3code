@@ -294,7 +294,7 @@ describe("resolveProviderAccount", () => {
 
     expect(resolved).toMatchObject({ outcome: "refused" });
     expect(resolved.outcome === "refused" && resolved.refusal).toBe(
-      "No Claude account is connected for you. Connect one in Settings → Connections, or ask a workspace admin to share one.",
+      "No Claude account is connected for you. Connect one in Settings → Connections, or open the collaboration panel and ask the workspace for usage.",
     );
   });
 

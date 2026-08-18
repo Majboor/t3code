@@ -18,6 +18,7 @@ import {
   SettingsSection,
   useRelativeTimeTick,
 } from "./settingsLayout";
+import { WorkspaceSharingPanel } from "../workspaceSharing/WorkspaceSharingPanel";
 import { Input } from "../ui/input";
 import {
   Dialog,
@@ -1228,6 +1229,12 @@ export function ConnectionsSettings() {
                 }
               />
             )}
+          </SettingsSection>
+
+          <SettingsSection title="Share this workspace">
+            <div className="px-4 py-4 sm:px-5">
+              <WorkspaceSharingPanel />
+            </div>
           </SettingsSection>
 
           {isLocalBackendNetworkAccessible ? (

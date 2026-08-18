@@ -63,7 +63,7 @@ describe("decideProviderAccount", () => {
   it("refuses a person with no account, and says both ways out", () => {
     const decision = expectRefusal(decideProviderAccount(input()));
     expect(decision.refusal).toContain("Settings → Connections");
-    expect(decision.refusal).toContain("admin");
+    expect(decision.refusal).toContain("ask the workspace for usage");
   });
 
   it("lends the workspace account to a member granted workspace access", () => {
@@ -181,11 +181,11 @@ describe("decideProviderAccount", () => {
     expect(decision.refusal).toContain("no account has been chosen");
   });
 
-  it("points a member without access at the admin when the workspace does have one to lend", () => {
+  it("says the workspace has one to lend but has not been set to lend it to you", () => {
     const decision = expectRefusal(
       decideProviderAccount(input({ sharedAccounts: [sharedAccount()] })),
     );
-    expect(decision.refusal).toContain("let you use the workspace account");
+    expect(decision.refusal).toContain("has not been set to let you use a shared one");
   });
 
   it("prefers the default account when a person has several", () => {

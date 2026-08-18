@@ -275,6 +275,28 @@ export interface DesktopServerExposureState {
   advertisedHost: string | null;
 }
 
+/**
+ * Lifecycle of "share this workspace from my laptop", where a Cloudflare quick
+ * tunnel publishes the local server. `unavailable` means cloudflared is not
+ * installed, which is a setup problem rather than a run failure.
+ */
+export type DesktopWorkspaceShareStatus =
+  | "not-shared"
+  | "starting"
+  | "live"
+  | "stopping"
+  | "unavailable"
+  | "failed";
+
+export interface DesktopWorkspaceShareState {
+  status: DesktopWorkspaceShareStatus;
+  /** The public `https://<name>.trycloudflare.com` URL; only set while `live`. */
+  url: string | null;
+  failureReason: string | null;
+  /** Captured cloudflared output, attached so a failure can be diagnosed. */
+  diagnostics: string | null;
+}
+
 export interface PickFolderOptions {
   initialPath?: string | null;
 }
@@ -293,6 +315,10 @@ export interface DesktopBridge {
   removeSavedEnvironmentSecret: (environmentId: EnvironmentId) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
+  getWorkspaceShareState: () => Promise<DesktopWorkspaceShareState>;
+  startWorkspaceShare: () => Promise<DesktopWorkspaceShareState>;
+  stopWorkspaceShare: () => Promise<DesktopWorkspaceShareState>;
+  onWorkspaceShareState: (listener: (state: DesktopWorkspaceShareState) => void) => () => void;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
@@ -301,6 +327,12 @@ export interface DesktopBridge {
     position?: { x: number; y: number },
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
+  /**
+   * The main process owns the clipboard because the renderer's own
+   * `navigator.clipboard` needs a focused document, and the actions that copy
+   * here hand focus straight to another app.
+   */
+  writeClipboardText: (text: string) => Promise<boolean>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;

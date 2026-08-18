@@ -30,6 +30,21 @@ const setup = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`PRAGMA journal_mode = WAL;`;
+    /**
+     * Wait for a busy database rather than failing at it.
+     *
+     * WAL keeps readers out of a writer's way, but it does nothing for two
+     * writers, and this database has two by design: the server, and the `t3`
+     * CLI that agents drive as a separate process against the same file. With
+     * no busy timeout the loser of that race fails instantly with SQLITE_BUSY,
+     * which surfaces as a command that simply did not work — an
+     * `analytics declare` failing mid-run and taking a whole deploy with it,
+     * and succeeding the moment it is tried again by hand.
+     *
+     * Five seconds is far longer than any write here takes and still short
+     * enough to report a genuinely stuck database rather than hang on it.
+     */
+    yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* runMigrations();
   }),

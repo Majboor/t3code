@@ -56,6 +56,7 @@ import {
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness.ts";
 import { showDesktopConfirmDialog } from "./confirmDialog.ts";
 import { resolveDesktopServerExposure } from "./serverExposure.ts";
+import { QuickTunnelController } from "./tunnel.ts";
 import { syncShellEnvironment } from "./syncShellEnvironment.ts";
 import { getAutoUpdateDisabledReason, shouldBroadcastDownloadProgress } from "./updateState.ts";
 import { doesVersionMatchDesktopUpdateChannel } from "./updateChannels.ts";
@@ -74,6 +75,7 @@ import {
 } from "./updateMachine.ts";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch.ts";
 import { resolveDesktopAppBranding } from "./appBranding.ts";
+import { createNotchPanel } from "./notchWindow.ts";
 
 syncShellEnvironment();
 
@@ -82,6 +84,7 @@ const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
+const WRITE_CLIPBOARD_TEXT_CHANNEL = "desktop:write-clipboard-text";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
@@ -100,6 +103,10 @@ const SET_SAVED_ENVIRONMENT_SECRET_CHANNEL = "desktop:set-saved-environment-secr
 const REMOVE_SAVED_ENVIRONMENT_SECRET_CHANNEL = "desktop:remove-saved-environment-secret";
 const GET_SERVER_EXPOSURE_STATE_CHANNEL = "desktop:get-server-exposure-state";
 const SET_SERVER_EXPOSURE_MODE_CHANNEL = "desktop:set-server-exposure-mode";
+const WORKSPACE_SHARE_STATE_CHANNEL = "desktop:workspace-share-state";
+const WORKSPACE_SHARE_GET_STATE_CHANNEL = "desktop:workspace-share-get-state";
+const WORKSPACE_SHARE_START_CHANNEL = "desktop:workspace-share-start";
+const WORKSPACE_SHARE_STOP_CHANNEL = "desktop:workspace-share-stop";
 const BASE_DIR = process.env.T3CODE_HOME?.trim() || Path.join(OS.homedir(), ".t3");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SETTINGS_PATH = Path.join(STATE_DIR, "desktop-settings.json");
@@ -222,6 +229,36 @@ let restoreStdIoCapture: (() => void) | null = null;
 let backendObservabilitySettings = readPersistedBackendObservabilitySettings();
 let desktopSettings = readDesktopSettings(DESKTOP_SETTINGS_PATH, app.getVersion());
 let desktopServerExposureMode: DesktopServerExposureMode = desktopSettings.serverExposureMode;
+
+/**
+ * SECURITY: a quick tunnel forwards the public internet straight at the loopback
+ * port, so anything the server grants because "the request came from 127.0.0.1"
+ * is granted to every stranger holding the URL. The renderer must warn before
+ * starting, and the process must never outlive the app — see the quit hooks below.
+ */
+const workspaceShareController = new QuickTunnelController({
+  onStateChange: (state) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed()) continue;
+      window.webContents.send(WORKSPACE_SHARE_STATE_CHANNEL, state);
+    }
+  },
+});
+
+// Registered here rather than inside the existing quit handlers so every teardown
+// path is visible in one place. `stop()` is idempotent, and `disposeSync()` is the
+// last-resort kill for exits that never reach an Electron event.
+app.on("before-quit", () => {
+  workspaceShareController.stop();
+});
+app.on("window-all-closed", () => {
+  // With no window there is no way left to see or revoke the link, so a surviving
+  // tunnel would be an invisible public door into this machine.
+  workspaceShareController.stop();
+});
+process.on("exit", () => {
+  workspaceShareController.disposeSync();
+});
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const expectedBackendExitChildren = new WeakSet<ChildProcess.ChildProcess>();
@@ -828,7 +865,7 @@ function handleFatalStartupError(stage: string, error: unknown): void {
   console.error(`[desktop] fatal startup error (${stage})`, error);
   if (!isQuitting) {
     isQuitting = true;
-    dialog.showErrorBox("T3 Code failed to start", `Stage: ${stage}\n${message}${detail}`);
+    dialog.showErrorBox("LogicPacks failed to start", `Stage: ${stage}\n${message}${detail}`);
   }
   stopBackend();
   restoreStdIoCapture?.();
@@ -933,7 +970,7 @@ async function checkForUpdatesFromMenu(): Promise<void> {
     void dialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: `T3 Code ${updateState.currentVersion} is currently the newest version available.`,
+      message: `LogicPacks ${updateState.currentVersion} is currently the newest version available.`,
       buttons: ["OK"],
     });
   } else if (updateState.status === "error") {
@@ -1705,6 +1742,19 @@ function registerIpcHandlers(): void {
     return nextState;
   });
 
+  ipcMain.removeHandler(WORKSPACE_SHARE_GET_STATE_CHANNEL);
+  ipcMain.handle(WORKSPACE_SHARE_GET_STATE_CHANNEL, async () =>
+    workspaceShareController.getState(),
+  );
+
+  ipcMain.removeHandler(WORKSPACE_SHARE_START_CHANNEL);
+  ipcMain.handle(WORKSPACE_SHARE_START_CHANNEL, async () =>
+    workspaceShareController.start(backendPort),
+  );
+
+  ipcMain.removeHandler(WORKSPACE_SHARE_STOP_CHANNEL);
+  ipcMain.handle(WORKSPACE_SHARE_STOP_CHANNEL, async () => workspaceShareController.stop());
+
   ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
   ipcMain.handle(PICK_FOLDER_CHANNEL, async (_event, rawOptions: unknown) => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -1818,6 +1868,16 @@ function registerIpcHandlers(): void {
     } catch {
       return false;
     }
+  });
+
+  ipcMain.removeHandler(WRITE_CLIPBOARD_TEXT_CHANNEL);
+  ipcMain.handle(WRITE_CLIPBOARD_TEXT_CHANNEL, async (_event, rawText: unknown) => {
+    if (typeof rawText !== "string" || rawText.length === 0) {
+      return false;
+    }
+
+    clipboard.writeText(rawText);
+    return true;
   });
 
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
@@ -2156,6 +2216,10 @@ app
     configureApplicationMenu();
     registerDesktopProtocol();
     configureAutoUpdater();
+    // The notch panel is an independent always-on-top surface with its own
+    // teardown, so it is created here rather than tied to the main window's
+    // lifecycle. It no-ops off macOS and needs `screen`, hence after ready.
+    createNotchPanel();
     void bootstrap().catch((error) => {
       if (isBackendReadinessAborted(error) && isQuitting) {
         return;

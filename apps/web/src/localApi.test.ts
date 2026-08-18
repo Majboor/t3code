@@ -112,6 +112,17 @@ const rpcClientMock = {
     updatePolicy: vi.fn(),
     updateMember: vi.fn(),
   },
+  providerUsage: {
+    createRequest: vi.fn(),
+    listRequests: vi.fn(),
+    respondToRequest: vi.fn(),
+    withdrawRequest: vi.fn(),
+  },
+  shareLinks: {
+    create: vi.fn(),
+    list: vi.fn(),
+    revoke: vi.fn(),
+  },
   analytics: {
     listStreams: vi.fn(),
     query: vi.fn(),
@@ -239,11 +250,31 @@ function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridg
       endpointUrl: null,
       advertisedHost: null,
     }),
+    getWorkspaceShareState: async () => ({
+      status: "not-shared",
+      url: null,
+      failureReason: null,
+      diagnostics: null,
+    }),
+    startWorkspaceShare: async () => ({
+      status: "not-shared",
+      url: null,
+      failureReason: null,
+      diagnostics: null,
+    }),
+    stopWorkspaceShare: async () => ({
+      status: "not-shared",
+      url: null,
+      failureReason: null,
+      diagnostics: null,
+    }),
+    onWorkspaceShareState: () => () => undefined,
     pickFolder: async () => null,
     confirm: async () => true,
     setTheme: async () => undefined,
     showContextMenu: async () => null,
     openExternal: async () => true,
+    writeClipboardText: async () => true,
     onMenuAction: () => () => undefined,
     getUpdateState: async () => {
       throw new Error("getUpdateState not implemented in test");

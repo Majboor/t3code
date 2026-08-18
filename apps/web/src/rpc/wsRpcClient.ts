@@ -209,6 +209,18 @@ export interface WsRpcClient {
     readonly updatePolicy: RpcUnaryMethod<typeof WS_METHODS.providerSharingPolicyUpdate>;
     readonly updateMember: RpcUnaryMethod<typeof WS_METHODS.providerSharingMemberUpdate>;
   };
+  readonly providerUsage: {
+    readonly createRequest: RpcUnaryMethod<typeof WS_METHODS.providerUsageRequestCreate>;
+    readonly listRequests: RpcUnaryMethod<typeof WS_METHODS.providerUsageRequestList>;
+    readonly respondToRequest: RpcUnaryMethod<typeof WS_METHODS.providerUsageRequestRespond>;
+    readonly withdrawRequest: RpcUnaryMethod<typeof WS_METHODS.providerUsageRequestWithdraw>;
+  };
+  readonly shareLinks: {
+    /** The only call that ever yields a token; `list` never returns one again. */
+    readonly create: RpcUnaryMethod<typeof WS_METHODS.shareLinksCreate>;
+    readonly list: RpcUnaryMethod<typeof WS_METHODS.shareLinksList>;
+    readonly revoke: RpcUnaryMethod<typeof WS_METHODS.shareLinksRevoke>;
+  };
   readonly orchestration: {
     readonly dispatchCommand: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.dispatchCommand>;
     readonly getTurnDiff: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.getTurnDiff>;
@@ -492,6 +504,21 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.providerSharingPolicyUpdate](input)),
       updateMember: (input) =>
         transport.request((client) => client[WS_METHODS.providerSharingMemberUpdate](input)),
+    },
+    providerUsage: {
+      createRequest: (input) =>
+        transport.request((client) => client[WS_METHODS.providerUsageRequestCreate](input)),
+      listRequests: (input) =>
+        transport.request((client) => client[WS_METHODS.providerUsageRequestList](input)),
+      respondToRequest: (input) =>
+        transport.request((client) => client[WS_METHODS.providerUsageRequestRespond](input)),
+      withdrawRequest: (input) =>
+        transport.request((client) => client[WS_METHODS.providerUsageRequestWithdraw](input)),
+    },
+    shareLinks: {
+      create: (input) => transport.request((client) => client[WS_METHODS.shareLinksCreate](input)),
+      list: (input) => transport.request((client) => client[WS_METHODS.shareLinksList](input)),
+      revoke: (input) => transport.request((client) => client[WS_METHODS.shareLinksRevoke](input)),
     },
     orchestration: {
       dispatchCommand: (input) =>

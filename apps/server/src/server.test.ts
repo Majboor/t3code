@@ -124,6 +124,8 @@ import { AnalyticsRepositoryLive } from "./persistence/Layers/Analytics.ts";
 import { ProjectionThreadPreferenceRepositoryLive } from "./persistence/Layers/ProjectionThreadPreferences.ts";
 import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderSharing.ts";
 import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSharingService.ts";
+import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
+import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import {
   ProviderSharingRepository,
   type ProviderSharingRepositoryShape,
@@ -346,6 +348,17 @@ const providerSharingTestLayer = ProviderSharingRepositoryLive.pipe(
 // The sharing RPCs read the collaboration roster, so the test server needs the
 // same pairing the real one has rather than a repository on its own.
 const providerSharingServiceTestLayer = ProviderSharingServiceLive.pipe(
+  Layer.provide(providerSharingTestLayer),
+  Layer.provide(collaborationTestLayer),
+);
+
+const providerUsageRequestTestLayer = ProviderUsageRequestRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
+);
+
+// Answering a request writes sharing rows too, so it needs both repositories.
+const providerUsageServiceTestLayer = ProviderUsageServiceLive.pipe(
+  Layer.provide(providerUsageRequestTestLayer),
   Layer.provide(providerSharingTestLayer),
   Layer.provide(collaborationTestLayer),
 );
@@ -749,7 +762,13 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(analyticsTestLayer),
       Layer.provideMerge(deploymentRegistryTestLayer),
       Layer.provideMerge(packEnablementTestLayer),
-      Layer.provideMerge(Layer.mergeAll(collaborationTestLayer, providerSharingServiceTestLayer)),
+      Layer.provideMerge(
+        Layer.mergeAll(
+          collaborationTestLayer,
+          providerSharingServiceTestLayer,
+          providerUsageServiceTestLayer,
+        ),
+      ),
       Layer.provideMerge(organizationTestLayer),
       Layer.provideMerge(packRegistryTestLayer),
       Layer.provide(workspaceAndProjectServicesLayer),

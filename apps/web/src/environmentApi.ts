@@ -9,15 +9,30 @@ import type {
   ProviderSharingPolicyUpdateResult,
   ProviderSharingShareUpdateInput,
   ProviderSharingShareUpdateResult,
+  ProviderUsageRequestCreateInput,
+  ProviderUsageRequestCreateResult,
+  ProviderUsageRequestListInput,
+  ProviderUsageRequestListResult,
+  ProviderUsageRequestRespondInput,
+  ProviderUsageRequestRespondResult,
+  ProviderUsageRequestWithdrawInput,
+  ProviderUsageRequestWithdrawResult,
+  ShareLinkCreateInput,
+  ShareLinkCreateResult,
+  ShareLinkListInput,
+  ShareLinkListResult,
+  ShareLinkRevokeInput,
+  ShareLinkRevokeResult,
 } from "@t3tools/contracts";
 
 import type { WsRpcClient } from "./rpc/wsRpcClient";
 import { readEnvironmentConnection } from "./environments/runtime";
 
 /**
- * Provider sharing rides on `EnvironmentApi` rather than being spelled into it:
- * the shared contract is owned elsewhere, so the extra group is declared here
- * and everything the app resolves is typed as this, not the bare contract.
+ * Provider sharing and usage requests ride on `EnvironmentApi` rather than
+ * being spelled into it: the shared contract is owned elsewhere, so the extra
+ * groups are declared here and everything the app resolves is typed as this,
+ * not the bare contract.
  */
 export interface WebEnvironmentApi extends EnvironmentApi {
   providerSharing: {
@@ -32,6 +47,29 @@ export interface WebEnvironmentApi extends EnvironmentApi {
     updateMember: (
       input: ProviderSharingMemberUpdateInput,
     ) => Promise<ProviderSharingMemberUpdateResult>;
+  };
+  providerUsage: {
+    /** The requester is the session, so the input never names one. */
+    createRequest: (
+      input: ProviderUsageRequestCreateInput,
+    ) => Promise<ProviderUsageRequestCreateResult>;
+    listRequests: (input: ProviderUsageRequestListInput) => Promise<ProviderUsageRequestListResult>;
+    respondToRequest: (
+      input: ProviderUsageRequestRespondInput,
+    ) => Promise<ProviderUsageRequestRespondResult>;
+    withdrawRequest: (
+      input: ProviderUsageRequestWithdrawInput,
+    ) => Promise<ProviderUsageRequestWithdrawResult>;
+  };
+  shareLinks: {
+    /**
+     * The reply carries the token, and it is the only reply that ever will —
+     * `list` returns every other field of the same row without it. Whatever
+     * calls this owns the URL from here on.
+     */
+    create: (input: ShareLinkCreateInput) => Promise<ShareLinkCreateResult>;
+    list: (input: ShareLinkListInput) => Promise<ShareLinkListResult>;
+    revoke: (input: ShareLinkRevokeInput) => Promise<ShareLinkRevokeResult>;
   };
 }
 
@@ -163,6 +201,17 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): WebEnvironmentApi 
       updateShare: rpcClient.providerSharing.updateShare,
       updatePolicy: rpcClient.providerSharing.updatePolicy,
       updateMember: rpcClient.providerSharing.updateMember,
+    },
+    providerUsage: {
+      createRequest: rpcClient.providerUsage.createRequest,
+      listRequests: rpcClient.providerUsage.listRequests,
+      respondToRequest: rpcClient.providerUsage.respondToRequest,
+      withdrawRequest: rpcClient.providerUsage.withdrawRequest,
+    },
+    shareLinks: {
+      create: rpcClient.shareLinks.create,
+      list: rpcClient.shareLinks.list,
+      revoke: rpcClient.shareLinks.revoke,
     },
   };
 }

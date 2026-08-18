@@ -10,12 +10,14 @@ import { makeHistoryApi, type T3HistoryApi } from "./history.ts";
 import { makeOrganizationsApi, type T3OrganizationsApi } from "./organizations.ts";
 import { makePacksApi, type T3PacksApi } from "./packs.ts";
 import { makeProviderSharingApi, type T3ProviderSharingApi } from "./providerSharing.ts";
+import { makeProviderUsageApi, type T3ProviderUsageApi } from "./providerUsage.ts";
 import {
   makeProvidersApi,
   makeServerApi,
   type T3ProvidersApi,
   type T3ServerApi,
 } from "./server.ts";
+import { makeShareLinksApi, type T3ShareLinksApi } from "./shareLinks.ts";
 import { makeTerminalsApi, type T3TerminalsApi } from "./terminals.ts";
 import { makeThreadsApi, type T3ThreadsApi } from "./threads.ts";
 import { makeWorkspaceApi, type T3WorkspaceApi } from "./workspace.ts";
@@ -28,7 +30,9 @@ export * from "./history.ts";
 export * from "./organizations.ts";
 export * from "./packs.ts";
 export * from "./providerSharing.ts";
+export * from "./providerUsage.ts";
 export * from "./server.ts";
+export * from "./shareLinks.ts";
 export * from "./terminals.ts";
 export * from "./threads.ts";
 export * from "./workspace.ts";
@@ -52,6 +56,10 @@ export interface T3Api {
   readonly providers: T3ProvidersApi;
   /** Which provider account a workspace's turns run on, and who contributed it. */
   readonly providerSharing: T3ProviderSharingApi;
+  /** Members asking the workspace for usage, and contributors answering. */
+  readonly providerUsage: T3ProviderUsageApi;
+  /** Public links: a file, a project, or an invitation into a workspace. */
+  readonly shareLinks: T3ShareLinksApi;
   readonly server: T3ServerApi;
 }
 
@@ -68,6 +76,8 @@ export function createT3Api(transport: T3Transport): T3Api {
     terminals: makeTerminalsApi(transport),
     providers: makeProvidersApi(transport),
     providerSharing: makeProviderSharingApi(transport),
+    providerUsage: makeProviderUsageApi(transport),
+    shareLinks: makeShareLinksApi(transport),
     server: makeServerApi(transport),
   };
 }

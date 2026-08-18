@@ -6,6 +6,7 @@ const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
+const WRITE_CLIPBOARD_TEXT_CHANNEL = "desktop:write-clipboard-text";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
@@ -24,6 +25,10 @@ const SET_SAVED_ENVIRONMENT_SECRET_CHANNEL = "desktop:set-saved-environment-secr
 const REMOVE_SAVED_ENVIRONMENT_SECRET_CHANNEL = "desktop:remove-saved-environment-secret";
 const GET_SERVER_EXPOSURE_STATE_CHANNEL = "desktop:get-server-exposure-state";
 const SET_SERVER_EXPOSURE_MODE_CHANNEL = "desktop:set-server-exposure-mode";
+const WORKSPACE_SHARE_STATE_CHANNEL = "desktop:workspace-share-state";
+const WORKSPACE_SHARE_GET_STATE_CHANNEL = "desktop:workspace-share-get-state";
+const WORKSPACE_SHARE_START_CHANNEL = "desktop:workspace-share-start";
+const WORKSPACE_SHARE_STOP_CHANNEL = "desktop:workspace-share-stop";
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   getAppBranding: () => {
@@ -53,11 +58,26 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(REMOVE_SAVED_ENVIRONMENT_SECRET_CHANNEL, environmentId),
   getServerExposureState: () => ipcRenderer.invoke(GET_SERVER_EXPOSURE_STATE_CHANNEL),
   setServerExposureMode: (mode) => ipcRenderer.invoke(SET_SERVER_EXPOSURE_MODE_CHANNEL, mode),
+  getWorkspaceShareState: () => ipcRenderer.invoke(WORKSPACE_SHARE_GET_STATE_CHANNEL),
+  startWorkspaceShare: () => ipcRenderer.invoke(WORKSPACE_SHARE_START_CHANNEL),
+  stopWorkspaceShare: () => ipcRenderer.invoke(WORKSPACE_SHARE_STOP_CHANNEL),
+  onWorkspaceShareState: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+      if (typeof state !== "object" || state === null) return;
+      listener(state as Parameters<typeof listener>[0]);
+    };
+
+    ipcRenderer.on(WORKSPACE_SHARE_STATE_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(WORKSPACE_SHARE_STATE_CHANNEL, wrappedListener);
+    };
+  },
   pickFolder: (options) => ipcRenderer.invoke(PICK_FOLDER_CHANNEL, options),
   confirm: (message) => ipcRenderer.invoke(CONFIRM_CHANNEL, message),
   setTheme: (theme) => ipcRenderer.invoke(SET_THEME_CHANNEL, theme),
   showContextMenu: (items, position) => ipcRenderer.invoke(CONTEXT_MENU_CHANNEL, items, position),
   openExternal: (url: string) => ipcRenderer.invoke(OPEN_EXTERNAL_CHANNEL, url),
+  writeClipboardText: (text: string) => ipcRenderer.invoke(WRITE_CLIPBOARD_TEXT_CHANNEL, text),
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;

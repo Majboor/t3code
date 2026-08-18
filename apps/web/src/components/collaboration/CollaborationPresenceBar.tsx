@@ -238,6 +238,9 @@ export function CollaborationPresenceBar({
           <div className="mt-3">
             <ProviderSharingSection
               sharing={sharing}
+              environmentId={environmentId}
+              tenantId={tenantId}
+              workspaceId={workspaceId}
               workspaceTitle={ownership?.workspaceTitle ?? project?.name ?? null}
               onManage={() => {
                 setPanelOpen(false);

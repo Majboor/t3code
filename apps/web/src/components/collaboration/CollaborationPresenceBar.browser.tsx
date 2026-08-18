@@ -183,6 +183,13 @@ function makeEnvironmentApi(input: {
       updatePolicy: vi.fn(),
       updateMember: vi.fn(),
     },
+    // Same trap as sharing: the usage section reads on mount.
+    providerUsage: {
+      createRequest: vi.fn(),
+      listRequests: vi.fn(async () => ({ requests: [], canRespond: false })),
+      respondToRequest: vi.fn(),
+      withdrawRequest: vi.fn(),
+    },
     organizations: {
       list: vi.fn(async () => ({
         organizations: [],

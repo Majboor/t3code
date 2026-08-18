@@ -79,6 +79,17 @@ function pickOwnAccount(accounts: readonly DecidableOwnAccount[]): DecidableOwnA
 /** Where a person goes to fix this themselves, named the same way every time. */
 const CONNECT_YOUR_OWN = "Connect one in Settings → Connections";
 
+/**
+ * The other way out, for someone who has nothing to connect.
+ *
+ * Naming it in the refusal is the whole point: this text is read at the moment
+ * a turn stops, by the one person who needs to know that asking is possible.
+ * Telling them only to go and connect an account they may not have is a dead
+ * end, and a dead end is what this used to be.
+ */
+const ASK_THE_WORKSPACE =
+  "or open the collaboration panel and ask the workspace for usage";
+
 export function decideProviderAccount(input: DecideProviderAccountInput): ProviderAccountDecision {
   const { providerLabel } = input;
 
@@ -156,7 +167,7 @@ export function decideProviderAccount(input: DecideProviderAccountInput): Provid
     outcome: "refused",
     refusal:
       usableShared.length > 0
-        ? `No ${providerLabel} account is connected for you, and this workspace has not been set to let you use a shared one. ${CONNECT_YOUR_OWN}, or ask a workspace admin to let you use the workspace account.`
-        : `No ${providerLabel} account is connected for you. ${CONNECT_YOUR_OWN}, or ask a workspace admin to share one.`,
+        ? `No ${providerLabel} account is connected for you, and this workspace has not been set to let you use a shared one. ${CONNECT_YOUR_OWN}, ${ASK_THE_WORKSPACE}.`
+        : `No ${providerLabel} account is connected for you. ${CONNECT_YOUR_OWN}, ${ASK_THE_WORKSPACE}.`,
   };
 }

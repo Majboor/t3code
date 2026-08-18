@@ -1,4 +1,4 @@
-import type { ProviderAuthKind } from "@t3tools/contracts";
+import type { EnvironmentId, ProviderAuthKind, TenantId, WorkspaceId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { SettingsIcon } from "lucide-react";
 import { useState } from "react";
@@ -11,6 +11,7 @@ import {
   readViewerSharing,
   type ViewerProviderSharing,
 } from "./providerSharing.logic";
+import { ProviderUsageRequests } from "./ProviderUsageRequests";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
@@ -163,12 +164,23 @@ export function ProviderSharingSection({
   workspaceTitle,
   sharing,
   onManage,
+  environmentId = null,
+  tenantId = null,
+  workspaceId = null,
 }: {
   /** What people call this workspace; the switches are scoped to it. */
   workspaceTitle: string | null;
   sharing: ProviderSharing;
   /** Opens the admin dialog. Absent when there is nowhere to open it from. */
   onManage?: (() => void) | undefined;
+  /**
+   * Requests are read on their own call rather than folded into the sharing
+   * overview, so the usage half needs the scope again. Absent means the panel
+   * shows what is contributed and nothing about asking.
+   */
+  environmentId?: EnvironmentId | null;
+  tenantId?: TenantId | null;
+  workspaceId?: WorkspaceId | null;
 }) {
   const overview = sharing.overview;
   // Nothing has loaded, or this server does not answer: say nothing rather than
@@ -222,6 +234,16 @@ export function ProviderSharingSection({
           keeps it until it finishes.
         </p>
       ) : null}
+
+      <ProviderUsageRequests
+        environmentId={environmentId}
+        tenantId={tenantId}
+        workspaceId={workspaceId}
+        workspaceLabel={workspaceLabel}
+        viewerUserId={overview.viewerUserId}
+        viewerAccounts={overview.viewerAccounts}
+        workspaceAccounts={overview.workspaceAccounts}
+      />
     </div>
   );
 }

@@ -6,6 +6,8 @@ export * from "./terminal.ts";
 export * from "./provider.ts";
 export * from "./providerRuntime.ts";
 export * from "./providerSharing.ts";
+export * from "./providerUsage.ts";
+export * from "./shareLinks.ts";
 export * from "./model.ts";
 export * from "./keybindings.ts";
 export * from "./server.ts";

@@ -1,8 +1,9 @@
 import { ChartNoAxesColumnIcon, ServerIcon } from "lucide-react";
-import type { ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { OpenProjectInBrowserButton } from "./OpenProjectInBrowserButton";
 
 /**
  * Infrastructure and analytics, reachable from the thread.
@@ -12,7 +13,13 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
  * the numbers their deployment reports were a page they had to know existed and
  * navigate away to find.
  */
-export function ProjectSurfaceLinks({ projectId }: { projectId: ProjectId }) {
+export function ProjectSurfaceLinks({
+  environmentId,
+  projectId,
+}: {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+}) {
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       <Tooltip>
@@ -47,6 +54,7 @@ export function ProjectSurfaceLinks({ projectId }: { projectId: ProjectId }) {
         </TooltipTrigger>
         <TooltipPopup>Analytics — what its live deployments are reporting</TooltipPopup>
       </Tooltip>
+      <OpenProjectInBrowserButton environmentId={environmentId} projectId={projectId} />
     </div>
   );
 }

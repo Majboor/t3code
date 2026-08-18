@@ -654,7 +654,7 @@ describe("ProviderCommandReactor", () => {
     const detail = await waitForTurnStartFailure(harness);
     expect(detail).toContain("No Codex account is connected for you.");
     expect(detail).toContain("Connect one in Settings → Connections");
-    expect(detail).toContain("ask a workspace admin to share one");
+    expect(detail).toContain("ask the workspace for usage");
     expect(harness.startSession).not.toHaveBeenCalled();
   });
 

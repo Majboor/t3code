@@ -64,6 +64,8 @@ import {
   type ProviderSessionIsolation,
   ProviderSessionId,
   ProviderSharingError,
+  ProviderUsageError,
+  ShareLinkError,
   TenantId,
   TenantRuntimeId,
   type TenantPermission,
@@ -135,6 +137,8 @@ import { CollaborationService } from "./collaboration/Services/CollaborationServ
 import { OrganizationService } from "./organizations/Services/OrganizationService.ts";
 import { PackRegistryService } from "./packs/Services/PackRegistryService.ts";
 import { ProviderSharingService } from "./providerSharing/Services/ProviderSharingService.ts";
+import { ProviderUsageService } from "./providerUsage/Services/ProviderUsageService.ts";
+import { ShareLinkService } from "./shareLinks/Services/ShareLinkService.ts";
 import { TenancyRepository } from "./persistence/Services/Tenancy.ts";
 import { DeployService } from "./deploy/Services/DeployService.ts";
 import { DeploymentRegistry } from "./deploy/Services/DeploymentRegistry.ts";
@@ -760,6 +764,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const sessions = yield* SessionCredentialService;
       const collaboration = yield* CollaborationService;
       const providerSharing = yield* ProviderSharingService;
+      const providerUsage = yield* ProviderUsageService;
+      const shareLinks = yield* ShareLinkService;
       const organizations = yield* OrganizationService;
       const packRegistry = yield* PackRegistryService;
       const tenancyRepository = yield* TenancyRepository;
@@ -1511,6 +1517,46 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           Effect.mapError(
             () =>
               new ProviderSharingError({
+                code: "forbidden",
+                message: forbiddenMessage(permission),
+              }),
+          ),
+        );
+
+      /**
+       * The same coarse gate as sharing's, in this group's error vocabulary: an
+       * `Effect` failing with `ProviderSharingError` cannot be piped into a
+       * handler that must fail with `ProviderUsageError`, and widening either
+       * error to serve both would make every sharing caller narrow past codes
+       * about a request lifecycle it can never raise.
+       */
+      const ensureTenantPermissionForProviderUsage = (
+        tenantId: TenantId,
+        permission: TenantPermission,
+      ): Effect.Effect<void, ProviderUsageError> =>
+        ensureTenantPermission(tenantId, permission).pipe(
+          Effect.mapError(
+            () =>
+              new ProviderUsageError({
+                code: "forbidden",
+                message: forbiddenMessage(permission),
+              }),
+          ),
+        );
+
+      /**
+       * The coarse gate for share links, in this group's vocabulary. Whether
+       * the caller is a member of the particular workspace is the service's own
+       * roster check, which this deliberately does not duplicate.
+       */
+      const ensureTenantPermissionForShareLinks = (
+        tenantId: TenantId,
+        permission: TenantPermission,
+      ): Effect.Effect<void, ShareLinkError> =>
+        ensureTenantPermission(tenantId, permission).pipe(
+          Effect.mapError(
+            () =>
+              new ShareLinkError({
                 code: "forbidden",
                 message: forbiddenMessage(permission),
               }),
@@ -4400,6 +4446,104 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               (message) => new ProviderSharingError({ code: "forbidden", message }),
             ),
             { "rpc.aggregate": "provider-sharing" },
+          ),
+        [WS_METHODS.providerUsageRequestCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUsageRequestCreate,
+            withRateLimit(
+              // Asking is a statement about the caller's own situation, so it
+              // needs no more than the right to be in the workspace; the
+              // service takes the requester from the session and checks the
+              // roster itself.
+              ensureTenantPermissionForProviderUsage(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => providerUsage.createRequest(actor, input)),
+              ),
+              (message) => new ProviderUsageError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "provider-usage" },
+          ),
+        [WS_METHODS.providerUsageRequestList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUsageRequestList,
+            withRateLimit(
+              ensureTenantPermissionForProviderUsage(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => providerUsage.listRequests(actor, input)),
+              ),
+              (message) => new ProviderUsageError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "provider-usage" },
+          ),
+        [WS_METHODS.providerUsageRequestRespond]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUsageRequestRespond,
+            withRateLimit(
+              // Lending your own account is not a workspace-admin act, so this
+              // asks for no more than membership either; whether the caller
+              // actually owns the account being granted is the service's check.
+              ensureTenantPermissionForProviderUsage(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => providerUsage.respondToRequest(actor, input)),
+              ),
+              (message) => new ProviderUsageError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "provider-usage" },
+          ),
+        [WS_METHODS.providerUsageRequestWithdraw]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUsageRequestWithdraw,
+            withRateLimit(
+              ensureTenantPermissionForProviderUsage(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => providerUsage.withdrawRequest(actor, input)),
+              ),
+              (message) => new ProviderUsageError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "provider-usage" },
+          ),
+        [WS_METHODS.shareLinksCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.shareLinksCreate,
+            withRateLimit(
+              // `workspace.edit`, not `workspace.view`. Minting one of these
+              // publishes a workspace's files to anyone the URL reaches, which
+              // is a change to what the workspace is, not a read of it — a
+              // viewer-only role must not be able to make one.
+              ensureTenantPermissionForShareLinks(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => shareLinks.create(actor, input)),
+              ),
+              (message) => new ShareLinkError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "share-links" },
+          ),
+        [WS_METHODS.shareLinksList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.shareLinksList,
+            withRateLimit(
+              ensureTenantPermissionForShareLinks(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => shareLinks.list(actor, input)),
+              ),
+              (message) => new ShareLinkError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "share-links" },
+          ),
+        [WS_METHODS.shareLinksRevoke]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.shareLinksRevoke,
+            withRateLimit(
+              // Deliberately no stricter than creating. Switching a link off is
+              // the safe direction, and anyone who can be trusted to hand out
+              // access has to be able to take it back without finding an admin.
+              ensureTenantPermissionForShareLinks(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => shareLinks.revoke(actor, input)),
+              ),
+              (message) => new ShareLinkError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "share-links" },
           ),
         [WS_METHODS.packsPublish]: (input) =>
           observeRpcEffect(

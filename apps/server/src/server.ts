@@ -97,7 +97,10 @@ import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
 import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderSharing.ts";
+import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
+import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
 import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSharingService.ts";
+import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
@@ -295,6 +298,16 @@ const ProviderSharingRepositoryLayerLive = ProviderSharingRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 
+/** Public links: minted by the panel, redeemed with no session at all. */
+const ShareLinkRepositoryLayerLive = ShareLinkRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
+/** The asks that sit on top of sharing: who wants usage, and who answered. */
+const ProviderUsageRequestRepositoryLayerLive = ProviderUsageRequestRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 const AnalyticsRepositoryLayerLive = AnalyticsRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
@@ -321,6 +334,8 @@ const DeployLayerLive = DeployServiceLive.pipe(
 const PersistenceServicesLayerLive = Layer.mergeAll(
   TenancyRepositoryLayerLive,
   ProviderSharingRepositoryLayerLive,
+  ProviderUsageRequestRepositoryLayerLive,
+  ShareLinkRepositoryLayerLive,
   ThreadPreferenceLayerLive,
   DeployLayerLive,
   AnalyticsLayerLive,
@@ -351,6 +366,17 @@ const ProviderSharingLayerLive = ProviderSharingServiceLive.pipe(
   Layer.provide(CollaborationLayerLive),
 );
 
+/**
+ * Answering a request contributes an account, so this reaches the sharing rows
+ * as well as its own: a request marked granted while nothing was actually lent
+ * would be the feature failing quietly.
+ */
+const ProviderUsageLayerLive = ProviderUsageServiceLive.pipe(
+  Layer.provide(ProviderUsageRequestRepositoryLayerLive),
+  Layer.provide(ProviderSharingRepositoryLayerLive),
+  Layer.provide(CollaborationLayerLive),
+);
+
 const PackRegistryLayerLive = PackRegistryServiceLive.pipe(
   Layer.provide(PackRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
   Layer.provide(CollaborationLayerLive),
@@ -366,6 +392,7 @@ const PackEnablementLayerLive = PackEnablementServiceLive.pipe(
 const TenantServicesLayerLive = Layer.mergeAll(
   CollaborationLayerLive,
   ProviderSharingLayerLive,
+  ProviderUsageLayerLive,
   OrganizationLayerLive,
   PackRegistryLayerLive,
   PackEnablementLayerLive,

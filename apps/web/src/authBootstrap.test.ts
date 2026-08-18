@@ -48,7 +48,7 @@ function installTestBrowser(url: string) {
   };
 
   vi.stubGlobal("window", testWindow);
-  vi.stubGlobal("document", { title: "T3 Code" });
+  vi.stubGlobal("document", { title: "LogicPacks" });
   vi.stubGlobal("localStorage", createTestStorage());
 
   return testWindow;

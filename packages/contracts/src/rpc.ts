@@ -239,6 +239,26 @@ import {
   ProviderSharingShareUpdateResult,
 } from "./providerSharing.ts";
 import {
+  ShareLinkCreateInput,
+  ShareLinkCreateResult,
+  ShareLinkError,
+  ShareLinkListInput,
+  ShareLinkListResult,
+  ShareLinkRevokeInput,
+  ShareLinkRevokeResult,
+} from "./shareLinks.ts";
+import {
+  ProviderUsageError,
+  ProviderUsageRequestCreateInput,
+  ProviderUsageRequestCreateResult,
+  ProviderUsageRequestListInput,
+  ProviderUsageRequestListResult,
+  ProviderUsageRequestRespondInput,
+  ProviderUsageRequestRespondResult,
+  ProviderUsageRequestWithdrawInput,
+  ProviderUsageRequestWithdrawResult,
+} from "./providerUsage.ts";
+import {
   IsoDateTime,
   TenantId,
   TrimmedNonEmptyString,
@@ -318,6 +338,18 @@ export const WS_METHODS = {
   providerSharingShareUpdate: "providerSharing.share.update",
   providerSharingPolicyUpdate: "providerSharing.policy.update",
   providerSharingMemberUpdate: "providerSharing.member.update",
+
+  // Asking the workspace for provider usage
+  providerUsageRequestCreate: "providerUsage.request.create",
+  providerUsageRequestList: "providerUsage.request.list",
+  providerUsageRequestRespond: "providerUsage.request.respond",
+  providerUsageRequestWithdraw: "providerUsage.request.withdraw",
+
+  // Public share links. Managing them is authenticated; following one is not,
+  // which is why redemption is an HTTP route and never appears here.
+  shareLinksCreate: "shareLinks.create",
+  shareLinksList: "shareLinks.list",
+  shareLinksRevoke: "shareLinks.revoke",
 
   // Streaming subscriptions
   subscribeGitStatus: "subscribeGitStatus",
@@ -487,6 +519,48 @@ export const WsProviderSharingMemberUpdateRpc = Rpc.make(WS_METHODS.providerShar
   payload: ProviderSharingMemberUpdateInput,
   success: ProviderSharingMemberUpdateResult,
   error: ProviderSharingError,
+});
+
+export const WsProviderUsageRequestCreateRpc = Rpc.make(WS_METHODS.providerUsageRequestCreate, {
+  payload: ProviderUsageRequestCreateInput,
+  success: ProviderUsageRequestCreateResult,
+  error: ProviderUsageError,
+});
+
+export const WsProviderUsageRequestListRpc = Rpc.make(WS_METHODS.providerUsageRequestList, {
+  payload: ProviderUsageRequestListInput,
+  success: ProviderUsageRequestListResult,
+  error: ProviderUsageError,
+});
+
+export const WsProviderUsageRequestRespondRpc = Rpc.make(WS_METHODS.providerUsageRequestRespond, {
+  payload: ProviderUsageRequestRespondInput,
+  success: ProviderUsageRequestRespondResult,
+  error: ProviderUsageError,
+});
+
+export const WsProviderUsageRequestWithdrawRpc = Rpc.make(WS_METHODS.providerUsageRequestWithdraw, {
+  payload: ProviderUsageRequestWithdrawInput,
+  success: ProviderUsageRequestWithdrawResult,
+  error: ProviderUsageError,
+});
+
+export const WsShareLinksCreateRpc = Rpc.make(WS_METHODS.shareLinksCreate, {
+  payload: ShareLinkCreateInput,
+  success: ShareLinkCreateResult,
+  error: ShareLinkError,
+});
+
+export const WsShareLinksListRpc = Rpc.make(WS_METHODS.shareLinksList, {
+  payload: ShareLinkListInput,
+  success: ShareLinkListResult,
+  error: ShareLinkError,
+});
+
+export const WsShareLinksRevokeRpc = Rpc.make(WS_METHODS.shareLinksRevoke, {
+  payload: ShareLinkRevokeInput,
+  success: ShareLinkRevokeResult,
+  error: ShareLinkError,
 });
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
@@ -1315,6 +1389,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderSharingShareUpdateRpc,
   WsProviderSharingPolicyUpdateRpc,
   WsProviderSharingMemberUpdateRpc,
+  WsProviderUsageRequestCreateRpc,
+  WsProviderUsageRequestListRpc,
+  WsProviderUsageRequestRespondRpc,
+  WsProviderUsageRequestWithdrawRpc,
+  WsShareLinksCreateRpc,
+  WsShareLinksListRpc,
+  WsShareLinksRevokeRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsListDirectoryRpc,
   WsProjectsReadFileRpc,

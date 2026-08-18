@@ -82,8 +82,8 @@ function resolveCredentials(options: T3ClientOptions): T3Credentials {
  *
  * The grouped API on `workspace`, `threads`, `history`, `changes`,
  * `collaboration`, `packs`, `organizations`, `deploys`, `terminals`, `providers`,
- * `providerSharing`, and `server` covers the whole surface; the flat methods below are shorthands for
- * the handful of things scripts reach for first.
+ * `providerSharing`, `providerUsage`, `shareLinks`, and `server` covers the whole surface; the flat methods below
+ * are shorthands for the handful of things scripts reach for first.
  */
 export class T3Client implements T3Api {
   private readonly connection: T3Connection;
@@ -102,6 +102,8 @@ export class T3Client implements T3Api {
   readonly terminals: T3Api["terminals"];
   readonly providers: T3Api["providers"];
   readonly providerSharing: T3Api["providerSharing"];
+  readonly providerUsage: T3Api["providerUsage"];
+  readonly shareLinks: T3Api["shareLinks"];
   readonly server: T3Api["server"];
 
   private constructor(input: {
@@ -124,6 +126,8 @@ export class T3Client implements T3Api {
     this.terminals = this.api.terminals;
     this.providers = this.api.providers;
     this.providerSharing = this.api.providerSharing;
+    this.providerUsage = this.api.providerUsage;
+    this.shareLinks = this.api.shareLinks;
     this.server = this.api.server;
   }
 

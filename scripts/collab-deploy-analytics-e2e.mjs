@@ -599,6 +599,50 @@ async function deployAndWait({ page, instruction, healthUrl, buildId }) {
   return { sent, result, nudges };
 }
 
+const TUNNEL_ADDRESS = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+
+/** The address the deploy registered, which is the product's own record of it. */
+function registeredAddressFor(projectId) {
+  const database = path.join(BASE_DIR, "dev", "state.sqlite");
+  if (!existsSync(database) || !projectId) return null;
+  try {
+    const url = execFileSync("sqlite3", [
+      database,
+      `select url from deployments where project_id = '${projectId.replaceAll("'", "''")}' and url is not null order by updated_at desc limit 1;`,
+    ])
+      .toString()
+      .trim();
+    return TUNNEL_ADDRESS.exec(url)?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where the tunnel ended up, from whichever of the two places says so first.
+ *
+ * This used to read the thread once, the moment the health check passed. Two
+ * things make that wrong: the address is registered at the *end* of the deploy
+ * turn, after the build is already being served, and the agent narrating it in
+ * prose is a courtesy rather than the record. A run failed here on a deployment
+ * whose row carried a working tunnel address a few seconds later.
+ *
+ * So it polls, and it accepts the deployment record as well as the thread — the
+ * record is what the product actually stores and what the Infrastructure tab
+ * reads. Reachability is still checked afterwards either way, which is the part
+ * that would catch a tunnel that was published but does not serve.
+ */
+async function waitForTunnelAddress(page, projectId, timeoutMs = 90_000) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const said = await bodyText(page);
+    const printed = TUNNEL_ADDRESS.exec(said)?.[0] ?? registeredAddressFor(projectId);
+    if (printed) return printed;
+    await sleep(5_000);
+  } while (Date.now() < deadline);
+  return null;
+}
+
 /** Says how a deploy went, naming the chasing it needed rather than hiding it. */
 function describeDeploy(buildId, { result, nudges }) {
   const chased = nudges === 0 ? "" : ` (after ${nudges} nudge${nudges === 1 ? "" : "s"})`;
@@ -651,19 +695,46 @@ async function readAnalyticsTab(page, projectId, stream) {
   return { body, mentionsStream: body.includes(stream) };
 }
 
-async function readInfraTab(page, projectId) {
-  await page.goto(`${BASE_URL}/infra/${projectId}`, {
-    waitUntil: "domcontentloaded",
-    timeout: 60_000,
-  });
-  await sleep(8_000);
-  const rows = page.locator('[data-testid="infra-deployment"]');
-  const count = await rows.count();
-  const loads = await page.locator('[data-testid="infra-deployment-load"]').allInnerTexts();
-  const events = await rows.evaluateAll((nodes) =>
-    nodes.map((node) => node.getAttribute("data-events")),
-  );
-  return { count, loads, events, body: await bodyText(page) };
+/**
+ * What the Infrastructure tab says, once it has had the chance to say it.
+ *
+ * The load figure is the last thing in the whole chain to become true. A deploy
+ * registers the deployment against its stream at the *end* of the turn, and the
+ * health check that gates the previous step only proves the new build is being
+ * served — so a single read taken right after it catches the row in the window
+ * where it is live, listed, and not yet wired, and reports "not wired to
+ * analytics" about a deployment that is about to be. That is what failed here,
+ * on a deployment whose row carried its stream a moment later.
+ *
+ * So this polls, like every other eventually-consistent assertion in this file.
+ * It stops early on a measured load, and still returns whatever was on screen
+ * when the deadline passed, so a genuine wiring failure reports the real text
+ * rather than a timeout.
+ */
+async function readInfraTab(page, projectId, { waitForLoadMs = 90_000 } = {}) {
+  const deadline = Date.now() + waitForLoadMs;
+  let seen = null;
+
+  do {
+    await page.goto(`${BASE_URL}/infra/${projectId}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await sleep(8_000);
+    const rows = page.locator('[data-testid="infra-deployment"]');
+    const count = await rows.count();
+    const loads = await page.locator('[data-testid="infra-deployment-load"]').allInnerTexts();
+    const events = await rows.evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("data-events")),
+    );
+    seen = { count, loads, events, body: await bodyText(page) };
+
+    // A measured load is a number, including zero. `null` is the unwired state
+    // this is waiting out.
+    if (events.some((value) => value !== null)) return seen;
+  } while (Date.now() < deadline);
+
+  return seen;
 }
 
 // ── one artifact, start to finish ───────────────────────────────────────────
@@ -725,12 +796,11 @@ async function runArtifact(browser, artifact, index) {
     if (!first.ok) throw new Error("nothing was deployed to change");
 
     if (artifact.mode === "tunnel") {
-      const said = await bodyText(owner.page);
-      const printed = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(said)?.[0] ?? null;
+      const printed = await waitForTunnelAddress(owner.page, projectId);
       check(
-        `${artifact.kind}: the agent reports a tunnel address`,
+        `${artifact.kind}: the deploy publishes a tunnel address`,
         Boolean(printed),
-        printed ?? "no trycloudflare address in the thread",
+        printed ?? "no trycloudflare address in the thread or on the deployment",
       );
       if (printed) {
         address = printed;

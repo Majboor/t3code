@@ -191,7 +191,12 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
-        {activeProjectId ? <ProjectSurfaceLinks projectId={activeProjectId} /> : null}
+        {activeProjectId ? (
+          <ProjectSurfaceLinks
+            environmentId={activeThreadEnvironmentId}
+            projectId={activeProjectId}
+          />
+        ) : null}
         <InlinePanelToggles
           terminalAvailable={terminalAvailable}
           terminalOpen={terminalOpen}

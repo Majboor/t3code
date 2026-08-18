@@ -86,6 +86,9 @@ import { basenameOfPath } from "~/vscode-icons";
 
 import { DiffStatLabel, FileStatusBadge, hasNonZeroStat } from "./chat/DiffStatLabel";
 import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
+import { mintAndCopyShareLink } from "./shareLinks/mintShareLink";
+import { ShareFileLinkButton } from "./shareLinks/ShareFileLinkButton";
+import { ShareLinksPanel } from "./shareLinks/ShareLinksPanel";
 import { WorkspaceAgentDiffPreview } from "./WorkspaceAgentDiffPreview";
 import {
   WorkspacePanelLoadingState,
@@ -378,39 +381,47 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
         props.onOpenFile(entry.path);
       }}
     >
-      <VscodeEntryIcon
-        pathValue={entry.path}
-        kind="file"
-        theme={resolvedTheme}
-        className="size-3.5"
-      />
-      <span className="truncate text-xs">{entry.name}</span>
-      {props.author ? (
-        <span
-          className="ml-1 size-1.5 shrink-0 rounded-full"
-          style={{ backgroundColor: authorColor(props.author.userId) }}
-          title={`Last changed by ${props.author.displayName}`}
-          data-testid="workspace-entry-author"
-          data-author={props.author.displayName}
+        <VscodeEntryIcon
+          pathValue={entry.path}
+          kind="file"
+          theme={resolvedTheme}
+          className="size-3.5"
+        />
+        <span className="truncate text-xs">{entry.name}</span>
+        {props.author ? (
+          <span
+            className="ml-1 size-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: authorColor(props.author.userId) }}
+            title={`Last changed by ${props.author.displayName}`}
+            data-testid="workspace-entry-author"
+            data-author={props.author.displayName}
+          />
+        ) : null}
+        {props.changed || props.status ? (
+          <span
+            className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums"
+            data-workspace-entry-diff-state={entry.path}
+          >
+            {props.status ? <FileStatusBadge status={props.status} /> : null}
+            {props.diffStat && hasNonZeroStat(props.diffStat) ? (
+              <DiffStatLabel
+                additions={props.diffStat.additions}
+                deletions={props.diffStat.deletions}
+              />
+            ) : props.changed && !props.status ? (
+              <span className="text-primary/80">changed</span>
+            ) : null}
+          </span>
+        ) : null}
+      </button>
+      {props.onCopyShareLink ? (
+        <ShareFileLinkButton
+          relativePath={entry.path}
+          onCopyShareLink={props.onCopyShareLink}
+          className="ml-1"
         />
       ) : null}
-      {props.changed || props.status ? (
-        <span
-          className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums"
-          data-workspace-entry-diff-state={entry.path}
-        >
-          {props.status ? <FileStatusBadge status={props.status} /> : null}
-          {props.diffStat && hasNonZeroStat(props.diffStat) ? (
-            <DiffStatLabel
-              additions={props.diffStat.additions}
-              deletions={props.diffStat.deletions}
-            />
-          ) : props.changed && !props.status ? (
-            <span className="text-primary/80">changed</span>
-          ) : null}
-        </span>
-      ) : null}
-    </button>
+    </div>
   );
 });
 
@@ -2342,6 +2353,34 @@ export default function WorkspacePanel({
     [activeEnvironmentId, collaborationScope],
   );
 
+  const shareProjectId = activeProject?.id ?? null;
+  /**
+   * The tree's one-click share. Minting and copying are the same act because
+   * the token is in the creation reply and in no other, so this resolves only
+   * once the URL is on the clipboard.
+   */
+  const copyFileShareLink = useCallback(
+    async (relativePath: string) => {
+      if (!activeEnvironmentId || !collaborationScope || !shareProjectId) {
+        return;
+      }
+      await mintAndCopyShareLink({
+        environmentId: activeEnvironmentId,
+        failureTitle: "Could not share that file",
+        create: {
+          tenantId: collaborationScope.tenantId,
+          workspaceId: collaborationScope.workspaceId,
+          scope: "file",
+          projectId: shareProjectId,
+          filePath: relativePath,
+        },
+      });
+    },
+    [activeEnvironmentId, collaborationScope, shareProjectId],
+  );
+  /** Off unless this workspace has a tenancy a public link could come out of. */
+  const canShareLinks = activeEnvironmentId !== null && collaborationScope !== null;
+
   const saveActiveFile = useCallback(async () => {
     if (!activeEnvironmentId || !activeWorkspaceRoot || !activeFilePath || !activeFileState) {
       return;
@@ -2662,6 +2701,11 @@ export default function WorkspacePanel({
             author={entry.kind === "file" ? (workspaceAuthorByPath.get(entryPath) ?? null) : null}
             onToggleDirectory={toggleDirectory}
             onOpenFile={openFile}
+            onCopyShareLink={
+              entry.kind === "file" && canShareLinks && shareProjectId
+                ? copyFileShareLink
+                : undefined
+            }
             onSelectEntry={setSelectedEntry}
             onDirectoryDrop={handleDirectoryDrop}
             onDirectoryDragOver={handleDirectoryDragOver}
@@ -2674,6 +2718,8 @@ export default function WorkspacePanel({
         );
       }),
     [
+      canShareLinks,
+      copyFileShareLink,
       directoryEntriesByPath,
       dropTargetDirectoryPath,
       expandedDirectoriesByPath,
