@@ -27,6 +27,7 @@ import {
   LoaderCircleIcon,
   RefreshCcwIcon,
   SaveIcon,
+  Share2Icon,
   XIcon,
 } from "lucide-react";
 import {
@@ -313,6 +314,8 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   author?: { userId: string; displayName: string } | null;
   onToggleDirectory: (directoryPath: string) => void;
   onOpenFile: (relativePath: string) => void;
+  /** Absent when this workspace has no tenancy to hand a public link out of. */
+  onCopyShareLink?: ((relativePath: string) => Promise<void>) | undefined;
   onSelectEntry: (entry: Pick<ProjectDirectoryEntry, "kind" | "path">) => void;
   onDirectoryDrop: (event: DragEvent<HTMLButtonElement>, directoryPath: string) => void;
   onDirectoryDragOver: (event: DragEvent<HTMLButtonElement>, directoryPath: string) => void;
@@ -366,21 +369,25 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   }
 
   return (
-    <button
-      type="button"
-      className={cn(
-        "flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors",
-        props.selected
-          ? "bg-accent text-accent-foreground"
-          : "text-muted-foreground/80 hover:bg-accent/70 hover:text-foreground",
-        props.changed && "text-foreground/90",
-      )}
-      style={{ paddingLeft: `${paddingLeft + 18}px` }}
-      onClick={() => {
-        props.onSelectEntry(entry);
-        props.onOpenFile(entry.path);
-      }}
-    >
+    // A row action cannot be nested inside the row's own button, so the file
+    // row is a flex line holding the open-the-file button and the share control
+    // side by side.
+    <div className="group/entry flex w-full items-center pr-2">
+      <button
+        type="button"
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left transition-colors",
+          props.selected
+            ? "bg-accent text-accent-foreground"
+            : "text-muted-foreground/80 hover:bg-accent/70 hover:text-foreground",
+          props.changed && "text-foreground/90",
+        )}
+        style={{ paddingLeft: `${paddingLeft + 18}px` }}
+        onClick={() => {
+          props.onSelectEntry(entry);
+          props.onOpenFile(entry.path);
+        }}
+      >
         <VscodeEntryIcon
           pathValue={entry.path}
           kind="file"
@@ -622,6 +629,7 @@ export default function WorkspacePanel({
     kind: null,
   });
   const [compactExplorerOpen, setCompactExplorerOpen] = useState(true);
+  const [shareLinksOpen, setShareLinksOpen] = useState(false);
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [loadingFilePath, setLoadingFilePath] = useState<string | null>(null);
@@ -2731,6 +2739,7 @@ export default function WorkspacePanel({
       resolvedTheme,
       resolveLatestVisibleDiffState,
       selectedEntry.path,
+      shareProjectId,
       toggleDirectory,
       workingTreeStatusByPath,
       workspaceAuthorByPath,
@@ -2953,8 +2962,37 @@ export default function WorkspacePanel({
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">Upload files</TooltipPopup>
               </Tooltip>
+              {canShareLinks ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => setShareLinksOpen((current) => !current)}
+                        aria-label="Share links"
+                        aria-pressed={shareLinksOpen}
+                      />
+                    }
+                  >
+                    <Share2Icon className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">Share links</TooltipPopup>
+                </Tooltip>
+              ) : null}
             </div>
           </div>
+          {canShareLinks && shareLinksOpen ? (
+            <ShareLinksPanel
+              environmentId={activeEnvironmentId}
+              tenantId={collaborationScope?.tenantId ?? null}
+              workspaceId={collaborationScope?.workspaceId ?? null}
+              projectId={shareProjectId}
+              projectLabel={activeProject?.name ?? workspaceLabel}
+              workspaceLabel={workspaceLabel}
+              onClose={() => setShareLinksOpen(false)}
+            />
+          ) : null}
           <div
             className={cn(
               "min-h-0 flex-1 overflow-auto px-2 py-2",

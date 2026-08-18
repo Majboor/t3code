@@ -53,13 +53,14 @@ export function useShareLinks(input: {
   const [loaded, setLoaded] = useState(false);
   const requestSequenceRef = useRef(0);
 
-  const scope = useMemo(
+  /** Named apart from a link's `scope`, which is a different thing entirely. */
+  const tenancy = useMemo(
     () => (tenantId && workspaceId ? { tenantId, workspaceId } : null),
     [tenantId, workspaceId],
   );
 
   const refresh = useCallback(() => {
-    if (!environmentId || !scope) {
+    if (!environmentId || !tenancy) {
       return;
     }
     const api = readEnvironmentApi(environmentId);
@@ -72,7 +73,7 @@ export function useShareLinks(input: {
     const sequence = requestSequenceRef.current;
 
     api.shareLinks
-      .list(scope)
+      .list(tenancy)
       .then((result) => {
         if (sequence === requestSequenceRef.current) {
           setLinks(result.links);
@@ -80,7 +81,7 @@ export function useShareLinks(input: {
         }
       })
       .catch(() => undefined);
-  }, [environmentId, scope]);
+  }, [environmentId, tenancy]);
 
   useEffect(() => {
     refresh();
@@ -88,7 +89,7 @@ export function useShareLinks(input: {
 
   const mint = useCallback<ShareLinksState["mint"]>(
     async (draft) => {
-      if (!environmentId || !scope) {
+      if (!environmentId || !tenancy) {
         return null;
       }
       const target = checkShareLinkTarget({
@@ -109,7 +110,7 @@ export function useShareLinks(input: {
         environmentId,
         failureTitle: "Could not make the link",
         create: {
-          ...scope,
+          ...tenancy,
           scope: draft.scope,
           projectId: target.projectId,
           filePath: target.filePath,
@@ -119,12 +120,12 @@ export function useShareLinks(input: {
       refresh();
       return minted;
     },
-    [environmentId, projectId, refresh, scope],
+    [environmentId, projectId, refresh, tenancy],
   );
 
   const revoke = useCallback<ShareLinksState["revoke"]>(
     async (linkId) => {
-      if (!environmentId || !scope) {
+      if (!environmentId || !tenancy) {
         return;
       }
       const api = readEnvironmentApi(environmentId);
@@ -132,7 +133,7 @@ export function useShareLinks(input: {
         return;
       }
       try {
-        await api.shareLinks.revoke({ ...scope, linkId });
+        await api.shareLinks.revoke({ ...tenancy, linkId });
       } catch (error: unknown) {
         const notice = describeShareLinkFailure(error, {
           fallbackTitle: "Could not switch that link off",
@@ -148,7 +149,7 @@ export function useShareLinks(input: {
         refresh();
       }
     },
-    [environmentId, refresh, scope],
+    [environmentId, refresh, tenancy],
   );
 
   return { links, loaded, refresh, mint, revoke };

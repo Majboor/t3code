@@ -9,10 +9,17 @@ import {
   AuthRevokePairingLinkInput,
   AuthUpdateUserProfileInput,
   type AuthWebSocketTokenResult,
+  type ServerAuthPolicy,
 } from "@t3tools/contracts";
 import { DateTime, Effect, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
+import { ServerConfig } from "../config.ts";
+import {
+  authPolicyAutoIssuesOwnerSessions,
+  isBasicAuthEnabled,
+  resolveConfiguredAuthPolicy,
+} from "./Layers/ServerAuthPolicy.ts";
 import { AuthError, ServerAuth } from "./Services/ServerAuth.ts";
 import { SessionCredentialService } from "./Services/SessionCredentialService.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
@@ -47,22 +54,159 @@ export const respondToAuthError = (error: AuthError) =>
     );
   });
 
+/**
+ * Header names that nothing but an intermediary puts on a request.
+ *
+ * A browser talking straight to this port sends none of them; a tunnel, reverse
+ * proxy, or load balancer adds at least one, because that is how the real client
+ * address survives the hop. Their presence is therefore evidence that the socket's
+ * 127.0.0.1 belongs to the proxy and not to the person we would be handing an
+ * owner session to.
+ *
+ * What this does NOT cover, stated plainly for whoever is deciding whether it is
+ * safe to expose their laptop:
+ * - Anything that can already open a TCP connection to this port — other local
+ *   users, other processes, a browser tab on this machine following a link — can
+ *   forge these headers. That only ever *costs* the forger a session, so the
+ *   failure direction is safe, but do not read this list as an authenticator.
+ * - A proxy configured to strip forwarding headers defeats it entirely. Nothing
+ *   about such a request is distinguishable from a local browser, which is why
+ *   `publishedBeyondLoopback` exists and why the desktop tunnel refuses to start
+ *   in front of an auto-issuing policy instead of relying on this check.
+ */
+const PROXY_EVIDENCE_HEADERS = [
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-real-ip",
+  "x-original-forwarded-for",
+  "cf-connecting-ip",
+  "cf-ray",
+  "cf-visitor",
+] as const;
+
+export const LOCAL_SESSION_REFUSED_HEADER = "x-t3-auth-local-session-refused";
+export const LOCAL_SESSION_REFUSED_REASON_HEADER = "x-t3-auth-local-session-refused-reason";
+
+export function detectForwardingProxyHeader(
+  headers: Readonly<Record<string, string | undefined>>,
+): string | null {
+  for (const header of PROXY_EVIDENCE_HEADERS) {
+    const value = headers[header];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return header;
+    }
+  }
+  return null;
+}
+
+export interface LocalOwnerSessionRefusal {
+  readonly code: "server-published" | "request-forwarded";
+  readonly message: string;
+}
+
+export type LocalOwnerSessionDecision =
+  | { readonly issue: true }
+  /** `refusal === null` means the policy never auto-issued; there is nothing to explain. */
+  | { readonly issue: false; readonly refusal: LocalOwnerSessionRefusal | null };
+
+/**
+ * Decides whether this request may be handed an owner session on the strength of
+ * looking local.
+ *
+ * The policy alone is not enough to answer that. `loopback-browser` and
+ * `unsafe-no-auth` mean "the only thing that can reach this socket is the person
+ * who started it", and the moment a tunnel or proxy is in front of the port that
+ * sentence is false while every signal the socket offers still says 127.0.0.1.
+ * So the policy states the intent and the two checks below test whether the
+ * intent still holds.
+ */
+export function decideAutoIssuedOwnerSession(input: {
+  readonly configuredPolicy: ServerAuthPolicy;
+  readonly publishedBeyondLoopback: boolean;
+  readonly basicAuthEnabled: boolean;
+  readonly forwardedByHeader: string | null;
+}): LocalOwnerSessionDecision {
+  if (!authPolicyAutoIssuesOwnerSessions(input.configuredPolicy)) {
+    return { issue: false, refusal: null };
+  }
+
+  // Basic auth is checked by middleware in front of every route, so a request
+  // that got here proved it knows the password. Loopback is not what is trusted.
+  if (input.basicAuthEnabled) {
+    return { issue: true };
+  }
+
+  if (input.publishedBeyondLoopback) {
+    return {
+      issue: false,
+      refusal: {
+        code: "server-published",
+        message:
+          "This server was started as published beyond loopback, so it will not issue an owner session just because a request arrived from 127.0.0.1. Pair with a one-time token, or restart it without publishing it.",
+      },
+    };
+  }
+
+  if (input.forwardedByHeader) {
+    return {
+      issue: false,
+      refusal: {
+        code: "request-forwarded",
+        message: `This request was relayed by a proxy (${input.forwardedByHeader}), so its loopback address is the proxy's and not proof that the caller is at this machine. Pair with a one-time token instead.`,
+      },
+    };
+  }
+
+  return { issue: true };
+}
+
 export const authSessionRouteLayer = HttpRouter.add(
   "GET",
   "/api/auth/session",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    const config = yield* ServerConfig;
     const serverAuth = yield* ServerAuth;
     const sessions = yield* SessionCredentialService;
     const session = yield* serverAuth.getSessionState(request);
-    if (
-      session.authenticated ||
-      session.auth.localPassword ||
-      session.auth.supabase ||
-      (session.auth.policy !== "loopback-browser" && session.auth.policy !== "unsafe-no-auth")
-    ) {
+    if (session.authenticated || session.auth.localPassword || session.auth.supabase) {
       return HttpServerResponse.jsonUnsafe(session, { status: 200 });
     }
+
+    // Read the posture from configuration rather than from the advertised
+    // descriptor: a published server advertises `remote-reachable`, and that
+    // rewrite would otherwise hide the reason this route is refusing.
+    const configuredPolicy = resolveConfiguredAuthPolicy(config);
+    const decision = decideAutoIssuedOwnerSession({
+      configuredPolicy,
+      publishedBeyondLoopback: config.publishedBeyondLoopback,
+      basicAuthEnabled: isBasicAuthEnabled(config),
+      forwardedByHeader: detectForwardingProxyHeader(request.headers),
+    });
+
+    if (!decision.issue) {
+      if (!decision.refusal) {
+        return HttpServerResponse.jsonUnsafe(session, { status: 200 });
+      }
+
+      yield* Effect.logWarning("refused to auto-issue a local owner session", {
+        code: decision.refusal.code,
+        configuredPolicy,
+      });
+      // Still 200 with the ordinary unauthenticated state so the client shows its
+      // pairing screen; the headers say why the shortcut was declined, so this is
+      // debuggable without reading the server log.
+      return HttpServerResponse.jsonUnsafe(session, {
+        status: 200,
+        headers: {
+          [LOCAL_SESSION_REFUSED_HEADER]: decision.refusal.code,
+          [LOCAL_SESSION_REFUSED_REASON_HEADER]: decision.refusal.message,
+        },
+      });
+    }
+
     const authEntryPath = request.headers["x-t3-auth-entry-path"];
     if (authEntryPath === "/invite" || authEntryPath === "/pair") {
       return HttpServerResponse.jsonUnsafe(session, { status: 200 });
@@ -70,7 +214,7 @@ export const authSessionRouteLayer = HttpRouter.add(
 
     const requestMetadata = deriveAuthClientMetadata({ request });
     const localSession =
-      session.auth.policy === "unsafe-no-auth"
+      configuredPolicy === "unsafe-no-auth"
         ? yield* serverAuth.issueUnsafeNoAuthOwnerSession(requestMetadata)
         : yield* serverAuth.issueLoopbackOwnerSession(requestMetadata);
 

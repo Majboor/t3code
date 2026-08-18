@@ -549,6 +549,7 @@ const buildAppUnderTest = (options?: {
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,
+      publishedBeyondLoopback: false,
       unsafeNoAuth: false,
       basicAuthUsername: undefined,
       basicAuthPassword: undefined,

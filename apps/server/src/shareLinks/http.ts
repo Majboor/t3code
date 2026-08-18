@@ -1,6 +1,6 @@
 import * as Crypto from "node:crypto";
 
-import { Effect, Layer, Option } from "effect";
+import { Effect, Option } from "effect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -78,10 +78,7 @@ const unavailable = HttpServerResponse.text("This link is not available.", {
  */
 let cachedSalt: Uint8Array | null = null;
 
-const fingerprintSalt = Effect.gen(function* () {
-  if (cachedSalt !== null) {
-    return cachedSalt;
-  }
+const readFingerprintSalt = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore;
   const salt = yield* secrets.getOrCreateRandom(
     SHARE_LINK_FINGERPRINT_SALT,
@@ -90,6 +87,17 @@ const fingerprintSalt = Effect.gen(function* () {
   cachedSalt = salt;
   return salt;
 }).pipe(
+  // The store is built here rather than asked of the server, and the cache
+  // above is checked before this runs, so it is constructed exactly once — on
+  // the first visit to the first link — and never again. Reaching for it
+  // through the ambient context instead would mean making every server secret
+  // available to every HTTP route in the product for the sake of one salt.
+  Effect.provide(ServerSecretStoreLive),
+);
+
+const fingerprintSalt = Effect.suspend(() =>
+  cachedSalt !== null ? Effect.succeed(cachedSalt) : readFingerprintSalt,
+).pipe(
   // No salt, no fingerprint. Falling back to an unsalted hash would be worse
   // than recording nothing: an unsalted hash of an IPv4 address is reversible
   // by exhausting four billion inputs, which is a few seconds of work.
@@ -231,10 +239,4 @@ export const shareLinkRedeemRouteLayer = HttpRouter.add(
   "GET",
   `${SHARE_LINK_ROUTE_PREFIX}/*`,
   shareLinkRedeemRoute,
-).pipe(
-  // The secret store is provided here rather than asked of the server, because
-  // the fingerprint salt is this route's own business and nothing else reads
-  // it. The store is file-backed and its creation is race-safe, so a second
-  // instance alongside the auth stack's is harmless.
-  Layer.provide(ServerSecretStoreLive),
 );

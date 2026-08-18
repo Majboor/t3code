@@ -24,12 +24,6 @@ import {
   shareLinkTitle,
 } from "./shareLinks.logic";
 
-/** Whichever link was made here last, and only until it has been read. */
-interface UncopiedLink {
-  readonly url: string;
-  readonly scope: ShareLinkScope;
-}
-
 /**
  * The links this project and its workspace have handed out.
  *
@@ -62,7 +56,8 @@ export function ShareLinksPanel({
   const shareLinks = useShareLinks({ environmentId, tenantId, workspaceId, projectId });
   const [labels, setLabels] = useState<Partial<Record<ShareLinkScope, string>>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [uncopied, setUncopied] = useState<UncopiedLink | null>(null);
+  /** The one URL a clipboard refused, kept only until somebody has read it. */
+  const [uncopied, setUncopied] = useState<string | null>(null);
   const nowIso = new Date().toISOString();
 
   const visible = selectShareLinksForPanel(shareLinks.links, projectId);
@@ -78,7 +73,7 @@ export function ShareLinksPanel({
         setLabels((current) => ({ ...current, [scope]: "" }));
         // Kept only when the clipboard refused it. The token is not in any
         // later reply, so this render is the last place the URL can be read.
-        setUncopied(minted.copied ? null : { url: minted.url, scope: minted.link.scope });
+        setUncopied(minted.copied ? null : minted.url);
       })
       .finally(() => setBusyKey(null));
   };
@@ -215,7 +210,7 @@ export function ShareLinksPanel({
           </p>
           <div className="mt-1.5 flex min-w-0 items-center gap-1">
             <code className="min-w-0 flex-1 truncate rounded-md bg-muted px-2 py-1 text-[10px] text-muted-foreground">
-              {uncopied.url}
+              {uncopied}
             </code>
             <Button
               size="xs"
@@ -224,7 +219,7 @@ export function ShareLinksPanel({
               data-testid="share-links-uncopied-copy"
               onClick={() => {
                 void navigator.clipboard
-                  ?.writeText(uncopied.url)
+                  ?.writeText(uncopied)
                   .then(() => setUncopied(null))
                   .catch(() =>
                     toastManager.add({
@@ -251,7 +246,10 @@ export function ShareLinksPanel({
         {!shareLinks.loaded ? (
           <p className="text-[10px] text-muted-foreground">Reading this workspace's links…</p>
         ) : visible.length === 0 ? (
-          <p className="text-[10px] leading-4 text-muted-foreground" data-testid="share-links-empty">
+          <p
+            className="text-[10px] leading-4 text-muted-foreground"
+            data-testid="share-links-empty"
+          >
             No links yet. Nothing in {projectLabel} is reachable without an account until you make
             one.
           </p>

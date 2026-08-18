@@ -63,6 +63,18 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly noBrowser: boolean;
   readonly startupPresentation: StartupPresentation;
   readonly desktopBootstrapToken: string | undefined;
+  /**
+   * Declares that something in front of this process — a tunnel, reverse proxy,
+   * or port forward — carries requests here from people who are not sitting at
+   * this machine.
+   *
+   * The socket cannot answer that question. A proxy connects from 127.0.0.1 just
+   * like the owner's own browser does, so every "it came from loopback, it must
+   * be the owner" shortcut silently becomes "anyone on the internet". Only
+   * whoever started the server knows the truth, so they declare it here and the
+   * auth layer stops taking loopback as proof of identity.
+   */
+  readonly publishedBeyondLoopback: boolean;
   readonly unsafeNoAuth: boolean;
   readonly basicAuthUsername: string | undefined;
   readonly basicAuthPassword: string | undefined;
@@ -170,6 +182,7 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           port: 0,
           host: undefined,
           desktopBootstrapToken: undefined,
+          publishedBeyondLoopback: false,
           unsafeNoAuth: false,
           basicAuthUsername: undefined,
           basicAuthPassword: undefined,

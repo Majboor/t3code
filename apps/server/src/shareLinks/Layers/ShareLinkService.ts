@@ -327,9 +327,9 @@ const makeShareLinkService = Effect.gen(function* () {
       }
       if (stats.size > MAX_SHARED_FILE_BYTES) {
         return yield* new ShareLinkError({
-            code: "invalid-target",
-            message: "That file is too large to share.",
-          });
+          code: "invalid-target",
+          message: "That file is too large to share.",
+        });
       }
       const contents = yield* tryFs(() => fsPromises.readFile(target.absolutePath));
       return {
@@ -506,9 +506,9 @@ const makeShareLinkService = Effect.gen(function* () {
         .pipe(Effect.mapError(storageFailure("Could not revoke that share link.")));
       if (Option.isNone(record)) {
         return yield* new ShareLinkError({
-            code: "not-found",
-            message: "There is no such link in this workspace.",
-          });
+          code: "not-found",
+          message: "There is no such link in this workspace.",
+        });
       }
 
       // The UPDATE coalesces, so the row always comes back; a `revokedAt` other
@@ -516,9 +516,9 @@ const makeShareLinkService = Effect.gen(function* () {
       // first, and the stored time is the one that matters.
       if (record.value.revokedAt !== revokedAt) {
         return yield* new ShareLinkError({
-            code: "revoked",
-            message: "That link was already revoked.",
-          });
+          code: "revoked",
+          message: "That link was already revoked.",
+        });
       }
 
       const link = toRedactedShareLink(record.value);

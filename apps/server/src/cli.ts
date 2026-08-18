@@ -104,6 +104,7 @@ const BootstrapEnvelopeSchema = Schema.Struct({
   devUrl: Schema.optional(Schema.URLFromString),
   noBrowser: Schema.optional(Schema.Boolean),
   unsafeNoAuth: Schema.optional(Schema.Boolean),
+  publishedBeyondLoopback: Schema.optional(Schema.Boolean),
   desktopBootstrapToken: Schema.optional(Schema.String),
   supabaseProjectUrl: Schema.optional(Schema.URLFromString),
   supabaseAnonKey: Schema.optional(Schema.String),
@@ -202,6 +203,13 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   unsafeNoAuth: Config.boolean("T3CODE_UNSAFE_NO_AUTH").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  // Set this when a tunnel, reverse proxy, or port forward carries strangers to
+  // this process. The server cannot detect that for itself, and until it is told,
+  // it treats a loopback socket as proof that the caller is the owner.
+  publishedBeyondLoopback: Config.boolean("T3CODE_PUBLISHED_BEYOND_LOOPBACK").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -379,6 +387,8 @@ export const resolveServerConfig = (
       Option.getOrUndefined(normalizedFlags.unsafeNoAuth) === true ||
       env.unsafeNoAuth === true ||
       bootstrap?.unsafeNoAuth === true;
+    const publishedBeyondLoopback =
+      env.publishedBeyondLoopback === true || bootstrap?.publishedBeyondLoopback === true;
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
@@ -438,6 +448,7 @@ export const resolveServerConfig = (
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,
+      publishedBeyondLoopback,
       unsafeNoAuth,
       basicAuthUsername: env.basicAuthUsername?.trim() || undefined,
       basicAuthPassword: env.basicAuthPassword?.trim() || undefined,

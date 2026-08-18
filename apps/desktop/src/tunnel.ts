@@ -1,6 +1,10 @@
 import * as ChildProcess from "node:child_process";
 
-import type { DesktopWorkspaceShareState, DesktopWorkspaceShareStatus } from "@t3tools/contracts";
+import type {
+  DesktopWorkspaceShareState,
+  DesktopWorkspaceShareStatus,
+  ServerAuthPolicy,
+} from "@t3tools/contracts";
 
 /**
  * Cloudflare quick tunnel that publishes the desktop app's local server.
@@ -8,21 +12,27 @@ import type { DesktopWorkspaceShareState, DesktopWorkspaceShareStatus } from "@t
  * SECURITY: the tunnel terminates at Cloudflare and forwards to 127.0.0.1, so the
  * server sees every stranger as a loopback peer. Any "it came from localhost, so it
  * must be this user" assumption therefore applies to the whole internet while a
- * tunnel is live.
+ * tunnel is live. Peer addresses are logged as 127.0.0.1 through the tunnel too, so
+ * a tunnelled session shows up in the Connections list looking like a local device.
  *
- * As of this commit the desktop path survives that: the app spawns the server with
- * `mode: "desktop"` on 127.0.0.1, which selects the `desktop-managed-local` auth
- * policy, and `GET /api/auth/session` (apps/server/src/auth/http.ts) only auto-issues
- * an owner session for the `loopback-browser` and `unsafe-no-auth` policies. A
- * tunnel visitor gets the SPA and a 401.
+ * Two server auth policies carry exactly that assumption: `loopback-browser` (a CLI
+ * `t3 serve`) and `unsafe-no-auth` (`--unsafe-no-auth` or basic-auth env vars).
+ * Under either of them `GET /api/auth/session` hands a full owner session — shell,
+ * PTYs, filesystem, git, provider credentials — to whoever opens the URL. So this
+ * controller asks the server which policy it is running before it spawns anything,
+ * and refuses to publish an auto-issuing one. Refusing is the right trade: a
+ * running cloudflared is much harder to take back than an error message.
  *
- * That safety is one policy string deep, and it does NOT hold if the server was
- * started any other way — a CLI `t3 serve` (policy `loopback-browser`) or anything
- * running with `--unsafe-no-auth`/basic-auth env vars hands a full owner session,
- * and therefore shell and filesystem access, to anyone who opens the URL. Peer
- * addresses are also logged as 127.0.0.1 through the tunnel, so such a session
- * shows up in the Connections list as a local device. Do not reuse this controller
- * to expose a server whose auth policy has not been checked.
+ * The server has its own defence (it will not auto-issue when it knows it is
+ * published, or when a request arrives carrying proxy headers), but that one is
+ * a backstop. This refusal is the guard rail, because it is the only layer that
+ * knows a tunnel is about to exist.
+ *
+ * Deliberately left open: `/.well-known/t3/environment` stays unauthenticated
+ * while a tunnel is live, so anyone holding the URL can read the workspace folder
+ * name, the OS, the CPU architecture, and the server version. That endpoint has to
+ * answer before a client can know how to authenticate, so it cannot be gated
+ * without breaking pairing. It is an information leak to a URL-holder, not a way in.
  */
 export const CLOUDFLARED_BINARY = "cloudflared";
 
@@ -44,6 +54,100 @@ const DEFAULT_URL_TIMEOUT_MS = 25_000;
 const MAX_DIAGNOSTIC_CHARS = 8_192;
 const AVAILABILITY_PROBE_TIMEOUT_MS = 5_000;
 const STOP_FORCE_KILL_DELAY_MS = 2_000;
+const AUTH_POLICY_PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * The policies under which the server treats "the socket says 127.0.0.1" as proof
+ * of identity and mints an owner session on request. Publishing one of these is
+ * publishing an unauthenticated takeover.
+ */
+export const AUTO_ISSUING_AUTH_POLICIES: ReadonlySet<ServerAuthPolicy> = new Set([
+  "loopback-browser",
+  "unsafe-no-auth",
+]);
+
+/** Guards the untyped probe response; an unrecognised policy is treated as unknown. */
+const KNOWN_AUTH_POLICIES: ReadonlySet<string> = new Set<ServerAuthPolicy>([
+  "desktop-managed-local",
+  "loopback-browser",
+  "remote-reachable",
+  "unsafe-no-auth",
+]);
+
+export type WorkspaceSharePreflight =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly reason: string };
+
+/**
+ * Decides whether a server running this auth policy may be published at all.
+ *
+ * An unknown policy is refused rather than allowed. The cost of being wrong in
+ * one direction is a share that does not start; in the other it is a stranger
+ * with a shell on this laptop.
+ */
+export function evaluateWorkspaceSharePreflight(
+  policy: ServerAuthPolicy | null,
+): WorkspaceSharePreflight {
+  if (policy === null) {
+    return {
+      allowed: false,
+      reason:
+        "Could not read this server's authentication policy, so sharing stopped rather than risk publishing a server that hands full access to anyone with the link. Make sure the server is running, then try again.",
+    };
+  }
+
+  if (policy === "loopback-browser") {
+    return {
+      allowed: false,
+      reason:
+        "This server gives full owner access to anything that reaches it from this machine, and a tunnel makes every visitor look like this machine. Turn on network access in Settings so the server asks visitors to pair first, then share again.",
+    };
+  }
+
+  if (policy === "unsafe-no-auth") {
+    return {
+      allowed: false,
+      reason:
+        "This server was started with authentication turned off (--unsafe-no-auth, or the basic-auth environment variables), so anyone with the link would get full access to this computer. Restart it without those options, turn on network access in Settings, then share again.",
+    };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Asks the local server which auth policy it is running.
+ *
+ * The `x-t3-auth-entry-path` header makes the session route report its state
+ * without minting a session, so checking whether the server auto-issues owner
+ * sessions cannot itself cause one to be issued.
+ */
+export async function probeServerAuthPolicy(
+  port: number,
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+): Promise<ServerAuthPolicy | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AUTH_POLICY_PROBE_TIMEOUT_MS);
+  timer.unref?.();
+
+  try {
+    const response = await fetchImpl(`http://127.0.0.1:${port}/api/auth/session`, {
+      headers: { "x-t3-auth-entry-path": "/pair" },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+
+    const body: unknown = await response.json();
+    const policy = (body as { readonly auth?: { readonly policy?: unknown } })?.auth?.policy;
+    return typeof policy === "string" && KNOWN_AUTH_POLICIES.has(policy)
+      ? (policy as ServerAuthPolicy)
+      : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function createWorkspaceShareState(): DesktopWorkspaceShareState {
   return { status: "not-shared", url: null, failureReason: null, diagnostics: null };
@@ -264,6 +368,7 @@ export interface QuickTunnelControllerOptions {
   readonly urlTimeoutMs?: number;
   readonly onStateChange?: (state: DesktopWorkspaceShareState) => void;
   readonly probeAvailability?: () => Promise<CloudflaredAvailability>;
+  readonly resolveServerAuthPolicy?: (port: number) => Promise<ServerAuthPolicy | null>;
 }
 
 /**
@@ -281,12 +386,15 @@ export class QuickTunnelController {
   private readonly urlTimeoutMs: number;
   private readonly onStateChange: ((state: DesktopWorkspaceShareState) => void) | undefined;
   private readonly probeAvailability: () => Promise<CloudflaredAvailability>;
+  private readonly resolveServerAuthPolicy: (port: number) => Promise<ServerAuthPolicy | null>;
 
   constructor(options: QuickTunnelControllerOptions = {}) {
     this.spawn = options.spawn ?? ChildProcess.spawn;
     this.urlTimeoutMs = options.urlTimeoutMs ?? DEFAULT_URL_TIMEOUT_MS;
     this.onStateChange = options.onStateChange;
     this.probeAvailability = options.probeAvailability ?? (() => probeCloudflaredAvailability());
+    this.resolveServerAuthPolicy =
+      options.resolveServerAuthPolicy ?? ((port) => probeServerAuthPolicy(port));
   }
 
   getState(): DesktopWorkspaceShareState {
@@ -295,6 +403,16 @@ export class QuickTunnelController {
 
   async start(port: number): Promise<DesktopWorkspaceShareState> {
     if (!canStartWorkspaceShare(this.state.status)) return this.state;
+
+    // Before anything is spawned: publishing a server that mints owner sessions
+    // for local-looking callers would put a shell on this laptop behind a public
+    // URL. A probe that throws is a policy we could not read, which is refused
+    // for the same reason.
+    const policy = await this.resolveServerAuthPolicy(port).catch(() => null);
+    const preflight = evaluateWorkspaceSharePreflight(policy);
+    if (!preflight.allowed) {
+      return this.setState(reduceWorkspaceShareOnUnavailable(this.state, preflight.reason));
+    }
 
     const availability = await this.probeAvailability();
     if (!availability.available) {

@@ -186,10 +186,13 @@ export interface ShareLinkScopeCopy {
  * mis-click on a dropdown hand over the workspace, so each gets its own
  * sentence and its own button.
  */
-export function describeShareLinkScope(scope: ShareLinkScope, names: {
-  readonly projectLabel: string;
-  readonly workspaceLabel: string;
-}): ShareLinkScopeCopy {
+export function describeShareLinkScope(
+  scope: ShareLinkScope,
+  names: {
+    readonly projectLabel: string;
+    readonly workspaceLabel: string;
+  },
+): ShareLinkScopeCopy {
   switch (scope) {
     case "file":
       return {
