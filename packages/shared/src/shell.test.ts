@@ -64,7 +64,7 @@ describe("readPathFromLoginShell", () => {
     expect(args?.[1]).toContain("printenv PATH || true");
     expect(args?.[1]).toContain("__T3CODE_ENV_PATH_START__");
     expect(args?.[1]).toContain("__T3CODE_ENV_PATH_END__");
-    expect(options).toEqual({ encoding: "utf8", timeout: 5000 });
+    expect(options).toEqual({ encoding: "utf8", timeout: 5000, killSignal: "SIGKILL" });
   });
 });
 
@@ -164,6 +164,25 @@ describe("readEnvironmentFromLoginShell", () => {
     expect(readEnvironmentFromLoginShell("/bin/zsh", ["CUSTOM_VAR"], execFile)).toEqual({
       CUSTOM_VAR: "  padded value  ",
     });
+  });
+
+  // `SIGTERM` — the default — is ignored by an interactive shell, which turns
+  // the timeout into a suggestion and the call into an indefinite block on the
+  // thread that opens the desktop app's first window. Asserting the signal is
+  // the only way this stays true, because the failure it prevents looks like a
+  // launch that never happens rather than an error.
+  it("kills a shell that overruns rather than asking it to stop", () => {
+    const execFile = vi.fn<
+      (
+        file: string,
+        args: ReadonlyArray<string>,
+        options: { encoding: "utf8"; timeout: number; killSignal?: NodeJS.Signals },
+      ) => string
+    >(() => "");
+
+    readEnvironmentFromLoginShell("/bin/zsh", ["PATH"], execFile);
+
+    expect(execFile.mock.calls[0]?.[2]).toMatchObject({ timeout: 5_000, killSignal: "SIGKILL" });
   });
 });
 

@@ -13,8 +13,31 @@ const WINDOWS_SHELL_CANDIDATES = ["pwsh.exe", "powershell.exe"] as const;
 type ExecFileSyncLike = (
   file: string,
   args: ReadonlyArray<string>,
-  options: { encoding: "utf8"; timeout: number },
+  options: { encoding: "utf8"; timeout: number; killSignal?: NodeJS.Signals },
 ) => string;
+
+/**
+ * How long a login shell gets to print its environment before it is abandoned.
+ */
+const SHELL_ENV_TIMEOUT_MS = 5_000;
+
+/**
+ * The signal that enforces that timeout — and it has to be `SIGKILL`.
+ *
+ * `execFileSync`'s `timeout` is not a deadline on the call; it is a deadline
+ * after which the child is sent `killSignal`, and the call goes on blocking
+ * until the child's pipes close. The default is `SIGTERM`, and **an interactive
+ * shell ignores `SIGTERM`** — that is in zsh's manual, not a quirk of one
+ * machine. So `zsh -ilc` against a slow startup file does not time out after
+ * five seconds; it blocks the calling thread until the shell decides to finish.
+ *
+ * The caller here is the desktop app's main process, at module scope, before
+ * `app.whenReady()`. A shell that never finishes is an app that never opens a
+ * window and never logs a line — observed on a cold `HOME`, roughly three
+ * launches in four, hung with no output and a live `/bin/zsh -ilc` child.
+ * `SIGKILL` cannot be ignored, so the timeout becomes the bound it reads as.
+ */
+const SHELL_ENV_KILL_SIGNAL: NodeJS.Signals = "SIGKILL";
 
 export interface CommandAvailabilityOptions {
   readonly platform?: NodeJS.Platform;
@@ -194,7 +217,8 @@ export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
 
   const output = execFile(shell, ["-ilc", buildEnvironmentCaptureCommand(names)], {
     encoding: "utf8",
-    timeout: 5000,
+    timeout: SHELL_ENV_TIMEOUT_MS,
+    killSignal: SHELL_ENV_KILL_SIGNAL,
   });
 
   const environment: Partial<Record<string, string>> = {};

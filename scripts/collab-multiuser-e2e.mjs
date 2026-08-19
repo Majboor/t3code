@@ -74,7 +74,25 @@ const AGENT_TURN_MS = 180_000;
  *
  * Keep this in step with `ensureTurnStartWritable` in apps/server/src/ws.ts.
  */
-const SERVER_READ_ONLY_SENTENCE = "This workspace is read-only for you.";
+/**
+ * The two sentences the server can refuse a demoted member's prompt with.
+ * Neither exists anywhere in apps/web, so reading either one in the browser is
+ * proof the server decided it rather than a disabled control in the client.
+ *
+ *   read-only role   `ensureTurnStartWritable` in apps/server/src/ws.ts
+ *   no capability    `ensureThreadAccess` -> ensureAnyTenantWorkspacePermission
+ *
+ * In practice the capability check fires first: demoting to `viewer` takes
+ * `session.prompt` away, and `ensureThreadAccess` runs ahead of the
+ * collaboration check in the `thread.turn.start` chain. That matters, because
+ * the collaboration check falls open on a read failure (`catchCause(() =>
+ * true)`) and this one does not — so the refusal does not rest on the branch
+ * that can fail open.
+ */
+const SERVER_REFUSALS = [
+  { gate: "the collaboration read-only check", text: "workspace is read-only for you" },
+  { gate: "the tenant permission check", text: "does not have session.prompt" },
+];
 
 const { phase, check, skip, finish } = createReporter();
 const harness = createHarness({
@@ -333,12 +351,20 @@ async function expandMemberRow(page, email) {
     const row = rows.nth(index);
     const text = (await row.innerText().catch(() => "")) ?? "";
     if (text.includes(email) || text.includes(name)) {
-      await row
-        .locator("button")
-        .first()
-        .click()
-        .catch(() => undefined);
-      await sleep(1_500);
+      // Only expand a row that is collapsed. Clicking unconditionally toggles,
+      // so a row left open by an earlier step was being closed again — which
+      // hid the controls and read as "the lead cannot restore write access"
+      // when the lead had simply been handed a shut drawer.
+      const alreadyOpen =
+        (await row.locator('[data-testid="collaboration-read-only-toggle"]').count()) > 0;
+      if (!alreadyOpen) {
+        await row
+          .locator("button")
+          .first()
+          .click()
+          .catch(() => undefined);
+        await sleep(1_500);
+      }
       return row;
     }
   }
@@ -700,14 +726,18 @@ try {
       skip("two agents in one file are noticed the same way", "no agent turn ran");
     } else {
       check("A's agent wrote the file", wrote, wrote ? "" : "never landed on disk");
-      const agentMark = await fileAuthorFor(accountA.page, agentFile);
-      check(
-        "an agent's file write is attributed to somebody",
-        Boolean(agentMark?.author),
-        agentMark?.author
-          ? agentMark.author
-          : "the agent wrote the file and the tree shows no author — only browser saves claim authorship, so nothing an agent does is attributed or contended",
-      );
+      if (!wrote) {
+        skip("an agent's file write is attributed to somebody", "the agent never wrote a file");
+      } else {
+        const agentMark = await fileAuthorFor(accountA.page, agentFile);
+        check(
+          "an agent's file write is attributed to somebody",
+          Boolean(agentMark?.author),
+          agentMark?.author
+            ? agentMark.author
+            : "the agent wrote the file and the tree shows no author — only a browser save claims authorship, so nothing an agent does is attributed or contended",
+        );
+      }
     }
   }
 
@@ -834,15 +864,35 @@ try {
   // that quietly dropped it would look identical from here.
   check("B's composer still accepts the prompt", sentWhileMuted);
   const refusal = await waitForText(accountB.page, /read-only|was not sent/i, 45_000);
-  check("B is told the workspace is read-only for them", refusal.found, refusal.found ? "" : refusal.seen.replace(/\s+/g, " ").slice(0, 180));
-  // The sentence exists in apps/server/src/ws.ts and nowhere in apps/web, so
-  // reading it in the browser is proof the server decided this.
+  // What B was actually shown, so a failure names the refusal that arrived
+  // instead of only the one that did not. The composer surfaces a dispatch
+  // error twice — a toast and a banner on the thread — and both print the
+  // server's own message, so either is enough to read it back.
+  const refusalText =
+    /Your message was not sent[^]{0,200}/.exec(refusal.seen)?.[0] ??
+    /[^.\n]*read-only[^.\n]*\.?/i.exec(refusal.seen)?.[0] ??
+    "";
+  check(
+    "B is told the workspace is read-only for them",
+    refusal.found,
+    refusalText.replace(/\s+/g, " ").slice(0, 160),
+  );
+  const firedGate = SERVER_REFUSALS.find((refuse) => refusal.seen.includes(refuse.text)) ?? null;
   check(
     "the refusal came from the server, not a hidden button",
-    refusal.seen.includes(SERVER_READ_ONLY_SENTENCE),
-    refusal.seen.includes(SERVER_READ_ONLY_SENTENCE)
-      ? ""
-      : `never saw "${SERVER_READ_ONLY_SENTENCE}"`,
+    firedGate !== null,
+    firedGate
+      ? `refused by ${firedGate.gate}`
+      : `B was shown: "${refusalText.replace(/\s+/g, " ").slice(0, 160)}"`,
+  );
+  // Which gate stopped it is the difference between a refusal that rests on a
+  // check that falls open on a read failure and one that does not.
+  check(
+    "the refusal does not depend on the check that falls open",
+    firedGate?.text === "does not have session.prompt",
+    firedGate
+      ? `refused by ${firedGate.gate}`
+      : "nothing on the server refused it at all",
   );
   check("B's prompt never reached the agent", !(await waitForFileOnDisk(deniedFile, 10_000)));
 

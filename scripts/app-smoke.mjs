@@ -184,13 +184,26 @@ async function shoot(page, name) {
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }).catch(() => undefined);
 }
 
-async function main() {
-  const home = buildSandboxHome();
-  console.log(`app      ${APP_PATH}`);
-  console.log(`sandbox  ${home}`);
-  console.log(`email    ${EMAIL}`);
+const LAUNCH_TIMEOUT_MS = 60_000;
+const LAUNCH_ATTEMPTS = 4;
 
-  const app = await electron.launch({
+/**
+ * Starts the app, more than once if it has to.
+ *
+ * A launch that hangs before Chromium's debugging server comes up is a startup
+ * bug, not a flaky driver, and it has a name: the main process reads its
+ * environment out of a login shell synchronously at module scope, and until
+ * `SHELL_ENV_KILL_SIGNAL` in `packages/shared/src/shell.ts` that read had no
+ * enforceable timeout — an interactive shell ignores `SIGTERM`. On a cold
+ * sandbox home it hung roughly three launches in four.
+ *
+ * The retry stays regardless, because this drives the *installed* app: whatever
+ * is in `/Applications` was built before any fix in this repo, and a run that
+ * cannot get in the door reports nothing about the panel. A launch that needed
+ * a retry says so, so the loop can never quietly hide a regression.
+ */
+async function launchApp(home) {
+  const options = {
     executablePath: APP_PATH,
     args: [],
     env: {
@@ -201,8 +214,29 @@ async function main() {
       // from its default, but pin it so the run knows what it is talking to.
       T3CODE_DISABLE_AUTO_UPDATE: "1",
     },
-    timeout: 120_000,
-  });
+    timeout: LAUNCH_TIMEOUT_MS,
+  };
+  let lastError;
+  for (let attempt = 1; attempt <= LAUNCH_ATTEMPTS; attempt += 1) {
+    try {
+      const app = await electron.launch(options);
+      if (attempt > 1) note(`the app only started on attempt ${attempt} of ${LAUNCH_ATTEMPTS}`);
+      return app;
+    } catch (error) {
+      lastError = error;
+      note(`launch attempt ${attempt} timed out after ${LAUNCH_TIMEOUT_MS}ms`);
+    }
+  }
+  throw lastError;
+}
+
+async function main() {
+  const home = buildSandboxHome();
+  console.log(`app      ${APP_PATH}`);
+  console.log(`sandbox  ${home}`);
+  console.log(`email    ${EMAIL}`);
+
+  const app = await launchApp(home);
 
   // A renderer that dies takes its `page` events with it, so the death itself
   // has to come from the main process.
@@ -316,6 +350,9 @@ const NOTCH_GEOMETRY = { panelWidth: 380, panelHeight: 160, gutter: 16, pillWidt
 
 /** `NOTCH_SLOT_COUNT` — the panel lays out this many rows once, at load. */
 const NOTCH_SLOT_COUNT = 3;
+
+/** `HOVER_SAMPLE_INTERVAL_MS` — how long "nothing happened yet" is worth waiting. */
+const NOTCH_SAMPLE_MS = 90;
 
 /**
  * Wraps the three things the panel reads from the outside world so a run can
@@ -446,6 +483,25 @@ async function waitForNotch(panel, predicate, timeoutMs = 6_000) {
   return last;
 }
 
+/**
+ * The same, for the main process's side of a hover.
+ *
+ * Click-through is decided on the next cursor sample and shows up nowhere in the
+ * document, so moving the cursor *inside* an already-expanded panel changes
+ * nothing `waitForNotch` can see — read the probe once and it is a coin toss
+ * whether the sample that flips the window has run yet. That is a race in this
+ * script and not in the panel, and it is the reason this exists.
+ */
+async function waitForNotchProbe(app, predicate, timeoutMs = 4_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = await readNotchProbe(app);
+  while (Date.now() < deadline && !predicate(last)) {
+    await sleep(NOTCH_SAMPLE_MS / 2);
+    last = await readNotchProbe(app);
+  }
+  return last;
+}
+
 async function notchPhase({ app, page }) {
   phase("notch");
   if (process.platform !== "darwin") {
@@ -539,12 +595,34 @@ async function notchPhase({ app, page }) {
     expandedView?.state === "expanded",
     `${expandedView?.state}`,
   );
+  // The panel open, with its button on it. Every other artefact of this phase is
+  // a number read back out of the process that drew it; this is the one thing a
+  // person can look at and say the surface is real.
+  await shoot(panel, "notch-expanded");
+
+  // ── click-through ──────────────────────────────────────────────────────────
+  //
+  // The cursor is still on the pill, and the pill is over the menu bar. The
+  // panel is expanded and has a button on it — the one state in which the window
+  // is allowed to take a click at all — so if it were ever going to shadow the
+  // menu bar, this is the moment. Nothing may have been turned on yet.
+  const overPill = await waitForNotchProbe(
+    app,
+    (read) => read.mouse.some((call) => call.ignore === false),
+    NOTCH_SAMPLE_MS * 4,
+  );
+  check(
+    "an expanded, actionable panel stays click-through while the cursor is on the pill",
+    overPill.mouse.every((call) => call.ignore === true),
+    JSON.stringify(overPill.mouse),
+  );
+
   await setNotchCursor(app, panelPoint);
   const heldView = await waitForNotch(panel, (view) => view.state === "expanded");
   check("moving down into the panel keeps it open", heldView?.state === "expanded");
-
-  // ── click-through ──────────────────────────────────────────────────────────
-  const overPanel = await readNotchProbe(app);
+  const overPanel = await waitForNotchProbe(app, (read) =>
+    read.mouse.some((call) => call.ignore === false),
+  );
   check(
     "the window takes mouse events only once the cursor is in the panel",
     overPanel.mouse.filter((call) => call.ignore === false).length === 1,
@@ -622,7 +700,7 @@ async function notchPhase({ app, page }) {
     collapsedView?.state === "collapsed",
     `${collapsedView?.state}`,
   );
-  const closed = await readNotchProbe(app);
+  const closed = await waitForNotchProbe(app, (read) => read.mouse.at(-1)?.ignore === true);
   const restored = closed.mouse.filter((call) => call.ignore === true).at(-1);
   check(
     "and puts the window back to click-through",
@@ -635,8 +713,23 @@ async function notchPhase({ app, page }) {
   // shrug: it is the only window in which the overlay can shadow the menu bar.
   if (restored) note(`click-through restored ${restored.at - leftAt}ms after the cursor left`);
 
+  // The same rule from the other side: parked exactly where the panel would be,
+  // but with the panel collapsed, there is no click target and the window keeps
+  // refusing the mouse. Position alone never buys the overlay a click.
+  const parkedAt = Date.now();
+  await setNotchCursor(app, panelPoint);
+  await sleep(NOTCH_SAMPLE_MS * 4);
+  const parked = await readNotchProbe(app);
+  const whileParked = parked.mouse.filter((call) => call.at >= parkedAt);
+  check(
+    "a collapsed panel takes no mouse events even with the cursor over it",
+    whileParked.every((call) => call.ignore === true),
+    JSON.stringify(whileParked),
+  );
+  await setNotchCursor(app, awayPoint);
+
   // ── contexts ───────────────────────────────────────────────────────────────
-  const geometryBefore = closed.bounds;
+  const geometryBefore = parked.bounds;
   for (const [kind, url, title] of [
     ["deployment", "http://127.0.0.1:1/#/infra/smoke-project-id", "Deployment"],
     ["analytics", "http://127.0.0.1:1/#/analytics/smoke-project-id", "Analytics"],
@@ -695,7 +788,7 @@ async function notchPhase({ app, page }) {
   await waitForNotch(panel, (view) => view.title === "Live activity", 8_000);
 
   await releaseNotchProbe(app);
-  await panel.screenshot({ path: path.join(SHOTS, "notch-panel.png") }).catch(() => undefined);
+  await shoot(panel, "notch-collapsed");
 }
 
 /**
