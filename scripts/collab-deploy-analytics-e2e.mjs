@@ -109,9 +109,27 @@ function writeFile(dir, relativePath, contents) {
 }
 
 /** The project row the app created for a directory, which is the id everything else takes. */
+/**
+ * The state file the server under test is actually writing.
+ *
+ * A dev server puts it under `dev/`; one started with `--base-dir` and no
+ * `--dev-url` puts it under `userdata/`. Guessing one of them wrong reads a
+ * database nobody is writing to, where every project looks absent — which
+ * reports as a product failure and is not one.
+ */
+function resolveStateDatabase() {
+  const explicit = process.env["T3_STATE_DB"];
+  if (explicit) return existsSync(explicit) ? explicit : null;
+  for (const home of ["dev", "userdata"]) {
+    const candidate = path.join(BASE_DIR, home, "state.sqlite");
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 function projectIdFor(dir) {
-  const database = path.join(BASE_DIR, "dev", "state.sqlite");
-  if (!existsSync(database)) return null;
+  const database = resolveStateDatabase();
+  if (database === null) return null;
   return (
     execFileSync("sqlite3", [
       database,
