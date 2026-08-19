@@ -584,7 +584,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const buildConfig: Record<string, unknown> = {
     appId: "com.t3tools.t3code",
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: "LogicPacks-${version}-${arch}.${ext}",
     directories: {
       buildResources: "apps/desktop/resources",
     },
