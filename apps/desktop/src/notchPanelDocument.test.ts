@@ -9,6 +9,7 @@ import {
   buildNotchPanelDataUrl,
   buildNotchPanelHtml,
   buildNotchStateScript,
+  NOTCH_ACTION_BUTTON_ATTRIBUTE,
   type NotchPanelView,
 } from "./notchPanelDocument.ts";
 
@@ -142,6 +143,38 @@ describe("slot markup", () => {
   });
 });
 
+describe("sign-in action", () => {
+  const html = buildNotchPanelHtml(resolveNotchLayout(notchedDisplay));
+
+  it("carries a real button, not a sentence dressed as one", () => {
+    expect(html).toContain(`<button type="button"`);
+    expect(html).toContain(NOTCH_ACTION_BUTTON_ATTRIBUTE);
+  });
+
+  it("says what the button does, since it lands on the app window", () => {
+    expect(html).toMatch(/<button[^>]*title="[^"]+"[^>]*aria-label="[^"]+"/);
+  });
+
+  /*
+   * The window is sized once for `NOTCH_SLOT_COUNT` rows. The button takes
+   * their place rather than joining them, so no state can make the panel need
+   * more room than it was built with.
+   */
+  it("swaps the rows out rather than adding a fourth thing below them", () => {
+    expect(html).toMatch(/html\[data-notch-action="sign-in"\] \.slots \{[^}]*display: none;/);
+    expect(html).toMatch(/html\[data-notch-action="sign-in"\] \.action \{[^}]*display: flex;/);
+    expect(html).toMatch(/\n {6}\.action \{[^}]*display: none;/);
+  });
+
+  it("starts with no action, so a button never precedes a reading", () => {
+    expect(html).toContain('data-notch-action="none"');
+  });
+
+  it("keeps the rows in the document so signing in brings the figures back", () => {
+    expect(html.match(/data-slot="/g)).toHaveLength(NOTCH_SLOT_COUNT);
+  });
+});
+
 describe("buildNotchDataScript", () => {
   const view: NotchPanelView = {
     title: "Deployment",
@@ -150,7 +183,17 @@ describe("buildNotchDataScript", () => {
       { label: "Traffic", value: "—", note: "not wired", detail: "Nothing can report." },
       { label: "Last deploy", value: "3h ago", note: "succeeded", detail: "Ran at noon." },
     ],
+    action: null,
   };
+
+  it("switches the page to the button and back with the figures it belongs to", () => {
+    expect(buildNotchDataScript({ ...view, action: "sign-in" })).toContain(
+      'document.documentElement.dataset.notchAction="sign-in";',
+    );
+    expect(buildNotchDataScript(view)).toContain(
+      'document.documentElement.dataset.notchAction="none";',
+    );
+  });
 
   it("writes label, value, note and detail for every row", () => {
     const script = buildNotchDataScript(view);
@@ -168,7 +211,11 @@ describe("buildNotchDataScript", () => {
   });
 
   it("blanks a row the view does not fill rather than leaving the last page's", () => {
-    const script = buildNotchDataScript({ title: "Analytics", slots: [view.slots[0]!] });
+    const script = buildNotchDataScript({
+      title: "Analytics",
+      slots: [view.slots[0]!],
+      action: null,
+    });
 
     expect(script).toContain(`w(1,"","—","","");`);
   });
@@ -178,6 +225,7 @@ describe("buildNotchDataScript", () => {
     const script = buildNotchDataScript({
       title: hostile,
       slots: [{ label: hostile, value: hostile, note: "", detail: "x" }],
+      action: null,
     });
 
     expect(script).toContain(JSON.stringify(hostile));

@@ -476,6 +476,76 @@ describe("toNotchPanelView, per context", () => {
       expect(row.value).toBe(EM_DASH);
       expect(row.detail).toBe("Not read yet.");
     }
+    expect(pending.action).toBeNull();
+  });
+});
+
+describe("toNotchPanelView, the one state with a next step", () => {
+  const contexts: NotchContext[] = [
+    defaultNotchContext,
+    deploymentContext,
+    analyticsContext,
+    threadContext,
+  ];
+
+  it("offers sign-in wherever the app is, because the account is not per page", () => {
+    for (const context of contexts) {
+      expect(toNotchPanelView(context, { kind: "signed-out" }).action).toBe("sign-in");
+    }
+  });
+
+  /*
+   * A button that leads nowhere is worse than a dash. None of these are fixed
+   * by clicking: the server is not answering, the read failed, the project
+   * belongs to somebody else, or there is genuinely nothing yet.
+   */
+  it.each([
+    ["server off", { kind: "offline" }],
+    ["unavailable", { kind: "failed" }],
+    ["unknown project", { kind: "unknown-project" }],
+  ] as const)("offers nothing to press when the state is %s", (_name, outcome) => {
+    for (const context of contexts) {
+      expect(toNotchPanelView(context, outcome).action).toBeNull();
+    }
+  });
+
+  it("offers nothing to press once a reading lands, workspace or not", () => {
+    const withWorkspace: NotchActivityOutcome = {
+      kind: "ok",
+      activity: {
+        workspaceCount: 2,
+        partial: false,
+        shareViews: { total: 3, linkCount: 1, lastViewedAt: null },
+        tokenSpend: null,
+        project: null,
+      },
+    };
+    const withoutWorkspace: NotchActivityOutcome = {
+      kind: "ok",
+      activity: {
+        workspaceCount: 0,
+        partial: false,
+        shareViews: null,
+        tokenSpend: null,
+        project: null,
+      },
+    };
+
+    expect(toNotchPanelView(defaultNotchContext, withWorkspace).action).toBeNull();
+    expect(toNotchPanelView(defaultNotchContext, withoutWorkspace).action).toBeNull();
+  });
+
+  /*
+   * The rows are still built and still carry their reasons. The button replaces
+   * what the panel draws, not what it knows, so the distinction the panel exists
+   * for survives a state that happens to have a next step.
+   */
+  it("keeps the signed-out rows honest underneath the button", () => {
+    const view = toNotchPanelView(defaultNotchContext, { kind: "signed-out" });
+
+    expect(slot(view, "Share clicks").value).toBe(EM_DASH);
+    expect(slot(view, "Share clicks").note).toBe("sign in");
+    expect(slot(view, "Token spend").note).toBe("sign in");
   });
 });
 

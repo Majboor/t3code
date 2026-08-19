@@ -21,17 +21,17 @@
  *    extra area is transparent and click-through, so it costs nothing.
  *
  * 3. Hover is sampled in this process rather than reported by the page. The
- *    desktop bundler only emits `main.cjs` and `preload.cjs`, so the panel has
- *    no preload of its own and therefore no renderer -> main channel; and the
- *    window must stay click-through, which makes DOM hover dependent on
- *    forwarded mouse messages. Polling the cursor is deterministic, needs no
- *    IPC surface, and keeps `sandbox`/`contextIsolation` on for the page.
+ *    window is click-through for all but one of its states, which makes DOM
+ *    hover dependent on forwarded mouse messages; polling the cursor is
+ *    deterministic instead, and it is the same sample that decides whether the
+ *    panel may take a click at all. The panel does now have a preload
+ *    (`notchPreload.ts`), but it carries one button press and nothing else —
+ *    hover has no reason to become the page's business.
  *
- * 4. The figures are fetched here and written into the page, for the same
- *    reason: with no preload there is no channel the page could ask over, and
- *    giving it one would mean handing a sandboxed surface a credential. Main
- *    already holds the server's address, so the read stays on this side and the
- *    page only ever receives a few short strings. What it reads and how it
+ * 4. The figures are fetched here and written into the page. Giving the page a
+ *    channel to ask over would mean handing a sandboxed surface a credential.
+ *    Main already holds the server's address, so the read stays on this side and
+ *    the page only ever receives a few short strings. What it reads and how it
  *    authenticates is `notchData.ts`.
  *
  * 5. What it shows follows the app window's route, and that route is *sampled*
@@ -42,10 +42,20 @@
  *    code inside the main window's constructor. A synchronous string read ten
  *    times a second costs nothing, survives the window being replaced, and
  *    needs no renderer channel — the same argument that made hover a poll.
+ *
+ * 6. Mouse events are refused except over the expanded panel in the one state
+ *    that offers something to press. The window is a single rectangle reaching
+ *    up to the top of the display, so "clickable" is all-or-nothing for the
+ *    whole frame — including the strip the menu bar owns. Scoping it by cursor
+ *    position, against a rect that starts at the top of the *work* area, is what
+ *    lets the panel hold a button without the collapsed pill ever being in a
+ *    position to swallow a click meant for the menu bar. See
+ *    `resolveNotchClickTarget`.
  */
 
-import { app, BaseWindow, screen, WebContentsView } from "electron";
-import type { Display } from "electron";
+import { app, BaseWindow, ipcMain, screen, WebContentsView } from "electron";
+import type { Display, IpcMainEvent } from "electron";
+import * as Path from "node:path";
 
 import {
   areNotchContextsEqual,
@@ -57,6 +67,8 @@ import {
   areRectsEqual,
   containsPoint,
   type NotchLayout,
+  type NotchPoint,
+  resolveNotchClickTarget,
   resolveNotchHoverTarget,
   resolveNotchLayout,
 } from "./notchGeometry.ts";
@@ -71,6 +83,7 @@ import {
   buildNotchLayoutScript,
   buildNotchPanelDataUrl,
   buildNotchStateScript,
+  NOTCH_SIGN_IN_CHANNEL,
   type NotchPanelView,
 } from "./notchPanelDocument.ts";
 
@@ -109,6 +122,12 @@ export interface NotchPanelOptions {
    * captured, because the window it reads is closed and recreated.
    */
   readonly readUrl?: () => string | null;
+  /**
+   * Carries the reader to where they can sign in. Required, not optional: the
+   * panel draws a sign-in button whenever the read comes back signed out, and a
+   * button with nobody behind it is worse than the dash it replaced.
+   */
+  readonly onSignIn: () => void;
   readonly refreshIntervalMs?: number;
 }
 
@@ -124,7 +143,7 @@ function toLayoutInput(display: Display): NotchLayout {
  * mean anything on — so this is a deliberate absence, not an unimplemented
  * branch.
  */
-export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelController | null {
+export function createNotchPanel(options: NotchPanelOptions): NotchPanelController | null {
   if (process.platform !== "darwin") {
     return null;
   }
@@ -169,14 +188,29 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
   // An overlay that sits over every screenshot and screen share is noise in
   // both; excluding it costs nothing because the panel is read-only.
   window.setContentProtection(true);
-  // Click-through, permanently: the collapsed pill overlaps the menu bar and
-  // must never swallow a click meant for it. `forward` keeps mouse moves
-  // flowing to the page so in-panel hover affordances work once the panel has
-  // content worth pointing at.
-  window.setIgnoreMouseEvents(true, { forward: true });
+  /**
+   * Click-through is the resting state and the only state the pill is ever in:
+   * it overlaps the menu bar and must never swallow a click meant for it.
+   * `forward` keeps mouse moves flowing to the page while it holds, so the
+   * button's hover styling works even before the panel accepts a press.
+   */
+  const setClickThrough = (clickThrough: boolean): void => {
+    if (window.isDestroyed()) {
+      return;
+    }
+    if (clickThrough) {
+      window.setIgnoreMouseEvents(true, { forward: true });
+      return;
+    }
+    window.setIgnoreMouseEvents(false);
+  };
+  setClickThrough(true);
 
   const view = new WebContentsView({
     webPreferences: {
+      // One button press, no exposed API — see `notchPreload.ts`. The page's
+      // own world is unchanged by it, so nothing below is relaxed for it.
+      preload: Path.join(__dirname, "notchPreload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -211,6 +245,18 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
   };
 
   let hover: NotchHoverState = initialNotchHoverState;
+  let action: NotchPanelView["action"] = null;
+  let clickThrough = true;
+
+  /**
+   * The page and this process learn a reading in the same moment. Drawing the
+   * button without recording that there is one — or the reverse — is a button
+   * nobody can press, so the two are never written apart.
+   */
+  const applyView = (next: NotchPanelView): void => {
+    action = next.action;
+    evaluateInPanel(buildNotchDataScript(next));
+  };
 
   const applyLayout = (): void => {
     if (destroyed || window.isDestroyed()) {
@@ -252,7 +298,7 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
           },
           apply: (view) => {
             if (view !== null) {
-              evaluateInPanel(buildNotchDataScript(view));
+              applyView(view);
             }
           },
           intervalMs: options.refreshIntervalMs ?? DATA_REFRESH_INTERVAL_MS,
@@ -280,7 +326,7 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     // Repaint the new page's labels straight away, so the panel is never
     // showing one page's numbers beside another page's names while the read
     // for the new one is still in the air.
-    evaluateInPanel(buildNotchDataScript(pendingNotchPanelView(next)));
+    applyView(pendingNotchPanelView(next));
     // Collapsed, the next expansion reads anyway; asking now would be a request
     // for a surface nobody is looking at.
     if (hover.expanded) {
@@ -288,9 +334,9 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     }
   };
 
-  const sampleHover = (): void => {
+  const sampleHover = (cursor: NotchPoint): void => {
     const target = resolveNotchHoverTarget(layout, hover.expanded);
-    const next = reduceNotchHoverState(hover, containsPoint(target, screen.getCursorScreenPoint()));
+    const next = reduceNotchHoverState(hover, containsPoint(target, cursor));
     if (next.expanded !== hover.expanded) {
       evaluateInPanel(buildNotchStateScript(next.expanded));
       // Refreshing is tied to visibility, not to a clock: a panel nobody has
@@ -300,6 +346,26 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     hover = next;
   };
 
+  /**
+   * The window stops being click-through only while the cursor is inside a rect
+   * the panel can act on, and `resolveNotchClickTarget` never returns one that
+   * reaches the menu bar. Collapsing puts it back by the same rule, without
+   * needing a separate path: no expansion, no target.
+   *
+   * It follows the cursor rather than the hover state alone because the hover
+   * region deliberately spans the pill, the gap and the panel — and the pill is
+   * over the menu bar. A press is only ever possible where a press makes sense.
+   */
+  const sampleClickThrough = (cursor: NotchPoint): void => {
+    const target = resolveNotchClickTarget(layout, hover.expanded, action !== null);
+    const next = target === null || !containsPoint(target, cursor);
+    if (next === clickThrough) {
+      return;
+    }
+    clickThrough = next;
+    setClickThrough(next);
+  };
+
   const sample = (): void => {
     if (destroyed || window.isDestroyed()) {
       return;
@@ -307,8 +373,22 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     // Context first: an expansion in the same tick should read the page the
     // window is actually on.
     sampleContext();
-    sampleHover();
+    // One cursor read for both: sampling it twice in a tick could put the hover
+    // state and the click region on either side of a single mouse move.
+    const cursor = screen.getCursorScreenPoint();
+    sampleHover(cursor);
+    sampleClickThrough(cursor);
   };
+
+  const handleSignIn = (event: IpcMainEvent): void => {
+    // `ipcMain` is process-wide, so the panel's own page is checked for rather
+    // than assumed: this channel exists for exactly one surface.
+    if (destroyed || view.webContents.isDestroyed() || event.sender !== view.webContents) {
+      return;
+    }
+    options.onSignIn();
+  };
+  ipcMain.on(NOTCH_SIGN_IN_CHANNEL, handleSignIn);
 
   const hoverTimer = setInterval(sample, HOVER_SAMPLE_INTERVAL_MS);
   // The panel must never be the reason the process stays alive.
@@ -337,6 +417,7 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     destroyed = true;
     clearInterval(hoverTimer);
     refresher?.stop();
+    ipcMain.removeListener(NOTCH_SIGN_IN_CHANNEL, handleSignIn);
     screen.removeListener("display-metrics-changed", applyLayout);
     screen.removeListener("display-added", applyLayout);
     screen.removeListener("display-removed", applyLayout);

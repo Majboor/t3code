@@ -1,30 +1,16 @@
-import type { DesktopServerExposureState, DesktopWorkspaceShareState } from "@t3tools/contracts";
-import { CheckIcon, CopyIcon, GlobeIcon, ShieldAlertIcon, TriangleAlertIcon } from "lucide-react";
+import type { DesktopServerExposureState } from "@t3tools/contracts";
+import { CheckIcon, CopyIcon, GlobeIcon, TriangleAlertIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogPortal,
-  AlertDialogTitle,
-  AlertDialogViewport,
-} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
-import {
-  createIdleWorkspaceShareState,
-  describeWorkspaceShare,
-  formatWorkspaceShareDiagnostics,
-  WORKSPACE_SHARE_EXPOSURE_WARNING,
-} from "./workspaceSharing.logic";
+import { useWorkspaceShareState } from "./useWorkspaceShareState";
+import { describeWorkspaceShare, formatWorkspaceShareDiagnostics } from "./workspaceSharing.logic";
+import { WorkspaceShareConfirmDialog } from "./WorkspaceShareConfirmDialog";
 
 /**
  * A quick tunnel reaches the server over loopback, so the server sees the whole
@@ -37,24 +23,15 @@ const NETWORK_ACCESS_HINT =
   "Turn on Settings → Connections → Network access first. Without it the server has no way to issue a pairing link, so your guest will only ever see a sign-in wall.";
 
 export function WorkspaceSharingPanel() {
-  const [shareState, setShareState] = useState<DesktopWorkspaceShareState>(
-    createIdleWorkspaceShareState,
-  );
+  const share = useWorkspaceShareState();
   const [exposureState, setExposureState] = useState<DesktopServerExposureState | null>(null);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const bridge = window.desktopBridge;
-    if (!bridge || typeof bridge.getWorkspaceShareState !== "function") return;
+    if (!bridge) return;
 
     let cancelled = false;
-    void bridge.getWorkspaceShareState().then(
-      (next) => {
-        if (!cancelled) setShareState(next);
-      },
-      () => {},
-    );
     void bridge.getServerExposureState?.().then(
       (next) => {
         if (!cancelled) setExposureState(next);
@@ -62,13 +39,8 @@ export function WorkspaceSharingPanel() {
       () => {},
     );
 
-    const unsubscribe = bridge.onWorkspaceShareState?.((next) => {
-      setShareState(next);
-    });
-
     return () => {
       cancelled = true;
-      unsubscribe?.();
     };
   }, []);
 
@@ -89,48 +61,25 @@ export function WorkspaceSharingPanel() {
     },
   });
 
-  const view = describeWorkspaceShare(shareState);
-  const diagnostics = formatWorkspaceShareDiagnostics(shareState.diagnostics);
-  const isDesktop = typeof window !== "undefined" && window.desktopBridge !== undefined;
-
-  const runStart = useCallback(async () => {
-    setActionError(null);
-    const bridge = window.desktopBridge;
-    if (!bridge) return;
-    try {
-      setShareState(await bridge.startWorkspaceShare());
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
-
-  const runStop = useCallback(async () => {
-    setActionError(null);
-    const bridge = window.desktopBridge;
-    if (!bridge) return;
-    try {
-      setShareState(await bridge.stopWorkspaceShare());
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
+  const view = describeWorkspaceShare(share.state);
+  const diagnostics = formatWorkspaceShareDiagnostics(share.state.diagnostics);
 
   const handlePrimaryAction = useCallback(() => {
     if (view.primaryAction === "stop") {
-      void runStop();
+      void share.stop();
       return;
     }
     // Never start straight from the button: the confirmation is where the user
     // learns the link is public, and by the time it exists that is already true.
     setIsConfirmOpen(true);
-  }, [runStop, view.primaryAction]);
+  }, [share, view.primaryAction]);
 
   const handleConfirmStart = useCallback(() => {
     setIsConfirmOpen(false);
-    void runStart();
-  }, [runStart]);
+    void share.start();
+  }, [share]);
 
-  if (!isDesktop) {
+  if (!share.isDesktop) {
     return (
       <section className="space-y-3" data-testid="workspace-sharing-panel">
         <Alert variant="info">
@@ -242,39 +191,19 @@ export function WorkspaceSharingPanel() {
         </pre>
       ) : null}
 
-      {actionError ? (
+      {share.actionError ? (
         <Alert variant="error" data-testid="workspace-sharing-action-error">
           <TriangleAlertIcon aria-hidden />
           <AlertTitle>Could not change sharing</AlertTitle>
-          <AlertDescription>{actionError}</AlertDescription>
+          <AlertDescription>{share.actionError}</AlertDescription>
         </Alert>
       ) : null}
 
-      <AlertDialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-        <AlertDialogPortal>
-          <AlertDialogViewport>
-            <AlertDialogPopup className="max-w-md" data-testid="workspace-sharing-confirm">
-              <AlertDialogHeader>
-                <AlertDialogTitle>Put this workspace on the internet?</AlertDialogTitle>
-                <AlertDialogDescription>{WORKSPACE_SHARE_EXPOSURE_WARNING}</AlertDialogDescription>
-              </AlertDialogHeader>
-              <Alert variant="warning" className="mx-4">
-                <ShieldAlertIcon aria-hidden />
-                <AlertDescription>
-                  The link stays live until you stop sharing or quit the app, and a new link is
-                  issued every time you start again.
-                </AlertDescription>
-              </Alert>
-              <AlertDialogFooter>
-                <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-                <Button onClick={handleConfirmStart} data-testid="workspace-sharing-confirm-start">
-                  Start sharing
-                </Button>
-              </AlertDialogFooter>
-            </AlertDialogPopup>
-          </AlertDialogViewport>
-        </AlertDialogPortal>
-      </AlertDialog>
+      <WorkspaceShareConfirmDialog
+        open={isConfirmOpen}
+        onOpenChange={setIsConfirmOpen}
+        onConfirm={handleConfirmStart}
+      />
     </section>
   );
 }

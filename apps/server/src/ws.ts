@@ -71,7 +71,9 @@ import {
   TenantRuntimeId,
   type TenantPermission,
   type TenantRole,
+  DEFAULT_TERMINAL_ID,
   TerminalCwdError,
+  TerminalSessionLookupError,
   ThreadId,
   WorkspaceId,
   type TerminalEvent,
@@ -175,6 +177,46 @@ type HostedLimitRejection = {
 const hostedRpcRateBuckets = new Map<string, RpcRateBucket>();
 const providerConnectFailureBuckets = new Map<string, ProviderConnectFailureBucket>();
 const activeWebSocketConnections = new Map<string, number>();
+
+/**
+ * A thread only gets a row once its first message is sent, but its terminal is
+ * openable long before that: a draft the person is still composing is an
+ * ordinary state, not an error. `terminal.open` authorizes the directory it was
+ * handed, so remember that directory here and let the rest of the terminal RPCs
+ * authorize against it while the thread itself is still unwritten.
+ *
+ * Keyed by thread id and shared across connections on purpose — the same draft
+ * is reachable from a second window, and each caller is re-checked against the
+ * remembered root rather than being trusted because someone else opened it.
+ */
+const MAX_REMEMBERED_TERMINAL_WORKSPACE_ROOTS = 256;
+const terminalWorkspaceRootsByThreadId = new Map<string, string>();
+
+function rememberTerminalWorkspaceRoot(threadId: string, cwd: string): void {
+  // Re-inserting moves the entry to the end, so the trim below drops the roots
+  // nobody has opened a terminal in for the longest.
+  terminalWorkspaceRootsByThreadId.delete(threadId);
+  terminalWorkspaceRootsByThreadId.set(threadId, cwd);
+  while (terminalWorkspaceRootsByThreadId.size > MAX_REMEMBERED_TERMINAL_WORKSPACE_ROOTS) {
+    const oldest = terminalWorkspaceRootsByThreadId.keys().next();
+    if (oldest.done === true) break;
+    terminalWorkspaceRootsByThreadId.delete(oldest.value);
+  }
+}
+
+function forgetTerminalWorkspaceRoot(threadId: string): void {
+  terminalWorkspaceRootsByThreadId.delete(threadId);
+}
+
+function threadWorkingDirectoryUnavailableMessage(threadId: string): string {
+  return `Thread ${threadId} has no working directory on this server yet. Send its first message, or open its terminal, and try again.`;
+}
+
+export const __testTerminalWorkspaceRoots = {
+  remember: rememberTerminalWorkspaceRoot,
+  read: (threadId: string) => terminalWorkspaceRootsByThreadId.get(threadId),
+  reset: () => terminalWorkspaceRootsByThreadId.clear(),
+};
 
 type ActiveWebSocketConnectionSlot = {
   readonly keys: readonly string[];
@@ -1773,12 +1815,22 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           { discard: true },
         );
 
+      /**
+       * The directory a thread's connection runs in.
+       *
+       * A thread that has been started answers with its worktree or its
+       * project's root. A draft has neither yet, so fall back to the directory
+       * its terminal was opened in — which `terminal.open` already authorized —
+       * rather than treating a perfectly ordinary unsent thread as a missing
+       * one. Only when there is no directory at all does this refuse, and it
+       * says what to do about it.
+       */
       const resolveThreadConnectionCwd = (
         threadId: ThreadId,
       ): Effect.Effect<string, ProviderAccountError> =>
         projectionSnapshotQuery.getThreadShellById(threadId).pipe(
           Effect.mapError(() =>
-            providerAccountError("forbidden", `Thread ${threadId} was not found.`),
+            providerAccountError("forbidden", threadWorkingDirectoryUnavailableMessage(threadId)),
           ),
           Effect.flatMap((thread) =>
             orchestrationEngine.getReadModel().pipe(
@@ -1786,18 +1838,19 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 const threadShell = Option.isSome(thread)
                   ? thread.value
                   : readModel.threads.find((candidate) => candidate.id === threadId);
-                if (!threadShell) {
-                  return Effect.fail(
-                    providerAccountError("forbidden", `Thread ${threadId} was not found.`),
-                  );
-                }
-                const project = readModel.projects.find(
-                  (candidate) => candidate.id === threadShell.projectId,
-                );
-                const cwd = threadShell.worktreePath ?? project?.workspaceRoot;
+                const cwd =
+                  threadShell === undefined
+                    ? terminalWorkspaceRootsByThreadId.get(threadId)
+                    : (threadShell.worktreePath ??
+                      readModel.projects.find(
+                        (candidate) => candidate.id === threadShell.projectId,
+                      )?.workspaceRoot);
                 if (!cwd) {
                   return Effect.fail(
-                    providerAccountError("forbidden", `Thread ${threadId} project was not found.`),
+                    providerAccountError(
+                      "forbidden",
+                      threadWorkingDirectoryUnavailableMessage(threadId),
+                    ),
                   );
                 }
                 return Effect.succeed(cwd);
@@ -2764,6 +2817,58 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           reason: "statFailed",
           cause: { message },
         });
+
+      const terminalThreadIsKnown = (threadId: string): Effect.Effect<boolean> =>
+        projectionSnapshotQuery.getThreadShellById(ThreadId.make(threadId)).pipe(
+          Effect.map(Option.isSome),
+          Effect.catchCause(() => Effect.succeed(false)),
+          Effect.flatMap((known) =>
+            known
+              ? Effect.succeed(true)
+              : orchestrationEngine.getReadModel().pipe(
+                  Effect.map((readModel) =>
+                    readModel.threads.some((candidate) => candidate.id === threadId),
+                  ),
+                  Effect.catchCause(() => Effect.succeed(false)),
+                ),
+          ),
+        );
+
+      /**
+       * Authorize a terminal RPC for a thread that may not have a row yet.
+       *
+       * A started thread authorizes through its own worktree and project, as
+       * everything else does. A draft has neither, so it authorizes through the
+       * directory `terminal.open` already checked for it — the same check, run
+       * again for whoever is asking now. A thread with no row and no terminal
+       * ever opened here is an id this server has never heard of: that is a
+       * lookup failure, not a directory failure, and it says so.
+       */
+      const ensureTerminalThreadAccess = (
+        input: { readonly threadId: string; readonly terminalId?: string | undefined },
+        permission: TenantPermission,
+      ): Effect.Effect<void, TerminalCwdError | TerminalSessionLookupError> => {
+        const toError = (message: string) => terminalRpcError(input.threadId, message);
+        return terminalThreadIsKnown(input.threadId).pipe(
+          Effect.flatMap(
+            (known): Effect.Effect<void, TerminalCwdError | TerminalSessionLookupError> => {
+              if (known) {
+                return ensureThreadAccess(input.threadId, permission, toError);
+              }
+              const openedRoot = terminalWorkspaceRootsByThreadId.get(input.threadId);
+              if (openedRoot !== undefined) {
+                return ensureWorkspaceRoot(openedRoot, permission, toError);
+              }
+              return Effect.fail(
+                new TerminalSessionLookupError({
+                  threadId: input.threadId,
+                  terminalId: input.terminalId ?? DEFAULT_TERMINAL_ID,
+                }),
+              );
+            },
+          ),
+        );
+      };
 
       const ensureProjectAccess = (
         projectId: string,
@@ -5714,7 +5819,12 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             withRateLimit(
               ensureWorkspaceRoot(input.cwd, "session.create", (message) =>
                 terminalRpcError(input.cwd, message),
-              ).pipe(Effect.flatMap(() => terminalManager.open(input))),
+              ).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => rememberTerminalWorkspaceRoot(input.threadId, input.cwd)),
+                ),
+                Effect.flatMap(() => terminalManager.open(input)),
+              ),
               (message) => terminalRpcError(input.cwd, message),
             ),
             {
@@ -5728,11 +5838,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               ensureHostedRpcRequestLimit(WS_METHODS.terminalWrite, input, (message) =>
                 terminalRpcError(input.threadId, message),
               ).pipe(
-                Effect.flatMap(() =>
-                  ensureThreadAccess(input.threadId, "session.prompt", (message) =>
-                    terminalRpcError(input.threadId, message),
-                  ),
-                ),
+                Effect.flatMap(() => ensureTerminalThreadAccess(input, "session.prompt")),
                 Effect.flatMap(() => terminalManager.write(input)),
               ),
               (message) => terminalRpcError(input.threadId, message),
@@ -5745,9 +5851,9 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.terminalResize,
             withRateLimit(
-              ensureThreadAccess(input.threadId, "session.view", (message) =>
-                terminalRpcError(input.threadId, message),
-              ).pipe(Effect.flatMap(() => terminalManager.resize(input))),
+              ensureTerminalThreadAccess(input, "session.view").pipe(
+                Effect.flatMap(() => terminalManager.resize(input)),
+              ),
               (message) => terminalRpcError(input.threadId, message),
             ),
             {
@@ -5758,9 +5864,9 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.terminalClear,
             withRateLimit(
-              ensureThreadAccess(input.threadId, "session.view", (message) =>
-                terminalRpcError(input.threadId, message),
-              ).pipe(Effect.flatMap(() => terminalManager.clear(input))),
+              ensureTerminalThreadAccess(input, "session.view").pipe(
+                Effect.flatMap(() => terminalManager.clear(input)),
+              ),
               (message) => terminalRpcError(input.threadId, message),
             ),
             {
@@ -5773,7 +5879,12 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             withRateLimit(
               ensureWorkspaceRoot(input.cwd, "session.create", (message) =>
                 terminalRpcError(input.cwd, message),
-              ).pipe(Effect.flatMap(() => terminalManager.restart(input))),
+              ).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => rememberTerminalWorkspaceRoot(input.threadId, input.cwd)),
+                ),
+                Effect.flatMap(() => terminalManager.restart(input)),
+              ),
               (message) => terminalRpcError(input.cwd, message),
             ),
             {
@@ -5784,9 +5895,18 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.terminalClose,
             withRateLimit(
-              ensureThreadAccess(input.threadId, "session.view", (message) =>
-                terminalRpcError(input.threadId, message),
-              ).pipe(Effect.flatMap(() => terminalManager.close(input))),
+              ensureTerminalThreadAccess(input, "session.view").pipe(
+                Effect.flatMap(() => terminalManager.close(input)),
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    // Closing the last terminal for a thread ends the reason to
+                    // remember where its terminals were opened.
+                    if (input.terminalId === undefined) {
+                      forgetTerminalWorkspaceRoot(input.threadId);
+                    }
+                  }),
+                ),
+              ),
               (message) => terminalRpcError(input.threadId, message),
             ),
             {
@@ -5806,9 +5926,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                     ),
                   ).pipe(
                     Stream.filterEffect((event) =>
-                      ensureThreadAccess(event.threadId, "session.view", (message) =>
-                        terminalRpcError(event.threadId, message),
-                      ).pipe(
+                      ensureTerminalThreadAccess(event, "session.view").pipe(
                         Effect.as(true),
                         Effect.catch(() => Effect.succeed(false)),
                       ),

@@ -157,6 +157,26 @@ export function resolveNotchHoverTarget(layout: NotchLayout, expanded: boolean):
   return expanded ? unionRect(layout.collapsed, layout.expanded) : layout.collapsed;
 }
 
+/**
+ * The region the panel is allowed to take clicks in, or `null` when it must
+ * stay click-through.
+ *
+ * The host window is one rectangle that starts at the top of the display, so
+ * turning mouse events on for it turns them on over the menu bar too. This is
+ * what keeps that from happening: the answer is only ever `expanded`, and
+ * `expanded.y` is the top of the work area by construction — the strip the menu
+ * bar owns, and the part of the collapsed pill that overlaps it, are outside
+ * every rect this can return. `actionable` is the second half of the rule:
+ * a panel showing figures has nothing to press, so it goes on costing nothing.
+ */
+export function resolveNotchClickTarget(
+  layout: NotchLayout,
+  expanded: boolean,
+  actionable: boolean,
+): NotchRect | null {
+  return expanded && actionable ? layout.expanded : null;
+}
+
 /** Screen-space rect rebased onto the host window's coordinate system. */
 export function toWindowLocalRect(rect: NotchRect, window: NotchRect): NotchRect {
   return { x: rect.x - window.x, y: rect.y - window.y, width: rect.width, height: rect.height };

@@ -32,7 +32,12 @@ import {
   type NotchFigureKey,
   resolveNotchFeed,
 } from "./notchContext.ts";
-import { EM_DASH, type NotchPanelView, type NotchSlotView } from "./notchPanelDocument.ts";
+import {
+  EM_DASH,
+  type NotchPanelAction,
+  type NotchPanelView,
+  type NotchSlotView,
+} from "./notchPanelDocument.ts";
 
 /** Mirrors the key `apps/web/src/environments/primary/auth.ts` writes under. */
 const SUPABASE_ACCESS_TOKEN_STORAGE_KEY = "t3code.supabase.accessToken";
@@ -719,9 +724,26 @@ function buildFigure(
 }
 
 /**
+ * The one outcome whose remedy is known exactly.
+ *
+ * Every other absence sends the reader nowhere useful: a server that is not
+ * answering, a read that failed, a project this account cannot see and an
+ * account with no workspace are all things a click cannot mend, so they keep
+ * the dash and the sentence explaining it. Being signed out is different — the
+ * next step is a screen the app already has.
+ */
+function resolveNotchAction(outcome: NotchActivityOutcome): NotchPanelAction | null {
+  return outcome.kind === "signed-out" ? "sign-in" : null;
+}
+
+/**
  * The context picks the rows and their labels; the outcome fills them in. The
  * label always comes from the context rather than the builder, so a figure can
  * never end up drawn under another figure's name.
+ *
+ * The rows are built even when the outcome carries an action and the page will
+ * draw the button instead of them: the reasons stay attached to the reading, so
+ * nothing here has to know which of the two the document chose to show.
  */
 export function toNotchPanelView(
   context: NotchContext,
@@ -734,6 +756,7 @@ export function toNotchPanelView(
       const view = buildFigure(figure, context, outcome);
       return { label, value: view.value, note: view.note, detail: view.detail };
     }),
+    action: resolveNotchAction(outcome),
   };
 }
 
@@ -742,6 +765,9 @@ export function toNotchPanelView(
  *
  * Painted the moment the app navigates, so the panel never shows one page's
  * numbers under another page's labels while the new read is in the air.
+ *
+ * No action either: an unfinished read is not evidence of being signed out, and
+ * offering a sign-in button to someone who is signed in would be a guess.
  */
 export function pendingNotchPanelView(context: NotchContext): NotchPanelView {
   const panel = NOTCH_CONTEXT_PANELS[context.kind];
@@ -753,6 +779,7 @@ export function pendingNotchPanelView(context: NotchContext): NotchPanelView {
       note: "",
       detail: "Not read yet.",
     })),
+    action: null,
   };
 }
 

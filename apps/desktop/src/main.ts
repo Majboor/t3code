@@ -2301,6 +2301,24 @@ app
     configureApplicationMenu();
     registerDesktopProtocol();
     configureAutoUpdater();
+    // Bringing the app to the front — reopening it if macOS has left the
+    // process running with no window — is what `activate` already means here.
+    // The notch panel's sign-in button needs exactly that and nothing more, so
+    // both go through this rather than through two window-opening paths that
+    // would drift the first time one of them learned something.
+    const revealOrOpenAppWindow = (): void => {
+      const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0];
+      if (existingWindow) {
+        revealWindow(existingWindow);
+        return;
+      }
+      if (isDevelopment) {
+        mainWindow = createWindow();
+        return;
+      }
+      ensureInitialBackendWindowOpen();
+    };
+
     // The notch panel is an independent always-on-top surface with its own
     // teardown, so it is created here rather than tied to the main window's
     // lifecycle. It no-ops off macOS and needs `screen`, hence after ready.
@@ -2322,6 +2340,9 @@ app
         const contents = mainWindow?.webContents;
         return contents && !contents.isDestroyed() ? contents.getURL() : null;
       },
+      // Signing in is a screen in the renderer, so the panel's job ends at
+      // putting the person in front of it.
+      onSignIn: revealOrOpenAppWindow,
     });
     void bootstrap().catch((error) => {
       if (isBackendReadinessAborted(error) && isQuitting) {
@@ -2330,18 +2351,7 @@ app
       handleFatalStartupError("bootstrap", error);
     });
 
-    app.on("activate", () => {
-      const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0];
-      if (existingWindow) {
-        revealWindow(existingWindow);
-        return;
-      }
-      if (isDevelopment) {
-        mainWindow = createWindow();
-        return;
-      }
-      ensureInitialBackendWindowOpen();
-    });
+    app.on("activate", revealOrOpenAppWindow);
   })
   .catch((error) => {
     handleFatalStartupError("whenReady", error);

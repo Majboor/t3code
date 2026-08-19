@@ -9,6 +9,7 @@ import {
   NOTCH_PANEL_HEIGHT,
   NOTCH_PANEL_WIDTH,
   type NotchDisplayMetrics,
+  resolveNotchClickTarget,
   resolveNotchHoverTarget,
   resolveNotchLayout,
   toWindowLocalRect,
@@ -142,6 +143,61 @@ describe("resolveNotchHoverTarget", () => {
     expect(target.width).toBe(NOTCH_PANEL_WIDTH);
     expect(containsPoint(target, { x: layout.expanded.x, y: layout.expanded.y })).toBe(true);
     expect(containsPoint(target, { x: layout.expanded.x - 1, y: layout.expanded.y })).toBe(false);
+  });
+});
+
+describe("resolveNotchClickTarget", () => {
+  it("refuses clicks unless the panel is both open and offering something", () => {
+    const layout = resolveNotchLayout(notchedDisplay);
+
+    expect(resolveNotchClickTarget(layout, false, false)).toBeNull();
+    expect(resolveNotchClickTarget(layout, false, true)).toBeNull();
+    expect(resolveNotchClickTarget(layout, true, false)).toBeNull();
+    expect(resolveNotchClickTarget(layout, true, true)).toEqual(layout.expanded);
+  });
+
+  /*
+   * The whole reason this is a rect and not a boolean. The host window reaches
+   * the top of the display, so turning mouse events on for it turns them on
+   * over the menu bar too; scoping the flip to this rect is what keeps that
+   * from happening.
+   */
+  it.each([
+    ["a notched Mac", notchedDisplay],
+    ["a plain Mac", plainDisplay],
+  ])("never offers a click region that reaches the menu bar on %s", (_name, display) => {
+    const layout = resolveNotchLayout(display);
+    const target = resolveNotchClickTarget(layout, true, true);
+
+    expect(target).not.toBeNull();
+    expect(target?.y).toBeGreaterThanOrEqual(display.workArea.y);
+  });
+
+  /*
+   * The collapsed pill runs up behind the notch and across the menu bar. What
+   * has to hold is that no point in that strip is ever clickable — including
+   * while the panel below it is open and taking presses.
+   */
+  it.each([
+    ["a notched Mac", notchedDisplay],
+    ["a plain Mac", plainDisplay],
+  ])("leaves the whole menu bar strip click-through on %s", (_name, display) => {
+    const layout = resolveNotchLayout(display);
+    const target = resolveNotchClickTarget(layout, true, true);
+
+    const columns = [
+      layout.window.x,
+      layout.collapsed.x,
+      Math.round(display.bounds.width / 2),
+      layout.collapsed.x + layout.collapsed.width - 1,
+      layout.window.x + layout.window.width - 1,
+    ];
+
+    for (let y = layout.window.y; y < display.workArea.y; y += 1) {
+      for (const x of columns) {
+        expect(containsPoint(target!, { x, y })).toBe(false);
+      }
+    }
   });
 });
 

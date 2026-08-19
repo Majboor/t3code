@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 
 import { CloudSyncBar } from "../cloudSync/CloudSyncBar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ShareProjectButton } from "../workspaceSharing/ShareProjectButton";
 import { OpenProjectInBrowserButton } from "./OpenProjectInBrowserButton";
 
 /**
@@ -56,6 +57,10 @@ export function ProjectSurfaceLinks({
         <TooltipPopup>Analytics — what its live deployments are reporting</TooltipPopup>
       </Tooltip>
       <OpenProjectInBrowserButton environmentId={environmentId} projectId={projectId} />
+      {/* Next to the browser link because that link is loopback and people were
+          sending it to colleagues; this is the one that survives leaving the
+          machine, and it says which kind of link it hands out. */}
+      <ShareProjectButton environmentId={environmentId} projectId={projectId} />
       {/* Beside the browser link on purpose: both answer "can somebody else open
           this", and the sync badge is the only warning that they cannot yet. */}
       <CloudSyncBar environmentId={environmentId} projectId={projectId} />

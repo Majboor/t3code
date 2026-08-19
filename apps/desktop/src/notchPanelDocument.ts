@@ -27,6 +27,38 @@ import { type NotchLayout, toWindowLocalRect } from "./notchGeometry.ts";
 
 export const NOTCH_STATE_ATTRIBUTE = "notchState";
 
+/**
+ * Which of the panel's states the reader can do something about.
+ *
+ * Only states with a next step belong here. "The server is off", "the read
+ * failed" and "this account has no workspace" are not fixed by clicking, so
+ * they keep their dash and their reason — a button that leads nowhere is worse
+ * than an honest blank.
+ */
+export type NotchPanelAction = "sign-in";
+
+export const NOTCH_ACTION_ATTRIBUTE = "notchAction";
+
+/** Written when no state offers an action, so the switch is a plain assignment. */
+const NOTCH_ACTION_NONE = "none";
+
+/**
+ * The one hook a click has to find, named here because this module writes it.
+ *
+ * The page carries no script of its own, so the click is recognised in
+ * `notchPreload.ts` by this attribute. Sharing the constant is what stops the
+ * button and the code listening for it from drifting apart silently.
+ */
+export const NOTCH_ACTION_BUTTON_ATTRIBUTE = "data-notch-action-button";
+
+/**
+ * The page -> main direction of the same contract the rest of this module
+ * defines going the other way. Main drives the panel by evaluating the scripts
+ * below; this is the single message that travels back, and it carries nothing —
+ * the channel *is* the message.
+ */
+export const NOTCH_SIGN_IN_CHANNEL = "desktop:notch-sign-in";
+
 export interface NotchSlotView {
   /** Drawn on the left of the row; it changes with the context. */
   readonly label: string;
@@ -48,6 +80,12 @@ export interface NotchPanelView {
   readonly title: string;
   /** Always `NOTCH_SLOT_COUNT` long; the page has that many rows and no more. */
   readonly slots: readonly NotchSlotView[];
+  /**
+   * What the reader can do about this state, or `null` when the honest answer
+   * is still a row of dashes. Required rather than optional so that every place
+   * that builds a view has to have decided.
+   */
+  readonly action: NotchPanelAction | null;
 }
 
 export const EM_DASH = "—";
@@ -61,7 +99,21 @@ export const initialNotchPanelView: NotchPanelView = {
     note: "",
     detail: "Not read yet.",
   })),
+  action: null,
 };
+
+/**
+ * The signed-out panel's words.
+ *
+ * Two lines and no more: this is a hover panel at the top of the screen, and
+ * the reader has already been told the app is not signed in by the fact that
+ * they are looking at this rather than at their figures. The tooltip says what
+ * the button actually does, because pressing it lands on the app window rather
+ * than on a form the panel could ever host itself.
+ */
+const SIGN_IN_LINE = "Not signed in, so there is nothing to report yet.";
+const SIGN_IN_BUTTON_LABEL = "Sign in";
+const SIGN_IN_BUTTON_DETAIL = "Brings the T3 Code window forward, where you can sign in.";
 
 /** Corner radius of the expanded panel, in CSS pixels. */
 const PANEL_RADIUS = 22;
@@ -136,7 +188,7 @@ function renderSlots(): string {
 
 export function buildNotchPanelHtml(layout: NotchLayout): string {
   return `<!doctype html>
-<html lang="en" data-notch-state="collapsed">
+<html lang="en" data-notch-state="collapsed" data-notch-action="${NOTCH_ACTION_NONE}">
   <head>
     <meta charset="utf-8" />
     <title>Live activity</title>
@@ -325,6 +377,60 @@ ${renderCssVariableBlock(layout)}
         display: none;
       }
 
+      /*
+       * The one state the panel can do something about takes the rows' place
+       * rather than joining them: the rows are laid out to fill the panel, and
+       * a fourth thing below them would not fit a box whose height was fixed at
+       * load. The rows stay in the document and keep being rewritten, so
+       * signing in brings the figures back without rebuilding the page.
+       */
+      .action {
+        display: none;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      html[data-notch-action="sign-in"] .slots {
+        display: none;
+      }
+
+      html[data-notch-action="sign-in"] .action {
+        display: flex;
+      }
+
+      .action-line {
+        font-size: 13px;
+        line-height: 1.35;
+        color: rgba(255, 255, 255, 0.55);
+      }
+
+      /*
+       * Quiet on purpose. It is the only thing on this surface anyone can press,
+       * so it has to read as pressable — but a hover panel over the menu bar is
+       * not a login form, and a filled accent button here would be shouting.
+       */
+      .action-button {
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.92);
+        background-color: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        padding: 6px 14px;
+        cursor: pointer;
+        transition: background-color 120ms ease;
+      }
+
+      .action-button:hover {
+        background-color: rgba(255, 255, 255, 0.2);
+      }
+
+      .action-button:active {
+        background-color: rgba(255, 255, 255, 0.26);
+      }
+
       @media (prefers-reduced-motion: reduce) {
         .surface,
         .grip,
@@ -342,6 +448,10 @@ ${renderCssVariableBlock(layout)}
         <dl class="slots">
 ${renderSlots()}
         </dl>
+        <div class="action">
+          <p class="action-line">${escapeHtml(SIGN_IN_LINE)}</p>
+          <button type="button" class="action-button" ${NOTCH_ACTION_BUTTON_ATTRIBUTE} title="${escapeHtml(SIGN_IN_BUTTON_DETAIL)}" aria-label="${escapeHtml(SIGN_IN_BUTTON_DETAIL)}">${escapeHtml(SIGN_IN_BUTTON_LABEL)}</button>
+        </div>
       </div>
     </div>
   </body>
@@ -378,8 +488,13 @@ export function buildNotchStateScript(expanded: boolean): string {
  * figure is stale — or worse, draws a deployment count under a label saying
  * "Share clicks" — is far worse than one that repaints a handful of short
  * strings. Rows the view does not fill are blanked for the same reason.
+ *
+ * The action travels with the figures rather than in a script of its own, so
+ * the page can never be showing a sign-in button beside a reading that came
+ * back signed in — the two are decided by one outcome and applied in one go.
  */
 export function buildNotchDataScript(view: NotchPanelView): string {
+  const action = JSON.stringify(view.action ?? NOTCH_ACTION_NONE);
   const calls = Array.from({ length: NOTCH_SLOT_COUNT }, (_unused, index) => {
     const slot = view.slots[index] ?? { label: "", value: EM_DASH, note: "", detail: "" };
     return (
@@ -388,7 +503,8 @@ export function buildNotchDataScript(view: NotchPanelView): string {
     );
   }).join("");
   return (
-    `(()=>{const t=document.querySelector("[data-panel-title]");` +
+    `(()=>{document.documentElement.dataset.${NOTCH_ACTION_ATTRIBUTE}=${action};` +
+    `const t=document.querySelector("[data-panel-title]");` +
     `if(t)t.textContent=${JSON.stringify(view.title)};` +
     `const w=(k,l,v,n,d)=>{` +
     `const e=document.querySelector('[data-slot="'+k+'"]');if(!e)return;` +
