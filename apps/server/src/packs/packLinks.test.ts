@@ -170,7 +170,9 @@ describe("the links printed under a pack search", () => {
     expect(shadowed[0]).toMatch(/(acme|t3demo)\/ssh-deploy@/);
     // And the one that is linked is the one that opens.
     const linked = lines.find((line) => line.startsWith("ssh-deploy: http"));
-    const opened = await withRegistry(root, () => getVerifiedPack(packIdInLink(linked ?? "") ?? ""));
+    const opened = await withRegistry(root, () =>
+      getVerifiedPack(packIdInLink(linked ?? "") ?? ""),
+    );
     expect(opened?.manifest.identity.name).toBe("ssh-deploy");
   });
 

@@ -458,23 +458,30 @@ it.effect("attributes an agent's writes to the person whose turn it was", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
-it.effect("counts a person and their agent in one file as two people in it", () =>
+it.effect("lets a turn fill in an unclaimed file but never take somebody else's", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;
 
     yield* collaboration.touchFiles(lead, { ...scope, paths: ["app.py"] });
-    yield* collaboration.touchFilesForUser(member.userId, { ...scope, paths: ["app.py"] });
+    yield* collaboration.touchFilesForUser(member.userId, {
+      ...scope,
+      paths: ["app.py", "worker.py"],
+    });
 
     const listed = yield* collaboration.listFileTouches(scope);
-    const authors = listed.touches
+    const authorsOfApp = listed.touches
       .filter((touch) => touch.path === "app.py")
       .map((touch) => touch.userId);
+    const authorsOfWorker = listed.touches
+      .filter((touch) => touch.path === "worker.py")
+      .map((touch) => touch.userId);
 
-    // The contention warning reads this list. An agent write that left no touch
-    // is why two people racing through their agents was never noticed.
-    assert.strictEqual(authors.length, 2);
-    assert.ok(authors.includes(lead.userId));
-    assert.ok(authors.includes(member.userId));
+    // A turn is told which files differ from the checkpoint it started at, and
+    // that set is wider than what the turn changed whenever the checkpoint is
+    // older than the turn. Handing the lead's file to the member on that
+    // evidence would put the wrong name and colour against it.
+    assert.deepStrictEqual(authorsOfApp, [lead.userId]);
+    assert.deepStrictEqual(authorsOfWorker, [member.userId]);
   }).pipe(Effect.provide(makeLayer())),
 );
 

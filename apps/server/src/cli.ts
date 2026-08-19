@@ -2104,12 +2104,7 @@ const runPackCliCommandWithLinks = Effect.fn("runPackCliCommandWithLinks")(funct
   const outcome = yield* runPackCommand(command, registryRoot);
   const packs = readPackIds(outcome.result);
   const links = yield* Effect.promise(() => packPageLinks({ packs, registryRoot, workspace }));
-  yield* Console.log(
-    [
-      outcome.human,
-      ...links,
-    ].join("\n"),
-  );
+  yield* Console.log([outcome.human, ...links].join("\n"));
 });
 
 const packSearchCommand = Command.make("search", {

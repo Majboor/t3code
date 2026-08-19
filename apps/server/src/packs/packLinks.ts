@@ -66,7 +66,7 @@ export async function packPageLinks(input: {
     return [
       "",
       addressing.servedRoot === undefined
-        ? `No pack pages: this workspace serves no packs of its own, so nothing here opens on the web.`
+        ? "No pack pages: this workspace serves no shipped packs, so nothing found here opens on the web."
         : `No pack pages for ${input.registryRoot}: this workspace opens packs from ${addressing.servedRoot}.`,
     ];
   }

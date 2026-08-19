@@ -2022,6 +2022,37 @@ const makeCollaborationService = Effect.gen(function* () {
   const touchFilesForUser: CollaborationServiceShape["touchFilesForUser"] = (userId, input) =>
     Effect.gen(function* () {
       const state = yield* Ref.get(stateRef);
+
+      /**
+       * Inference must not overwrite evidence.
+       *
+       * A browser save says "this person changed this file". A turn's diff says
+       * "these files differ from the checkpoint the turn started at", which is
+       * only the same sentence when that checkpoint was captured at the turn's
+       * start — and it is not, whenever an earlier turn changed nothing and left
+       * no checkpoint to measure from. A turn then sweeps up whatever anybody
+       * else did in between, and claiming those would put the wrong name and the
+       * wrong colour against a colleague's file.
+       *
+       * So a turn fills in the files nobody has claimed and leaves the rest
+       * alone. The cost is real and worth naming: a file somebody saved by hand
+       * keeps their name after somebody else's agent rewrites it.
+       */
+      const claimedByOthers = new Set<string>();
+      for (const touch of state.fileTouches.values()) {
+        if (
+          touch.tenantId === input.tenantId &&
+          touch.workspaceId === input.workspaceId &&
+          touch.userId !== userId
+        ) {
+          claimedByOthers.add(touch.path);
+        }
+      }
+      const paths = input.paths.filter((path) => !claimedByOthers.has(path));
+      if (paths.length === 0) {
+        return { touches: [] };
+      }
+
       const profile = state.memberProfiles.get(
         scopedKey(input.tenantId, input.workspaceId, userId),
       );
@@ -2048,7 +2079,7 @@ const makeCollaborationService = Effect.gen(function* () {
           displayName,
           avatarInitials: presence?.avatarInitials ?? toAvatarInitials(displayName),
         },
-        input,
+        { ...input, paths },
       );
     });
 

@@ -1040,7 +1040,6 @@ const make = Effect.gen(function* () {
    * completion event: the provider event PubSub is a shared subscription that
    * does not reliably reach every reactor, and this domain event carries the
    * file list already computed.
-   *
    */
   const attributeTurnFilesToItsAuthor = Effect.fn("attributeTurnFilesToItsAuthor")(function* (
     event: Extract<OrchestrationEvent, { type: "thread.turn-diff-completed" }>,

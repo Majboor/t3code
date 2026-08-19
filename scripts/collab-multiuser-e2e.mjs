@@ -579,10 +579,18 @@ try {
   }
 
   phase("Three people in one thread");
+  // Each line ends by telling the agent to leave the folder alone.
+  //
+  // Without it these are three agent turns loose in the workspace, and they
+  // act: given `from-a-<run>.txt` already in the tree and "B checking in
+  // <run>", one run's agent invented `from-b-<run>.txt` and `from-c-<run>.txt`
+  // before C had created theirs. C's New file then failed on a name that was
+  // already taken, and the phase after it reported a product that could not
+  // attribute a file when what had happened was a race with a helpful agent.
   const said = {
-    A: `A checking in ${RUN_ID}`,
-    B: `B checking in ${RUN_ID}`,
-    C: `C checking in ${RUN_ID}`,
+    A: `A checking in ${RUN_ID}. Reply with one word. Do not create or change any files.`,
+    B: `B checking in ${RUN_ID}. Reply with one word. Do not create or change any files.`,
+    C: `C checking in ${RUN_ID}. Reply with one word. Do not create or change any files.`,
   };
   // Each person walks in through the dashboard before writing, so all three
   // land in the project's thread rather than three drafts of their own.
@@ -667,10 +675,21 @@ try {
   // The same person is drawn twice: on the roster and against the files they
   // touched. A recolour that only reaches one of them leaves one person wearing
   // two colours, which is the opposite of what a colour is for.
-  const cFile = `from-c-${RUN_ID}.txt`;
+  // Named off the pattern the earlier files use rather than on it: a name an
+  // agent could guess from the thread is a name an agent can take first, and
+  // then C's create fails on a file that already exists.
+  const cFile = `c-note-${RUN_ID}.txt`;
   if (inviteForC) {
-    check("C creates a file", (await ensurePanelReady(accountC.page)) && (await createFileViaUi(accountC.page, cFile)));
-    await waitForFileOnDisk(cFile, FILE_APPEAR_TIMEOUT_MS);
+    // Asserted on disk, not on the click. `createFileViaUi` reports that it
+    // drove the dialog, which stays true when the create was refused — and a
+    // file that was never written cannot carry an author, so the two checks
+    // below would blame attribution for a create that never happened.
+    check(
+      "C creates a file",
+      (await ensurePanelReady(accountC.page)) &&
+        (await createFileViaUi(accountC.page, cFile)) &&
+        (await waitForFileOnDisk(cFile, FILE_APPEAR_TIMEOUT_MS)),
+    );
     // A walks back in first. There is no stream event for a member being
     // recoloured, so the roster A is holding refreshes and the shared
     // governance store behind the tree does not until it is re-acquired. That
@@ -694,16 +713,23 @@ try {
   phase("Two people in one file, and the offer of a branch");
   const contested = "seed.txt";
   // Contention is computed from file touches by distinct users inside a 15
-  // minute window, and a touch is only claimed by the workspace panel's own
-  // save. So two saves through the editor is what the detector is actually
-  // watching for — driving it with two agent turns would test nothing, because
-  // an agent's write never registers a touch at all.
+  // minute window, and a touch is claimed by a save through the editor or by
+  // the turn that changed the file. Two saves through the editor is the case
+  // this phase drives, because it is the one where both people are still
+  // typing and the warning is worth anything.
+  //
+  // Both browsers walk back into the project first. Sending a message leaves a
+  // browser on the /draft route it composed from, where the editor pane is not
+  // the one the tree opens into — B failed here twice with "the editor never
+  // rendered the file" while the editor was working perfectly for A.
+  await reachProject(accountA.page);
   await ensurePanelReady(accountA.page);
   const aSave = await editFileViaUi(accountA.page, {
     file: contested,
     contents: `A owns this line ${RUN_ID}\n`,
   });
   check("A edits the shared file in the editor", aSave.ok, aSave.why);
+  await reachProject(accountB.page);
   await ensurePanelReady(accountB.page);
   const bSave = await editFileViaUi(accountB.page, {
     file: contested,
@@ -758,13 +784,21 @@ try {
       if (!wrote) {
         skip("an agent's file write is attributed to somebody", "the agent never wrote a file");
       } else {
-        const agentMark = await fileAuthorFor(accountA.page, agentFile);
+        // Waited for, like every other mark in this suite: the file lands on
+        // disk while the turn is still running, and the touch is only recorded
+        // once the turn's diff is computed and reaches the browser on a stream.
+        const agentMark = await waitForFileAuthor(accountA.page, agentFile);
         check(
           "an agent's file write is attributed to somebody",
           Boolean(agentMark?.author),
           agentMark?.author
             ? agentMark.author
-            : "the agent wrote the file and the tree shows no author — only a browser save claims authorship, so nothing an agent does is attributed or contended",
+            : `the agent wrote the file and ${whyNoMark(agentMark)} — if only a browser save claims authorship, nothing an agent does is attributed or contended`,
+        );
+        check(
+          "the agent's write is attributed to whoever asked for the turn",
+          agentMark?.author === displayNameFor(ACCOUNT_A),
+          `marked "${agentMark?.author ?? ""}", A is "${displayNameFor(ACCOUNT_A)}"`,
         );
       }
     }

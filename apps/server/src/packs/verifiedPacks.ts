@@ -128,6 +128,13 @@ export interface ShippedPackAddressing {
  * state: `--registry` points the CLI at a directory of its own, and
  * T3CODE_VERIFIED_PACKS moves the server's. Packs from a registry this server
  * does not read have no page here, and saying so is the point.
+ *
+ * Called from the CLI, that answer is this process's environment speaking for
+ * the server's — they are two processes on one machine with no channel between
+ * them, and this is as close as it gets without adding one. It is the same
+ * inference the CLI already makes to find packs at all, and it errs the safe
+ * way: a link is printed only when the environment says both sides are reading
+ * one directory.
  */
 export async function shippedPackAddresses(searchedRoot: string): Promise<ShippedPackAddressing> {
   const servedRoot = verifiedPackRoot();
