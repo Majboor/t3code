@@ -85,3 +85,26 @@ describe("withShimOnPath", () => {
     expect(withShimOnPath("", "/shim")).toBe("/shim");
   });
 });
+
+/**
+ * Both adapters, or neither. Only the Codex manager put `t3` on PATH, so an
+ * agent running on Claude could not run the CLI the packs tell it to use —
+ * deploys served correctly and registered nothing. A grep is a blunt test, but
+ * the alternative is launching a provider, and the failure it guards against is
+ * exactly "somebody wired one adapter and not the other".
+ */
+describe("every provider that runs a turn gets the shim", () => {
+  const read = (relativePath: string) =>
+    fs.readFileSync(path.join(import.meta.dirname, relativePath), "utf8");
+
+  it("is applied by the Codex manager and the Claude adapter alike", () => {
+    for (const source of [
+      "codexAppServerManager.ts",
+      "provider/Layers/ClaudeAdapter.ts",
+    ] as const) {
+      const text = read(source);
+      expect.soft(text, `${source} must build the shim`).toContain("ensureAgentCliShim");
+      expect.soft(text, `${source} must put it on PATH`).toContain("withShimOnPath");
+    }
+  });
+});

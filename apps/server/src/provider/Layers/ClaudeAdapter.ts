@@ -64,6 +64,10 @@ import {
   Stream,
 } from "effect";
 
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+import { ensureAgentCliShim, withShimOnPath } from "../../agentCliShim.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -2861,7 +2865,33 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
         ...(fastMode ? { fastMode: true } : {}),
       };
-      const launchEnvironment = input.providerLaunchEnvironment?.env ?? process.env;
+      /**
+       * The same `t3` on PATH that a Codex turn gets.
+       *
+       * Only the Codex manager did this, so an agent running on Claude had no
+       * `t3` at all: it could not `t3 deploy run` or `t3 analytics declare`,
+       * and packs that tell it to are telling it to run a command that is not
+       * there. The visible symptom was deploys that served correctly and
+       * registered nothing, leaving Infrastructure and Analytics empty and
+       * analytics impossible to wire, since only `t3 deploy run` mints the
+       * ingest key.
+       *
+       * PATH is prepended rather than the environment rebuilt, so the
+       * credential filtering upstream still decides everything else in here.
+       */
+      const baseLaunchEnvironment = input.providerLaunchEnvironment?.env ?? process.env;
+      const t3Home = process.env["T3CODE_HOME"];
+      const shimDir = ensureAgentCliShim(
+        join(
+          t3Home !== undefined && t3Home.length > 0 ? t3Home : join(homedir(), ".t3code"),
+          "bin",
+        ),
+      );
+      const shimmedPath = withShimOnPath(baseLaunchEnvironment["PATH"], shimDir);
+      const launchEnvironment =
+        shimmedPath === undefined
+          ? baseLaunchEnvironment
+          : { ...baseLaunchEnvironment, PATH: shimmedPath };
 
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
