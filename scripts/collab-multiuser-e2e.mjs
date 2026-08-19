@@ -207,7 +207,7 @@ function checkLiveTreeUpdate(step, result) {
  * catch a tree attributing a file to the wrong person.
  */
 async function fileAuthorFor(page, fileName) {
-  await ensureWorkspacePanelOpen(page);
+  await ensurePanelReady(page);
   return page
     .locator("button")
     .evaluateAll((nodes, target) => {
@@ -258,6 +258,32 @@ async function reachProject(page, timeoutMs = 60_000) {
       reloaded = true;
       await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
     }
+  }
+  return false;
+}
+
+/**
+ * Leaves the workspace panel genuinely open, verified by a control that only
+ * exists while it is.
+ *
+ * The harness's `ensureWorkspacePanelOpen` decides it succeeded as soon as
+ * *some* project is selected, and it gets there by clicking the toggle — so
+ * when the panel was already open but the probe file had not painted yet, the
+ * click closed it and the helper reported success. Everything that needs the
+ * tree then failed: New file was not on the page, `seed.txt` had "no tree row",
+ * and author marks read as absent. All of it looked like broken product and
+ * none of it was.
+ *
+ * Toggling is idempotent over two passes, so re-checking after each attempt
+ * converges instead of oscillating.
+ */
+async function ensurePanelReady(page, timeoutMs = 45_000) {
+  const newFile = page.locator('button[aria-label="New file"]').first();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await newFile.isVisible().catch(() => false)) return true;
+    await ensureWorkspacePanelOpen(page);
+    await sleep(2_000);
   }
   return false;
 }
@@ -429,7 +455,7 @@ try {
   // suite looking for it in the wrong room.
   check("A is back in the project", await reachProject(accountA.page));
   const aFile = `from-a-${RUN_ID}.txt`;
-  check("A uses New file", await createFileViaUi(accountA.page, aFile));
+  check("A uses New file", (await ensurePanelReady(accountA.page)) && (await createFileViaUi(accountA.page, aFile)));
   check("A's file lands on disk", await waitForFileOnDisk(aFile, FILE_APPEAR_TIMEOUT_MS));
   checkLiveTreeUpdate("B sees A's new file", await waitForFileInTree(accountB.page, aFile));
 
@@ -592,7 +618,7 @@ try {
   // two colours, which is the opposite of what a colour is for.
   const cFile = `from-c-${RUN_ID}.txt`;
   if (inviteForC) {
-    check("C creates a file", await createFileViaUi(accountC.page, cFile));
+    check("C creates a file", (await ensurePanelReady(accountC.page)) && (await createFileViaUi(accountC.page, cFile)));
     await waitForFileOnDisk(cFile, FILE_APPEAR_TIMEOUT_MS);
     // A walks back in first. There is no stream event for a member being
     // recoloured, so the roster A is holding refreshes and the shared
@@ -617,11 +643,13 @@ try {
   // save. So two saves through the editor is what the detector is actually
   // watching for — driving it with two agent turns would test nothing, because
   // an agent's write never registers a touch at all.
+  await ensurePanelReady(accountA.page);
   const aSave = await editFileViaUi(accountA.page, {
     file: contested,
     contents: `A owns this line ${RUN_ID}\n`,
   });
   check("A edits the shared file in the editor", aSave.ok, aSave.why);
+  await ensurePanelReady(accountB.page);
   const bSave = await editFileViaUi(accountB.page, {
     file: contested,
     contents: `B owns this line ${RUN_ID}\n`,
@@ -822,7 +850,7 @@ try {
   // The turn check guards `thread.turn.start` alone; the file routes take
   // anyone who can reach the project.
   const smuggledFile = `smuggled-${RUN_ID}.txt`;
-  const createdWhileMuted = await createFileViaUi(accountB.page, smuggledFile);
+  const createdWhileMuted = (await ensurePanelReady(accountB.page)) && (await createFileViaUi(accountB.page, smuggledFile));
   // Looked for in every tree this run created, not just the project folder: by
   // now B may be working in their own branch's worktree, and a write that
   // landed there is still a write a read-only member was not supposed to make.
@@ -834,6 +862,7 @@ try {
       ? `read-only B created ${smuggledFile} at ${smuggledAt} — the viewer role guards thread.turn.start alone, so projects.createEntry and projects.writeFile still take anyone who can reach the project`
       : "",
   );
+  await ensurePanelReady(accountB.page);
   const overwrite = await editFileViaUi(accountB.page, {
     file: "seed.txt",
     contents: `overwritten by a read-only member ${RUN_ID}\n`,

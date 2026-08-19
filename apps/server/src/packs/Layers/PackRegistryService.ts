@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, PubSub, Stream } from "effect";
 
-import { getVerifiedPack, listVerifiedPacks } from "../verifiedPacks.ts";
+import { getVerifiedPack, isVerifiedPackId, listVerifiedPacks } from "../verifiedPacks.ts";
 
 import {
   fromManifestJson,
@@ -364,33 +364,62 @@ const makePackRegistryService = Effect.gen(function* () {
       .some((term) => haystack.includes(term));
   }
 
+  /**
+   * A pack that shipped with the product, as a registry entry, a release and a
+   * manifest — or nothing, when this id does not name one.
+   *
+   * Shared because every read has to agree about what exists. `search` offered
+   * these packs and `get` served them, but `listVersions` went straight to the
+   * published entries and failed with pack-not-found for a `verified:` id. The
+   * pack page asks for both at once, so every pack that ships with the product
+   * listed itself in search, offered a button to open it, and then rendered
+   * "No pack here" — the deploy pack and the analytics pack included, which is
+   * every pack a new workspace has. Offering a pack and then failing to open it
+   * is worse than never offering it.
+   *
+   * The version comes from the release just read rather than from the cached
+   * listing, so a page cannot show one version's manifest under another's
+   * number after an upgrade the cache has not seen.
+   */
+  const shippedPack = (viewer: PackViewerScope, packId: string) =>
+    Effect.gen(function* () {
+      if (!isVerifiedPackId(packId)) {
+        return undefined;
+      }
+      const release = yield* Effect.promise(() => getVerifiedPack(packId));
+      if (release === undefined) {
+        return undefined;
+      }
+      const entries = yield* Effect.promise(() =>
+        listVerifiedPacks(viewer.tenantId, viewer.workspaceId),
+      );
+      const entry = entries.find((candidate) => candidate.packId === packId);
+      if (entry === undefined) {
+        return undefined;
+      }
+      const pack: PackRegistryEntry = { ...entry, latestVersion: release.version };
+      return {
+        pack,
+        version: {
+          packId: pack.packId,
+          version: release.version,
+          capabilitySummary: pack.capabilitySummary,
+          // Nobody in this workspace published it — it came with the product.
+          // Naming the publisher handle is truthful and keeps the field
+          // meaning "who put this here".
+          publishedByUserId: UserId.make(`pack-publisher:${pack.publisherHandle}`),
+          publishedAt: pack.createdAt,
+        } satisfies PackRegistryVersion,
+        manifest: release.manifest,
+      };
+    });
+
   const get: PackRegistryServiceShape["get"] = (viewer, input) =>
     Effect.gen(function* () {
-      // Search offers shipped packs, so read has to serve them too. Listing a
-      // pack and then failing to open it is worse than never listing it: the
-      // person has already decided they want it.
-      const shipped = yield* Effect.promise(() => getVerifiedPack(input.packId));
+      // Search offers shipped packs, so read has to serve them too.
+      const shipped = yield* shippedPack(viewer, input.packId);
       if (shipped !== undefined) {
-        const entries = yield* Effect.promise(() =>
-          listVerifiedPacks(viewer.tenantId, viewer.workspaceId),
-        );
-        const pack = entries.find((entry) => entry.packId === input.packId);
-        if (pack !== undefined) {
-          return {
-            pack,
-            version: {
-              packId: pack.packId,
-              version: pack.latestVersion,
-              capabilitySummary: pack.capabilitySummary,
-              // Nobody in this workspace published it — it came with the
-              // product. Naming the publisher handle is truthful and keeps the
-              // field meaning "who put this here".
-              publishedByUserId: UserId.make(`pack-publisher:${pack.publisherHandle}`),
-              publishedAt: pack.createdAt,
-            },
-            manifest: shipped.manifest,
-          };
-        }
+        return shipped;
       }
 
       const pack = yield* loadVisibleEntry(viewer, input.packId);
@@ -410,6 +439,15 @@ const makePackRegistryService = Effect.gen(function* () {
 
   const listVersions: PackRegistryServiceShape["listVersions"] = (viewer, input) =>
     Effect.gen(function* () {
+      // A shipped pack has exactly the release that is installed. The registry
+      // on disk keeps older manifests beside it, but nothing here can say when
+      // any of them was published — a shipped pack has no publish event — so
+      // one honest release beats a history with invented dates.
+      const shipped = yield* shippedPack(viewer, input.packId);
+      if (shipped !== undefined) {
+        return { pack: shipped.pack, versions: [shipped.version] };
+      }
+
       const pack = yield* loadVisibleEntry(viewer, input.packId);
       const versions = yield* stored(repository.listVersions({ packId: pack.packId }));
       return { pack, versions };

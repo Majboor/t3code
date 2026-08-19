@@ -16,6 +16,7 @@ import { Effect, Layer, Schema } from "effect";
 
 import { PackRegistryServiceLive } from "./PackRegistryService.ts";
 import { PackRepositoryLive } from "./PackRepository.ts";
+import { resetVerifiedPackCache } from "../verifiedPacks.ts";
 import { PackRegistryService } from "../Services/PackRegistryService.ts";
 import { CollaborationService } from "../../collaboration/Services/CollaborationService.ts";
 import { CollaborationServiceLive } from "../../collaboration/Layers/CollaborationService.ts";
@@ -129,52 +130,99 @@ function makeLayer() {
   );
 }
 
+/**
+ * Runs an effect against a named registry of packs that ship with the product,
+ * and puts back whatever was configured before.
+ *
+ * `"none"` switches them off entirely. The cache is reset on both edges,
+ * because the module reads the directory once and remembers it.
+ */
+function withVerifiedPackRegistry<A, E, R>(
+  root: string | (() => string),
+  effect: Effect.Effect<A, E, R>,
+) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const previous = process.env["T3CODE_VERIFIED_PACKS"];
+      process.env["T3CODE_VERIFIED_PACKS"] = typeof root === "function" ? root() : root;
+      resetVerifiedPackCache();
+      return previous;
+    }),
+    () => effect,
+    (previous) =>
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env["T3CODE_VERIFIED_PACKS"];
+        else process.env["T3CODE_VERIFIED_PACKS"] = previous;
+        resetVerifiedPackCache();
+      }),
+  );
+}
+
+/**
+ * Runs an effect with the packs that ship with the product switched off.
+ *
+ * Stated here rather than inherited from the runner. `search` merges the
+ * machine's installed packs into a workspace's own, so a test that counts what
+ * a workspace can see depends on what happens to be installed — and the only
+ * thing making these pass was `T3CODE_VERIFIED_PACKS: "none"` in
+ * apps/server/vitest.config.ts. Run the same file from the repository root,
+ * which uses the root config instead, and two of them fail with nothing wrong
+ * with the code. A precondition a test needs belongs in the test.
+ */
+function withoutShippedPacks<A, E, R>(effect: Effect.Effect<A, E, R>) {
+  return withVerifiedPackRegistry("none", effect);
+}
+
 it.effect("publishes private to the workspace, whatever the manifest claims", () =>
-  Effect.gen(function* () {
-    const registry = yield* PackRegistryService;
+  withoutShippedPacks(
+    Effect.gen(function* () {
+      const registry = yield* PackRegistryService;
 
-    const published = yield* registry.publish(lead, {
-      ...scope,
-      manifest: makeManifest({ version: "0.1.0" }),
-    });
+      const published = yield* registry.publish(lead, {
+        ...scope,
+        manifest: makeManifest({ version: "0.1.0" }),
+      });
 
-    assert.strictEqual(published.pack.visibility.scope, "workspace");
-    assert.strictEqual(
-      published.pack.visibility.scope === "workspace"
-        ? published.pack.visibility.workspaceId
-        : null,
-      workspaceId,
-    );
-    assert.strictEqual(published.pack.latestVersion, "0.1.0");
-    assert.strictEqual(published.version.publishedByUserId, lead.userId);
+      assert.strictEqual(published.pack.visibility.scope, "workspace");
+      assert.strictEqual(
+        published.pack.visibility.scope === "workspace"
+          ? published.pack.visibility.workspaceId
+          : null,
+        workspaceId,
+      );
+      assert.strictEqual(published.pack.latestVersion, "0.1.0");
+      assert.strictEqual(published.version.publishedByUserId, lead.userId);
 
-    // The publishing workspace sees its own pack straight away.
-    const mine = yield* registry.search(scope, {});
-    assert.strictEqual(mine.packs.length, 1);
-    assert.strictEqual(mine.packs[0]?.packId, packId);
-  }).pipe(Effect.provide(makeLayer())),
+      // The publishing workspace sees its own pack straight away.
+      const mine = yield* registry.search(scope, {});
+      assert.strictEqual(mine.packs.length, 1);
+      assert.strictEqual(mine.packs[0]?.packId, packId);
+    }),
+  ).pipe(Effect.provide(makeLayer())),
 );
 
 it.effect("keeps a private pack out of another workspace entirely", () =>
-  Effect.gen(function* () {
-    const registry = yield* PackRegistryService;
-    yield* registry.publish(lead, { ...scope, manifest: makeManifest({ version: "0.1.0" }) });
+  withoutShippedPacks(
+    Effect.gen(function* () {
+      const registry = yield* PackRegistryService;
+      yield* registry.publish(lead, { ...scope, manifest: makeManifest({ version: "0.1.0" }) });
 
-    const theirs = yield* registry.search(otherScope, {});
-    assert.strictEqual(theirs.packs.length, 0);
+      const theirs = yield* registry.search(otherScope, {});
+      assert.strictEqual(theirs.packs.length, 0);
 
-    // Not "forbidden" — a stranger is not told which packs a workspace holds.
-    const refused = yield* registry.get(otherScope, { packId }).pipe(Effect.flip);
-    assert.strictEqual(refused.code, "pack-not-found");
+      // Not "forbidden" — a stranger is not told which packs a workspace holds.
+      const refused = yield* registry.get(otherScope, { packId }).pipe(Effect.flip);
+      assert.strictEqual(refused.code, "pack-not-found");
 
-    // Listing it is the deliberate second act.
-    yield* registry.setVisibility(lead, { ...scope, packId, visibility: { scope: "public" } });
+      // Listing it is the deliberate second act.
+      yield* registry.setVisibility(lead, { ...scope, packId, visibility: { scope: "public" } });
 
-    const listed = yield* registry.search(otherScope, {});
-    assert.strictEqual(listed.packs.length, 1);
-    const found = yield* registry.get(otherScope, { packId });
-    assert.strictEqual(found.pack.visibility.scope, "public");
-  }).pipe(Effect.provide(makeLayer())),
+      const listed = yield* registry.search(otherScope, {});
+      assert.strictEqual(listed.packs.length, 1);
+      const found = yield* registry.get(otherScope, { packId });
+      assert.strictEqual(found.pack.visibility.scope, "public");
+    }),
+  ).pipe(Effect.provide(makeLayer())),
 );
 
 it.effect("leaves a published version alone when the next one lands", () =>
@@ -256,28 +304,91 @@ it.effect("refuses a visibility change from someone who may only watch", () =>
 );
 
 it.effect("finds a pack by what it does and by its tags", () =>
-  Effect.gen(function* () {
-    const registry = yield* PackRegistryService;
-    yield* registry.publish(lead, {
-      ...scope,
-      manifest: makeManifest({
-        version: "0.1.0",
-        does: "Reconciles Stripe webhooks idempotently.",
-        tags: ["payments", "webhooks"],
-      }),
-    });
+  withoutShippedPacks(
+    Effect.gen(function* () {
+      const registry = yield* PackRegistryService;
+      yield* registry.publish(lead, {
+        ...scope,
+        manifest: makeManifest({
+          version: "0.1.0",
+          does: "Reconciles Stripe webhooks idempotently.",
+          tags: ["payments", "webhooks"],
+        }),
+      });
 
-    const byCapability = yield* registry.search(scope, { query: "idempotently" });
-    assert.strictEqual(byCapability.packs.length, 1);
+      const byCapability = yield* registry.search(scope, { query: "idempotently" });
+      assert.strictEqual(byCapability.packs.length, 1);
 
-    const byTag = yield* registry.search(scope, { query: "webhooks" });
-    assert.strictEqual(byTag.packs.length, 1);
+      const byTag = yield* registry.search(scope, { query: "webhooks" });
+      assert.strictEqual(byTag.packs.length, 1);
 
-    const byNothing = yield* registry.search(scope, { query: "kubernetes" });
-    assert.strictEqual(byNothing.packs.length, 0);
+      const byNothing = yield* registry.search(scope, { query: "kubernetes" });
+      assert.strictEqual(byNothing.packs.length, 0);
 
-    // Wildcards in a query are terms, not syntax.
-    const literal = yield* registry.search(scope, { query: "%" });
-    assert.strictEqual(literal.packs.length, 0);
-  }).pipe(Effect.provide(makeLayer())),
+      // Wildcards in a query are terms, not syntax.
+      const literal = yield* registry.search(scope, { query: "%" });
+      assert.strictEqual(literal.packs.length, 0);
+    }),
+  ).pipe(Effect.provide(makeLayer())),
+);
+
+/**
+ * A registry holding one pack that ships with the product, built here rather
+ * than pointed at the machine's own: what is installed on a developer's laptop
+ * must not decide what a test asserts.
+ */
+function buildShippedRegistry(): string {
+  const installed = path.join(os.homedir(), ".t3code", "packs");
+  const source = fs
+    .readdirSync(installed, { withFileTypes: true })
+    .find((entry) => entry.isDirectory() && entry.name.endsWith("ssh-deploy.pack"));
+  if (source === undefined) {
+    throw new Error(
+      `No ssh-deploy pack under ${installed}; this test would otherwise assert nothing. Run \`bun run packs:install\`.`,
+    );
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "t3-pack-registry-shipped-"));
+  fs.cpSync(path.join(installed, source.name), path.join(root, source.name), { recursive: true });
+  return root;
+}
+
+function withShippedPacks<A, E, R>(effect: Effect.Effect<A, E, R>) {
+  return withVerifiedPackRegistry(buildShippedRegistry, effect);
+}
+
+/**
+ * Search, read and release history have to agree about a pack that shipped with
+ * the product.
+ *
+ * They did not. `search` and `get` both knew about shipped packs and
+ * `listVersions` did not, so it failed with pack-not-found for a `verified:`
+ * id — and the pack page asks for a pack and its releases together. Every pack
+ * that ships with the product therefore appeared in search, offered a button to
+ * open it, and rendered "No pack here" when you did. That is every pack a new
+ * workspace has, including the one that does the deploying.
+ */
+it.effect("serves a shipped pack from search, from read and from its release history", () =>
+  withShippedPacks(
+    Effect.gen(function* () {
+      const registry = yield* PackRegistryService;
+
+      const found = yield* registry.search(scope, { query: "ssh" });
+      const listed = found.packs.find((pack) => pack.name === "ssh-deploy");
+      assert.ok(listed, "search did not offer the shipped pack");
+
+      const read = yield* registry.get(scope, { packId: listed.packId });
+      assert.strictEqual(read.manifest.identity.name, "ssh-deploy");
+
+      const history = yield* registry.listVersions(scope, { packId: listed.packId });
+      assert.strictEqual(history.pack.packId, listed.packId);
+      assert.strictEqual(history.versions.length, 1);
+
+      // The number the history reports has to be the number the manifest
+      // carries, or the page shows one release's contents under another's
+      // version the moment an upgrade lands that the listing cache has not seen.
+      assert.strictEqual(history.versions[0]?.version, read.manifest.identity.version);
+      assert.strictEqual(read.version.version, read.manifest.identity.version);
+      assert.strictEqual(history.pack.latestVersion, read.manifest.identity.version);
+    }),
+  ).pipe(Effect.provide(makeLayer())),
 );
