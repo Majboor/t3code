@@ -63,7 +63,11 @@ const SSH_USER = process.env["T3_DEPLOY_SSH_USER"] ?? "root";
 const RUN_ID = String(Date.now());
 const DESKTOP_DIR = path.join(os.homedir(), "Desktop");
 const ROOT_DIR = existsSync(DESKTOP_DIR) ? DESKTOP_DIR : os.tmpdir();
-const BASE_DIR = path.join(os.homedir(), ".t3");
+// Overridable because the server under test is not always the one in ~/.t3:
+// an agent may start it with its own --base-dir, and then this reads a database
+// nobody is writing to — a project that exists reads as a project with no
+// streams, which looks like a product bug and is not one.
+const BASE_DIR = process.env["T3_BASE_DIR"] ?? path.join(os.homedir(), ".t3");
 const PASSWORD = "CollabDeploy!2026";
 const KEEP = process.env["T3_E2E_KEEP_WORKSPACE"] === "1";
 const ONLY = process.env["T3_E2E_ONLY"] ?? "";
