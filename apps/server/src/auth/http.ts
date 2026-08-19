@@ -477,6 +477,60 @@ export const authPairingCredentialRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
+/**
+ * The label a handed-off browser session carries into the Connections list, so a
+ * session that appeared without anyone typing a token is identifiable there.
+ */
+export const BROWSER_HANDOFF_PAIRING_LABEL = "Opened in browser";
+
+/**
+ * Mints a pairing credential for the caller's *own* identity, so a client that
+ * already holds an owner session can hand that session to a second user agent on
+ * the same machine — the system browser, which shares no cookie jar with the
+ * desktop renderer.
+ *
+ * Deliberately a separate route from `POST /api/auth/pairing-token` rather than a
+ * flag on it:
+ * - That route mints `client`-role credentials under a fresh
+ *   `paired-client:<uuid>` subject. Subject is what a user id is derived from when
+ *   a session carries no local or tenant account, so a browser paired through it
+ *   arrives as a *different person* — a lesser role, and none of the provider
+ *   logins the owner connected. It cannot express "the same person".
+ * - It is also the route the Connections screen uses to pair other people's
+ *   devices. Teaching it to mint owner-role credentials on request would turn
+ *   every device-pairing link into an account hand-over, which is a much worse
+ *   trade than one extra route.
+ *
+ * It takes no body and no parameters: role and subject are read off the
+ * authenticated caller, so the credential it returns can never grant more than the
+ * session that asked for it. The credential itself is the ordinary one-time
+ * pairing credential — single use, minutes-long TTL — and nothing here consults or
+ * changes the auth policy. `desktop-managed-local` still refuses to auto-issue for
+ * anyone who merely reaches the port; this only lets someone who is already inside
+ * carry their own session across.
+ */
+export const authSelfPairingCredentialRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/auth/pairing-token/self",
+  Effect.gen(function* () {
+    const serverAuth = yield* ServerAuth;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const session = yield* serverAuth.authenticateHttpRequest(request);
+    if (session.role !== "owner") {
+      return yield* new AuthError({
+        message: "Only owner sessions can hand this session to a browser.",
+        status: 403,
+      });
+    }
+    const result = yield* serverAuth.issuePairingCredential({
+      role: session.role,
+      subject: session.subject,
+      label: BROWSER_HANDOFF_PAIRING_LABEL,
+    });
+    return HttpServerResponse.jsonUnsafe(result, { status: 200 });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
 const authenticateOwnerSession = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const serverAuth = yield* ServerAuth;

@@ -15,6 +15,7 @@ export {
 } from "./context";
 
 export {
+  createBrowserHandoffCredential,
   createServerPairingCredential,
   fetchOnboardingState,
   fetchSessionState,

@@ -1205,6 +1205,105 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(testWindow.location.searchParams.get("token")).toBeNull();
   });
 
+  it("signs a deep link in where it landed, so the project survives the sign-in", async () => {
+    const testWindow = installTestBrowser(
+      "http://localhost/project/environment-local/project-1#token=ABC123XYZ789",
+    );
+    const unauthenticated = {
+      authenticated: false,
+      auth: {
+        policy: "desktop-managed-local",
+        bootstrapMethods: ["desktop-bootstrap"],
+        sessionMethods: ["browser-session-cookie"],
+        sessionCookieName: "t3_session",
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(sessionResponse(unauthenticated))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          authenticated: true,
+          role: "owner",
+          sessionMethod: "browser-session-cookie",
+          expiresAt: "2030-01-01T00:00:00.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        sessionResponse({
+          ...unauthenticated,
+          authenticated: true,
+          tenantStatus: "active",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "authenticated",
+      tenantStatus: "active",
+    });
+    // The credential is spent, so it must not survive in the address bar for a
+    // reload or a bookmark to fail on later.
+    expect(testWindow.location.hash).toBe("");
+    expect(testWindow.location.pathname).toBe("/project/environment-local/project-1");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/auth/bootstrap");
+    expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain("ABC123XYZ789");
+  });
+
+  it("leaves the pairing screen's own token alone, so that page still owns it", async () => {
+    const testWindow = installTestBrowser("http://localhost/pair#token=ABC123XYZ789");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      sessionResponse({
+        authenticated: false,
+        auth: {
+          policy: "desktop-managed-local",
+          bootstrapMethods: ["desktop-bootstrap"],
+          sessionMethods: ["browser-session-cookie"],
+          sessionCookieName: "t3_session",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+    const gateState = await resolveInitialServerAuthGateState();
+
+    expect(gateState.status).toBe("requires-auth");
+    expect(testWindow.location.hash).toBe("#token=ABC123XYZ789");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a deep-link credential the server refused instead of pretending to sign in", async () => {
+    installTestBrowser("http://localhost/project/environment-local/project-1#token=EXPIRED12345");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        sessionResponse({
+          authenticated: false,
+          auth: {
+            policy: "desktop-managed-local",
+            bootstrapMethods: ["desktop-bootstrap"],
+            sessionMethods: ["browser-session-cookie"],
+            sessionCookieName: "t3_session",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "Bootstrap credential expired." }, { status: 401 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+    const gateState = await resolveInitialServerAuthGateState();
+
+    expect(gateState).toMatchObject({
+      status: "requires-auth",
+      errorMessage: "Bootstrap credential expired.",
+    });
+  });
+
   it("allows manual token submission after the initial auth check requires pairing", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

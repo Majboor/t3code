@@ -156,6 +156,30 @@ export function takePairingTokenFromUrl(): string | null {
   return token;
 }
 
+/**
+ * Takes a pairing token that arrived on a deep link — a project URL, not the
+ * pairing screen — so the destination survives the sign-in instead of being
+ * bounced to `/pair` and losing it.
+ *
+ * `/pair` and `/invite` are left alone: they read the token themselves and own the
+ * surface that reports a bad one, and consuming it out from under them would strip
+ * the field the user is looking at. The token is removed from the address bar as
+ * it is read, so it does not linger in a bookmark or a reload of a URL whose
+ * single-use credential the server has already burned.
+ */
+function takeDeepLinkPairingToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const pathname = window.location.pathname;
+  if (pathname === "/pair" || pathname === "/invite") {
+    return null;
+  }
+
+  return takePairingTokenFromUrl();
+}
+
 function getDesktopBootstrapCredential(): string | null {
   const bootstrap = window.desktopBridge?.getLocalEnvironmentBootstrap();
   return typeof bootstrap?.bootstrapToken === "string" && bootstrap.bootstrapToken.length > 0
@@ -774,6 +798,21 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
     return authenticatedGateStateFromSession(currentSession);
   }
 
+  const urlPairingToken = takeDeepLinkPairingToken();
+  if (urlPairingToken) {
+    try {
+      await exchangeBootstrapCredential(urlPairingToken);
+      const session = await waitForAuthenticatedSessionAfterBootstrap();
+      return authenticatedGateStateFromSession(session);
+    } catch (error) {
+      return {
+        status: "requires-auth",
+        auth: currentSession.auth,
+        errorMessage: error instanceof Error ? error.message : "Authentication failed.",
+      };
+    }
+  }
+
   if (!bootstrapCredential) {
     return {
       status: "requires-auth",
@@ -850,6 +889,34 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
   await exchangeBootstrapCredential(trimmedCredential);
   bootstrapPromise = null;
   stripPairingTokenFromUrl();
+}
+
+/**
+ * Asks the server for a pairing credential that stands in for *this* session, to
+ * hand it to a browser that has no cookie of ours — the desktop renderer opening
+ * a project in the system browser.
+ *
+ * Distinct from `createServerPairingCredential`, which mints a `client` credential
+ * for somebody else's device. This one carries no body precisely so it cannot ask
+ * for anything: the server reads the role and subject off the calling session, so
+ * the credential is worth exactly what the caller already holds and nothing more.
+ */
+export async function createBrowserHandoffCredential(): Promise<AuthPairingCredentialResult> {
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/pairing-token/self"), {
+    credentials: "include",
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      await readErrorMessage(
+        response,
+        `Failed to create a browser hand-off credential (${response.status}).`,
+      ),
+    );
+  }
+
+  return (await response.json()) as AuthPairingCredentialResult;
 }
 
 export async function createServerPairingCredential(

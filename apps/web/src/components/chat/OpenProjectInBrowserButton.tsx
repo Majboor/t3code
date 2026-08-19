@@ -2,11 +2,14 @@ import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { ExternalLinkIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 
-import { resolvePrimaryEnvironmentHttpUrl } from "~/environments/primary";
+import {
+  createBrowserHandoffCredential,
+  resolvePrimaryEnvironmentHttpUrl,
+} from "~/environments/primary";
 import { readLocalApi } from "~/localApi";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
-import { buildProjectBrowserUrl, copyLinkAndOpen } from "./OpenProjectInBrowser.logic";
+import { buildProjectBrowserUrl, handOffProjectToBrowser } from "./OpenProjectInBrowser.logic";
 
 /**
  * In the browser build there is no bridge, and the action stays rather than
@@ -25,6 +28,16 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
   await navigator.clipboard.writeText(text);
   return true;
+}
+
+/**
+ * The clipboard never gets the sign-in credential, so say so rather than let
+ * someone discover it by pasting the address somewhere and being asked to pair.
+ */
+function describeClipboard(handedOff: boolean): string {
+  return handedOff
+    ? "That browser was signed in for you. The clipboard has the plain address, so any other browser will still ask to pair."
+    : "The address is on your clipboard, for this machine's browsers.";
 }
 
 export const OpenProjectInBrowserButton = memo(function OpenProjectInBrowserButton({
@@ -57,17 +70,32 @@ export const OpenProjectInBrowserButton = memo(function OpenProjectInBrowserButt
       return;
     }
 
-    void copyLinkAndOpen({
+    void handOffProjectToBrowser({
       url,
+      // Only the desktop shell opens a browser that is a stranger to this session.
+      // Without the bridge the "browser" is another tab of this one, and it
+      // already has the cookie.
+      mintPairingCredential: window.desktopBridge
+        ? async () => (await createBrowserHandoffCredential()).credential
+        : undefined,
       copyToClipboard,
       openExternal: (target) => api.shell.openExternal(target),
     }).then(
-      ({ copied }) => {
+      (outcome) => {
+        if (outcome.status === "not-opened") {
+          toastManager.add({
+            type: "error",
+            title: "Unable to sign your browser in",
+            description: `${outcome.reason} Nothing was opened, because the page would have turned you away.`,
+          });
+          return;
+        }
+
         toastManager.add({
-          type: copied ? "success" : "warning",
+          type: outcome.copied ? "success" : "warning",
           title: "Opened this project in your browser",
-          description: copied
-            ? "The address is on your clipboard, for this machine's browsers."
+          description: outcome.copied
+            ? describeClipboard(outcome.handedOff)
             : "The address could not be copied, so paste it from the browser instead.",
         });
       },
@@ -98,7 +126,7 @@ export const OpenProjectInBrowserButton = memo(function OpenProjectInBrowserButt
       </TooltipTrigger>
       {/* The server usually listens on loopback, so this address is this machine's, not a link to hand out. */}
       <TooltipPopup>
-        Open in browser — copies this project&apos;s address and opens it here on this machine
+        Open in browser — signs your browser in and opens this project here on this machine
       </TooltipPopup>
     </Tooltip>
   );

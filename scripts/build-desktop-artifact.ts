@@ -77,6 +77,21 @@ interface BuildCliInput {
   readonly mockUpdateServerPort: Option.Option<number>;
 }
 
+/**
+ * Drops `workspace:*` entries from a staged dependency set.
+ *
+ * The build bundles workspace siblings into the dists, so the staged app needs
+ * their code, not their names — and the staging directory is not a workspace
+ * root, so `bun install` there cannot resolve the protocol at all. Packaging
+ * failed exactly here: apps/server depends on @t3tools/pack-cli, whose code is
+ * already inside bin.mjs.
+ */
+function stripWorkspaceDependencies(dependencies: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(dependencies).filter(([, version]) => !version.startsWith("workspace:")),
+  );
+}
+
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
   if (hostPlatform === "darwin") return "mac";
   if (hostPlatform === "linux") return "linux";
@@ -794,10 +809,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.mockUpdates,
       options.mockUpdateServerPort,
     ),
-    dependencies: {
+    // Workspace siblings are bundled into the dists by the build, so naming them
+    // here asks the staged install to fetch something that is already inlined —
+    // and it cannot, because the staging directory has no workspaces to resolve
+    // `workspace:*` against. That is exactly how packaging failed: apps/server
+    // depends on @t3tools/pack-cli, whose code is already inside bin.mjs.
+    dependencies: stripWorkspaceDependencies({
       ...resolvedServerDependencies,
       ...resolvedDesktopRuntimeDependencies,
-    },
+    }),
     devDependencies: {
       electron: electronVersion,
     },
