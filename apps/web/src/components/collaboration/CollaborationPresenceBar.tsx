@@ -127,8 +127,17 @@ export function CollaborationPresenceBar({
   // the popover that opened it has closed, and so the overview can summarise
   // sharing, the roster and the request list without opening their sections.
   const sharing = useProviderSharing({ environmentId, tenantId, workspaceId });
-  const roster = useCollaborationRoster({ environmentId, tenantId, workspaceId });
-  const usage = useProviderUsageRequests({ environmentId, tenantId, workspaceId });
+  // The roster and the request list are only summarised inside the popover, so
+  // they are scoped to nothing until it opens: an unscoped hook does not call,
+  // and every header on screen would otherwise buy two requests nobody reads.
+  // Both keep what they last loaded, so reopening paints before it refetches.
+  const panelScope = {
+    environmentId,
+    tenantId: panelOpen ? tenantId : null,
+    workspaceId: panelOpen ? workspaceId : null,
+  };
+  const roster = useCollaborationRoster(panelScope);
+  const usage = useProviderUsageRequests(panelScope);
   const project = useStore((store) =>
     selectProjectByRef(store, projectId ? { environmentId, projectId } : null),
   );
