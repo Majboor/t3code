@@ -158,6 +158,22 @@ async function mainWindow(app, timeoutMs = 120_000) {
   throw new Error("no window ever loaded the app over http");
 }
 
+/**
+ * The notch overlay's page. It is the one document in the app that is served
+ * from a `data:` URL — `notchPanelDocument.ts` generates it in-process — so that
+ * is what identifies it, for the same reason `mainWindow` matches on `http:`.
+ */
+async function notchPage(app, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const candidate of app.windows()) {
+      if (candidate.url().startsWith("data:text/html")) return candidate;
+    }
+    await sleep(500);
+  }
+  return null;
+}
+
 const bodyText = (page) =>
   page
     .locator("body")
@@ -215,6 +231,10 @@ async function main() {
   const context = { app, page, home, origin: new URL(page.url()).origin };
   const phases = {
     boot: bootPhase,
+    // Before the sign-in phase on purpose: the notch panel's only pressable
+    // state is the signed-out one, and this is the only moment in a run when it
+    // is reached honestly rather than by forcing an attribute onto the page.
+    notch: notchPhase,
     signin: signInPhase,
     project: projectPhase,
     chat: chatPhase,
@@ -222,6 +242,9 @@ async function main() {
     connections: connectionsPhase,
     publish: publishPhase,
     sweep: sweepPhase,
+    // Last, because it is the same panel read by an account that exists: the
+    // signed-out pass above can prove the button and not the figures.
+    notchlive: notchLivePhase,
   };
   for (const [name, run] of Object.entries(phases)) {
     if (ONLY && ONLY !== name) continue;
@@ -256,6 +279,468 @@ async function bootPhase({ page }) {
   check("a window opened", Boolean(url), url);
   check("the window rendered something", text.trim().length > 0, `${text.slice(0, 120)}`);
   await shoot(page, "01-boot");
+}
+
+/*
+ * ── the notch panel ──────────────────────────────────────────────────────────
+ *
+ * Everything below drives `apps/desktop/src/notch*.ts`, which was unit-tested
+ * against synthetic displays and never once watched running. Three things it
+ * can prove and one it cannot, stated here so a green run is not read as more
+ * than it is:
+ *
+ * - **Proven.** That the window and its document exist at the notch, that the
+ *   preload really did attach to a `data:` document inside a sandboxed
+ *   `WebContentsView` (a click on the page arrives in `ipcMain`), that hover
+ *   expands and collapses the panel, and that navigating the app window swaps
+ *   the panel's context without moving a pixel of its geometry.
+ * - **Not proven, and not provable from here.** That macOS delivers a *physical*
+ *   click to a `focusable: false`, `type: "panel"` window, and that the menu bar
+ *   still takes clicks underneath the collapsed pill. Both are questions about
+ *   AppKit's hit-testing of a real cursor. Playwright's clicks are injected into
+ *   the renderer over the debugger, which is exactly the layer below the one in
+ *   doubt, and driving the real cursor would take over the machine of whoever is
+ *   running this. What this run does instead is check the decision that hit
+ *   testing depends on — that the window is only ever taken out of
+ *   click-through while the cursor is inside the expanded panel, which starts at
+ *   the top of the work area and so never overlaps the menu bar.
+ *
+ * The cursor is stubbed rather than moved: `notchWindow.ts` polls
+ * `screen.getCursorScreenPoint()`, so replacing that one function drives the
+ * real sampler, the real hysteresis and the real geometry without touching the
+ * pointer of the person running this. Everything it stubs, it puts back.
+ */
+
+/** Mirrors `notchGeometry.ts`; kept here because a script cannot import the TS. */
+const NOTCH_GEOMETRY = { panelWidth: 380, panelHeight: 160, gutter: 16, pillWidth: 190 };
+
+/** `NOTCH_SLOT_COUNT` — the panel lays out this many rows once, at load. */
+const NOTCH_SLOT_COUNT = 3;
+
+/**
+ * Wraps the three things the panel reads from the outside world so a run can
+ * drive them: the cursor, the app window's URL, and the click-through call it
+ * makes in response. Each wrapper keeps the original and `releaseNotchProbe`
+ * puts it back, because every later phase shares this main process.
+ */
+async function installNotchProbe(app) {
+  return app.evaluate(({ BaseWindow, BrowserWindow, ipcMain, screen }) => {
+    const scope = globalThis;
+    const panel = BaseWindow.getAllWindows().find((window) => !(window instanceof BrowserWindow));
+    if (panel === undefined) return { found: false };
+    scope.__notchPanel = panel;
+
+    // Every click-through flip, with the cursor that caused it, is the whole
+    // evidence for "the collapsed pill cannot swallow a menu bar click".
+    scope.__notchMouseCalls = [];
+    const setIgnoreMouseEvents = panel.setIgnoreMouseEvents.bind(panel);
+    panel.setIgnoreMouseEvents = (ignore, options) => {
+      scope.__notchMouseCalls.push({
+        ignore,
+        forward: options?.forward ?? false,
+        at: Date.now(),
+        // The cursor the decision was taken against. Without it "mouse events
+        // were turned on" is not a statement about where they were turned on.
+        cursor: scope.__notchCursor ?? screen.getCursorScreenPoint(),
+      });
+      return setIgnoreMouseEvents(ignore, options);
+    };
+
+    // A second listener on the panel's own channel. `notchWindow.ts` keeps its
+    // own and still runs; this only counts.
+    scope.__notchSignIns = 0;
+    scope.__notchSignInListener = () => {
+      scope.__notchSignIns += 1;
+    };
+    ipcMain.on("desktop:notch-sign-in", scope.__notchSignInListener);
+
+    scope.__notchCursor = null;
+    const getCursorScreenPoint = screen.getCursorScreenPoint.bind(screen);
+    screen.getCursorScreenPoint = () => scope.__notchCursor ?? getCursorScreenPoint();
+
+    scope.__notchUrl = null;
+    const appWindow = BrowserWindow.getAllWindows()[0];
+    const getURL = appWindow ? appWindow.webContents.getURL.bind(appWindow.webContents) : null;
+    if (appWindow && getURL) {
+      appWindow.webContents.getURL = () => scope.__notchUrl ?? getURL();
+    }
+
+    scope.__notchRelease = () => {
+      panel.setIgnoreMouseEvents = setIgnoreMouseEvents;
+      screen.getCursorScreenPoint = getCursorScreenPoint;
+      if (appWindow && getURL && !appWindow.isDestroyed()) {
+        appWindow.webContents.getURL = getURL;
+      }
+      ipcMain.removeListener("desktop:notch-sign-in", scope.__notchSignInListener);
+    };
+
+    const display = screen.getPrimaryDisplay();
+    return {
+      found: true,
+      isBrowserWindow: panel instanceof BrowserWindow,
+      title: panel.getTitle(),
+      visible: panel.isVisible(),
+      alwaysOnTop: panel.isAlwaysOnTop(),
+      childViews: panel.contentView.children.length,
+      bounds: panel.getBounds(),
+      display: { bounds: display.bounds, workArea: display.workArea },
+      // The app window must still be a `BrowserWindow` and the panel must not
+      // be one: `main.ts` drives menus, theme repaints and "is there a window
+      // open" off `BrowserWindow.getAllWindows()`.
+      browserWindows: BrowserWindow.getAllWindows().length,
+    };
+  });
+}
+
+const releaseNotchProbe = (app) =>
+  app.evaluate(() => globalThis.__notchRelease?.()).catch(() => undefined);
+
+const setNotchCursor = (app, point) =>
+  app.evaluate((_electron, value) => {
+    globalThis.__notchCursor = value;
+  }, point);
+
+const setNotchUrl = (app, url) =>
+  app.evaluate((_electron, value) => {
+    globalThis.__notchUrl = value;
+  }, url);
+
+const readNotchProbe = (app) =>
+  app.evaluate(() => ({
+    signIns: globalThis.__notchSignIns ?? 0,
+    mouse: globalThis.__notchMouseCalls ?? [],
+    bounds: globalThis.__notchPanel?.getBounds() ?? null,
+  }));
+
+/** What the panel is drawing, read out of the document itself. */
+const readNotchPanel = (panel) =>
+  panel.evaluate(() => ({
+    state: document.documentElement.dataset.notchState ?? null,
+    action: document.documentElement.dataset.notchAction ?? null,
+    title: document.querySelector("[data-panel-title]")?.textContent ?? null,
+    slots: [...document.querySelectorAll("[data-slot]")].map((slot) => ({
+      label: slot.children[0]?.textContent ?? "",
+      value: slot.children[1]?.children[0]?.textContent ?? "",
+      note: slot.children[1]?.children[1]?.textContent ?? "",
+    })),
+    hasButton: Boolean(document.querySelector("[data-notch-action-button]")),
+    hasSurface: Boolean(document.querySelector(".surface")),
+    panelWidth: getComputedStyle(document.documentElement)
+      .getPropertyValue("--notch-panel-width")
+      .trim(),
+  }));
+
+/**
+ * Waits for the panel to settle on a state rather than sleeping past it: the
+ * hover reducer needs two agreeing samples at 90ms, and a fixed sleep would
+ * either be flaky or be ten times longer than it needs to be.
+ */
+async function waitForNotch(panel, predicate, timeoutMs = 6_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readNotchPanel(panel).catch(() => null);
+    if (last && predicate(last)) return last;
+    await sleep(120);
+  }
+  return last;
+}
+
+async function notchPhase({ app, page }) {
+  phase("notch");
+  if (process.platform !== "darwin") {
+    note("not macOS; `createNotchPanel` returns null by design and there is nothing to drive");
+    return;
+  }
+
+  const panel = await notchPage(app);
+  if (!check("the panel document loaded from a data: URL", panel !== null)) return;
+  attachWindowListeners(panel, "notch");
+
+  const probe = await installNotchProbe(app);
+  if (!check("a non-BrowserWindow overlay exists", probe.found === true)) return;
+  check("it stays out of BrowserWindow.getAllWindows()", probe.isBrowserWindow === false);
+  check("it is visible and above the menu bar", probe.visible && probe.alwaysOnTop);
+  check("it hosts exactly one WebContentsView", probe.childViews === 1, `${probe.childViews}`);
+
+  // The rects `notchGeometry.ts` computes, recomputed here from the display the
+  // app actually launched on — the unit tests prove the arithmetic, this proves
+  // the window was given the answer.
+  const inset = probe.display.workArea.y - probe.display.bounds.y;
+  const expected = {
+    x: Math.round(
+      probe.display.bounds.x +
+        (probe.display.bounds.width - (NOTCH_GEOMETRY.panelWidth + NOTCH_GEOMETRY.gutter * 2)) / 2,
+    ),
+    y: probe.display.bounds.y,
+    width: NOTCH_GEOMETRY.panelWidth + NOTCH_GEOMETRY.gutter * 2,
+    height: inset + NOTCH_GEOMETRY.panelHeight + NOTCH_GEOMETRY.gutter,
+  };
+  check(
+    "it is placed at the notch, sized for the expanded panel",
+    JSON.stringify(probe.bounds) === JSON.stringify(expected),
+    `got ${JSON.stringify(probe.bounds)} want ${JSON.stringify(expected)}`,
+  );
+  note(`menu bar inset ${inset}pt — over 32 is read as a notched display`);
+
+  // The panel is the only surface here, so the rect a click may land in is the
+  // expanded one: it starts at the top of the work area by construction.
+  const expandedRect = {
+    x: Math.round(
+      probe.display.bounds.x + (probe.display.bounds.width - NOTCH_GEOMETRY.panelWidth) / 2,
+    ),
+    y: probe.display.bounds.y + inset,
+    width: NOTCH_GEOMETRY.panelWidth,
+    height: NOTCH_GEOMETRY.panelHeight,
+  };
+  // The pill hides behind the notch on a display that has one and sits below
+  // the menu bar on one that does not, so the point to hover is derived rather
+  // than assumed — this run has to mean the same thing on both.
+  const hasNotch = inset >= 32;
+  const pillTop = hasNotch ? probe.display.bounds.y : probe.display.bounds.y + inset;
+  const pillHeight = hasNotch ? inset + 10 : 14;
+  const pillPoint = {
+    x: Math.round(probe.bounds.x + probe.bounds.width / 2),
+    y: pillTop + Math.floor(pillHeight / 2),
+  };
+  const panelPoint = { x: expandedRect.x + 40, y: expandedRect.y + 60 };
+  const awayPoint = { x: probe.display.bounds.x + 10, y: probe.display.workArea.y + 400 };
+  const insidePanel = (point) =>
+    point.x >= expandedRect.x &&
+    point.x < expandedRect.x + expandedRect.width &&
+    point.y >= expandedRect.y &&
+    point.y < expandedRect.y + expandedRect.height;
+
+  const drawn = await readNotchPanel(panel);
+  check("the document rendered its surface", drawn.hasSurface === true);
+  check(
+    `it laid out ${NOTCH_SLOT_COUNT} slots`,
+    drawn.slots.length === NOTCH_SLOT_COUNT,
+    `${drawn.slots.length}`,
+  );
+  check("the slots are sized for the panel", drawn.panelWidth === `${NOTCH_GEOMETRY.panelWidth}px`);
+  check("it starts collapsed", drawn.state === "collapsed", `${drawn.state}`);
+  note(`panel reads: ${drawn.title} — ${drawn.slots.map((s) => `${s.label} ${s.value} ${s.note}`).join(" | ")}`);
+
+  // Nobody has signed in in this sandbox, so this is the signed-out outcome
+  // arriving on its own rather than an attribute forced onto the page.
+  const signedOut = await waitForNotch(panel, (view) => view.action === "sign-in", 20_000);
+  check(
+    "a signed-out read draws the sign-in button",
+    signedOut?.action === "sign-in" && signedOut.hasButton,
+    `action=${signedOut?.action}`,
+  );
+
+  // ── hover ──────────────────────────────────────────────────────────────────
+  await setNotchCursor(app, pillPoint);
+  const expandedView = await waitForNotch(panel, (view) => view.state === "expanded");
+  check(
+    "a cursor on the pill expands the panel",
+    expandedView?.state === "expanded",
+    `${expandedView?.state}`,
+  );
+  await setNotchCursor(app, panelPoint);
+  const heldView = await waitForNotch(panel, (view) => view.state === "expanded");
+  check("moving down into the panel keeps it open", heldView?.state === "expanded");
+
+  // ── click-through ──────────────────────────────────────────────────────────
+  const overPanel = await readNotchProbe(app);
+  check(
+    "the window takes mouse events only once the cursor is in the panel",
+    overPanel.mouse.filter((call) => call.ignore === false).length === 1,
+    JSON.stringify(overPanel.mouse),
+  );
+  // The whole of "the collapsed pill cannot swallow a menu bar click": the
+  // window is only ever taken out of click-through with the cursor inside the
+  // expanded rect, and that rect starts at the top of the work area, so no such
+  // moment can exist while the cursor is over the menu bar.
+  check(
+    "mouse events are only ever turned on with the cursor inside the panel rect",
+    overPanel.mouse.every((call) => call.ignore === true || insidePanel(call.cursor)),
+    JSON.stringify(overPanel.mouse),
+  );
+  check(
+    "the panel rect never reaches the menu bar",
+    expandedRect.y >= probe.display.workArea.y,
+    `panel top ${expandedRect.y}, work area top ${probe.display.workArea.y}`,
+  );
+
+  // ── the button ─────────────────────────────────────────────────────────────
+  //
+  // This is the one that could have failed silently: `notchPreload.ts` is
+  // configured as the view's preload, but nothing had ever confirmed Electron
+  // attaches a preload to a `data:` document in a sandboxed `WebContentsView`.
+  // If it does not, this click reaches the page, finds no listener, and the
+  // count below stays at zero.
+  const before = await readNotchProbe(app);
+  // Hidden first, so "the app window came forward" is something this run
+  // watched happen rather than something that was already true.
+  const appWindowState = (evaluated) =>
+    evaluated.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return window ? { visible: window.isVisible(), minimized: window.isMinimized() } : null;
+    });
+  await app
+    .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.hide())
+    .catch(() => undefined);
+  await sleep(500);
+  note(`app window before the click: ${JSON.stringify(await appWindowState(app))}`);
+
+  await panel
+    .locator("[data-notch-action-button]")
+    .click({ timeout: 5_000 })
+    .catch((error) => note(`sign-in click: ${String(error).slice(0, 200)}`));
+  await sleep(1_500);
+  const after = await readNotchProbe(app);
+  check(
+    "clicking Sign in reaches main over desktop:notch-sign-in",
+    after.signIns > before.signIns,
+    `${before.signIns} -> ${after.signIns}`,
+  );
+  note(
+    "the click is injected into the renderer, so this proves the preload attached to the data: document — not that AppKit delivers a physical click to a non-activating panel",
+  );
+  const revealed = await appWindowState(app).catch(() => null);
+  check(
+    "signing in brings the app window forward",
+    revealed?.visible === true && revealed.minimized === false,
+    JSON.stringify(revealed),
+  );
+  // Whatever the check said, the rest of the run needs that window back.
+  if (revealed?.visible !== true) {
+    await app
+      .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.show())
+      .catch(() => undefined);
+  }
+
+  // ── collapse ───────────────────────────────────────────────────────────────
+  const leftAt = Date.now();
+  await setNotchCursor(app, awayPoint);
+  const collapsedView = await waitForNotch(panel, (view) => view.state === "collapsed");
+  check(
+    "leaving the panel collapses it",
+    collapsedView?.state === "collapsed",
+    `${collapsedView?.state}`,
+  );
+  const closed = await readNotchProbe(app);
+  const restored = closed.mouse.filter((call) => call.ignore === true).at(-1);
+  check(
+    "and puts the window back to click-through",
+    Boolean(restored) && restored.at >= leftAt && restored.forward === true,
+    JSON.stringify(closed.mouse.at(-1)),
+  );
+  // The gap between the cursor leaving the panel and the window going back to
+  // click-through is one sampling interval, and during it the window is still
+  // taking mouse events over the menu bar strip. Worth a number rather than a
+  // shrug: it is the only window in which the overlay can shadow the menu bar.
+  if (restored) note(`click-through restored ${restored.at - leftAt}ms after the cursor left`);
+
+  // ── contexts ───────────────────────────────────────────────────────────────
+  const geometryBefore = closed.bounds;
+  for (const [kind, url, title] of [
+    ["deployment", "http://127.0.0.1:1/#/infra/smoke-project-id", "Deployment"],
+    ["analytics", "http://127.0.0.1:1/#/analytics/smoke-project-id", "Analytics"],
+    ["prompting", "http://127.0.0.1:1/#/env-1/thread-1", "Current thread"],
+    ["default", "http://127.0.0.1:1/#/settings/general", "Live activity"],
+  ]) {
+    await setNotchUrl(app, url);
+    const view = await waitForNotch(panel, (candidate) => candidate.title === title);
+    check(`${kind} route relabels the panel`, view?.title === title, `${view?.title}`);
+    check(
+      `${kind} keeps ${NOTCH_SLOT_COUNT} slots and the same rect`,
+      view?.slots.length === NOTCH_SLOT_COUNT &&
+        JSON.stringify((await readNotchProbe(app)).bounds) === JSON.stringify(geometryBefore),
+      `${view?.slots.length} slots`,
+    );
+    // The reason `pendingNotchPanelView` exists: the moment the route changes,
+    // every figure has to be blanked, or the panel is drawing one page's numbers
+    // under another page's names until the next read lands.
+    check(
+      `${kind} shows no reading from the page it just left`,
+      view?.slots.every((slot) => slot.value === "—"),
+      JSON.stringify(view?.slots),
+    );
+  }
+  await setNotchUrl(app, null);
+
+  // A read is deliberately not made for a collapsed panel, so the dashes above
+  // stay until someone looks — this is the hover that makes them fill in again.
+  await setNotchCursor(app, pillPoint);
+  const refilled = await waitForNotch(panel, (view) => view.action === "sign-in", 20_000);
+  check(
+    "expanding after a navigation reads again",
+    refilled?.action === "sign-in",
+    JSON.stringify(refilled?.slots),
+  );
+  await setNotchCursor(app, awayPoint);
+  await waitForNotch(panel, (view) => view.state === "collapsed");
+
+  // ── the app's own routing ──────────────────────────────────────────────────
+  //
+  // Everything above stubbed the app window's URL, which proves the mapping and
+  // not that the app produces URLs it maps. This navigates the window itself.
+  await setNotchUrl(app, null);
+  await page.evaluate(() => {
+    window.location.hash = "#/infra/smoke-navigated";
+  });
+  const navigated = await waitForNotch(panel, (view) => view.title === "Deployment", 8_000);
+  check(
+    "navigating the real app window switches the panel",
+    navigated?.title === "Deployment",
+    `url=${page.url().slice(-40)} title=${navigated?.title}`,
+  );
+  await page.evaluate(() => {
+    window.location.hash = "#/";
+  });
+  await waitForNotch(panel, (view) => view.title === "Live activity", 8_000);
+
+  await releaseNotchProbe(app);
+  await panel.screenshot({ path: path.join(SHOTS, "notch-panel.png") }).catch(() => undefined);
+}
+
+/**
+ * The same panel, once an account exists.
+ *
+ * The signed-out pass can prove the button and nothing about the figures: every
+ * slot it sees says "sign in". This is the only run in which `notchData.ts`
+ * reads a token out of the app window, calls `/api/desktop/activity` and draws
+ * what came back — so it is the only place the panel's whole point is observed.
+ */
+async function notchLivePhase({ app, page }) {
+  phase("notch (signed in)");
+  if (process.platform !== "darwin") return;
+
+  const panel = await notchPage(app, 5_000);
+  if (!check("the panel is still up at the end of the run", panel !== null)) return;
+
+  const token = await page
+    .evaluate(() => localStorage.getItem("t3code.supabase.accessToken"))
+    .catch(() => null);
+  if (!token) {
+    note("no Supabase token in the app window — sign-in never completed, so the signed-in panel cannot be observed");
+    check("the panel keeps saying sign in rather than inventing figures", true);
+    return;
+  }
+
+  const probe = await installNotchProbe(app);
+  if (!check("the overlay is still there", probe.found === true)) return;
+  const pill = { x: Math.round(probe.bounds.x + probe.bounds.width / 2), y: probe.bounds.y + 4 };
+  await setNotchCursor(app, pill);
+  const view = await waitForNotch(panel, (candidate) => candidate.action === "none", 25_000);
+  check(
+    "a signed-in read drops the sign-in button",
+    view?.action === "none",
+    `action=${view?.action}`,
+  );
+  check(
+    "and every slot says either a figure or why there is none",
+    view?.slots.every((slot) => slot.value !== "" && (slot.value !== "—" || slot.note !== "")),
+    JSON.stringify(view?.slots),
+  );
+  note(`signed-in panel: ${view?.slots.map((s) => `${s.label} ${s.value} ${s.note}`).join(" | ")}`);
+  await setNotchCursor(app, { x: probe.display.bounds.x + 10, y: probe.display.workArea.y + 400 });
+  await sleep(500);
+  await releaseNotchProbe(app);
 }
 
 async function signInPhase({ page }) {

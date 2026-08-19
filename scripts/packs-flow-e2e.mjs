@@ -46,7 +46,6 @@ import {
   createReporter,
   openIsolatedSession,
   sleep,
-  unlistProject,
 } from "./lib/e2e-harness.mjs";
 
 const { chromium } = createRequire(new URL("../apps/web/package.json", import.meta.url))(
@@ -61,7 +60,6 @@ const RUN_ID = String(Date.now());
 const DESKTOP_DIR = path.join(os.homedir(), "Desktop");
 const ROOT_DIR = existsSync(DESKTOP_DIR) ? DESKTOP_DIR : os.tmpdir();
 const PROJECT_DIR = path.join(ROOT_DIR, `t3-packs-flow-${RUN_ID}`);
-const BASE_DIR = path.join(os.homedir(), ".t3");
 const PASSWORD = "PacksFlow!2026";
 const KEEP = process.env["T3_E2E_KEEP_WORKSPACE"] === "1";
 const PORT = 19940 + (Number(RUN_ID) % 30);
@@ -92,7 +90,6 @@ const {
   createInvite,
   acceptInvite,
   editFileViaUi,
-  closeWorkspacePanel,
   setApprovalMode,
   openCollabPanel,
   closeCollabPanel,
@@ -101,8 +98,55 @@ const {
 
 const CLI_ENTRY = path.join(REPO, "apps", "server", "src", "bin.ts");
 
+/**
+ * The home the server that is answering is actually using, and whether it was
+ * given a dev URL.
+ *
+ * Both matter and neither can be assumed. `t3 analytics` opens the SQLite file
+ * directly rather than going over RPC, and the file it opens is
+ * `<base-dir>/<"dev" if --dev-url else "userdata">/state.sqlite` (config.ts:96).
+ * Point it at the wrong home and nothing fails: it answers about an empty
+ * database, so a project that exists reads as a project with no streams — which
+ * is indistinguishable from analytics being broken, and cost this suite its
+ * first run. Every other suite hardcodes `~/.t3` and a `--dev-url`, which is
+ * right only when the server happens to have been started that way.
+ *
+ * So read the flags off the process that is serving, and say which was used.
+ */
+function resolveServerHome() {
+  const override = process.env["T3_E2E_BASE_DIR"];
+  if (override !== undefined && override.length > 0) {
+    return {
+      baseDir: override,
+      devUrl: process.env["T3_E2E_DEV_URL"] ?? null,
+      from: "environment",
+    };
+  }
+  const listing = execFileSync("ps", ["-ax", "-o", "command="], { encoding: "utf8" });
+  const serving = listing
+    .split("\n")
+    .find((line) => /bin\.ts\s+(serve|start)\b/.test(line) && !line.includes("grep"));
+  if (serving === undefined) {
+    return { baseDir: path.join(os.homedir(), ".t3"), devUrl: BASE_URL, from: "the usual default" };
+  }
+  return {
+    baseDir: /--base-dir[=\s]+(\S+)/.exec(serving)?.[1] ?? path.join(os.homedir(), ".t3"),
+    devUrl: /--dev-url[=\s]+(\S+)/.exec(serving)?.[1] ?? null,
+    from: "the running server",
+  };
+}
+
+const SERVER_HOME = resolveServerHome();
+const STATE_DB = path.join(
+  SERVER_HOME.baseDir,
+  SERVER_HOME.devUrl === null ? "userdata" : "dev",
+  "state.sqlite",
+);
+
 function t3(args) {
-  return execFileSync("node", [CLI_ENTRY, ...args, "--base-dir", BASE_DIR, "--dev-url", BASE_URL], {
+  const flags = ["--base-dir", SERVER_HOME.baseDir];
+  if (SERVER_HOME.devUrl !== null) flags.push("--dev-url", SERVER_HOME.devUrl);
+  return execFileSync("node", [CLI_ENTRY, ...args, ...flags], {
     encoding: "utf8",
     timeout: 180_000,
   }).trim();
@@ -174,18 +218,44 @@ function tryHeaders(url) {
 
 const PYTHON = sh("python3 -c 'import sys; print(sys.executable)'");
 
-/** The project row the app created for the directory. */
-function projectIdFor() {
-  const database = path.join(BASE_DIR, "dev", "state.sqlite");
-  if (!existsSync(database)) return null;
-  return (
-    execFileSync("sqlite3", [
-      database,
-      `select project_id from projection_projects where workspace_root = '${PROJECT_DIR.replaceAll("'", "''")}' and deleted_at is null limit 1;`,
-    ])
-      .toString()
-      .trim() || null
-  );
+/** The project row the app created for the directory, read out of the database. */
+function projectIdFromDatabase() {
+  if (!existsSync(STATE_DB)) return null;
+  try {
+    return (
+      execFileSync("sqlite3", [
+        STATE_DB,
+        `select project_id from projection_projects where workspace_root = '${PROJECT_DIR.replaceAll("'", "''")}' and deleted_at is null limit 1;`,
+      ])
+        .toString()
+        .trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The id the dashboard itself is using for this project.
+ *
+ * Preferred over the database because it is what a person clicking through
+ * would get, and because it does not depend on having guessed which home the
+ * server is running out of. The infrastructure icon beside each project row is
+ * a real link, so its href carries the id.
+ */
+async function projectIdFromDashboard(page) {
+  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await sleep(7_000);
+  const links = page.locator('[data-testid="dashboard-workspace-infra-link"]');
+  for (let index = 0; index < (await links.count()); index += 1) {
+    const href = await links
+      .nth(index)
+      .getAttribute("href")
+      .catch(() => null);
+    const found = href === null ? null : /\/infra\/([^/?#]+)/.exec(href)?.[1];
+    if (found) return found;
+  }
+  return null;
 }
 
 /** A pack's own words, from this repository rather than whatever was published. */
@@ -352,7 +422,9 @@ async function readInfraTab(page, projectId, { waitForLoadMs = 90_000 } = {}) {
     const rows = page.locator('[data-testid="infra-deployment"]');
     seen = {
       deployments: await rows.count(),
-      events: await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-events"))),
+      events: await rows.evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute("data-events")),
+      ),
       loads: await page.locator('[data-testid="infra-deployment-load"]').allInnerTexts(),
       enablements: await page.locator('[data-testid="infra-enablement"]').count(),
       body: await bodyText(page),
@@ -407,9 +479,17 @@ try {
 
   check("the first person signs up", await signUp(one, emailOne), emailOne);
   await addProject(one.page, PROJECT_DIR);
-  projectId = projectIdFor();
+  projectId = (await projectIdFromDashboard(one.page)) ?? projectIdFromDatabase();
   check("the folder is registered as a project", Boolean(projectId), projectId ?? "none");
   if (!projectId) throw new Error("no project");
+  // The CLI reads the database rather than the server, so a home that does not
+  // hold this project means every `t3 analytics` answer below is about the
+  // wrong machine. Said here, once, rather than discovered as an empty chart.
+  check(
+    "the CLI is pointed at the same home the server is serving from",
+    projectIdFromDatabase() === projectId,
+    `${STATE_DB} (from ${SERVER_HOME.from})`,
+  );
 
   if (PHASES.has("1")) {
     check("the first person opens the project", await openProject(one.page));
@@ -496,6 +576,12 @@ try {
       (await record.count()) === 1,
       (await record.innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 90),
     );
+    const releases = await one.page.locator('[data-testid="pack-detail-release"]').count();
+    check(
+      "and its release history opens rather than dead-ending the page",
+      releases >= 1,
+      `${releases} releases`,
+    );
     skip(
       "a pack is marked verified by the registry",
       "no implementation: there is no verified flag on a pack. `verified:` is an id prefix for whatever is installed on this machine's disk (apps/server/src/packs/verifiedPacks.ts), and packs.publish never checks a signature",
@@ -525,16 +611,41 @@ try {
     const ownPack = /\/pack\/(.+)$/.exec(one.page.url())?.[1] ?? null;
     check("it lands on the new pack's own page", Boolean(ownPack), one.page.url());
 
+    check(
+      "the published page has a share control with a button to copy the link",
+      (await one.page.locator('[data-testid="pack-detail-share-copy"]').count()) === 1,
+    );
+    // A pack is published private, and the control says so rather than handing
+    // over a URL that would 404 for the reader — so the link itself only
+    // appears once somebody widens it, which is a second deliberate act.
+    const beforeWidening = await one.page.locator('[data-testid="pack-detail-share-url"]').count();
+    check(
+      "and holds the link back while the pack is private",
+      beforeWidening === 0,
+      `${beforeWidening} shown`,
+    );
+    await one.page
+      .locator('[data-testid="pack-detail-visibility-change"]')
+      .first()
+      .click()
+      .catch(() => undefined);
+    await sleep(2_500);
+    const publicChoice = one.page
+      .locator('[data-testid="pack-detail-visibility-choice"]')
+      .filter({ hasText: /public/i })
+      .first();
+    if ((await publicChoice.count()) > 0) {
+      await publicChoice.click();
+      await sleep(800);
+      await one.page.locator('[data-testid="pack-detail-visibility-confirm"]').first().click();
+      await sleep(9_000);
+    }
     const share = one.page.locator('[data-testid="pack-detail-share-url"]').first();
     const shareUrl = (await share.count()) === 0 ? "" : await share.innerText().catch(() => "");
     check(
-      "the published page offers a link to share the pack",
+      "once it is made public the page shows the link to copy",
       shareUrl.includes("/pack/"),
-      shareUrl.replace(/\s+/g, " ").slice(0, 90),
-    );
-    check(
-      "and there is a button to copy it",
-      (await one.page.locator('[data-testid="pack-detail-share-copy"]').count()) === 1,
+      shareUrl.replace(/\s+/g, " ").slice(0, 90) || "no share url after widening",
     );
     // Read honestly: the link is only a link. Following it needs an account on
     // this server, and there is no way for the recipient to take a copy.
@@ -697,7 +808,15 @@ try {
           GIT_COMMITTER_EMAIL: "packs@example.test",
         },
       });
-      check("they commit a change on their branch", true, branchName ?? "");
+      const committed = execFileSync("git", ["log", "-1", "--name-only", "--format=%s"], {
+        cwd: worktree,
+        encoding: "utf8",
+      });
+      check(
+        "they commit a change on their branch",
+        committed.includes("NOTES-FROM-THE-BRANCH.md"),
+        committed.replace(/\s+/g, " ").slice(0, 80),
+      );
 
       // The comparison has to catch up before the merge button stops being
       // disabled for having nothing to merge.
@@ -706,14 +825,26 @@ try {
         await waitForCollabElement(two.page, "collaboration-branch-compare", 40_000),
         "",
       );
-      await sleep(6_000);
-      await openCollabPanel(two.page);
+      // The button is disabled while the comparison still reads "nothing to
+      // merge yet", and the commit was made outside the app, so the claim's
+      // ahead-count catches up a beat later. Polled rather than slept on: a
+      // fixed wait either fails a working feature or slows every run.
       const merge = two.page.locator('[data-testid="collaboration-merge-branch"]').first();
-      const canMerge = (await merge.count()) > 0 && !(await merge.isDisabled().catch(() => true));
+      let canMerge = false;
+      const mergeDeadline = Date.now() + 90_000;
+      do {
+        await openCollabPanel(two.page);
+        canMerge = (await merge.count()) > 0 && !(await merge.isDisabled().catch(() => true));
+        if (canMerge) break;
+        await closeCollabPanel(two.page);
+        await sleep(6_000);
+      } while (Date.now() < mergeDeadline);
       check(
         "they can merge it back from the same panel",
         canMerge,
-        canMerge ? "" : "the merge button is absent or still disabled",
+        canMerge
+          ? ""
+          : "the merge button stayed absent or disabled — the comparison never saw the commit",
       );
       if (canMerge) {
         await merge.click();
@@ -721,7 +852,11 @@ try {
         const outcome = two.page.locator('[data-testid="collaboration-merge-outcome"]').first();
         const status =
           (await outcome.count()) === 0 ? "none" : await outcome.getAttribute("data-status");
-        check("the merge completes rather than conflicting", status === "completed", status ?? "none");
+        check(
+          "the merge completes rather than conflicting",
+          status === "completed",
+          status ?? "none",
+        );
         const onMain = tryGit("show", "main:NOTES-FROM-THE-BRANCH.md");
         check(
           "the branch's change is on main afterwards",
@@ -1027,9 +1162,12 @@ try {
     if (!deployed) {
       skip("a document put live", "nothing was deployed to add it to");
     } else {
+      // Driven from the first person's session, because this phase is about the
+      // shape of the thing being deployed rather than about who asks.
+      await openProject(one.page);
       const fifthBuild = `${RUN_ID}-5`;
       const doc = await deployAndWait(
-        three.page,
+        one.page,
         deployInstruction({
           buildId: fifthBuild,
           projectId,
@@ -1041,7 +1179,7 @@ try {
         fifthBuild,
       );
       check("the request to put a document live goes to the agent", doc.sent);
-      const trouble = await providerTrouble(three.page);
+      const trouble = await providerTrouble(one.page);
       check("that turn reached a provider", trouble === null, trouble ?? "");
       check("the redeploy is what is serving", doc.result.ok, describeDeploy(fifthBuild, doc));
       const headers = tryHeaders(`http://127.0.0.1:${PORT}/doc.pdf`);
@@ -1087,7 +1225,20 @@ try {
     // A worktree left behind keeps the directory alive under a different name.
     sh(`git -C ${JSON.stringify(PROJECT_DIR)} worktree prune 2>/dev/null || true`);
     rmSync(PROJECT_DIR, { recursive: true, force: true });
-    unlistProject(PROJECT_DIR);
+    // The harness's own `unlistProject` reads ~/.t3/dev, which is not
+    // necessarily where this server keeps its state — so do it against the home
+    // that was actually resolved. Marked deleted rather than dropped, which is
+    // what the app itself does, and best effort: tidying up must never change
+    // what a run reported.
+    try {
+      execFileSync("sqlite3", [
+        STATE_DB,
+        `update projection_projects set deleted_at = datetime('now'), updated_at = datetime('now')
+         where deleted_at is null and workspace_root = '${PROJECT_DIR.replaceAll("'", "''")}';`,
+      ]);
+    } catch {
+      // A missing sqlite3, a locked database — none of it is worth a failed run.
+    }
   }
 }
 

@@ -89,7 +89,6 @@ const {
   waitForText,
   signUp,
   addProject,
-  openProject,
   visibleFileNames,
   waitForFileInTree,
   createFileViaUi,
@@ -132,6 +131,36 @@ function git(...args) {
       GIT_COMMITTER_EMAIL: "multiuser@example.test",
     },
   }).trim();
+}
+
+/**
+ * Every directory this run's workspace occupies: the project folder and any
+ * branch worktree beside it. A person working on their own branch is writing
+ * into the worktree, so a check that only reads the project folder would call
+ * their write "never happened".
+ */
+function workspaceTrees() {
+  const trees = [PROJECT_DIR];
+  try {
+    for (const line of git("worktree", "list").split("\n")) {
+      const dir = line.split(/\s+/)[0];
+      if (dir && !trees.includes(dir)) trees.push(dir);
+    }
+  } catch {
+    // Not a repository yet, or no worktrees: the project folder is the whole of it.
+  }
+  return trees;
+}
+
+/** Where a named file turned up, or null if it never did. */
+async function findWrittenFile(name, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = workspaceTrees().find((dir) => existsSync(path.join(dir, name)));
+    if (found) return path.join(found, name);
+    await sleep(2_000);
+  }
+  return null;
 }
 
 async function waitForFileOnDisk(name, timeoutMs) {
@@ -194,6 +223,43 @@ async function fileAuthorFor(page, fileName) {
         color: getComputedStyle(mark).backgroundColor,
       };
     }, fileName);
+}
+
+/**
+ * Walks a browser back into the shared project, waiting for the row rather
+ * than assuming it has arrived.
+ *
+ * The harness's `openProject` settles for a fixed six seconds and then decides.
+ * That is enough on an idle machine and not enough with three browser contexts
+ * and a dev server on one laptop: the dashboard lists workspaces
+ * asynchronously, so the row was simply not painted yet. One such miss failed
+ * seven downstream checks in a row — the roster, the transcript, two people's
+ * file writes and the whole read-only phase — none of which had anything wrong
+ * with them, and the run reported a broken product instead of a slow one.
+ *
+ * So poll for the row instead of re-navigating blindly, and reload only if it
+ * never comes. Costs nothing when the dashboard is quick.
+ */
+async function reachProject(page, timeoutMs = 60_000) {
+  const link = page.locator('[data-testid="dashboard-workspace-project-link"]').first();
+  const deadline = Date.now() + timeoutMs;
+  let reloaded = false;
+  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  while (Date.now() < deadline) {
+    if ((await link.count().catch(() => 0)) > 0) {
+      await link.click().catch(() => undefined);
+      await sleep(NAVIGATION_MS);
+      return true;
+    }
+    await sleep(2_500);
+    // One reload halfway through, for a dashboard that fetched before the
+    // membership landed and is not going to ask again on its own.
+    if (!reloaded && Date.now() > deadline - timeoutMs / 2) {
+      reloaded = true;
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    }
+  }
+  return false;
 }
 
 /** Waits for an author mark to reach a row, because the touch arrives on a stream. */
@@ -349,7 +415,7 @@ try {
     .click()
     .catch(() => undefined);
   await sleep(6_000);
-  check("the shared workspace opens for B", await openProject(accountB.page));
+  check("the shared workspace opens for B", await reachProject(accountB.page));
   check("B hits no permission error", !PERMISSION_ERROR.test(await bodyText(accountB.page)));
   check(
     "B sees the file python wrote before they joined",
@@ -357,6 +423,11 @@ try {
   );
 
   phase("A creates a file, and B is told who created it");
+  // Inviting B left A on the dashboard, and the workspace panel only has a tree
+  // to show from inside the project — without this the New file control is
+  // simply not on the page, which reads as a broken control rather than as the
+  // suite looking for it in the wrong room.
+  check("A is back in the project", await reachProject(accountA.page));
   const aFile = `from-a-${RUN_ID}.txt`;
   check("A uses New file", await createFileViaUi(accountA.page, aFile));
   check("A's file lands on disk", await waitForFileOnDisk(aFile, FILE_APPEAR_TIMEOUT_MS));
@@ -422,7 +493,7 @@ try {
       .click()
       .catch(() => undefined);
     await sleep(6_000);
-    check("the shared workspace appears for C's existing account", await openProject(accountC.page));
+    check("the shared workspace appears for C's existing account", await reachProject(accountC.page));
     check(
       "C sees the shared files",
       (await visibleFileNames(accountC.page)).includes(pythonFile),
@@ -431,30 +502,51 @@ try {
   }
 
   phase("Three people in one thread");
-  check("A is back in the project", await openProject(accountA.page));
   const said = {
     A: `A checking in ${RUN_ID}`,
     B: `B checking in ${RUN_ID}`,
     C: `C checking in ${RUN_ID}`,
   };
-  // Messages, not turns: what is being checked is attribution and colour, and
-  // making all three depend on a provider would lose that to a missing key.
+  // Each person walks in through the dashboard before writing, so all three
+  // land in the project's thread rather than three drafts of their own.
   for (const [label, session] of [
     ["A", accountA],
     ["B", accountB],
     ["C", accountC],
   ]) {
+    check(`${label} reaches the shared project`, await reachProject(session.page));
     check(`${label} sends a message`, await sendAgentMessage(session.page, said[label]));
-    await sleep(4_000);
+    await sleep(UI_SETTLE_MS);
   }
-  await sleep(8_000);
 
+  // Walking A back in reads the transcript the server stored rather than what
+  // A's own browser drew: sending does not rewrite the sender's URL, so until
+  // then A is still on the /draft route it composed from.
+  await reachProject(accountA.page);
+  await sleep(6_000);
   const seenByA = await userMessages(accountA.page);
-  const authored = new Set(seenByA.map((message) => message.authorName).filter(Boolean));
+  const found = Object.fromEntries(
+    Object.entries(said).map(([label, text]) => [
+      label,
+      seenByA.find((message) => message.text.includes(text)) ?? null,
+    ]),
+  );
+  // The precondition, asserted rather than assumed: attribution checked on a
+  // transcript missing two of the three would pass on an empty room.
   check(
-    "A's transcript attributes other people's messages",
-    authored.size > 0,
-    [...authored].join(", ") || "no message carried an author",
+    "all three messages are in one transcript",
+    Boolean(found.A && found.B && found.C),
+    ["A", "B", "C"].map((label) => `${label}:${found[label] ? "present" : "missing"}`).join(" "),
+  );
+  check(
+    "B's message carries B's name, not the reader's",
+    found.B?.authorName === displayNameFor(ACCOUNT_B),
+    `labelled ${found.B?.authorName ?? "nothing"}, expected ${displayNameFor(ACCOUNT_B)}`,
+  );
+  check(
+    "C's message carries C's name",
+    found.C?.authorName === displayNameFor(ACCOUNT_C),
+    `labelled ${found.C?.authorName ?? "nothing"}, expected ${displayNameFor(ACCOUNT_C)}`,
   );
 
   phase("Colours, and an admin changing one");
@@ -502,6 +594,13 @@ try {
   if (inviteForC) {
     check("C creates a file", await createFileViaUi(accountC.page, cFile));
     await waitForFileOnDisk(cFile, FILE_APPEAR_TIMEOUT_MS);
+    // A walks back in first. There is no stream event for a member being
+    // recoloured, so the roster A is holding refreshes and the shared
+    // governance store behind the tree does not until it is re-acquired. That
+    // is a staleness question; what this check is about is whether the tree
+    // uses the workspace's colour for a person at all, so give it a page load
+    // rather than let the two questions fail as one.
+    await reachProject(accountA.page);
     const cMark = await waitForFileAuthor(accountA.page, cFile);
     check("the tree marks C's file with C", cMark?.author === displayNameFor(ACCOUNT_C), cMark?.author ?? "no mark");
     check(
@@ -692,8 +791,12 @@ try {
 
   phase("A demotes B to read-only");
   check("A can mark B read-only", await setMemberReadOnly(accountA.page, ACCOUNT_B, true));
-  check("A reopens the project", await openProject(accountA.page));
+  check("A reopens the project", await reachProject(accountA.page));
 
+  // B has to be sitting in the shared project for any of this to mean anything:
+  // a composer that is not on screen refuses every prompt, and would read as a
+  // read-only member being blocked when nothing had blocked them.
+  check("B is in the shared project to be refused from", await reachProject(accountB.page));
   const deniedFile = `denied-${RUN_ID}.txt`;
   const sentWhileMuted = await sendAgentMessage(
     accountB.page,
@@ -720,26 +823,34 @@ try {
   // anyone who can reach the project.
   const smuggledFile = `smuggled-${RUN_ID}.txt`;
   const createdWhileMuted = await createFileViaUi(accountB.page, smuggledFile);
-  const landed = createdWhileMuted && (await waitForFileOnDisk(smuggledFile, 15_000));
+  // Looked for in every tree this run created, not just the project folder: by
+  // now B may be working in their own branch's worktree, and a write that
+  // landed there is still a write a read-only member was not supposed to make.
+  const smuggledAt = createdWhileMuted ? await findWrittenFile(smuggledFile, 15_000) : null;
   check(
     "a read-only member cannot create files in the workspace either",
-    !landed,
-    landed
-      ? `read-only B created ${smuggledFile} through the workspace panel — the viewer role only guards agent turns, not projects.writeFile / projects.createEntry`
+    smuggledAt === null,
+    smuggledAt
+      ? `read-only B created ${smuggledFile} at ${smuggledAt} — the viewer role guards thread.turn.start alone, so projects.createEntry and projects.writeFile still take anyone who can reach the project`
       : "",
   );
   const overwrite = await editFileViaUi(accountB.page, {
     file: "seed.txt",
     contents: `overwritten by a read-only member ${RUN_ID}\n`,
   });
-  const overwritten =
-    overwrite.ok &&
-    readFileSync(path.join(PROJECT_DIR, "seed.txt"), "utf8").includes("read-only member");
+  const overwrittenAt = overwrite.ok
+    ? workspaceTrees().find((dir) => {
+        const target = path.join(dir, "seed.txt");
+        return (
+          existsSync(target) && readFileSync(target, "utf8").includes("read-only member")
+        );
+      }) ?? null
+    : null;
   check(
     "a read-only member cannot overwrite a shared file either",
-    !overwritten,
-    overwritten
-      ? "read-only B saved over seed.txt from the editor — projects.writeFile has no viewer check"
+    overwrittenAt === null,
+    overwrittenAt
+      ? `read-only B saved over seed.txt in ${overwrittenAt} — projects.writeFile has no viewer check`
       : overwrite.why,
   );
 
