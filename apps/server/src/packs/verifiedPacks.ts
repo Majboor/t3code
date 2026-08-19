@@ -16,6 +16,8 @@
  * installed or upgraded, not while it is running, and re-reading a directory
  * on every keystroke of somebody's prompt would be a strange thing to do.
  */
+import { resolve as resolvePath } from "node:path";
+
 import type { PackManifest, PackRegistryEntry, TenantId, WorkspaceId } from "@t3tools/contracts";
 import { PackId } from "@t3tools/contracts";
 import { makeDirectoryRegistry, type PackRecord } from "@t3tools/pack-cli/registry";
@@ -92,6 +94,62 @@ async function readShipped(
     shipped.set(packId, hit.record);
   }
   return [...shipped].map(([packId, record]) => ({ packId, record }));
+}
+
+/** What this server would open, for the packs held in one registry directory. */
+export interface ShippedPackAddressing {
+  /** The registry this server serves as shipped packs, or nothing when it serves none. */
+  readonly servedRoot: string | undefined;
+  /** Whether that is the same registry the caller read its packs out of. */
+  readonly serves: boolean;
+  /**
+   * The `verified:` id each pack opens under, keyed by the id the registry
+   * itself serves that pack as — the one on `PackRecord.ref.id`.
+   */
+  readonly addresses: ReadonlyMap<string, string>;
+}
+
+/**
+ * How this server addresses the packs sitting in `searchedRoot`.
+ *
+ * Here rather than in the CLI because it is the same question `get` answers,
+ * and the two have to agree: the CLI prints a link, somebody follows it, and
+ * `getVerifiedPack` either opens that pack or does not. A second implementation
+ * of "what is this pack called on the web" is a second chance to print an
+ * address nothing resolves, which is the bug this exists to close.
+ *
+ * Keyed on the registry's own served id rather than on the name, because that
+ * is the one handle a caller has that means "this directory". A name can be
+ * the pre-rename one when an older release was read, and a manifest id can be
+ * claimed by two packs at once — the registry settles both, and this reads its
+ * answer rather than repeating the reasoning.
+ *
+ * `serves` is false when the server reads some other registry, which is a real
+ * state: `--registry` points the CLI at a directory of its own, and
+ * T3CODE_VERIFIED_PACKS moves the server's. Packs from a registry this server
+ * does not read have no page here, and saying so is the point.
+ */
+export async function shippedPackAddresses(searchedRoot: string): Promise<ShippedPackAddressing> {
+  const servedRoot = verifiedPackRoot();
+  if (servedRoot === undefined || resolvePath(servedRoot) !== resolvePath(searchedRoot)) {
+    return { servedRoot, serves: false, addresses: new Map() };
+  }
+  const addresses = new Map<string, string>();
+  try {
+    for (const shipped of await readShipped(servedRoot)) {
+      // A record the registry could not settle an id for is one no caller can
+      // hold a handle to either, so there is nothing to key it under.
+      const servedId = shipped.record.ref.id;
+      if (servedId !== undefined) {
+        addresses.set(servedId, shipped.packId);
+      }
+    }
+  } catch {
+    // An unreadable registry is a registry with no pages in it, which is what
+    // an empty map says. Throwing here would take a search down with it.
+    return { servedRoot, serves: true, addresses: new Map() };
+  }
+  return { servedRoot, serves: true, addresses };
 }
 
 async function loadFromDisk(): Promise<

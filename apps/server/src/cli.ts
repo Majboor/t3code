@@ -53,6 +53,7 @@ import {
   type StartupPresentation,
 } from "./config.ts";
 import { readBootstrapEnvelope } from "./bootstrap.ts";
+import { packPageLinks, type PackLinkTarget } from "./packs/packLinks.ts";
 import { expandHomePath, resolveBaseDir } from "./os-jank.ts";
 import { runServer } from "./server.ts";
 import { DeployService, type DeployServiceShape } from "./deploy/Services/DeployService.ts";
@@ -69,7 +70,6 @@ import {
   formatTargetAdded,
   formatUnknownTarget,
   infrastructurePageUrl,
-  packPageUrl,
   type DeployAnalyticsOutcome,
   type WorkspaceOrigin,
 } from "./deploy/cliOutput.ts";
@@ -2019,14 +2019,15 @@ class PackCommandError extends Data.TaggedError("PackCommandError")<{
 
 function runPackCommand(
   command: Parameters<typeof runPackCliCommand>[0],
-  registryRoot: string | undefined,
+  /** Already resolved, so the link block can name the same directory this read. */
+  registryRoot: string,
 ): Effect.Effect<{ readonly human: string; readonly result: unknown }, PackCommandError> {
   return Effect.tryPromise({
     try: async () => {
       const store = makeNodePackStore();
       const outcome = await runPackCliCommand(command, {
         store,
-        registry: makeDirectoryRegistry(store, resolveRegistryRoot(registryRoot)),
+        registry: makeDirectoryRegistry(store, registryRoot),
         cwd: process.cwd(),
         now: () => new Date(),
         newId: (prefix: string) => `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
@@ -2047,15 +2048,24 @@ function runPackCommand(
  * Read defensively rather than typed against pack-cli's view types: the
  * registry's result shape is its own business, and a pack whose manifest omits
  * an id should cost a missing link and nothing else.
+ *
+ * The id read here is the registry's handle on the pack, not the address of
+ * its page — `packPageLinks` turns one into the other.
  */
 const packRefOf = (value: unknown) =>
   typeof value === "object" && value !== null && "ref" in value
-    ? (value as { readonly ref?: { readonly id?: unknown; readonly name?: unknown } }).ref
+    ? (
+        value as {
+          readonly ref?: {
+            readonly id?: unknown;
+            readonly name?: unknown;
+            readonly qualified?: unknown;
+          };
+        }
+      ).ref
     : undefined;
 
-function readPackIds(
-  result: unknown,
-): ReadonlyArray<{ readonly id: string; readonly name: string }> {
+function readPackIds(result: unknown): ReadonlyArray<PackLinkTarget> {
   const entries =
     typeof result === "object" && result !== null && "results" in result
       ? ((result as { readonly results?: unknown }).results ?? [])
@@ -2064,7 +2074,13 @@ function readPackIds(
   return entries.flatMap((entry) => {
     const ref = packRefOf(entry);
     return typeof ref?.id === "string" && typeof ref.name === "string"
-      ? [{ id: ref.id, name: ref.name }]
+      ? [
+          {
+            id: ref.id,
+            name: ref.name,
+            qualified: typeof ref.qualified === "string" ? ref.qualified : ref.name,
+          },
+        ]
       : [];
   });
 }
@@ -2081,14 +2097,17 @@ const runPackCliCommandWithLinks = Effect.fn("runPackCliCommandWithLinks")(funct
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
   const workspace = yield* resolveWorkspaceOrigin(config);
-  const outcome = yield* runPackCommand(command, Option.getOrUndefined(flags.registry));
+  // Resolved once: the registry that answered the search is the registry the
+  // links have to be judged against, and resolving it twice is how they end up
+  // being two different directories.
+  const registryRoot = resolveRegistryRoot(Option.getOrUndefined(flags.registry));
+  const outcome = yield* runPackCommand(command, registryRoot);
   const packs = readPackIds(outcome.result);
+  const links = yield* Effect.promise(() => packPageLinks({ packs, registryRoot, workspace }));
   yield* Console.log(
     [
       outcome.human,
-      ...(packs.length === 0
-        ? []
-        : ["", ...packs.map((pack) => `${pack.name}: ${packPageUrl(workspace, pack.id)}`)]),
+      ...links,
     ].join("\n"),
   );
 });

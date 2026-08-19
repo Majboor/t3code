@@ -232,15 +232,26 @@ async function fileAuthorFor(page, fileName) {
       const row = nodes.find((node) =>
         (node.textContent ?? "").trim().replace(/\s+/g, " ").startsWith(target),
       );
-      if (!row) return null;
+      // A file the tree has not listed and a file listed without an author are
+      // two different failures — one is the tree, one is the attribution — and
+      // reporting both as "no mark" sends the reader to the wrong half of the
+      // product.
+      if (!row) return { inTree: false, author: "", title: "", color: "" };
       const mark = row.querySelector('[data-testid="workspace-entry-author"]');
-      if (!mark) return null;
+      if (!mark) return { inTree: true, author: "", title: "", color: "" };
       return {
+        inTree: true,
         author: mark.getAttribute("data-author") ?? "",
         title: mark.getAttribute("title") ?? "",
         color: getComputedStyle(mark).backgroundColor,
       };
     }, fileName);
+}
+
+/** What a missing mark should say, so a failure names which half went wrong. */
+function whyNoMark(mark) {
+  if (!mark || !mark.inTree) return "the file is not in this browser's tree at all";
+  return "the row is there and carries no author";
 }
 
 /**
@@ -496,7 +507,11 @@ try {
   checkLiveTreeUpdate("B sees A's new file", await waitForFileInTree(accountB.page, aFile));
 
   const markInB = await waitForFileAuthor(accountB.page, aFile);
-  check("B's tree marks the file with an author", Boolean(markInB?.author), markInB?.author ?? "no mark");
+  check(
+    "B's tree marks the file with an author",
+    Boolean(markInB?.author),
+    markInB?.author || whyNoMark(markInB),
+  );
   // The assertion worth having: not "somebody" but "A", read from B's browser.
   check(
     "the mark names A rather than whoever is looking",
@@ -664,7 +679,11 @@ try {
     // rather than let the two questions fail as one.
     await reachProject(accountA.page);
     const cMark = await waitForFileAuthor(accountA.page, cFile);
-    check("the tree marks C's file with C", cMark?.author === displayNameFor(ACCOUNT_C), cMark?.author ?? "no mark");
+    check(
+      "the tree marks C's file with C",
+      cMark?.author === displayNameFor(ACCOUNT_C),
+      cMark?.author || whyNoMark(cMark),
+    );
     check(
       "the file mark uses the colour the admin chose",
       Boolean(cMark?.color) && cMark?.color === cColourAfter,
