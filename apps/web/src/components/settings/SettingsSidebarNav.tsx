@@ -1,45 +1,49 @@
 import type { ComponentType } from "react";
-import {
-  ArchiveIcon,
-  ArrowLeftIcon,
-  Building2Icon,
-  Link2Icon,
-  Settings2Icon,
-  UserIcon,
-} from "lucide-react";
+import { ArchiveIcon, Building2Icon, Link2Icon, Settings2Icon, UserIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
+import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import {
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
+  useSidebar,
 } from "../ui/sidebar";
+import {
+  isSettingsSectionActive,
+  SETTINGS_SECTION_LABELS,
+  SETTINGS_SECTION_PATHS,
+  type SettingsSectionPath,
+} from "./settingsNav.logic";
 
-export type SettingsSectionPath =
-  | "/settings/general"
-  | "/settings/account"
-  | "/settings/organization"
-  | "/settings/connections"
-  | "/settings/archived";
+export type { SettingsSectionPath };
+
+const SETTINGS_SECTION_ICONS: Readonly<
+  Record<SettingsSectionPath, ComponentType<{ className?: string }>>
+> = {
+  "/settings/general": Settings2Icon,
+  "/settings/account": UserIcon,
+  "/settings/organization": Building2Icon,
+  "/settings/connections": Link2Icon,
+  "/settings/archived": ArchiveIcon,
+};
 
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
   to: SettingsSectionPath;
   icon: ComponentType<{ className?: string }>;
-}> = [
-  { label: "General", to: "/settings/general", icon: Settings2Icon },
-  { label: "Account", to: "/settings/account", icon: UserIcon },
-  { label: "Organization", to: "/settings/organization", icon: Building2Icon },
-  { label: "Connections", to: "/settings/connections", icon: Link2Icon },
-  { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
-];
+}> = SETTINGS_SECTION_PATHS.map((to) => ({
+  to,
+  label: SETTINGS_SECTION_LABELS[to],
+  icon: SETTINGS_SECTION_ICONS[to],
+}));
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
 
   return (
     <>
@@ -48,7 +52,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
           <SidebarMenu>
             {SETTINGS_NAV_ITEMS.map((item) => {
               const Icon = item.icon;
-              const isActive = pathname === item.to;
+              const isActive = isSettingsSectionActive(pathname, item.to);
               return (
                 <SidebarMenuItem key={item.to}>
                   <SidebarMenuButton
@@ -59,7 +63,12 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                         ? "gap-2.5 px-2.5 py-2 text-left text-[13px] font-medium text-foreground"
                         : "gap-2.5 px-2.5 py-2 text-left text-[13px] text-muted-foreground/70 hover:text-foreground/80"
                     }
-                    onClick={() => void navigate({ to: item.to, replace: true })}
+                    onClick={() => {
+                      if (isMobile) {
+                        setOpenMobile(false);
+                      }
+                      void navigate({ to: item.to, replace: true });
+                    }}
                   >
                     <Icon
                       className={
@@ -78,20 +87,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       </SidebarContent>
 
       <SidebarSeparator />
-      <SidebarFooter className="p-2">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              size="sm"
-              className="gap-2 px-2 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => window.history.back()}
-            >
-              <ArrowLeftIcon className="size-4" />
-              <span>Back</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
+      <SidebarChromeFooter />
     </>
   );
 }

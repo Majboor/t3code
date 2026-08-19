@@ -175,7 +175,9 @@ export function makeSdkPackRegistry(scope: SdkPackRegistryScope): PackRegistry {
         hits.push({ record, score: packs.length - hits.length, matched: [input.query] });
       }
 
-      return { hits: hits.slice(0, limit), scanned: packs.length, unreadable };
+      // A served registry keys packs by id itself, so two packs cannot answer
+      // to one id there and there is nothing for this to report.
+      return { hits: hits.slice(0, limit), scanned: packs.length, unreadable, conflicts: [] };
     },
 
     get: async (input) => {

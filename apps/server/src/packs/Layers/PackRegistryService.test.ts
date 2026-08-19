@@ -46,18 +46,21 @@ function makeManifest(input: {
   readonly version: string;
   readonly does?: string;
   readonly tags?: ReadonlyArray<string>;
+  /** For the case where a second pack turns up carrying the first one's id. */
+  readonly name?: string;
+  readonly publisherHandle?: string;
 }) {
   return decodeManifest({
     formatVersion: PACK_FORMAT_VERSION,
     identity: {
       id: packId,
-      name: "stripe-checkout",
+      name: input.name ?? "stripe-checkout",
       version: input.version,
       displayName: "Stripe Checkout",
       summary: "Hosted Stripe checkout with webhook reconciliation.",
       publisher: {
         type: "user",
-        handle: "waleed",
+        handle: input.publisherHandle ?? "waleed",
         displayName: "Waleed Ajmal",
       },
       license: "MIT",
@@ -221,6 +224,47 @@ it.effect("keeps a private pack out of another workspace entirely", () =>
       assert.strictEqual(listed.packs.length, 1);
       const found = yield* registry.get(otherScope, { packId });
       assert.strictEqual(found.pack.visibility.scope, "public");
+    }),
+  ).pipe(Effect.provide(makeLayer())),
+);
+
+/**
+ * A copied manifest is how one id ends up on two packs, and the entry is what
+ * every enablement and every link is keyed on. Without this, the second pack's
+ * release is appended to the first pack's entry and takes over its name: the
+ * id keeps resolving, and resolves to something nobody chose.
+ *
+ * A rename is the case this must not catch — the same publisher, a new name,
+ * the same id — and it stays allowed.
+ */
+it.effect("refuses a second publisher's pack arriving under an id already taken", () =>
+  withoutShippedPacks(
+    Effect.gen(function* () {
+      const registry = yield* PackRegistryService;
+      yield* registry.publish(lead, { ...scope, manifest: makeManifest({ version: "1.0.0" }) });
+
+      const refused = yield* registry
+        .publish(lead, {
+          ...scope,
+          manifest: makeManifest({
+            version: "0.3.0",
+            name: "stripe-checkout-lite",
+            publisherHandle: "acme",
+          }),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused.code, "manifest-invalid");
+
+      const held = yield* registry.get(scope, { packId });
+      assert.strictEqual(held.pack.name, "stripe-checkout");
+      assert.strictEqual(held.pack.latestVersion, "1.0.0");
+
+      // The same publisher renaming their own pack still works.
+      const renamed = yield* registry.publish(lead, {
+        ...scope,
+        manifest: makeManifest({ version: "1.1.0", name: "stripe-payments" }),
+      });
+      assert.strictEqual(renamed.pack.name, "stripe-payments");
     }),
   ).pipe(Effect.provide(makeLayer())),
 );

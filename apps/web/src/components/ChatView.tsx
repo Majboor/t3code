@@ -152,6 +152,7 @@ import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
+import { WorkspacePageHeader } from "./WorkspacePageHeader";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -3770,17 +3771,10 @@ export default function ChatView(props: ChatViewProps) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
       {/* Top bar */}
-      <header
-        className={cn(
-          "border-b border-border px-3 sm:px-5",
-          isElectron
-            ? cn(
-                "drag-region flex h-[52px] items-center wco:h-[env(titlebar-area-height)]",
-                reserveTitleBarControlInset &&
-                  "wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]",
-              )
-            : "py-2 sm:py-3",
-        )}
+      <WorkspacePageHeader
+        electron={isElectron}
+        reserveNativeControls={reserveTitleBarControlInset}
+        className="border-b border-border"
       >
         <ChatHeader
           activeThreadEnvironmentId={activeThread.environmentId}
@@ -3817,7 +3811,7 @@ export default function ChatView(props: ChatViewProps) {
           onToggleDiff={onToggleDiff}
           onDesktopLayoutModeChange={onDesktopLayoutModeChange}
         />
-      </header>
+      </WorkspacePageHeader>
 
       {/* Error banner */}
       <ProviderStatusBanner status={activeProviderStatus} />

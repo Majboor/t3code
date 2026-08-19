@@ -26,6 +26,7 @@ import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } 
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { CollaborationService } from "../../collaboration/Services/CollaborationService.ts";
 import { ServerConfig } from "../../config.ts";
 import { resolveProviderAccount } from "../../providerAuth/resolveProviderAccount.ts";
 import type { ProviderAuthProvider } from "../../providerAuth/store.ts";
@@ -56,6 +57,15 @@ type ProviderIntentEvent = Extract<
       | "thread.session-stop-requested";
   }
 >;
+
+/**
+ * Everything this reactor listens for: the intents it acts on, plus the one
+ * fact it only records. A finished turn's diff is nobody's instruction — it is
+ * how the workspace learns which files the turn's author changed.
+ */
+type ProviderReactorEvent =
+  | ProviderIntentEvent
+  | Extract<OrchestrationEvent, { type: "thread.turn-diff-completed" }>;
 
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -237,6 +247,13 @@ const make = Effect.gen(function* () {
   const gitStatusBroadcaster = yield* GitStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  /**
+   * Optional on purpose, and read here rather than per event so it is resolved
+   * against the layer's own context: a mark on a file tree is decoration over a
+   * turn, and a runtime assembled without a collaboration roster — a test, a
+   * single-user box — still has turns to run.
+   */
+  const collaborationService = yield* Effect.serviceOption(CollaborationService);
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -1009,8 +1026,87 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * Marks the files a turn changed with the person whose turn it was.
+   *
+   * A file mark answers "who last changed this", and until now only the
+   * workspace panel's own save could claim one — so everything an agent wrote
+   * belonged to nobody, and two people whose agents were editing the same file
+   * were invisible to the contention warning that exists to catch exactly that.
+   * The agent is not a person and has no place in a roster; whoever sent the
+   * message is, and it is their turn and their provider account paying for it.
+   *
+   * Read from `thread.turn-diff-completed` rather than the runtime's own
+   * completion event: the provider event PubSub is a shared subscription that
+   * does not reliably reach every reactor, and this domain event carries the
+   * file list already computed.
+   *
+   */
+  const attributeTurnFilesToItsAuthor = Effect.fn("attributeTurnFilesToItsAuthor")(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.turn-diff-completed" }>,
+  ) {
+    const paths = event.payload.files.map((file) => file.path);
+    if (paths.length === 0 || Option.isNone(collaborationService)) {
+      return;
+    }
+
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const thread = readModel.threads.find((entry) => entry.id === event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+
+    // The message this turn was started from first, and only then the newest
+    // attributed one: a turn's files belong to whoever asked for them, not to
+    // whoever happened to speak in the thread while it was running.
+    const actingUserId =
+      thread.messages.find(
+        (message) => message.turnId === event.payload.turnId && message.authorUserId !== null,
+      )?.authorUserId ??
+      thread.messages.findLast((message) => message.authorUserId !== null)?.authorUserId ??
+      null;
+    if (actingUserId === null) {
+      return;
+    }
+
+    // Diff paths are relative to the directory the turn ran in, and a touch is
+    // relative to the workspace the panel draws. They are the same directory
+    // only when the turn ran in the project itself, so a thread working in its
+    // own worktree is left unattributed rather than attributed to the wrong
+    // paths.
+    const cwd = resolveThreadWorkspaceCwd({ thread, projects: readModel.projects });
+    if (cwd === undefined) {
+      return;
+    }
+    const project = readModel.projects.find(
+      (entry) => entry.ownership !== undefined && entry.workspaceRoot === cwd,
+    );
+    const ownership = project?.ownership;
+    if (!project || !ownership) {
+      return;
+    }
+
+    yield* collaborationService.value
+      .touchFilesForUser(actingUserId, {
+        tenantId: ownership.tenantId,
+        // A project can predate workspaces, in which case its own id stands in —
+        // the same substitution the provider-account lookup above makes.
+        workspaceId: ownership.workspaceId ?? WorkspaceId.make(project.id),
+        paths,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider command reactor could not attribute a turn's files", {
+            threadId: event.payload.threadId,
+            turnId: event.payload.turnId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+  });
+
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
-    event: ProviderIntentEvent,
+    event: ProviderReactorEvent,
   ) {
     yield* Effect.annotateCurrentSpan({
       "orchestration.event_type": event.type,
@@ -1058,10 +1154,13 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.turn-diff-completed":
+        yield* attributeTurnFilesToItsAuthor(event);
+        return;
     }
   });
 
-  const processDomainEventSafely = (event: ProviderIntentEvent) =>
+  const processDomainEventSafely = (event: ProviderReactorEvent) =>
     processDomainEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -1084,7 +1183,8 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.turn-diff-completed"
       ) {
         return yield* worker.enqueue(event);
       }

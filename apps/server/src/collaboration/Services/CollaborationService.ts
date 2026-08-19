@@ -198,6 +198,20 @@ export interface CollaborationServiceShape {
     input: CollaborationFileTouchInput,
   ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;
 
+  /**
+   * Records touches for work somebody asked for but did not type.
+   *
+   * An agent writes with no session attached, so there is no actor to hand in —
+   * only the id of whoever sent the message that started the turn. The name is
+   * resolved here rather than guessed by the caller, so a mark left by an agent
+   * and a mark left by a browser name the same person the same way, and the
+   * contention warning can finally see a file two agents are both in.
+   */
+  readonly touchFilesForUser: (
+    userId: UserId,
+    input: CollaborationFileTouchInput,
+  ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;
+
   readonly listFileTouches: (
     input: CollaborationFileTouchListInput,
   ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;

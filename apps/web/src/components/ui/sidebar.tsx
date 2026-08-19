@@ -19,6 +19,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import { resolveSidebarState } from "~/components/ui/sidebarState";
 import { Schema } from "effect";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
@@ -114,6 +115,12 @@ function useSidebar() {
   return context;
 }
 
+/** Whether the sidebar the current viewport actually renders is on screen. */
+function useSidebarVisibility(): boolean {
+  const { isMobile, open, openMobile } = useSidebar();
+  return isMobile ? openMobile : open;
+}
+
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
@@ -162,7 +169,7 @@ function SidebarProvider({
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
-  const state = open ? "expanded" : "collapsed";
+  const state = resolveSidebarState({ isMobile, open, openMobile });
 
   const contextValue = React.useMemo<SidebarContextProps>(
     () => ({
@@ -471,7 +478,10 @@ function Sidebar({
 }
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar, openMobile } = useSidebar();
+  const { toggleSidebar } = useSidebar();
+  // Mirrors whichever sidebar this viewport renders, so the desktop trigger
+  // stops claiming "open me" while the sidebar is already open.
+  const isOpen = useSidebarVisibility();
 
   return (
     <Button
@@ -486,7 +496,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      {openMobile ? <PanelLeftCloseIcon /> : <PanelLeftIcon />}
+      {isOpen ? <PanelLeftCloseIcon /> : <PanelLeftIcon />}
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );
@@ -1274,4 +1284,5 @@ export {
   SidebarSeparator,
   SidebarTrigger,
   useSidebar,
+  useSidebarVisibility,
 };

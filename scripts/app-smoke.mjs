@@ -578,14 +578,32 @@ async function notchPhase({ app, page }) {
   check("it starts collapsed", drawn.state === "collapsed", `${drawn.state}`);
   note(`panel reads: ${drawn.title} — ${drawn.slots.map((s) => `${s.label} ${s.value} ${s.note}`).join(" | ")}`);
 
-  // Nobody has signed in in this sandbox, so this is the signed-out outcome
-  // arriving on its own rather than an attribute forced onto the page.
-  const signedOut = await waitForNotch(panel, (view) => view.action === "sign-in", 20_000);
-  check(
-    "a signed-out read draws the sign-in button",
-    signedOut?.action === "sign-in" && signedOut.hasButton,
-    `action=${signedOut?.action}`,
+  // The panel draws a sign-in button only when nobody is signed in — and the
+  // desktop app bootstraps its own owner, so a sandbox usually *is* signed in
+  // by the time this runs. Reporting "sign in" to somebody already signed in
+  // was the bug that made the button useless: its only act was to raise a
+  // window already in front of them. So take whichever state is genuinely
+  // true, and hold each to its own promise.
+  const settled = await waitForNotch(
+    panel,
+    (view) => view.action === "sign-in" || view.slots.some((slot) => slot.value !== "—"),
+    20_000,
   );
+  const isSignedOut = settled?.action === "sign-in";
+  check(
+    isSignedOut
+      ? "a signed-out read draws the sign-in button"
+      : "a signed-in read draws figures rather than a sign-in button",
+    isSignedOut ? settled.hasButton === true : settled?.action === null,
+    `action=${settled?.action ?? "none"}`,
+  );
+  if (!isSignedOut) {
+    check(
+      "and never tells a signed-in person to sign in",
+      settled?.slots.every((slot) => slot.note !== "sign in") === true,
+      settled?.slots.map((slot) => `${slot.label} ${slot.note}`).join(" | ") ?? "",
+    );
+  }
 
   // ── hover ──────────────────────────────────────────────────────────────────
   await setNotchCursor(app, pillPoint);
@@ -620,14 +638,26 @@ async function notchPhase({ app, page }) {
   await setNotchCursor(app, panelPoint);
   const heldView = await waitForNotch(panel, (view) => view.state === "expanded");
   check("moving down into the panel keeps it open", heldView?.state === "expanded");
-  const overPanel = await waitForNotchProbe(app, (read) =>
-    read.mouse.some((call) => call.ignore === false),
-  );
-  check(
-    "the window takes mouse events only once the cursor is in the panel",
-    overPanel.mouse.filter((call) => call.ignore === false).length === 1,
-    JSON.stringify(overPanel.mouse),
-  );
+  // Mouse events are only ever taken when the panel is actionable — a
+  // signed-in panel has nothing to press, so staying click-through throughout
+  // is the correct behaviour rather than a missing one.
+  const actionable = (await readNotchPanel(panel).catch(() => null))?.action === "sign-in";
+  const overPanel = actionable
+    ? await waitForNotchProbe(app, (read) => read.mouse.some((call) => call.ignore === false))
+    : await readNotchProbe(app);
+  if (actionable) {
+    check(
+      "the window takes mouse events only once the cursor is in the panel",
+      overPanel.mouse.filter((call) => call.ignore === false).length === 1,
+      JSON.stringify(overPanel.mouse),
+    );
+  } else {
+    check(
+      "a panel with nothing to press never takes mouse events",
+      overPanel.mouse.every((call) => call.ignore === true),
+      JSON.stringify(overPanel.mouse.at(-1)),
+    );
+  }
   // The whole of "the collapsed pill cannot swallow a menu bar click": the
   // window is only ever taken out of click-through with the cursor inside the
   // expanded rect, and that rect starts at the top of the work area, so no such
@@ -664,26 +694,53 @@ async function notchPhase({ app, page }) {
   await sleep(500);
   note(`app window before the click: ${JSON.stringify(await appWindowState(app))}`);
 
-  await panel
+  // Asked of the panel's own state, not of the DOM at one instant. A read that
+  // lands between the button being drawn and the figures replacing it counts a
+  // button that is already on its way out, and then asserts a click against it.
+  const nowView = await readNotchPanel(panel).catch(() => null);
+  const hasActionButton =
+    nowView?.action === "sign-in" &&
+    (await panel
+      .locator("[data-notch-action-button]")
+      .count()
+      .then((count) => count > 0)
+      .catch(() => false));
+
+  // A signed-in panel has no button, and that is the correct state rather than
+  // a missing one. Skipping keeps the run honest: the click is proved when
+  // there is something to click, and never asserted against a panel that is
+  // right to omit it.
+  if (!hasActionButton) {
+    note("signed in, so the panel draws figures and no button — nothing to click here");
+    await app
+      .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.show())
+      .catch(() => undefined);
+  }
+
+  if (hasActionButton) await panel
     .locator("[data-notch-action-button]")
     .click({ timeout: 5_000 })
     .catch((error) => note(`sign-in click: ${String(error).slice(0, 200)}`));
-  await sleep(1_500);
+  await sleep(hasActionButton ? 1_500 : 0);
   const after = await readNotchProbe(app);
-  check(
-    "clicking Sign in reaches main over desktop:notch-sign-in",
-    after.signIns > before.signIns,
-    `${before.signIns} -> ${after.signIns}`,
-  );
+  if (hasActionButton) {
+    check(
+      "clicking Sign in reaches main over desktop:notch-sign-in",
+      after.signIns > before.signIns,
+      `${before.signIns} -> ${after.signIns}`,
+    );
+  }
   note(
     "the click is injected into the renderer, so this proves the preload attached to the data: document — not that AppKit delivers a physical click to a non-activating panel",
   );
   const revealed = await appWindowState(app).catch(() => null);
-  check(
-    "signing in brings the app window forward",
-    revealed?.visible === true && revealed.minimized === false,
-    JSON.stringify(revealed),
-  );
+  if (hasActionButton) {
+    check(
+      "signing in brings the app window forward",
+      revealed?.visible === true && revealed.minimized === false,
+      JSON.stringify(revealed),
+    );
+  }
   // Whatever the check said, the rest of the run needs that window back.
   if (revealed?.visible !== true) {
     await app
@@ -703,8 +760,10 @@ async function notchPhase({ app, page }) {
   const closed = await waitForNotchProbe(app, (read) => read.mouse.at(-1)?.ignore === true);
   const restored = closed.mouse.filter((call) => call.ignore === true).at(-1);
   check(
-    "and puts the window back to click-through",
-    Boolean(restored) && restored.at >= leftAt && restored.forward === true,
+    actionable ? "and puts the window back to click-through" : "and is still click-through",
+    actionable
+      ? Boolean(restored) && restored.at >= leftAt && restored.forward === true
+      : Boolean(restored) && restored.forward === true,
     JSON.stringify(closed.mouse.at(-1)),
   );
   // The gap between the cursor leaving the panel and the window going back to

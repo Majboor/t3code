@@ -2019,6 +2019,39 @@ const makeCollaborationService = Effect.gen(function* () {
       return { touches };
     });
 
+  const touchFilesForUser: CollaborationServiceShape["touchFilesForUser"] = (userId, input) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.get(stateRef);
+      const profile = state.memberProfiles.get(
+        scopedKey(input.tenantId, input.workspaceId, userId),
+      );
+      // The same precedence `buildMembers` uses, so an agent's mark and the
+      // roster row for the same person never disagree about their name.
+      let presence: CollaborationPresence | null = null;
+      for (const entry of state.presence.values()) {
+        if (
+          entry.tenantId !== input.tenantId ||
+          entry.workspaceId !== input.workspaceId ||
+          entry.userId !== userId
+        ) {
+          continue;
+        }
+        if (!presence || presence.lastSeenAt < entry.lastSeenAt) {
+          presence = entry;
+        }
+      }
+      const displayName = profile?.displayName ?? presence?.displayName ?? userId;
+
+      return yield* touchFiles(
+        {
+          userId,
+          displayName,
+          avatarInitials: presence?.avatarInitials ?? toAvatarInitials(displayName),
+        },
+        input,
+      );
+    });
+
   const listFileTouches: CollaborationServiceShape["listFileTouches"] = (input) =>
     Ref.get(stateRef).pipe(
       Effect.map((state) => ({
@@ -2052,6 +2085,7 @@ const makeCollaborationService = Effect.gen(function* () {
     listBranchClaims,
     releaseBranch,
     touchFiles,
+    touchFilesForUser,
     listFileTouches,
     listMembers,
     updateMember,

@@ -87,7 +87,7 @@ const {
   waitForFileInTree,
   createFileViaUi,
   editFileViaUi,
-  openCollabPanel,
+  openCollabSection,
   closeCollabPanel,
   setApprovalMode,
   waitForCollabElement,
@@ -177,7 +177,11 @@ function displayNameFor(email) {
 }
 
 async function expandMemberRow(page, email) {
-  if (!(await openCollabPanel(page))) return null;
+  // The roster is a section behind the popover's overview, not the popover itself.
+  if (!(await openCollabSection(page, "people"))) {
+    await closeCollabPanel(page);
+    return null;
+  }
   const rows = page.locator('[data-testid="collaboration-member-row"]');
   const displayName = displayNameFor(email);
   for (let index = 0; index < (await rows.count()); index += 1) {
@@ -222,7 +226,10 @@ async function setMemberReadOnly(page, email, readOnly) {
  * reads it as two people sharing a colour.
  */
 async function avatarColors(page) {
-  if (!(await openCollabPanel(page))) return [];
+  if (!(await openCollabSection(page, "people"))) {
+    await closeCollabPanel(page);
+    return [];
+  }
   const colors = await page
     .locator('[data-testid="collaboration-member-row"] [data-testid="collaboration-avatar"]')
     .evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).backgroundColor));
@@ -232,7 +239,10 @@ async function avatarColors(page) {
 
 /** The pills in the collaboration popover: who is here and who is working. */
 async function presencePills(page) {
-  if (!(await openCollabPanel(page))) return [];
+  if (!(await openCollabSection(page, "people"))) {
+    await closeCollabPanel(page);
+    return [];
+  }
   const pills = await page
     .locator('[data-testid="collaboration-working-pill"]')
     .evaluateAll((nodes) =>
@@ -704,7 +714,7 @@ try {
     skip("A can merge B's branch from the governance panel", BRANCH_UI_UNEXPLAINED);
     skip("the merge reports the conflict rather than pretending", BRANCH_UI_UNEXPLAINED);
   } else {
-    const opened = await openCollabPanel(accountA2.page);
+    const opened = await openCollabSection(accountA2.page, "branch");
     const claims = accountA2.page.locator('[data-testid="collaboration-branch-claim"]');
     check(
       "A can see the branches people are on",

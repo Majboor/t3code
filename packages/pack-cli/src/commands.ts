@@ -39,6 +39,7 @@ import {
   type PackRefView,
   type PackIntegrationKnowledgeView,
 } from "./manifest.ts";
+import type { PackIdConflict } from "./packIdentity.ts";
 import { assessReadiness, type ReadinessReport } from "./readiness.ts";
 import type { PackRegistry } from "./registry.ts";
 import type { PackStore } from "./store.ts";
@@ -144,6 +145,20 @@ function renderIssues(report: ReadinessReport): string {
         `  ${issue.severity === "error" ? "!" : "-"} ${issue.code} (${issue.path})\n    ${issue.message}`,
     )
     .join("\n");
+}
+
+/**
+ * Says out loud that two packs claim one id, and that neither is being served
+ * under it. Silence here would leave a reader wondering why the address of a
+ * pack they have seen before has changed.
+ */
+function renderIdConflicts(conflicts: ReadonlyArray<PackIdConflict>): ReadonlyArray<string> {
+  return conflicts.flatMap((conflict) => [
+    "",
+    `  ! ${conflict.id} is claimed by ${conflict.claimedBy.join(" and ")}.`,
+    "    None of them is served under it, so no link can open the wrong pack.",
+    "    Each is addressed as pack:<publisher>/<name> until one of them gives the id up.",
+  ]);
 }
 
 function renderCard(card: PackCardView, suggestion: string, score?: number): string {
@@ -270,14 +285,17 @@ async function searchCommand(
       scanned: outcome.scanned,
       returned: results.length,
       ...(outcome.unreadable.length > 0 ? { unreadable: outcome.unreadable } : {}),
+      ...(outcome.conflicts.length > 0 ? { idConflicts: outcome.conflicts } : {}),
       results,
     },
-    human:
+    human: [
       results.length === 0
         ? `No pack in ${context.registry.root} matches "${command.query}" (${outcome.scanned} scanned).`
         : results
             .map((result) => renderCard(result, result.suggestion.line, result.score))
             .join("\n\n"),
+      ...renderIdConflicts(outcome.conflicts),
+    ].join("\n"),
   };
 }
 
@@ -325,12 +343,21 @@ async function showCommand(
       { pack: requested.name, registry: context.registry.root },
     );
   }
-  const detail = readDetail(record.manifest);
+  // The ref comes from the registry rather than from the manifest: the
+  // registry is the only thing that knows whether this pack's id is also
+  // somebody else's, and a `show` that printed the manifest's own answer would
+  // hand back the address the registry has just refused to serve.
+  const detail = { ...readDetail(record.manifest), ref: record.ref };
   const suggestion = suggestPack(record.card, context.now());
   return {
-    result: { ...detail, suggestion },
+    result: {
+      ...detail,
+      suggestion,
+      ...(record.idConflict !== undefined ? { idConflict: record.idConflict } : {}),
+    },
     human: [
       renderCard(detail, suggestion.line),
+      ...(record.idConflict !== undefined ? renderIdConflicts([record.idConflict]) : []),
       "",
       ...suggestion.caveats.map((caveat) => `  caveat: ${caveat}`),
       "",
@@ -603,6 +630,7 @@ async function publishCommand(
       ...(receipt !== undefined
         ? { directory: receipt.directory, release: receipt.versionPath }
         : {}),
+      ...(receipt?.idConflict !== undefined ? { idConflict: receipt.idConflict } : {}),
       visibility: {
         scope: forced.scope,
         claimedInManifest: forced.claimedScope,
@@ -618,6 +646,7 @@ async function publishCommand(
       forced.claimedScope !== undefined && forced.claimedScope !== forced.scope
         ? `  visibility forced from "${forced.claimedScope}" to "${forced.scope}".`
         : "",
+      ...(receipt?.idConflict !== undefined ? renderIdConflicts([receipt.idConflict]) : []),
       renderIssues(report),
     ]
       .filter((line) => line.length > 0)
@@ -686,9 +715,13 @@ async function versionCommand(
       version: target,
       registry: context.registry.root,
       release: receipt.versionPath,
+      ...(receipt.idConflict !== undefined ? { idConflict: receipt.idConflict } : {}),
       note: "A version is a promise about behaviour. Earlier releases are untouched.",
     },
-    human: `Recorded ${pack.ref.name} ${current} → ${target} in ${context.registry.root}.`,
+    human: [
+      `Recorded ${pack.ref.name} ${current} → ${target} in ${context.registry.root}.`,
+      ...(receipt.idConflict !== undefined ? renderIdConflicts([receipt.idConflict]) : []),
+    ].join("\n"),
   };
 }
 

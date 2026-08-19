@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon } from "lucide-react";
+import { ChartNoAxesColumnIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -31,32 +31,11 @@ import { usePrimaryEnvironmentId } from "../../environments/primary/context";
 import { selectThreadIdsByProjectRef, useStore } from "../../store";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../../threadRoutes";
 import { Button } from "../ui/button";
-import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
+import { WorkspaceSubPage } from "../WorkspaceSubPage";
 import { Spinner } from "../ui/spinner";
 
 function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 sm:px-5">
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Back"
-            onClick={() => window.history.back()}
-          >
-            <ArrowLeftIcon className="size-4" />
-          </Button>
-          <SidebarTrigger className="size-7 shrink-0 md:hidden" />
-          <span className="text-sm font-medium text-foreground">Analytics</span>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5">
-          <div className="mx-auto grid max-w-3xl gap-4">{children}</div>
-        </div>
-      </div>
-    </SidebarInset>
-  );
+  return <WorkspaceSubPage title="Analytics">{children}</WorkspaceSubPage>;
 }
 
 /**

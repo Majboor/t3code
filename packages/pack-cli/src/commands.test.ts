@@ -602,6 +602,142 @@ describe("show", () => {
 
 // ── Init, validate, publish, version ────────────────────────────────────────
 
+// ── Pack ids ────────────────────────────────────────────────────────────────
+
+/**
+ * The id `ssh-deploy` was cut with while it was still called
+ * `ssh-flask-deploy`. Keeping it through the rename is the format working as
+ * designed; keeping the pre-rename releases installed beside the new ones is
+ * how a registry ends up with two packs answering to it.
+ */
+const LINEAGE_ID = "pack_c7f9cb58f6a544e7b16c";
+
+function lineageManifest(name: string): Record<string, unknown> {
+  const manifest = minimalManifest(name);
+  const identity = manifest["identity"] as Record<string, unknown>;
+  return { ...manifest, identity: { ...identity, id: LINEAGE_ID } };
+}
+
+function seedCollidingRegistry(): PackStore & { readonly files: Map<string, string> } {
+  return makeMemoryStore({
+    [`${REGISTRY}/local-ssh-deploy.pack/pack.json`]: JSON.stringify(lineageManifest("ssh-deploy")),
+    [`${REGISTRY}/local-ssh-flask-deploy.pack/pack.json`]: JSON.stringify(
+      lineageManifest("ssh-flask-deploy"),
+    ),
+    [`${REGISTRY}/acme-stripe-checkout.pack/pack.json`]: JSON.stringify(richManifest()),
+  });
+}
+
+describe("pack ids", () => {
+  /**
+   * The bug, from the outside: two packs, one address. Following it opened
+   * whichever of the two the registry happened to read first, and the page gave
+   * no sign it was the wrong one.
+   */
+  it("never gives two packs the same id", async () => {
+    const context = makeContext(seedCollidingRegistry());
+
+    const outcome = await run(
+      { kind: "search", query: "deploy changelog", limit: 10, category: undefined, tag: undefined },
+      context,
+    );
+    const result = outcome.result as {
+      readonly results: ReadonlyArray<Record<string, any>>;
+      readonly idConflicts?: ReadonlyArray<{ readonly id: string }>;
+    };
+
+    const ids = result.results.map((hit) => hit["ref"].id);
+    expect(result.results.length).toBe(2);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).not.toContain(LINEAGE_ID);
+  });
+
+  it("says which packs are claiming the id rather than healing quietly", async () => {
+    const context = makeContext(seedCollidingRegistry());
+
+    const outcome = await run(
+      { kind: "search", query: "deploy", limit: 10, category: undefined, tag: undefined },
+      context,
+    );
+
+    expect(
+      (outcome.result as { readonly idConflicts?: ReadonlyArray<Record<string, any>> })[
+        "idConflicts"
+      ],
+    ).toEqual([{ id: LINEAGE_ID, claimedBy: ["local/ssh-deploy", "local/ssh-flask-deploy"] }]);
+    expect(outcome.human).toContain(`${LINEAGE_ID} is claimed by`);
+  });
+
+  it("leaves an uncontested id exactly as its manifest wrote it", async () => {
+    // Nothing else may move. An id that changed because some other pack in the
+    // registry is in trouble would orphan every enablement keyed on it.
+    const context = makeContext(seedCollidingRegistry());
+
+    const outcome = await run(
+      { kind: "show", pack: "stripe-checkout", version: undefined },
+      context,
+    );
+
+    expect((outcome.result as Record<string, any>)["ref"].id).toBe("pack_stripe");
+    expect((outcome.result as Record<string, any>)["idConflict"]).toBeUndefined();
+  });
+
+  it("shows each contested pack under an address of its own", async () => {
+    const context = makeContext(seedCollidingRegistry());
+
+    const deploy = await run({ kind: "show", pack: "ssh-deploy", version: undefined }, context);
+    const flask = await run(
+      { kind: "show", pack: "ssh-flask-deploy", version: undefined },
+      context,
+    );
+
+    expect((deploy.result as Record<string, any>)["ref"].id).toBe("pack:local/ssh-deploy");
+    expect((flask.result as Record<string, any>)["ref"].id).toBe("pack:local/ssh-flask-deploy");
+    expect((flask.result as Record<string, any>)["idConflict"].id).toBe(LINEAGE_ID);
+    expect(flask.human).toContain("no link can open the wrong pack");
+  });
+
+  /**
+   * The release still lands: a rename keeps its id by design and has nowhere
+   * else to go. What must not happen is it landing quietly.
+   */
+  it("reports a conflict at the moment a release creates one", async () => {
+    const store = makeMemoryStore({
+      [`${REGISTRY}/local-ssh-flask-deploy.pack/pack.json`]: JSON.stringify(
+        lineageManifest("ssh-flask-deploy"),
+      ),
+    });
+    const registry = makeDirectoryRegistry(store, REGISTRY);
+
+    const receipt = await registry.record({
+      name: "ssh-deploy",
+      publisher: "local",
+      version: "1.0.0",
+      manifestJson: JSON.stringify(lineageManifest("ssh-deploy")),
+    });
+
+    expect(receipt.idConflict).toEqual({
+      id: LINEAGE_ID,
+      claimedBy: ["local/ssh-deploy", "local/ssh-flask-deploy"],
+    });
+    expect(store.files.has(`${REGISTRY}/local-ssh-deploy.pack/versions/1.0.0.json`)).toBe(true);
+  });
+
+  it("keeps quiet when a release takes an id nobody else holds", async () => {
+    const store = seedRegistry();
+    const registry = makeDirectoryRegistry(store, REGISTRY);
+
+    const receipt = await registry.record({
+      name: "changelog-widget",
+      publisher: "local",
+      version: "0.2.0",
+      manifestJson: JSON.stringify(minimalManifest()),
+    });
+
+    expect(receipt.idConflict).toBeUndefined();
+  });
+});
+
 describe("init and validate", () => {
   it("scaffolds a pack that says it has learned nothing, and names what is unwritten", async () => {
     const store = makeMemoryStore();

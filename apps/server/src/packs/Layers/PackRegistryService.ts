@@ -251,6 +251,20 @@ const makePackRegistryService = Effect.gen(function* () {
             message: "This pack id was published from another workspace.",
           });
         }
+        /**
+         * A pack may be renamed and keep its id — that is what the id is for,
+         * and the entry's name moves with it. A pack may not change publisher
+         * this way. Two packs carrying one id is how a copied manifest arrives,
+         * and without this the second one appends its release to the first
+         * one's entry and takes over its name: every install, enablement and
+         * link pointing at that id then opens a pack nobody chose.
+         */
+        if (entry.publisherHandle !== index.publisherHandle) {
+          return yield* new PackError({
+            code: "manifest-invalid",
+            message: `Pack id ${entry.packId} already belongs to ${entry.publisherHandle}/${entry.name}. A different pack needs an id of its own.`,
+          });
+        }
         // Re-publishing a pack that is already registered is how the next
         // version arrives; the entry keeps the visibility it was given.
         const appended = yield* appendVersion({ actor, entry, manifest: input.manifest, index });

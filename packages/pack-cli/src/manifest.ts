@@ -1110,4 +1110,8 @@ export function readNameFromRaw(raw: unknown): string | undefined {
   return text(raw, "identity", "name");
 }
 
+export function readIdFromRaw(raw: unknown): string | undefined {
+  return text(raw, "identity", "id");
+}
+
 export type { PackManifest };

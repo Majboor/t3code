@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, OctagonAlertIcon } from "lucide-react";
+import { OctagonAlertIcon } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
@@ -23,36 +23,15 @@ import { PackShareControl } from "./PackShareControl";
 import { PackSignatureBadge } from "./PackSignatureBadge";
 import { PackScarRecordSection } from "./PackScarRecordSection";
 import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
-import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
+import { WorkspaceSubPage } from "../WorkspaceSubPage";
 import { Spinner } from "../ui/spinner";
 import { Card, CardTitle } from "../ui/card";
 
 function PackDetailShell({ children }: { children: React.ReactNode }) {
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 sm:px-5">
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Back"
-            title="Back"
-            onClick={() => {
-              window.history.back();
-            }}
-          >
-            <ArrowLeftIcon className="size-4" />
-          </Button>
-          <SidebarTrigger className="size-7 shrink-0 md:hidden" />
-          <span className="text-sm font-medium text-foreground">Pack</span>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto grid max-w-3xl gap-3 p-3 sm:p-5">{children}</div>
-        </div>
-      </div>
-    </SidebarInset>
+    <WorkspaceSubPage title="Pack" contentClassName="gap-3 py-4 sm:py-6">
+      {children}
+    </WorkspaceSubPage>
   );
 }
 

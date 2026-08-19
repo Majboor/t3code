@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CircleCheckIcon, CircleDashedIcon, PowerIcon } from "lucide-react";
+import { CircleCheckIcon, CircleDashedIcon, PowerIcon } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
@@ -14,33 +14,12 @@ import { usePrimaryEnvironmentId } from "../../environments/primary/context";
 import { selectProjectByRef, useStore } from "../../store";
 import { Button } from "../ui/button";
 import { Card, CardTitle } from "../ui/card";
-import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
+import { WorkspaceSubPage } from "../WorkspaceSubPage";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 
 function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 sm:px-5">
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Back"
-            onClick={() => window.history.back()}
-          >
-            <ArrowLeftIcon className="size-4" />
-          </Button>
-          <SidebarTrigger className="size-7 shrink-0 md:hidden" />
-          <span className="text-sm font-medium text-foreground">Infrastructure</span>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5">
-          <div className="mx-auto grid max-w-3xl gap-4">{children}</div>
-        </div>
-      </div>
-    </SidebarInset>
-  );
+  return <WorkspaceSubPage title="Infrastructure">{children}</WorkspaceSubPage>;
 }
 
 /**

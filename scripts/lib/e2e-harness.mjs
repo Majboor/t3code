@@ -343,17 +343,68 @@ export function createHarness({
 
   // ── collaboration panel ───────────────────────────────────────────────────
 
-  /** The governance controls live behind the "Collab" popover in the header. */
+  /**
+   * The order the popover lists its sections in, which is the order this walks
+   * them when looking for a control it was not told the home of.
+   *
+   * Kept in step with COLLABORATION_SECTION_ORDER in
+   * apps/web/src/components/collaboration/collaborationPanel.logic.ts.
+   */
+  const COLLAB_SECTIONS = ["activity", "people", "approvals", "branch", "sharing", "requests"];
+
+  /**
+   * Where each control the suites reach for actually lives.
+   *
+   * The popover used to stack every section at once, so a suite could open it
+   * and look for anything. It now opens on an overview with one section behind
+   * each row, which means "the control is not on the page" and "the control is
+   * one click away" look identical to a locator. Naming the section here is
+   * what keeps a suite asserting about the product rather than about the shape
+   * of a popover it did not have to know.
+   */
+  const COLLAB_SECTION_FOR_TESTID = {
+    "collaboration-activity-visibility": "activity",
+    "collaboration-member-row": "people",
+    "collaboration-avatar": "people",
+    "collaboration-color-picker": "people",
+    "collaboration-read-only-toggle": "people",
+    "collaboration-people-empty": "people",
+    "collaboration-working-pill": "people",
+    "collaboration-approval-modes": "approvals",
+    "collaboration-approval-row": "approvals",
+    "collaboration-view-toggle": "approvals",
+    "collaboration-contention": "approvals",
+    "collaboration-contended-file": "approvals",
+    "collaboration-branch-offer": "branch",
+    "collaboration-branch-create": "branch",
+    "collaboration-branch-compare": "branch",
+    "collaboration-conflict-warning": "branch",
+    "collaboration-merge-branch": "branch",
+    "collaboration-merge-outcome": "branch",
+    "collaboration-branch-claims": "branch",
+    "collaboration-branch-claim": "branch",
+    "collaboration-merge-claim": "branch",
+    "collaboration-merge-conflict": "branch",
+  };
+
+  /**
+   * The governance controls live behind the "Collab" popover in the header,
+   * which opens on an overview rather than on the controls themselves.
+   *
+   * Open means the popover is on screen — either the overview or a section — so
+   * callers that want a control ask `openCollabSection` for the room it is in.
+   */
   async function openCollabPanel(page) {
+    // Checked before the workspace panel is touched: `closeWorkspacePanel`
+    // falls back to the toggle, so calling it against an already-closed panel
+    // opens one, and an open popover needs nothing moved out of its way.
+    if ((await page.locator('[data-testid="collaboration-panel"]').count()) > 0) return true;
     await closeWorkspacePanel(page);
     const trigger = page.locator('button[aria-label="Open collaboration panel"]').first();
     if ((await trigger.count()) === 0) return false;
     await trigger.click().catch(() => undefined);
     await sleep(uiSettleMs);
-    return (
-      (await page.locator('[data-testid="collaboration-approval-modes"]').count()) > 0 ||
-      (await page.locator('[data-testid="collaboration-view-toggle"]').count()) > 0
-    );
+    return (await page.locator('[data-testid="collaboration-panel"]').count()) > 0;
   }
 
   async function closeCollabPanel(page) {
@@ -364,9 +415,38 @@ export function createHarness({
     }
   }
 
+  /** Back to the overview, from wherever the panel currently is. */
+  async function returnToCollabOverview(page) {
+    const back = page.locator('[data-testid="collaboration-panel-back"]').first();
+    if ((await back.count()) > 0) {
+      await back.click().catch(() => undefined);
+      await sleep(1_200);
+    }
+  }
+
+  /**
+   * Opens one section of the popover and confirms it is the one on screen.
+   *
+   * A section whose overview row is absent has genuinely nothing to show — the
+   * panel leaves a row out rather than drawing an unloaded one — so a false
+   * here is a real answer, not a missed click.
+   */
+  async function openCollabSection(page, section) {
+    if (!(await openCollabPanel(page))) return false;
+    const open = page.locator(`[data-testid="collaboration-section"][data-section="${section}"]`);
+    if ((await open.count()) > 0) return true;
+
+    await returnToCollabOverview(page);
+    const row = page.locator(`[data-testid="collaboration-row-${section}"]`).first();
+    if ((await row.count()) === 0) return false;
+    await row.click().catch(() => undefined);
+    await sleep(uiSettleMs);
+    return (await open.count()) > 0;
+  }
+
   /** Only the lead sees the mode buttons, so this is the lead's lever. */
   async function setApprovalMode(page, label) {
-    if (!(await openCollabPanel(page))) return false;
+    if (!(await openCollabSection(page, "approvals"))) return false;
     const button = page
       .locator('[data-testid="collaboration-approval-modes"] button', { hasText: label })
       .first();
@@ -378,13 +458,23 @@ export function createHarness({
     return pressed === "true";
   }
 
-  /** Waits for a testid to show up in the collaboration popover. */
+  /**
+   * Waits for a testid to show up in the collaboration popover, opening the
+   * section it belongs to — and every section in turn for a testid this file
+   * has never heard of, so an unlisted control is looked for rather than
+   * declared missing.
+   */
   async function waitForCollabElement(page, testId, timeoutMs = 20_000) {
+    const known = COLLAB_SECTION_FOR_TESTID[testId];
+    const sections = known ? [known] : COLLAB_SECTIONS;
     const deadline = Date.now() + timeoutMs;
+    const target = page.locator(`[data-testid="${testId}"]`);
     while (Date.now() < deadline) {
       if (!(await openCollabPanel(page))) return false;
-      if ((await page.locator(`[data-testid="${testId}"]`).count()) > 0) {
-        return true;
+      if ((await target.count()) > 0) return true;
+      for (const section of sections) {
+        if (!(await openCollabSection(page, section))) continue;
+        if ((await target.count()) > 0) return true;
       }
       await closeCollabPanel(page);
       await sleep(3_000);
@@ -454,7 +544,9 @@ export function createHarness({
     clickTreeEntry,
     editFileViaUi,
     openCollabPanel,
+    openCollabSection,
     closeCollabPanel,
+    returnToCollabOverview,
     setApprovalMode,
     waitForCollabElement,
     sendAgentMessage,

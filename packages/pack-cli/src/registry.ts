@@ -14,6 +14,7 @@ import {
   MANIFEST_FILENAME,
   parseManifestJson,
   readCard,
+  readIdFromRaw,
   readRef,
   type PackCardView,
   type PackManifest,
@@ -21,6 +22,13 @@ import {
 } from "./manifest.ts";
 import { manifestDigest } from "@t3tools/shared/packSigning";
 import type { SignedManifestResult } from "@t3tools/shared/packSigningNode";
+import {
+  conflictFor,
+  derivePackId,
+  resolvePackIds,
+  type PackIdConflict,
+  type ResolvedPackIds,
+} from "./packIdentity.ts";
 import type { PackStore } from "./store.ts";
 
 const VERSIONS_DIRECTORY = "versions";
@@ -31,6 +39,12 @@ export interface PackRecord {
   readonly card: PackCardView;
   readonly manifest: PackManifest;
   readonly directory: string;
+  /**
+   * Set when the id in this pack's manifest is claimed by another pack in the
+   * same registry. The record is then served under a derived address instead,
+   * so a caller who follows `ref.id` cannot land on the other pack.
+   */
+  readonly idConflict?: PackIdConflict;
 }
 
 export interface PackSearchHit {
@@ -45,6 +59,12 @@ export interface PackSearchOutcome {
   readonly scanned: number;
   /** Packs in the registry this CLI could not read, named rather than hidden. */
   readonly unreadable: ReadonlyArray<{ readonly directory: string; readonly reason: string }>;
+  /**
+   * Ids more than one pack in this registry claims. Reported whether or not the
+   * packs involved matched the query: a registry that cannot say which pack an
+   * id names is broken for every caller, not only for this search.
+   */
+  readonly conflicts: ReadonlyArray<PackIdConflict>;
 }
 
 export interface PackRegistry {
@@ -74,7 +94,29 @@ export interface PackRegistry {
     readonly publisher: string | undefined;
     readonly version: string;
     readonly manifestJson: string;
-  }) => Promise<{ readonly directory: string; readonly versionPath: string }>;
+  }) => Promise<{
+    readonly directory: string;
+    readonly versionPath: string;
+    /**
+     * Reported rather than refused. A rename keeps its id by design, and the
+     * registry has to put the new name in a new directory, so the honest
+     * outcome is a release that landed plus a conflict the publisher can see
+     * and resolve — not a publish that fails with nowhere to go.
+     */
+    readonly idConflict?: PackIdConflict;
+  }>;
+}
+
+/**
+ * The id out of bytes that are being written rather than read, so unparseable
+ * text costs a missing conflict warning and not the publish itself.
+ */
+function parseJson(source: string): unknown {
+  try {
+    return JSON.parse(source);
+  } catch {
+    return undefined;
+  }
 }
 
 function packDirectoryName(name: string, publisher: string | undefined): string {
@@ -161,6 +203,31 @@ function compareHits(left: PackSearchHit, right: PackSearchHit): number {
   return surviving !== 0 ? surviving : left.record.ref.name.localeCompare(right.record.ref.name);
 }
 
+/**
+ * The record as the registry will serve it: same manifest, but wearing the id
+ * this registry can stand behind.
+ *
+ * Both `ref` and `card.ref` are rewritten because callers read whichever is
+ * nearer to hand — the CLI takes the id off `card.ref` for a search result and
+ * off `ref` for a `show` — and an id that depends on which copy you looked at
+ * is the same bug wearing a different hat.
+ */
+function withServedId(
+  record: PackRecord,
+  resolved: ResolvedPackIds,
+  addressedAs: PackRefView = record.ref,
+): PackRecord {
+  const address = derivePackId(addressedAs);
+  const ref = { ...record.ref, id: resolved.served.get(address) ?? address };
+  const conflict = conflictFor(resolved, addressedAs);
+  return {
+    ...record,
+    ref,
+    card: { ...record.card, ref },
+    ...(conflict !== undefined ? { idConflict: conflict } : {}),
+  };
+}
+
 export function makeDirectoryRegistry(store: PackStore, root: string): PackRegistry {
   const readPackDirectory = async (
     directoryName: string,
@@ -195,22 +262,62 @@ export function makeDirectoryRegistry(store: PackStore, root: string): PackRegis
       .map((entry) => entry.name);
   };
 
+  /**
+   * Every readable pack, with its id already settled against the others.
+   *
+   * Reading the whole registry to answer a question about one pack looks
+   * wasteful, and is not: whether an id names this pack is a question about
+   * every other pack in the registry, and a registry is a handful of
+   * directories. Answering it from one manifest is exactly how a page ends up
+   * showing the pack next door.
+   */
+  const readRegistry = async (): Promise<{
+    readonly records: ReadonlyArray<PackRecord>;
+    /** What each pack's manifest claims, before any of it was settled. */
+    readonly claims: ReadonlyArray<PackRefView>;
+    readonly unreadable: ReadonlyArray<{ readonly directory: string; readonly reason: string }>;
+    readonly resolved: ResolvedPackIds;
+    readonly scanned: number;
+  }> => {
+    const directories = await listPackDirectories();
+    const read: Array<PackRecord> = [];
+    const unreadable: Array<{ directory: string; reason: string }> = [];
+    for (const directoryName of directories) {
+      const outcome = await readPackDirectory(directoryName);
+      if (outcome.ok) {
+        read.push(outcome.record);
+      } else {
+        unreadable.push({ directory: directoryName, reason: outcome.reason });
+      }
+    }
+
+    // Sorted, so which pack answers to a name two publishers both used is
+    // decided here rather than by the order a filesystem handed the
+    // directories over. A lookup that depends on that is a lookup that can
+    // answer differently on two machines holding the same packs.
+    read.sort((left, right) => left.ref.qualified.localeCompare(right.ref.qualified));
+
+    const claims = read.map((record) => record.ref);
+    const resolved = resolvePackIds(claims);
+    return {
+      records: read.map((record) => withServedId(record, resolved)),
+      claims,
+      unreadable,
+      resolved,
+      scanned: directories.length,
+    };
+  };
+
   return {
     root,
 
     search: async (input) => {
       const tokens = tokenise(input.query);
-      const directories = await listPackDirectories();
+      const { records, unreadable, resolved, scanned } = await readRegistry();
       const hits: Array<PackSearchHit> = [];
-      const unreadable: Array<{ directory: string; reason: string }> = [];
 
-      for (const directoryName of directories) {
-        const read = await readPackDirectory(directoryName);
-        if (!read.ok) {
-          unreadable.push({ directory: directoryName, reason: read.reason });
-          continue;
-        }
-        const { card } = read.record;
+      for (const record of records) {
+        const { card } = record;
         if (input.category !== undefined && !(card.categories ?? []).includes(input.category)) {
           continue;
         }
@@ -219,14 +326,15 @@ export function makeDirectoryRegistry(store: PackStore, root: string): PackRegis
         }
         const scored = scoreCard(card, tokens);
         if (scored.score > 0) {
-          hits.push({ record: read.record, score: scored.score, matched: scored.matched });
+          hits.push({ record, score: scored.score, matched: scored.matched });
         }
       }
 
       return {
         hits: hits.toSorted(compareHits).slice(0, input.limit ?? DEFAULT_SEARCH_LIMIT),
-        scanned: directories.length,
+        scanned,
         unreadable,
+        conflicts: resolved.conflicts,
       };
     },
 
@@ -238,12 +346,9 @@ export function makeDirectoryRegistry(store: PackStore, root: string): PackRegis
         ? input.name.slice(0, input.name.indexOf("/"))
         : undefined;
 
-      for (const directoryName of await listPackDirectories()) {
-        const read = await readPackDirectory(directoryName);
-        if (!read.ok) {
-          continue;
-        }
-        const { ref } = read.record;
+      const { records, resolved } = await readRegistry();
+      for (const record of records) {
+        const { ref } = record;
         if (ref.name !== requested) {
           continue;
         }
@@ -251,11 +356,11 @@ export function makeDirectoryRegistry(store: PackStore, root: string): PackRegis
           continue;
         }
         if (input.version === undefined || ref.version === input.version) {
-          return read.record;
+          return record;
         }
         // An older release is kept beside the latest rather than in place of it.
         const pinned = await store.read(
-          store.resolve(read.record.directory, VERSIONS_DIRECTORY, `${input.version}.json`),
+          store.resolve(record.directory, VERSIONS_DIRECTORY, `${input.version}.json`),
         );
         if (pinned === undefined) {
           return undefined;
@@ -267,12 +372,19 @@ export function makeDirectoryRegistry(store: PackStore, root: string): PackRegis
             version: input.version,
           });
         }
-        return {
-          ref: readRef(parsed.manifest),
-          card: readCard(parsed.manifest),
-          manifest: parsed.manifest,
-          directory: read.record.directory,
-        };
+        // The address belongs to the pack, not to the release: an old manifest
+        // carrying the pre-rename name must not be served under a different id
+        // from the directory it was read out of.
+        return withServedId(
+          {
+            ref: readRef(parsed.manifest),
+            card: readCard(parsed.manifest),
+            manifest: parsed.manifest,
+            directory: record.directory,
+          },
+          resolved,
+          record.ref,
+        );
       }
       return undefined;
     },
@@ -317,11 +429,29 @@ export function makeDirectoryRegistry(store: PackStore, root: string): PackRegis
           { pack: input.name, version: input.version, registry: root },
         );
       }
+      // Checked before the write so the answer describes what is already
+      // there, not the release being added. A publisher who is told at this
+      // moment that their id is on another pack can still fix it; finding out
+      // when somebody opens the wrong page is finding out far too late.
+      const claim = {
+        publisher: input.publisher,
+        name: input.name,
+        id: readIdFromRaw(parseJson(input.manifestJson)),
+      };
+      const others = (await readRegistry()).claims.filter(
+        (other) => other.name !== input.name || other.publisher !== input.publisher,
+      );
+      const conflict = conflictFor(resolvePackIds([...others, claim]), claim);
+
       await store.makeDirectory(directory);
       await store.makeDirectory(store.resolve(directory, VERSIONS_DIRECTORY));
       await store.write(versionPath, input.manifestJson);
       await store.write(store.resolve(directory, MANIFEST_FILENAME), input.manifestJson);
-      return { directory, versionPath };
+      return {
+        directory,
+        versionPath,
+        ...(conflict !== undefined ? { idConflict: conflict } : {}),
+      };
     },
   };
 }

@@ -4,13 +4,12 @@ import {
   ChevronRightIcon,
   CloudIcon,
   GitPullRequestIcon,
-  MonitorSmartphoneIcon,
   PlusIcon,
   SearchIcon,
-  SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
 import {
   prStatusIndicator,
@@ -131,7 +130,6 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./u
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarHeader,
   SidebarMenu,
@@ -142,6 +140,7 @@ import {
   SidebarMenuSubItem,
   SidebarSeparator,
   SidebarTrigger,
+  useSidebar,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useCommandPaletteStore } from "../commandPaletteStore";
@@ -172,7 +171,12 @@ import {
   type SidebarThreadStatusFilter,
 } from "./Sidebar.logic";
 import { sortThreads } from "../lib/threadSort";
-import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
+import { SidebarChromeFooter } from "./sidebar/SidebarChrome";
+import { SidebarSearchField } from "./sidebar/SidebarSearchField";
+import {
+  countActiveSidebarFilters,
+  describeActiveSidebarFilters,
+} from "./sidebar/sidebarFilters.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { CommandDialogTrigger } from "./ui/command";
 import { readEnvironmentApi } from "../environmentApi";
@@ -2417,44 +2421,6 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
   );
 });
 
-const SidebarChromeFooter = memo(function SidebarChromeFooter() {
-  const navigate = useNavigate();
-  const handleSettingsClick = useCallback(() => {
-    void navigate({ to: "/settings" });
-  }, [navigate]);
-  const handleEnvironmentsClick = useCallback(() => {
-    void navigate({ to: "/environments" });
-  }, [navigate]);
-
-  return (
-    <SidebarFooter className="p-2">
-      <SidebarUpdatePill />
-      <SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            onClick={handleEnvironmentsClick}
-          >
-            <MonitorSmartphoneIcon className="size-3.5" />
-            <span className="text-xs">Environments</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            onClick={handleSettingsClick}
-          >
-            <SettingsIcon className="size-3.5" />
-            <span className="text-xs">Settings</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-      </SidebarMenu>
-    </SidebarFooter>
-  );
-});
-
 interface SidebarProjectsContentProps {
   showArm64IntelBuildWarning: boolean;
   arm64IntelBuildWarningDescription: string | null;
@@ -2569,6 +2535,36 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     [updateSettings],
   );
 
+  const { isMobile, open, setOpenMobile } = useSidebar();
+  // On a phone the sheet can simply open. On desktop the projects sidebar is
+  // opened through the layout, which rebalances the workspace column first, so
+  // `/` declines rather than opening it behind the layout's back.
+  const openSidebarForSearch = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(true);
+      return true;
+    }
+    return open;
+  }, [isMobile, open, setOpenMobile]);
+
+  const activeSidebarFilterCount = countActiveSidebarFilters({
+    searchQuery: sidebarSearchQuery,
+    threadStatusFilter: sidebarThreadStatusFilter,
+    projectSourceFilter: sidebarProjectSourceFilter,
+    ownerFilter: sidebarOwnerFilter,
+  });
+  const handleClearSidebarFilters = useCallback(() => {
+    onSidebarSearchQueryChange("");
+    onSidebarThreadStatusFilterChange("all");
+    onSidebarProjectSourceFilterChange("all");
+    onSidebarOwnerFilterChange("all");
+  }, [
+    onSidebarOwnerFilterChange,
+    onSidebarProjectSourceFilterChange,
+    onSidebarSearchQueryChange,
+    onSidebarThreadStatusFilterChange,
+  ]);
+
   return (
     <SidebarContent className="gap-0">
       <SidebarGroup className="px-2 pt-2 pb-1">
@@ -2650,18 +2646,11 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           </div>
         </div>
         <div className="mb-2 grid gap-1.5 px-1">
-          <div className="relative">
-            <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/55" />
-            <Input
-              type="search"
-              value={sidebarSearchQuery}
-              aria-label="Search projects and threads"
-              data-testid="sidebar-project-search"
-              placeholder="Find project, thread, branch..."
-              className="h-7 pl-7 text-xs"
-              onChange={(event) => onSidebarSearchQueryChange(event.target.value)}
-            />
-          </div>
+          <SidebarSearchField
+            value={sidebarSearchQuery}
+            onChange={onSidebarSearchQueryChange}
+            onFocusRequested={openSidebarForSearch}
+          />
           <div className="grid grid-cols-[minmax(4.5rem,0.7fr)_minmax(7.5rem,1.3fr)] gap-1.5">
             <Select
               value={sidebarThreadStatusFilter}
@@ -2768,6 +2757,17 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               </SelectPopup>
             </Select>
           </div>
+          {activeSidebarFilterCount > 0 ? (
+            <button
+              type="button"
+              data-testid="sidebar-clear-filters"
+              className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-md py-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+              onClick={handleClearSidebarFilters}
+            >
+              <XIcon className="size-3" />
+              Clear {describeActiveSidebarFilters(activeSidebarFilterCount)}
+            </button>
+          ) : null}
         </div>
 
         {isManualProjectSorting ? (

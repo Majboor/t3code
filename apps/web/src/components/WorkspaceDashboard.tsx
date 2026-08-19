@@ -44,6 +44,7 @@ import {
 } from "./ui/dialog";
 import { SidebarInset, SidebarTrigger } from "./ui/sidebar";
 import { toastManager } from "./ui/toast";
+import { WorkspacePageHeader } from "./WorkspacePageHeader";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -550,14 +551,7 @@ function DashboardFilter({
 
 function DashboardHeader() {
   return (
-    <header
-      className={cn(
-        "border-b border-border px-3 sm:px-5",
-        isElectron
-          ? "drag-region flex h-[52px] items-center wco:h-[env(titlebar-area-height)]"
-          : "py-2 sm:py-3",
-      )}
-    >
+    <WorkspacePageHeader electron={isElectron} className="border-b border-border">
       <div className="flex w-full min-w-0 items-center gap-2">
         <SidebarTrigger
           className={cn("size-7 shrink-0 md:hidden", isElectron && "[-webkit-app-region:no-drag]")}
@@ -569,7 +563,7 @@ function DashboardHeader() {
           </p>
         </div>
       </div>
-    </header>
+    </WorkspacePageHeader>
   );
 }
 

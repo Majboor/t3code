@@ -111,7 +111,7 @@ const {
   waitForFileInTree,
   createFileViaUi,
   editFileViaUi,
-  openCollabPanel,
+  openCollabSection,
   closeCollabPanel,
   setApprovalMode,
   waitForCollabElement,
@@ -319,7 +319,14 @@ async function waitForFileAuthor(page, fileName, timeoutMs = 40_000) {
 }
 
 async function memberRows(page) {
-  if (!(await openCollabPanel(page))) return [];
+  // The roster is one section of the popover rather than the whole of it, so
+  // reaching it is two clicks. Failing to reach it must still leave the popover
+  // shut: a popover left open covers the composer and the editor, and the next
+  // few phases then fail for a reason that has nothing to do with them.
+  if (!(await openCollabSection(page, "people"))) {
+    await closeCollabPanel(page);
+    return [];
+  }
   const rows = await page
     .locator('[data-testid="collaboration-member-row"]')
     .evaluateAll((nodes) =>
@@ -344,7 +351,10 @@ async function memberColorFor(page, email) {
 }
 
 async function expandMemberRow(page, email) {
-  if (!(await openCollabPanel(page))) return null;
+  if (!(await openCollabSection(page, "people"))) {
+    await closeCollabPanel(page);
+    return null;
+  }
   const rows = page.locator('[data-testid="collaboration-member-row"]');
   const name = displayNameFor(email);
   for (let index = 0; index < (await rows.count()); index += 1) {
@@ -804,7 +814,7 @@ try {
     await closeCollabPanel(accountB.page);
 
     phase("The admin merges, and the conflict surfaces to them");
-    const opened = await openCollabPanel(accountA.page);
+    const opened = await openCollabSection(accountA.page, "branch");
     const claims = accountA.page.locator('[data-testid="collaboration-branch-claim"]');
     check(
       "the admin can see which branches people are on",

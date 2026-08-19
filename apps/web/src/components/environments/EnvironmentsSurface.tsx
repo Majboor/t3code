@@ -1,11 +1,16 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeftIcon, KeyRoundIcon } from "lucide-react";
+import { KeyRoundIcon } from "lucide-react";
 import { useCallback } from "react";
 
 import { APP_DISPLAY_NAME } from "~/branding";
+import { isElectron } from "~/env";
 import { useStore } from "~/store";
 import { Button } from "../ui/button";
+import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
+import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
+import { WorkspacePageContainer } from "../WorkspacePageContainer";
+import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { AddEnvironmentForm } from "./AddEnvironmentForm";
 import { EnvironmentConnectList } from "./EnvironmentConnectList";
 
@@ -124,8 +129,8 @@ export function EnvironmentsSurface({
         </div>
       </SectionCard>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {variant === "standalone" ? (
+      {variant === "standalone" ? (
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant="ghost"
@@ -135,31 +140,54 @@ export function EnvironmentsSurface({
             <KeyRoundIcon />
             This device already has a pairing token
           </Button>
-        ) : (
-          <Button size="sm" variant="ghost" onClick={() => void navigate({ to: "/" })}>
-            <ArrowLeftIcon />
-            Back to your work
-          </Button>
-        )}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 
+  // Inside the shell: the sidebar stays put, so this page is somewhere you
+  // went rather than somewhere you were thrown. The way back is the sidebar's,
+  // not a button stranded at the bottom of the page.
   if (variant === "page") {
     return (
-      <div className="h-dvh min-h-0 overflow-y-auto bg-background text-foreground">
-        <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-12">{body}</div>
-      </div>
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+          <WorkspacePageHeader
+            electron={isElectron}
+            reserveNativeControls
+            className="border-b border-border"
+          >
+            <div className="flex w-full min-w-0 items-center gap-2">
+              <SidebarTrigger
+                className={
+                  isElectron
+                    ? "size-7 shrink-0 md:hidden [-webkit-app-region:no-drag]"
+                    : "size-7 shrink-0 md:hidden"
+                }
+              />
+              <WorkspaceBreadcrumb ariaLabel="Environments breadcrumb">
+                <WorkspaceBreadcrumbItem current className="truncate">
+                  Environments
+                </WorkspaceBreadcrumbItem>
+              </WorkspaceBreadcrumb>
+            </div>
+          </WorkspacePageHeader>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <WorkspacePageContainer width="wide">{body}</WorkspacePageContainer>
+          </div>
+        </div>
+      </SidebarInset>
     );
   }
 
   return (
-    <div className="relative min-h-dvh overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
+    <div className="relative min-h-dvh overflow-hidden bg-background text-foreground">
       <div className="pointer-events-none absolute inset-0 opacity-80">
         <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--primary)_14%,transparent),transparent)]" />
         <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
       </div>
-      <div className="relative mx-auto w-full max-w-2xl">{body}</div>
+      <WorkspacePageContainer className="relative">{body}</WorkspacePageContainer>
     </div>
   );
 }

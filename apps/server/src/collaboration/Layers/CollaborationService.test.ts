@@ -441,6 +441,43 @@ it.effect("remembers that two people touched the same file, not just the last on
   }).pipe(Effect.provide(makeLayer())),
 );
 
+it.effect("attributes an agent's writes to the person whose turn it was", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    // Presence is how the workspace learns what to call somebody, and an agent
+    // turn has none of its own — so the name has to come from the roster rather
+    // than from the caller, which has only a user id to offer.
+    yield* collaboration.upsertPresence(member, { ...scope, threadId, status: "active" });
+
+    yield* collaboration.touchFilesForUser(member.userId, { ...scope, paths: ["agent.py"] });
+
+    const listed = yield* collaboration.listFileTouches(scope);
+    const touch = listed.touches.find((entry) => entry.path === "agent.py");
+    assert.strictEqual(touch?.userId, member.userId);
+    assert.strictEqual(touch?.displayName, member.displayName);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("counts a person and their agent in one file as two people in it", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.touchFiles(lead, { ...scope, paths: ["app.py"] });
+    yield* collaboration.touchFilesForUser(member.userId, { ...scope, paths: ["app.py"] });
+
+    const listed = yield* collaboration.listFileTouches(scope);
+    const authors = listed.touches
+      .filter((touch) => touch.path === "app.py")
+      .map((touch) => touch.userId);
+
+    // The contention warning reads this list. An agent write that left no touch
+    // is why two people racing through their agents was never noticed.
+    assert.strictEqual(authors.length, 2);
+    assert.ok(authors.includes(lead.userId));
+    assert.ok(authors.includes(member.userId));
+  }).pipe(Effect.provide(makeLayer())),
+);
+
 it.effect("keeps one entry per person per file, however often they touch it", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;

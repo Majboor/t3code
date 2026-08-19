@@ -5,7 +5,12 @@ import path from "node:path";
 import { TenantId, WorkspaceId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isVerifiedPackId, listVerifiedPacks, resetVerifiedPackCache } from "./verifiedPacks.ts";
+import {
+  getVerifiedPack,
+  isVerifiedPackId,
+  listVerifiedPacks,
+  resetVerifiedPackCache,
+} from "./verifiedPacks.ts";
 
 const tenantId = TenantId.make("tenant-verified");
 const workspaceId = WorkspaceId.make("workspace-verified");
@@ -83,5 +88,41 @@ describe("listVerifiedPacks", () => {
 
   it("can be turned off entirely", async () => {
     expect(await withRegistry("none", () => listVerifiedPacks(tenantId, workspaceId))).toEqual([]);
+  });
+
+  /**
+   * A shipped pack is addressed by its name, and names are only unique per
+   * publisher. Two publishers shipping an `ssh-deploy` therefore land on one
+   * `verified:ssh-deploy`, and a listing that offered both would have one of
+   * them open as the other.
+   *
+   * Widening the id to carry the publisher would fix that and orphan every
+   * enablement already keyed on the narrow one, so the id stays as it is and
+   * only one of the two is offered — the same one `getVerifiedPack` opens.
+   */
+  it("offers one pack per id when two publishers ship the same name", async () => {
+    const root = buildRegistry();
+    const original = fs
+      .readdirSync(root, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    if (original === undefined) {
+      throw new Error("The registry this test built has nothing in it.");
+    }
+    const copy = path.join(root, `acme-${original.name.split("-").slice(1).join("-")}`);
+    fs.cpSync(path.join(root, original.name), copy, { recursive: true });
+    const manifestPath = path.join(copy, "pack.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.identity.publisher = { ...manifest.identity.publisher, handle: "acme" };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    const packs = await withRegistry(root, () => listVerifiedPacks(tenantId, workspaceId));
+    const deploys = packs.filter((pack) => pack.name === "ssh-deploy");
+    expect(deploys.length).toBe(1);
+
+    // Whichever one is listed is the one that opens: a page showing the pack
+    // next door is worse than a pack that was never offered.
+    const listed = deploys[0];
+    const opened = await withRegistry(root, () => getVerifiedPack(listed?.packId ?? ""));
+    expect(opened?.manifest.identity.publisher.handle).toBe(listed?.publisherHandle);
   });
 });
