@@ -95,6 +95,8 @@ Say what you stored and what you wrote, naming the secret but never its value. I
 
 Step 2 means a command you could run in the shell and show the output of. If putting it live requires a tool you did not run yourself, it is not step 2.
 
+**Whatever the route, put it live through \`t3 deploy\`.** Register the start command once with \`t3 deploy add\`, then run it with \`t3 deploy run\`. Starting the process yourself works and records nothing: no deploy target, no deployment, no ingest key — and the Infrastructure and Analytics pages read exactly those rows, so they stay empty while the site serves perfectly. That is the same outcome this section warns about for plugin routes, arrived at by a different door. If analytics is wanted, it can only be wired here: the ingest key is minted during \`t3 deploy run\` and never stored, so a deployment started any other way has no way to report.
+
 Those tools are not connected to this workspace. What they ship gets no deployment record, no ingest key, and no entry on the infrastructure or analytics pages — the user is left with a live URL the app cannot see, redeploy, or take down. A publish that succeeds and disappears is worse than one that does not run.
 
 The exception is being asked. If the user names the tool — "publish it with sites", "use the Netlify MCP" — use it, and say plainly that the result will not be tracked in T3.
