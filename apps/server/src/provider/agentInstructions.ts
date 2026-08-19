@@ -19,6 +19,15 @@
  * Saying which pack it is following is part of it. A pack that silently changes
  * what the agent does is indistinguishable, from the outside, from the agent
  * making it up — which is exactly how this gap was noticed.
+ *
+ * Worth knowing before anyone "fixes" this by injecting pack text into turns:
+ * that has been proposed twice, on the grounds that enabling a pack appears to
+ * change nothing. Enablement is a record; discovery is the mechanism, and the
+ * two are not the same feature. Both times the real fault was that discovery
+ * could not run — `t3` was absent from Claude turns, and `listVersions` did not
+ * know about shipped packs, so `pack show` failed for every pack that ships
+ * with the product. Check that `t3 pack search` and `t3 pack show` actually
+ * work for the provider in question before concluding the design is wrong.
  */
 export const PACK_DISCOVERY_INSTRUCTIONS = `<packs># Packs
 
