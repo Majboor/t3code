@@ -1842,9 +1842,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   threadShell === undefined
                     ? terminalWorkspaceRootsByThreadId.get(threadId)
                     : (threadShell.worktreePath ??
-                      readModel.projects.find(
-                        (candidate) => candidate.id === threadShell.projectId,
-                      )?.workspaceRoot);
+                      readModel.projects.find((candidate) => candidate.id === threadShell.projectId)
+                        ?.workspaceRoot);
                 if (!cwd) {
                   return Effect.fail(
                     providerAccountError(
@@ -2678,9 +2677,28 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   }).allowed
                 : false;
             });
-            return matchingProviderSession
-              ? Effect.void
-              : Effect.fail(toError(forbiddenMessage(permission)));
+            if (matchingProviderSession) {
+              return Effect.void;
+            }
+            /**
+             * No provider sessions exist at all, so there is nothing to be
+             * isolated from.
+             *
+             * This gate assumes a hosted deployment where a tenant reaches a
+             * path only through a provider session it owns. A desktop install
+             * never creates one, so a project registered before tenancy — its
+             * ownership still null — fell through to here and was refused
+             * `project.view` against its own owner. The visible symptom was a
+             * send button that did nothing, plus git failing on the same path,
+             * for the only person on the machine.
+             *
+             * The permission itself was already checked by the caller; this
+             * only declines to add a second gate that cannot be satisfied.
+             */
+            if (snapshot.providerSessions.length === 0) {
+              return Effect.void;
+            }
+            return Effect.fail(toError(forbiddenMessage(permission)));
           }),
         );
 
