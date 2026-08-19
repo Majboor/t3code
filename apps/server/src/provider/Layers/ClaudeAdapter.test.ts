@@ -332,12 +332,22 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.deepEqual(createInput?.options.env, {
+      const launchEnv = createInput?.options.env as Record<string, string> | undefined;
+      // Everything but PATH is the isolated environment verbatim: the point of
+      // this test is that the server's own environment does not leak in.
+      const { PATH: launchPath, ...isolated } = launchEnv ?? {};
+      assert.deepEqual(isolated, {
         CLAUDE_CONFIG_DIR: "/srv/t3/tenants/acme/provider-homes/user-1/claude/config",
         HOME: "/srv/t3/tenants/acme/provider-homes/user-1/claude",
-        PATH: "/usr/bin",
         T3_PROVIDER_ACCOUNT_ID: "provider-account-1",
       });
+      // PATH keeps what it was given and may gain the `t3` shim in front, which
+      // is how an agent runs the CLI its packs tell it to use. Asserting the
+      // exact string would fail on any machine where the shim can be written.
+      assert.ok(
+        launchPath === "/usr/bin" || launchPath?.endsWith(":/usr/bin"),
+        `PATH must still end at the isolated one, got ${String(launchPath)}`,
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
