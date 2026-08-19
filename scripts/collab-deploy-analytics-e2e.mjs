@@ -88,7 +88,17 @@ const { signUp, addProject, openProject, sendAgentMessage, createInvite, acceptI
 const CLI_ENTRY = path.join(REPO, "apps", "server", "src", "bin.ts");
 
 function t3(args) {
-  return execFileSync("node", [CLI_ENTRY, ...args, "--base-dir", BASE_DIR, "--dev-url", BASE_URL], {
+  // `--dev-url` moves the CLI's state under `dev/`, and a server started without
+  // it keeps state under `userdata/`. Passing it while the server under test
+  // does not means the two write to different databases: the CLI declares a
+  // stream the server has never heard of, and every event it later reports is
+  // refused 403 for a stream that genuinely is not there. So it is only passed
+  // when the CLI and the server would agree about where state lives.
+  const cliArgs = [CLI_ENTRY, ...args, "--base-dir", BASE_DIR];
+  if (resolveStateDatabase()?.includes(`${path.sep}dev${path.sep}`)) {
+    cliArgs.push("--dev-url", BASE_URL);
+  }
+  return execFileSync("node", cliArgs, {
     encoding: "utf8",
     timeout: 180_000,
   }).trim();
