@@ -16,6 +16,7 @@ import {
   OpenError,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
+  TerminalSessionLookupError,
   type OrchestrationCommand,
   type OrchestrationEvent,
   ORCHESTRATION_WS_METHODS,
@@ -159,7 +160,7 @@ import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
 import type { AuthenticatedSession } from "./auth/Services/ServerAuth.ts";
 import type { SupabaseJwtClaims, SupabaseJwks } from "./auth/supabaseJwt.ts";
-import { __testWebSocketConnectionLimits } from "./ws.ts";
+import { __testTerminalWorkspaceRoots, __testWebSocketConnectionLimits } from "./ws.ts";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -8963,6 +8964,163 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assertFailure(result, terminalError);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  /**
+   * A thread only gets a row once its first message is sent. Until then it is a
+   * draft, and opening its terminal is an ordinary thing to do — this is the
+   * shape that used to answer every keystroke with
+   * `Failed to access terminal cwd: <thread id> (Thread <thread id> was not
+   * found.)` while silently dropping the shell's output.
+   */
+  it.effect("keeps terminal rpcs working for a draft thread that has no row yet", () =>
+    Effect.gen(function* () {
+      __testTerminalWorkspaceRoots.reset();
+      const draftThreadId = "thread-draft-unpersisted";
+      const snapshot = {
+        threadId: draftThreadId,
+        terminalId: "default",
+        cwd: "/tmp/project",
+        worktreePath: null,
+        status: "running" as const,
+        pid: 4321,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        updatedAt: new Date().toISOString(),
+      };
+      const writtenData: string[] = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          terminalManager: {
+            open: () => Effect.succeed(snapshot),
+            write: (input) =>
+              Effect.sync(() => {
+                writtenData.push(input.data);
+              }),
+            resize: () => Effect.void,
+            clear: () => Effect.void,
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      // Nothing has been opened for this id yet, so the server has never heard
+      // of it: that is a lookup failure, and it says so instead of blaming a
+      // directory that was never a directory.
+      const beforeOpen = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.terminalWrite]({
+            threadId: draftThreadId,
+            terminalId: "default",
+            data: "e",
+          }),
+        ).pipe(Effect.result),
+      );
+      assertFailure(
+        beforeOpen,
+        new TerminalSessionLookupError({ threadId: draftThreadId, terminalId: "default" }),
+      );
+
+      const opened = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.terminalOpen]({
+            threadId: draftThreadId,
+            terminalId: "default",
+            cwd: "/tmp/project",
+          }),
+        ),
+      );
+      assert.equal(opened.terminalId, "default");
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.terminalWrite]({
+            threadId: draftThreadId,
+            terminalId: "default",
+            data: "echo hi\n",
+          }),
+        ),
+      );
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.terminalResize]({
+            threadId: draftThreadId,
+            terminalId: "default",
+            cols: 100,
+            rows: 30,
+          }),
+        ),
+      );
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.terminalClear]({
+            threadId: draftThreadId,
+            terminalId: "default",
+          }),
+        ),
+      );
+
+      assert.deepEqual(writtenData, ["echo hi\n"]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("streams terminal events for a draft thread that has no row yet", () =>
+    Effect.gen(function* () {
+      __testTerminalWorkspaceRoots.reset();
+      const draftThreadId = "thread-draft-streaming";
+      const snapshot = {
+        threadId: draftThreadId,
+        terminalId: "default",
+        cwd: "/tmp/project",
+        worktreePath: null,
+        status: "running" as const,
+        pid: 9876,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        updatedAt: new Date().toISOString(),
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          terminalManager: {
+            open: () => Effect.succeed(snapshot),
+            subscribe: (listener) =>
+              listener({
+                threadId: draftThreadId,
+                terminalId: "default",
+                createdAt: new Date().toISOString(),
+                type: "output",
+                data: "draft output",
+              }).pipe(Effect.as(() => {})),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.terminalOpen]({
+            threadId: draftThreadId,
+            terminalId: "default",
+            cwd: "/tmp/project",
+          }),
+        ),
+      );
+
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.subscribeTerminalEvents]({}).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+
+      assert.equal(events.length, 1);
+      assert.equal(events[0]?.threadId, draftThreadId);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

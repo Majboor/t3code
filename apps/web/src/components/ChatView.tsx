@@ -473,6 +473,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   const storeNewTerminal = useTerminalStateStore((state) => state.newTerminal);
   const storeSetActiveTerminal = useTerminalStateStore((state) => state.setActiveTerminal);
   const storeCloseTerminal = useTerminalStateStore((state) => state.closeTerminal);
+  const storeRemoveTerminalState = useTerminalStateStore((state) => state.removeTerminalState);
   const [localFocusRequestId, setLocalFocusRequestId] = useState(0);
   const worktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
   const effectiveWorktreePath = useMemo(() => {
@@ -564,6 +565,14 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     [bumpFocusRequestId, storeCloseTerminal, terminalState.terminalIds.length, threadId, threadRef],
   );
 
+  // An id the server has never heard of cannot be made to work by asking
+  // again — it outlived the server that issued it, and it is only still here
+  // because terminal state is restored per origin, not per server. Drop what
+  // was restored for it so the panel stops reopening onto nothing.
+  const handleThreadMissing = useCallback(() => {
+    storeRemoveTerminalState(threadRef);
+  }, [storeRemoveTerminalState, threadRef]);
+
   const handleAddTerminalContext = useCallback(
     (selection: TerminalContextSelection) => {
       if (!visible) {
@@ -601,6 +610,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         onActiveTerminalChange={activateTerminal}
         onCloseTerminal={closeTerminal}
         onHeightChange={setTerminalHeight}
+        onThreadMissing={handleThreadMissing}
         onAddTerminalContext={handleAddTerminalContext}
       />
     </div>

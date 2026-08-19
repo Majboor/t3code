@@ -62,6 +62,31 @@ function writeSystemMessage(terminal: Terminal, message: string): void {
   terminal.write(`\r\n[terminal] ${message}\r\n`);
 }
 
+/**
+ * What the server says when it has never heard of this thread: not "your
+ * directory is broken", but "that id means nothing here". It is raised for an
+ * id restored from storage that belongs to some other server that once used
+ * this port, or to a thread this one has since forgotten.
+ */
+export function isUnknownTerminalThreadError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "_tag" in error &&
+    (error as { _tag?: unknown })._tag === "TerminalSessionLookupError"
+  );
+}
+
+export const UNKNOWN_TERMINAL_THREAD_MESSAGE =
+  "This terminal belongs to a conversation this server does not have. Clearing it — open the terminal again to start a new one.";
+
+export function terminalFailureMessage(error: unknown, fallback: string): string {
+  if (isUnknownTerminalThreadError(error)) {
+    return UNKNOWN_TERMINAL_THREAD_MESSAGE;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
 function writeTerminalSnapshot(terminal: Terminal, snapshot: TerminalSessionSnapshot): void {
   terminal.write("\u001bc");
   if (snapshot.history.length > 0) {
@@ -250,6 +275,8 @@ interface TerminalViewportProps {
   worktreePath?: string | null;
   runtimeEnv?: Record<string, string>;
   onSessionExited: () => void;
+  /** Raised once when the server does not know this thread, so the caller can drop what it restored for it. */
+  onThreadMissing?: (() => void) | undefined;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   focusRequestId: number;
   autoFocus: boolean;
@@ -266,6 +293,7 @@ export function TerminalViewport({
   worktreePath,
   runtimeEnv,
   onSessionExited,
+  onThreadMissing,
   onAddTerminalContext,
   focusRequestId,
   autoFocus,
@@ -284,8 +312,13 @@ export function TerminalViewport({
   const selectionActionTimerRef = useRef<number | null>(null);
   const lastAppliedTerminalEventIdRef = useRef(0);
   const terminalHydratedRef = useRef(false);
+  const lastFailureMessageRef = useRef<string | null>(null);
+  const threadMissingRef = useRef(false);
   const handleSessionExited = useEffectEvent(() => {
     onSessionExited();
+  });
+  const handleThreadMissing = useEffectEvent(() => {
+    onThreadMissing?.();
   });
   const handleAddTerminalContext = useEffectEvent((selection: TerminalContextSelection) => {
     onAddTerminalContext(selection);
@@ -392,13 +425,35 @@ export function TerminalViewport({
       }
     };
 
+    /**
+     * Report a failed terminal call at most once.
+     *
+     * Every keystroke goes through its own request, so a terminal the server
+     * refuses would otherwise repeat the same line for as long as someone keeps
+     * typing. Say it once, and when the refusal is "I have never heard of this
+     * thread", stop asking and tell whoever restored the id to drop it.
+     */
+    const reportTerminalFailure = (error: unknown, fallbackError: string) => {
+      const activeTerminal = terminalRef.current;
+      const message = terminalFailureMessage(error, fallbackError);
+      if (activeTerminal && lastFailureMessageRef.current !== message) {
+        lastFailureMessageRef.current = message;
+        writeSystemMessage(activeTerminal, message);
+      }
+      if (!isUnknownTerminalThreadError(error) || threadMissingRef.current) {
+        return;
+      }
+      threadMissingRef.current = true;
+      handleThreadMissing();
+    };
+
     const sendTerminalInput = async (data: string, fallbackError: string) => {
       const activeTerminal = terminalRef.current;
-      if (!activeTerminal) return;
+      if (!activeTerminal || threadMissingRef.current) return;
       try {
         await api.terminal.write({ threadId, terminalId, data });
       } catch (error) {
-        writeSystemMessage(activeTerminal, error instanceof Error ? error.message : fallbackError);
+        reportTerminalFailure(error, fallbackError);
       }
     };
 
@@ -489,14 +544,7 @@ export function TerminalViewport({
     });
 
     const inputDisposable = terminal.onData((data) => {
-      void api.terminal
-        .write({ threadId, terminalId, data })
-        .catch((err) =>
-          writeSystemMessage(
-            terminal,
-            err instanceof Error ? err.message : "Terminal write failed",
-          ),
-        );
+      void sendTerminalInput(data, "Terminal write failed");
     });
 
     const selectionDisposable = terminal.onSelectionChange(() => {
@@ -677,10 +725,7 @@ export function TerminalViewport({
         }
       } catch (err) {
         if (disposed) return;
-        writeSystemMessage(
-          terminal,
-          err instanceof Error ? err.message : "Failed to open terminal",
-        );
+        reportTerminalFailure(err, "Failed to open terminal");
       }
     };
 
@@ -709,6 +754,8 @@ export function TerminalViewport({
       disposed = true;
       terminalHydratedRef.current = false;
       lastAppliedTerminalEventIdRef.current = 0;
+      lastFailureMessageRef.current = null;
+      threadMissingRef.current = false;
       unsubscribeTerminalEvents();
       window.clearTimeout(fitTimer);
       inputDisposable.dispose();
@@ -788,6 +835,7 @@ interface ThreadTerminalDrawerProps {
   focusRequestId: number;
   onSplitTerminal: () => void;
   onNewTerminal: () => void;
+  onThreadMissing?: (() => void) | undefined;
   splitShortcutLabel?: string | undefined;
   newShortcutLabel?: string | undefined;
   closeShortcutLabel?: string | undefined;
@@ -841,6 +889,7 @@ export default function ThreadTerminalDrawer({
   focusRequestId,
   onSplitTerminal,
   onNewTerminal,
+  onThreadMissing,
   splitShortcutLabel,
   newShortcutLabel,
   closeShortcutLabel,
@@ -1161,6 +1210,7 @@ export default function ThreadTerminalDrawer({
                         {...(worktreePath !== undefined ? { worktreePath } : {})}
                         {...(runtimeEnv ? { runtimeEnv } : {})}
                         onSessionExited={() => onCloseTerminal(terminalId)}
+                        onThreadMissing={onThreadMissing}
                         onAddTerminalContext={onAddTerminalContext}
                         focusRequestId={focusRequestId}
                         autoFocus={terminalId === resolvedActiveTerminalId}
@@ -1183,6 +1233,7 @@ export default function ThreadTerminalDrawer({
                   {...(worktreePath !== undefined ? { worktreePath } : {})}
                   {...(runtimeEnv ? { runtimeEnv } : {})}
                   onSessionExited={() => onCloseTerminal(resolvedActiveTerminalId)}
+                  onThreadMissing={onThreadMissing}
                   onAddTerminalContext={onAddTerminalContext}
                   focusRequestId={focusRequestId}
                   autoFocus
