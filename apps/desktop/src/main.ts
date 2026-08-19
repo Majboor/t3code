@@ -53,6 +53,7 @@ import {
   writeSavedEnvironmentRegistry,
   writeSavedEnvironmentSecret,
 } from "./clientPersistence.ts";
+import { scanProject, summariseScan } from "./cloudSync/scan.ts";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness.ts";
 import { showDesktopConfirmDialog } from "./confirmDialog.ts";
 import { resolveDesktopServerExposure } from "./serverExposure.ts";
@@ -1755,6 +1756,20 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeHandler(WORKSPACE_SHARE_STOP_CHANNEL);
   ipcMain.handle(WORKSPACE_SHARE_STOP_CHANNEL, async () => workspaceShareController.stop());
+
+  // Cloud sync, laptop half (`src/cloudSync/`). Only the scan is reachable from here: it
+  // reads and hashes, and the worst it can do is take a while. Applying actions is not
+  // exposed until the controller that sequences a pass exists, because the safety of
+  // `apply.ts` depends on being handed a plan that `planLocalPass` agreed to run — a
+  // renderer that could post individual actions could hand it a plan nothing checked.
+  const CLOUD_SYNC_SCAN_CHANNEL = "desktop:cloud-sync-scan";
+  ipcMain.removeHandler(CLOUD_SYNC_SCAN_CHANNEL);
+  ipcMain.handle(CLOUD_SYNC_SCAN_CHANNEL, async (_event, rawRoot: unknown) => {
+    if (typeof rawRoot !== "string" || rawRoot.trim() === "") {
+      throw new Error("Invalid cloud sync scan payload.");
+    }
+    return summariseScan(await scanProject({ root: rawRoot }));
+  });
 
   ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
   ipcMain.handle(PICK_FOLDER_CHANNEL, async (_event, rawOptions: unknown) => {

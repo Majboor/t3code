@@ -8,6 +8,13 @@ import { analyticsIngestRouteLayer } from "./analytics/http.ts";
 import { desktopActivityRouteLayer } from "./desktop/http.ts";
 import { shareLinkRedeemRouteLayer } from "./shareLinks/http.ts";
 import {
+  cloudSyncBlobDownloadRouteLayer,
+  cloudSyncBlobUploadRouteLayer,
+  cloudSyncCommitRouteLayer,
+  cloudSyncNegotiateRouteLayer,
+  cloudSyncPassRouteLayer,
+} from "./cloudSync/http.ts";
+import {
   providerAuthAccountRouteLayer,
   providerAuthCodeRouteLayer,
   providerAuthConnectionsRouteLayer,
@@ -104,6 +111,7 @@ import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
 import { CloudSyncRepositoryLive } from "./persistence/Layers/CloudSync.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
+import { CloudSyncServiceLive } from "./cloudSync/Layers/CloudSyncService.ts";
 import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSharingService.ts";
 import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
@@ -387,6 +395,16 @@ const ProviderSharingLayerLive = ProviderSharingServiceLive.pipe(
  * project and the project row is the only thing that knows which workspace owns
  * it — the check that stops a member of one workspace publishing another's.
  */
+/**
+ * Replicating a project reaches the same project projection the share links do,
+ * and for the same reason: the project row is what says which workspace owns it.
+ */
+const CloudSyncLayerLive = CloudSyncServiceLive.pipe(
+  Layer.provide(CloudSyncRepositoryLayerLive),
+  Layer.provide(CollaborationLayerLive),
+  Layer.provide(ProjectionProjectRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+);
+
 const ShareLinkLayerLive = ShareLinkServiceLive.pipe(
   Layer.provide(ShareLinkRepositoryLayerLive),
   Layer.provide(CollaborationLayerLive),
@@ -416,6 +434,7 @@ const TenantServicesLayerLive = Layer.mergeAll(
   ProviderSharingLayerLive,
   ProviderUsageLayerLive,
   ShareLinkLayerLive,
+  CloudSyncLayerLive,
   OrganizationLayerLive,
   PackRegistryLayerLive,
   PackEnablementLayerLive,
@@ -472,6 +491,11 @@ export const makeRoutesLayer = Layer.mergeAll(
   desktopActivityRouteLayer,
   // Before the static catch-all: `/s/*` is a public route, not an app path.
   shareLinkRedeemRouteLayer,
+  cloudSyncNegotiateRouteLayer,
+  cloudSyncBlobUploadRouteLayer,
+  cloudSyncBlobDownloadRouteLayer,
+  cloudSyncPassRouteLayer,
+  cloudSyncCommitRouteLayer,
   providerAuthPageRouteLayer,
   providerAuthStartRouteLayer,
   providerAuthCodeRouteLayer,

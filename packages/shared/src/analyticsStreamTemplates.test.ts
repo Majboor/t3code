@@ -40,8 +40,9 @@ describe("proposeAnalyticsStreams", () => {
   });
 
   it("leaves a loopback service alone, since nobody outside calls it", () => {
-    expect(proposeAnalyticsStreams(runtime({ services: [service({ exposure: "loopback" })] })))
-      .toEqual([]);
+    expect(
+      proposeAnalyticsStreams(runtime({ services: [service({ exposure: "loopback" })] })),
+    ).toEqual([]);
   });
 
   it("ignores a protocol that has no requests to count", () => {
@@ -191,10 +192,7 @@ describe("proposeStreamForDeployment", () => {
     const stream = proposeStreamForDeployment({ name: "Nightly PDF", url: null });
 
     expect(stream.name).toBe("nightly-pdf.run");
-    expect(stream.properties.map((property) => property.name)).toEqual([
-      "outcome",
-      "duration_ms",
-    ]);
+    expect(stream.properties.map((property) => property.name)).toEqual(["outcome", "duration_ms"]);
   });
 
   it("lets the command speak only when there is no address to go on", () => {

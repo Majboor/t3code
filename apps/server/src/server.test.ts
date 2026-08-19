@@ -128,6 +128,8 @@ import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/Provide
 import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
+import { CloudSyncRepositoryLive } from "./persistence/Layers/CloudSync.ts";
+import { CloudSyncServiceLive } from "./cloudSync/Layers/CloudSyncService.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import {
   ProviderSharingRepository,
@@ -353,6 +355,12 @@ const providerSharingTestLayer = ProviderSharingRepositoryLive.pipe(
 const providerSharingServiceTestLayer = ProviderSharingServiceLive.pipe(
   Layer.provide(providerSharingTestLayer),
   Layer.provide(collaborationTestLayer),
+);
+
+const cloudSyncServiceTestLayer = CloudSyncServiceLive.pipe(
+  Layer.provide(CloudSyncRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(collaborationTestLayer),
+  Layer.provide(ProjectionProjectRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
 );
 
 const providerUsageRequestTestLayer = ProviderUsageRequestRepositoryLive.pipe(
@@ -780,6 +788,7 @@ const buildAppUnderTest = (options?: {
           providerSharingServiceTestLayer,
           providerUsageServiceTestLayer,
           shareLinkServiceTestLayer,
+          cloudSyncServiceTestLayer,
         ),
       ),
       Layer.provideMerge(organizationTestLayer),

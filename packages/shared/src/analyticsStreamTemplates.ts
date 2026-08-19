@@ -47,7 +47,9 @@ const RUN_PROPERTIES = [
  * twenty that get declared once and never queried, and every one of these has
  * an obvious first question it answers.
  */
-export function proposeAnalyticsStreams(runtime: PackRuntime): ReadonlyArray<AnalyticsStreamTemplate> {
+export function proposeAnalyticsStreams(
+  runtime: PackRuntime,
+): ReadonlyArray<AnalyticsStreamTemplate> {
   const services = runtime.services ?? [];
   const templates: AnalyticsStreamTemplate[] = [];
 

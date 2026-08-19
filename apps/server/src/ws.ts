@@ -15,6 +15,7 @@ import os from "node:os";
 import {
   type AuthAccessStreamEvent,
   AuthSessionId,
+  CloudSyncError,
   CollaborationError,
   CommandId,
   AnalyticsError,
@@ -133,6 +134,7 @@ import {
   type SessionCredentialChange,
 } from "./auth/Services/SessionCredentialService.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { CloudSyncService } from "./cloudSync/Services/CloudSyncService.ts";
 import { CollaborationService } from "./collaboration/Services/CollaborationService.ts";
 import { OrganizationService } from "./organizations/Services/OrganizationService.ts";
 import { PackRegistryService } from "./packs/Services/PackRegistryService.ts";
@@ -766,6 +768,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const providerSharing = yield* ProviderSharingService;
       const providerUsage = yield* ProviderUsageService;
       const shareLinks = yield* ShareLinkService;
+      const cloudSync = yield* CloudSyncService;
       const organizations = yield* OrganizationService;
       const packRegistry = yield* PackRegistryService;
       const tenancyRepository = yield* TenancyRepository;
@@ -1557,6 +1560,30 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           Effect.mapError(
             () =>
               new ShareLinkError({
+                code: "forbidden",
+                message: forbiddenMessage(permission),
+              }),
+          ),
+        );
+
+      /**
+       * The coarse gate for cloud sync, in this group's vocabulary. An `Effect`
+       * failing with `ShareLinkError` cannot be piped into a handler that must
+       * fail with `CloudSyncError`, and widening either to serve both would
+       * make every share-link caller narrow past codes about base revisions it
+       * can never raise.
+       *
+       * Whether the caller belongs to the particular workspace is the service's
+       * own roster check, which this deliberately does not duplicate.
+       */
+      const ensureTenantPermissionForCloudSync = (
+        tenantId: TenantId,
+        permission: TenantPermission,
+      ): Effect.Effect<void, CloudSyncError> =>
+        ensureTenantPermission(tenantId, permission).pipe(
+          Effect.mapError(
+            () =>
+              new CloudSyncError({
                 code: "forbidden",
                 message: forbiddenMessage(permission),
               }),
@@ -4544,6 +4571,90 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               (message) => new ShareLinkError({ code: "forbidden", message }),
             ),
             { "rpc.aggregate": "share-links" },
+          ),
+        [WS_METHODS.cloudSyncStatusGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.cloudSyncStatusGet,
+            withRateLimit(
+              ensureTenantPermissionForCloudSync(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => cloudSync.getStatus(actor, input)),
+              ),
+              (message) => new CloudSyncError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "cloud-sync" },
+          ),
+        [WS_METHODS.cloudSyncStart]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.cloudSyncStart,
+            withRateLimit(
+              // `workspace.edit`, not `workspace.view`. Starting a sync
+              // replicates a laptop's files into a workspace and, in `mirror`,
+              // lets a local delete remove a file from the cloud copy everybody
+              // else is working on. That is a change to what the workspace is.
+              ensureTenantPermissionForCloudSync(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => cloudSync.start(actor, input)),
+              ),
+              (message) => new CloudSyncError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "cloud-sync" },
+          ),
+        [WS_METHODS.cloudSyncPause]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.cloudSyncPause,
+            withRateLimit(
+              // Deliberately no stricter than starting. Stopping the flow of
+              // bytes is the safe direction, and anyone trusted to begin a sync
+              // has to be able to halt one without finding an admin.
+              ensureTenantPermissionForCloudSync(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => cloudSync.pause(actor, input)),
+              ),
+              (message) => new CloudSyncError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "cloud-sync" },
+          ),
+        [WS_METHODS.cloudSyncStop]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.cloudSyncStop,
+            withRateLimit(
+              ensureTenantPermissionForCloudSync(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => cloudSync.stop(actor, input)),
+              ),
+              (message) => new CloudSyncError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "cloud-sync" },
+          ),
+        [WS_METHODS.cloudSyncConflictsList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.cloudSyncConflictsList,
+            withRateLimit(
+              ensureTenantPermissionForCloudSync(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => cloudSync.listConflicts(actor, input)),
+              ),
+              (message) => new CloudSyncError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "cloud-sync" },
+          ),
+        [WS_METHODS.cloudSyncConflictsResolve]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.cloudSyncConflictsResolve,
+            withRateLimit(
+              // `workspace.edit` even though nothing is deleted and no side is
+              // chosen: this is the call that stops the badge nagging, and
+              // someone who may only read the workspace must not be able to
+              // clear a warning about two copies of a file that are still
+              // sitting on somebody's disk.
+              ensureTenantPermissionForCloudSync(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => cloudSync.resolveConflict(actor, input)),
+              ),
+              (message) => new CloudSyncError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "cloud-sync" },
           ),
         [WS_METHODS.packsPublish]: (input) =>
           observeRpcEffect(
