@@ -13,6 +13,7 @@ import { Route as ShareRouteImport } from './routes/share'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as InviteRouteImport } from './routes/invite'
+import { Route as EnvironmentsRouteImport } from './routes/environments'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsOrganizationRouteImport } from './routes/settings.organization'
@@ -45,6 +46,11 @@ const PairRoute = PairRouteImport.update({
 const InviteRoute = InviteRouteImport.update({
   id: '/invite',
   path: '/invite',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EnvironmentsRoute = EnvironmentsRouteImport.update({
+  id: '/environments',
+  path: '/environments',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatRoute = ChatRouteImport.update({
@@ -116,6 +122,7 @@ const ChatProjectEnvironmentIdProjectIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
+  '/environments': typeof EnvironmentsRoute
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -133,6 +140,7 @@ export interface FileRoutesByFullPath {
   '/project/$environmentId/$projectId': typeof ChatProjectEnvironmentIdProjectIdRoute
 }
 export interface FileRoutesByTo {
+  '/environments': typeof EnvironmentsRoute
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -153,6 +161,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
+  '/environments': typeof EnvironmentsRoute
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -174,6 +183,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/environments'
     | '/invite'
     | '/pair'
     | '/settings'
@@ -191,6 +201,7 @@ export interface FileRouteTypes {
     | '/project/$environmentId/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/environments'
     | '/invite'
     | '/pair'
     | '/settings'
@@ -210,6 +221,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_chat'
+    | '/environments'
     | '/invite'
     | '/pair'
     | '/settings'
@@ -230,6 +242,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
+  EnvironmentsRoute: typeof EnvironmentsRoute
   InviteRoute: typeof InviteRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
@@ -264,6 +277,13 @@ declare module '@tanstack/react-router' {
       path: '/invite'
       fullPath: '/invite'
       preLoaderRoute: typeof InviteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/environments': {
+      id: '/environments'
+      path: '/environments'
+      fullPath: '/environments'
+      preLoaderRoute: typeof EnvironmentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat': {
@@ -405,6 +425,7 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
+  EnvironmentsRoute: EnvironmentsRoute,
   InviteRoute: InviteRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,

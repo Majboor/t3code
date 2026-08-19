@@ -99,4 +99,40 @@ describe("resolvePrivateRouteRedirect", () => {
       }),
     ).toBe("/custom-login");
   });
+
+  it("does not strand a browser on a pairing screen it can never satisfy", () => {
+    // `desktop-managed-local` advertises only `desktop-bootstrap`, so `/pair`
+    // would ask for a credential no browser can obtain. The way forward is to
+    // connect a machine of your own.
+    expect(
+      resolvePrivateRouteRedirect({
+        authGateState: {
+          status: "requires-auth",
+          auth: {
+            policy: "desktop-managed-local",
+            bootstrapMethods: ["desktop-bootstrap"],
+            sessionMethods: ["browser-session-cookie"],
+            sessionCookieName: "t3_session",
+          },
+        },
+      }),
+    ).toBe("/environments");
+  });
+
+  it("still sends a browser that can sign in to the pairing surface", () => {
+    expect(
+      resolvePrivateRouteRedirect({
+        authGateState: {
+          status: "requires-auth",
+          auth: {
+            policy: "desktop-managed-local",
+            bootstrapMethods: ["desktop-bootstrap"],
+            sessionMethods: ["browser-session-cookie"],
+            sessionCookieName: "t3_session",
+            localPassword: { enabled: true },
+          },
+        },
+      }),
+    ).toBe("/pair");
+  });
 });

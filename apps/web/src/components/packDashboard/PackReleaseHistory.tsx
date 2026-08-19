@@ -10,6 +10,7 @@ import {
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Card, CardTitle } from "../ui/card";
 
 /**
  * Releases read as what each one learned and what each one has survived, both
@@ -32,8 +33,8 @@ export function PackReleaseHistory({
   knowledge: PackKnowledge;
 }) {
   return (
-    <section className="rounded-lg border border-border p-4" data-testid="pack-detail-releases">
-      <h2 className="text-sm font-medium text-foreground">Releases</h2>
+    <Card className="p-4" render={<section />} data-testid="pack-detail-releases">
+      <CardTitle className="text-sm">Releases</CardTitle>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">
         Each release is a promise about behaviour, so what matters about one is what it had learned
         by then and what it has since survived on its own. Open an older release to read it as it
@@ -129,6 +130,6 @@ export function PackReleaseHistory({
           );
         })}
       </div>
-    </section>
+    </Card>
   );
 }

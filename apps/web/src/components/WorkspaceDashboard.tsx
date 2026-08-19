@@ -956,6 +956,16 @@ function EmptyDashboard({
             <span>Add Project</span>
           </button>
         </div>
+        <p className="mt-5 text-xs leading-relaxed text-muted-foreground">
+          Working from a browser?{" "}
+          <Link
+            className="font-medium text-foreground underline underline-offset-2"
+            to="/environments"
+          >
+            Connect the machine you work on
+          </Link>{" "}
+          and its projects show up here.
+        </p>
       </div>
     </section>
   );

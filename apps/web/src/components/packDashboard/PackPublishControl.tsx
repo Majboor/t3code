@@ -23,6 +23,7 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
+import { Radio, RadioGroup } from "../ui/radio-group";
 import { toastManager } from "../ui/toast";
 
 /**
@@ -104,32 +105,40 @@ export function PackPublishControl({
           </AlertDialogHeader>
 
           <div className="grid gap-2 px-6 pb-4">
-            <div className="grid gap-1" data-testid="pack-detail-visibility-choices">
+            {/* One of these is always chosen, so it is a radio group rather
+                than a row of toggles: screen readers get "2 of 3", and the
+                arrow keys move between the options. */}
+            <RadioGroup
+              className="gap-1"
+              data-testid="pack-detail-visibility-choices"
+              onValueChange={(next: PackVisibilityScope) => setTarget(next)}
+              value={target}
+            >
               {PACK_VISIBILITY_CHOICES.map((scope) => (
-                <button
+                <label
                   key={scope}
-                  type="button"
-                  aria-pressed={scope === target}
-                  data-testid="pack-detail-visibility-choice"
-                  data-scope={scope}
                   className={cn(
-                    "rounded-md border px-3 py-2 text-left transition-colors",
+                    "flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 text-left transition-colors",
                     scope === target
                       ? "border-primary bg-primary/10"
                       : "border-border hover:bg-accent/40",
                   )}
-                  onClick={() => setTarget(scope)}
+                  data-scope={scope}
+                  data-testid="pack-detail-visibility-choice"
                 >
-                  <div className="text-xs font-medium text-foreground">
-                    {PACK_VISIBILITY_DESCRIPTIONS[scope].label}
-                    {scope === current ? " — where it is now" : ""}
-                  </div>
-                  <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                    {PACK_VISIBILITY_DESCRIPTIONS[scope].detail}
-                  </div>
-                </button>
+                  <Radio className="mt-0.5" value={scope} />
+                  <span className="min-w-0">
+                    <span className="block font-medium text-foreground text-xs">
+                      {PACK_VISIBILITY_DESCRIPTIONS[scope].label}
+                      {scope === current ? " — where it is now" : ""}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground leading-4">
+                      {PACK_VISIBILITY_DESCRIPTIONS[scope].detail}
+                    </span>
+                  </span>
+                </label>
               ))}
-            </div>
+            </RadioGroup>
 
             {target === current ? null : (
               <div

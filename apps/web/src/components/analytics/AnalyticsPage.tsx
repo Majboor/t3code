@@ -24,6 +24,7 @@ import {
 import { buildEnableAnalyticsPrompt } from "./enableAnalytics.logic";
 import { type DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { Card, CardTitle } from "../ui/card";
 import { toastManager } from "../ui/toast";
 import { readEnvironmentApi } from "../../environmentApi";
 import { usePrimaryEnvironmentId } from "../../environments/primary/context";
@@ -95,9 +96,9 @@ function LiveDeployments({
   }
 
   return (
-    <section className="rounded-lg border border-border p-4" data-testid="analytics-deployments">
-      <div className="text-xs font-medium text-foreground">Live</div>
-      <div className="mt-2 grid gap-2">
+    <Card className="gap-2 p-4" data-testid="analytics-deployments" render={<section />}>
+      <CardTitle className="text-xs">Live</CardTitle>
+      <div className="grid gap-2">
         {links.map(({ deployment, streamNames, dangling }) => (
           <div
             key={deployment.id}
@@ -142,7 +143,7 @@ function LiveDeployments({
           </div>
         ))}
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -286,9 +287,9 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
   if (streams.isError) {
     return (
       <Shell>
-        <div className="rounded-lg border border-border p-4 text-sm" data-testid="analytics-error">
+        <Card className="p-4 text-sm" data-testid="analytics-error">
           {streams.error instanceof Error ? streams.error.message : "Could not read analytics."}
-        </div>
+        </Card>
       </Shell>
     );
   }
@@ -302,8 +303,8 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
     return (
       <Shell>
         <LiveDeployments links={links} onUsePrompt={writePromptToComposer} />
-        <div className="rounded-lg border border-border p-4" data-testid="analytics-empty">
-          <div className="text-sm font-medium text-foreground">Nothing is reporting yet</div>
+        <Card className="p-4" data-testid="analytics-empty">
+          <CardTitle className="text-sm">Nothing is reporting yet</CardTitle>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {live.length === 0
               ? "A deployment reports to a stream it was told about. Declare one with "
@@ -317,14 +318,14 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
             <Button
               size="xs"
               variant="outline"
-              className="mt-3"
+              className="mt-3 self-start"
               data-testid="analytics-empty-enable"
               onClick={() => void writePromptToComposer(emptyPrompt, subject.name)}
             >
               Enable analytics
             </Button>
           )}
-        </div>
+        </Card>
       </Shell>
     );
   }
@@ -337,7 +338,7 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
     <Shell>
       <LiveDeployments links={links} onUsePrompt={writePromptToComposer} />
 
-      <section className="rounded-lg border border-border p-4" data-testid="analytics-streams">
+      <Card className="p-4" data-testid="analytics-streams" render={<section />}>
         <div className="flex flex-wrap items-center gap-1.5">
           {streams.data.streams.map((stream) => (
             <Button
@@ -365,10 +366,10 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
             ? "No registered deployment reports to this stream."
             : `Reported by ${reporters.map((entry) => entry.name).join(", ")}.`}
         </p>
-      </section>
+      </Card>
 
-      <section className="rounded-lg border border-border p-4" data-testid="analytics-question">
-        <div className="text-xs font-medium text-foreground">Ask</div>
+      <Card className="p-4" data-testid="analytics-question" render={<section />}>
+        <CardTitle className="text-xs">Ask</CardTitle>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {questions?.aggregates.map((option) => (
             <Button
@@ -429,9 +430,9 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
             </span>
           )}
         </div>
-      </section>
+      </Card>
 
-      <section className="rounded-lg border border-border p-4" data-testid="analytics-chart">
+      <Card className="p-4" data-testid="analytics-chart" render={<section />}>
         {result.isPending ? (
           <Spinner />
         ) : result.isError ? (
@@ -464,7 +465,7 @@ export function AnalyticsPage({ projectId }: { projectId: ProjectId }) {
             ))}
           </div>
         )}
-      </section>
+      </Card>
     </Shell>
   );
 }

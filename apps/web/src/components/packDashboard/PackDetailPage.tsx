@@ -26,6 +26,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
+import { Card, CardTitle } from "../ui/card";
 
 function PackDetailShell({ children }: { children: React.ReactNode }) {
   return (
@@ -117,8 +118,8 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
   return (
     <PackDetailShell>
       {advisories.length > 0 ? (
-        <div
-          className="rounded-lg border border-destructive/40 bg-destructive/8 p-4"
+        <Card
+          className="gap-2 border-destructive/40 bg-destructive/8 p-4"
           data-testid="pack-detail-advisories"
         >
           {advisories.map((advisory) => (
@@ -136,12 +137,14 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
               </div>
             </div>
           ))}
-        </div>
+        </Card>
       ) : null}
 
-      <section className="rounded-lg border border-border p-4" data-testid="pack-detail-identity">
+      <Card className="p-4" render={<section />} data-testid="pack-detail-identity">
         <div className="flex flex-wrap items-baseline gap-2">
-          <h1 className="text-base font-medium text-foreground">{identity.displayName}</h1>
+          <CardTitle className="text-base" render={<h1 />}>
+            {identity.displayName}
+          </CardTitle>
           <span className="font-mono text-xs text-muted-foreground">
             {identity.publisher.handle}/{identity.name}@{identity.version}
           </span>
@@ -195,7 +198,7 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
             this version knew and had survived at the time.
           </div>
         ) : null}
-      </section>
+      </Card>
 
       <PackPublishControl
         record={verification.record}
@@ -217,8 +220,8 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
         analytics={manifest.analytics}
       />
 
-      <section className="rounded-lg border border-border p-4" data-testid="pack-detail-capability">
-        <h2 className="text-sm font-medium text-foreground">What it does</h2>
+      <Card className="p-4" render={<section />} data-testid="pack-detail-capability">
+        <CardTitle className="text-sm">What it does</CardTitle>
         <p className="mt-1 text-sm leading-6 text-foreground">{capability.does}</p>
         {identity.description === undefined ? null : (
           <p className="mt-1 text-xs leading-5 text-muted-foreground">{identity.description}</p>
@@ -252,7 +255,7 @@ export function PackDetailPage({ packId, version }: { packId: string; version?: 
             </Badge>
           ))}
         </div>
-      </section>
+      </Card>
 
       <PackRequirementsSection requirements={manifest.requirements} />
 

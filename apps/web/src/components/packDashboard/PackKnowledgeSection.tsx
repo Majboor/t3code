@@ -16,6 +16,7 @@ import {
 } from "./packDetail.logic";
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
+import { Card, CardTitle } from "../ui/card";
 
 const SEVERITY_TONE = {
   critical: "error",
@@ -303,8 +304,8 @@ export function PackKnowledgeSection({ knowledge }: { knowledge: PackKnowledge }
 
   if (integration.length === 0 && failureModes.length === 0) {
     return (
-      <section className="rounded-lg border border-border p-4" data-testid="pack-detail-knowledge">
-        <h2 className="text-sm font-medium text-foreground">What it knows</h2>
+      <Card className="p-4" render={<section />} data-testid="pack-detail-knowledge">
+        <CardTitle className="text-sm">What it knows</CardTitle>
         <p
           className="mt-1 text-xs leading-5 text-muted-foreground"
           data-testid="pack-detail-knowledge-empty"
@@ -313,13 +314,13 @@ export function PackKnowledgeSection({ knowledge }: { knowledge: PackKnowledge }
           has been written down, so an agent installing it is working from the source alone — the
           same position it would be in having written the code itself.
         </p>
-      </section>
+      </Card>
     );
   }
 
   return (
-    <section className="rounded-lg border border-border p-4" data-testid="pack-detail-knowledge">
-      <h2 className="text-sm font-medium text-foreground">What it knows</h2>
+    <Card className="p-4" render={<section />} data-testid="pack-detail-knowledge">
+      <CardTitle className="text-sm">What it knows</CardTitle>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">
         None of this is in the source. Each entry carries the conditions it was seen under, because
         a console path correct on one account tier in one region can be wrong on another and fail
@@ -351,6 +352,6 @@ export function PackKnowledgeSection({ knowledge }: { knowledge: PackKnowledge }
           </div>
         </div>
       ) : null}
-    </section>
+    </Card>
   );
 }

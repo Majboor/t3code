@@ -65,8 +65,10 @@ import {
 } from "../../store";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { cn } from "../../lib/utils";
+import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsibleContent } from "../ui/collapsible";
+import { DraftInput } from "../ui/draft-input";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -1551,10 +1553,10 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <Input
+            <DraftInput
               className="w-full sm:w-72"
               value={settings.addProjectBaseDirectory}
-              onChange={(event) => updateSettings({ addProjectBaseDirectory: event.target.value })}
+              onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
               placeholder="~/"
               spellCheck={false}
               aria-label="Add project base directory"
@@ -1727,9 +1729,7 @@ export function GeneralSettingsPanel() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex min-h-5 items-center gap-1.5">
-                      <span
-                        className={cn("size-2 shrink-0 rounded-full", providerCard.statusStyle.dot)}
-                      />
+                      <ConnectionStatusDot dotClassName={providerCard.statusStyle.dot} />
                       <h3 className="text-sm font-medium text-foreground">{providerDisplayName}</h3>
                       {providerCard.versionLabel ? (
                         <code className="text-xs text-muted-foreground">
@@ -1895,17 +1895,17 @@ export function GeneralSettingsPanel() {
                           <span className="text-xs font-medium text-foreground">
                             Launch arguments
                           </span>
-                          <Input
+                          <DraftInput
                             id="provider-install-claudeAgent-launch-args"
                             className="mt-1.5"
                             value={settings.providers.claudeAgent.launchArgs}
-                            onChange={(event) =>
+                            onCommit={(next) =>
                               updateSettings({
                                 providers: {
                                   ...settings.providers,
                                   claudeAgent: {
                                     ...settings.providers.claudeAgent,
-                                    launchArgs: event.target.value,
+                                    launchArgs: next,
                                   },
                                 },
                               })

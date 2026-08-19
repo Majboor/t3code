@@ -1,12 +1,21 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 
 import { PairingPendingSurface, PairingRouteSurface } from "../components/auth/PairingRouteSurface";
+import { canBrowserSatisfyAuthGate } from "../components/environments/environmentConnect.logic";
+import { peekPairingTokenFromUrl } from "../environments/primary";
 
 export const Route = createFileRoute("/pair")({
   beforeLoad: async ({ context }) => {
     const { authGateState } = context;
     if (authGateState.status === "authenticated") {
       throw redirect({ to: "/", replace: true });
+    }
+    // This page is correct for a device that genuinely holds a bootstrap
+    // credential, and only then. Arriving empty-handed at an environment that
+    // accepts nothing a browser can produce is the dead end — those visitors
+    // belong on the surface that connects a machine of their own.
+    if (!canBrowserSatisfyAuthGate(authGateState.auth) && peekPairingTokenFromUrl() === null) {
+      throw redirect({ to: "/environments", replace: true });
     }
     return {
       authGateState,

@@ -7,6 +7,7 @@ import {
   formatObservedDate,
 } from "./packDetail.logic";
 import { Badge } from "../ui/badge";
+import { Card, CardTitle } from "../ui/card";
 
 function Count({
   label,
@@ -49,9 +50,9 @@ export function PackScarRecordSection({
   const attestations = verification.attestations ?? [];
 
   return (
-    <section className="rounded-lg border border-border p-4" data-testid="pack-detail-record">
+    <Card className="p-4" render={<section />} data-testid="pack-detail-record">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-medium text-foreground">What production says</h2>
+        <CardTitle className="text-sm">What production says</CardTitle>
         <span className="text-[11px] text-muted-foreground">
           As of {formatObservedDate(record.measuredAt)}
         </span>
@@ -216,6 +217,6 @@ export function PackScarRecordSection({
           </div>
         </div>
       ) : null}
-    </section>
+    </Card>
   );
 }

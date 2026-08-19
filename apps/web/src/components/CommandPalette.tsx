@@ -18,6 +18,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   MessageSquareIcon,
+  MonitorSmartphoneIcon,
   SettingsIcon,
   SquarePenIcon,
 } from "lucide-react";
@@ -718,6 +719,17 @@ function OpenCommandPaletteDialog() {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:environments",
+    searchTerms: ["environment", "machine", "connect", "pair", "backend", "laptop", "server"],
+    title: "Connect an environment",
+    icon: <MonitorSmartphoneIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/environments" });
+    },
+  });
 
   actionItems.push({
     kind: "action",

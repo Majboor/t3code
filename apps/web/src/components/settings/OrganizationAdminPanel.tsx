@@ -35,7 +35,10 @@ import { usePrimaryEnvironmentId } from "../../environments/primary";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Field, FieldControl, FieldLabel } from "../ui/field";
 import { Input } from "../ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -145,25 +148,24 @@ function NativeSelect({
   children: ReactNode;
 }) {
   return (
-    <label className="grid gap-1.5 text-xs font-medium text-foreground">
-      {label}
-      <select
-        value={value}
-        className="h-8 rounded-lg border border-input bg-background px-2 text-sm text-foreground outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/20"
+    <LabeledField label={label}>
+      <FieldControl
+        className="h-8 rounded-lg border border-input bg-background px-2 text-foreground text-sm outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/20"
         onChange={(event) => onChange(event.target.value)}
-      >
-        {children}
-      </select>
-    </label>
+        render={<select>{children}</select>}
+        value={value}
+      />
+    </LabeledField>
   );
 }
 
-function FieldLabel({ label, children }: { label: string; children: ReactNode }) {
+/** Label-above-control row; `Field` wires the label to the control it wraps. */
+function LabeledField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="grid gap-1.5 text-xs font-medium text-foreground">
-      {label}
+    <Field className="w-full gap-1.5">
+      <FieldLabel className="font-medium text-foreground text-xs">{label}</FieldLabel>
       {children}
-    </label>
+    </Field>
   );
 }
 
@@ -392,16 +394,16 @@ export function OrganizationAdminPanel() {
           description="Create and select the organization scope used by employee, team, invite, and audit controls."
         >
           <div className="grid gap-3 pt-4 md:grid-cols-[1fr_12rem_auto]">
-            <FieldLabel label="Organization name">
+            <LabeledField label="Organization name">
               <Input
                 value={createName}
                 placeholder="Acme Engineering"
                 onChange={(event) => setCreateName(event.currentTarget.value)}
               />
-            </FieldLabel>
-            <FieldLabel label="Slug">
+            </LabeledField>
+            <LabeledField label="Slug">
               <Input value={slugFromName(createName)} readOnly />
-            </FieldLabel>
+            </LabeledField>
             <div className="flex items-end">
               <Button
                 className="w-full"
@@ -455,21 +457,21 @@ export function OrganizationAdminPanel() {
               description="Send a tenant-scoped invite and create the employee membership record."
             >
               <div className="grid gap-3 pt-4 md:grid-cols-2">
-                <FieldLabel label="Email">
+                <LabeledField label="Email">
                   <Input
                     type="email"
                     value={inviteEmail}
                     placeholder="teammate@example.com"
                     onChange={(event) => setInviteEmail(event.currentTarget.value)}
                   />
-                </FieldLabel>
-                <FieldLabel label="Display name">
+                </LabeledField>
+                <LabeledField label="Display name">
                   <Input
                     value={inviteName}
                     placeholder="Teammate"
                     onChange={(event) => setInviteName(event.currentTarget.value)}
                   />
-                </FieldLabel>
+                </LabeledField>
                 <NativeSelect
                   label="Tenant role"
                   value={tenantRole}
@@ -612,13 +614,13 @@ export function OrganizationAdminPanel() {
               description="Create org units used by employee assignment and scoped access grants."
             >
               <div className="grid gap-3 pt-4 md:grid-cols-[1fr_auto_1fr_auto]">
-                <FieldLabel label="Team">
+                <LabeledField label="Team">
                   <Input
                     value={teamName}
                     placeholder="Platform"
                     onChange={(event) => setTeamName(event.currentTarget.value)}
                   />
-                </FieldLabel>
+                </LabeledField>
                 <div className="flex items-end">
                   <Button
                     size="sm"
@@ -638,13 +640,13 @@ export function OrganizationAdminPanel() {
                     Add team
                   </Button>
                 </div>
-                <FieldLabel label="Department">
+                <LabeledField label="Department">
                   <Input
                     value={departmentName}
                     placeholder="Engineering"
                     onChange={(event) => setDepartmentName(event.currentTarget.value)}
                   />
-                </FieldLabel>
+                </LabeledField>
                 <div className="flex items-end">
                   <Button
                     size="sm"
@@ -854,25 +856,31 @@ export function OrganizationAdminPanel() {
 
 function InviteLinkRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid gap-1.5">
-      <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="flex min-w-0 items-center gap-2">
-        <code className="min-w-0 flex-1 truncate rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
-          {value}
-        </code>
-        <Button
-          size="xs"
-          variant="outline"
-          onClick={() => {
-            void navigator.clipboard?.writeText(value);
-            toastManager.add({ type: "success", title: "Invite link copied" });
-          }}
-        >
-          <CopyIcon className="size-3.5" />
-          Copy
-        </Button>
-      </div>
-    </div>
+    <Field className="w-full gap-1.5">
+      <FieldLabel className="font-medium text-muted-foreground text-xs">{label}</FieldLabel>
+      <InputGroup>
+        <InputGroupInput
+          className="truncate font-mono text-[11px] text-muted-foreground"
+          onFocus={(event) => event.currentTarget.select()}
+          readOnly
+          size="sm"
+          value={value}
+        />
+        <InputGroupAddon align="inline-end">
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => {
+              void navigator.clipboard?.writeText(value);
+              toastManager.add({ type: "success", title: "Invite link copied" });
+            }}
+          >
+            <CopyIcon className="size-3.5" />
+            Copy
+          </Button>
+        </InputGroupAddon>
+      </InputGroup>
+    </Field>
   );
 }
 
@@ -900,18 +908,20 @@ function EmployeeTable({
   }
 
   return (
-    <div className="mt-4 overflow-x-auto rounded-lg border border-border">
-      <table className="w-full min-w-[46rem] text-left text-sm">
-        <thead className="border-b border-border bg-muted/30 text-xs text-muted-foreground">
-          <tr>
-            <th className="px-3 py-2 font-medium">Employee</th>
-            <th className="px-3 py-2 font-medium">Role</th>
-            <th className="px-3 py-2 font-medium">Unit</th>
-            <th className="px-3 py-2 font-medium">Status</th>
-            <th className="px-3 py-2 text-right font-medium">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
+    <div className="mt-4 overflow-hidden rounded-lg border border-border">
+      <Table className="min-w-[46rem] text-sm">
+        <TableHeader className="bg-muted/30 text-muted-foreground [&_tr]:border-border">
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="px-3 py-2 text-muted-foreground text-xs">Employee</TableHead>
+            <TableHead className="px-3 py-2 text-muted-foreground text-xs">Role</TableHead>
+            <TableHead className="px-3 py-2 text-muted-foreground text-xs">Unit</TableHead>
+            <TableHead className="px-3 py-2 text-muted-foreground text-xs">Status</TableHead>
+            <TableHead className="px-3 py-2 text-right text-muted-foreground text-xs">
+              Actions
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {employees.map((employee) => {
             const teamNames = (employee.membership.teamIds ?? [])
               .map((teamId) => teams.find((team) => team.id === teamId)?.displayName)
@@ -920,26 +930,23 @@ function EmployeeTable({
               (department) => department.id === employee.membership.departmentId,
             )?.displayName;
             return (
-              <tr
-                key={employee.membership.id}
-                className="border-b border-border/70 last:border-b-0"
-              >
-                <td className="px-3 py-2">
+              <TableRow key={employee.membership.id} className="border-border/70">
+                <TableCell className="px-3 py-2">
                   <div className="font-medium text-foreground">{employee.displayName}</div>
-                  <div className="text-xs text-muted-foreground">{employee.email}</div>
-                </td>
-                <td className="px-3 py-2 text-xs text-muted-foreground">
+                  <div className="text-muted-foreground text-xs">{employee.email}</div>
+                </TableCell>
+                <TableCell className="px-3 py-2 text-muted-foreground text-xs">
                   {roleLabel(employee.membership.organizationRoles)}
-                </td>
-                <td className="px-3 py-2 text-xs text-muted-foreground">
+                </TableCell>
+                <TableCell className="px-3 py-2 text-muted-foreground text-xs">
                   {[departmentName, ...teamNames].filter(Boolean).join(" / ") || "Unassigned"}
-                </td>
-                <td className="px-3 py-2">
+                </TableCell>
+                <TableCell className="px-3 py-2">
                   <StatusText disabled={employee.status === "disabled"}>
                     {employee.status}
                   </StatusText>
-                </td>
-                <td className="px-3 py-2">
+                </TableCell>
+                <TableCell className="px-3 py-2">
                   <div className="flex justify-end gap-2">
                     <select
                       disabled={!canSubmit || employee.status === "disabled"}
@@ -964,12 +971,12 @@ function EmployeeTable({
                       Disable
                     </Button>
                   </div>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }

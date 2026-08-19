@@ -8,6 +8,7 @@ import {
   summariseRunningCost,
 } from "./packDetail.logic";
 import { Badge } from "../ui/badge";
+import { Card, CardTitle } from "../ui/card";
 
 function RequirementRow({
   title,
@@ -65,8 +66,8 @@ export function PackRequirementsSection({ requirements }: { requirements: PackRe
   const cost = summariseRunningCost(requirements);
 
   return (
-    <section className="rounded-lg border border-border p-4" data-testid="pack-detail-requirements">
-      <h2 className="text-sm font-medium text-foreground">Before this runs, you supply</h2>
+    <Card className="p-4" render={<section />} data-testid="pack-detail-requirements">
+      <CardTitle className="text-sm">Before this runs, you supply</CardTitle>
       <p
         className="mt-1 text-xs leading-5 text-muted-foreground"
         data-testid="pack-detail-requirements-headline"
@@ -268,6 +269,6 @@ export function PackRequirementsSection({ requirements }: { requirements: PackRe
           <code className="font-mono text-foreground">{requirements.preflightCommand}</code>
         </div>
       ) : null}
-    </section>
+    </Card>
   );
 }

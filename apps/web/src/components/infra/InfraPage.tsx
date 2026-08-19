@@ -13,6 +13,7 @@ import { readEnvironmentApi } from "../../environmentApi";
 import { usePrimaryEnvironmentId } from "../../environments/primary/context";
 import { selectProjectByRef, useStore } from "../../store";
 import { Button } from "../ui/button";
+import { Card, CardTitle } from "../ui/card";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
@@ -75,14 +76,14 @@ const INFRA_ENABLED = import.meta.env.VITE_T3_INFRA !== "off";
 function ComingSoon() {
   return (
     <Shell>
-      <section className="rounded-lg border border-border p-6 text-center">
-        <h2 className="text-base font-medium text-foreground">Infrastructure is coming soon</h2>
+      <Card className="p-6 text-center" render={<section />}>
+        <CardTitle className="text-base">Infrastructure is coming soon</CardTitle>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
           Deploying a project from here, and the record of what it put live, are still being built.
           Nothing here is wired up yet — when it is, this page will show what is running and the
           traffic it is serving.
         </p>
-      </section>
+      </Card>
     </Shell>
   );
 }
@@ -199,9 +200,9 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
   if (failure) {
     return (
       <Shell>
-        <div className="rounded-lg border border-border p-4 text-sm" data-testid="infra-error">
+        <Card className="p-4 text-sm" data-testid="infra-error">
           {failure instanceof Error ? failure.message : "Could not read this project's packs."}
-        </div>
+        </Card>
       </Shell>
     );
   }
@@ -219,30 +220,24 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
         {deployments.isLoading ? (
           <Spinner />
         ) : deployments.error ? (
-          <div
-            className="rounded-lg border border-border p-4 text-sm"
-            data-testid="infra-deployments-error"
-          >
+          <Card className="p-4 text-sm" data-testid="infra-deployments-error">
             {deployments.error instanceof Error
               ? deployments.error.message
               : "Could not read this project's deployments."}
-          </div>
+          </Card>
         ) : loads.length === 0 ? (
-          <div
-            className="rounded-lg border border-border p-4"
-            data-testid="infra-deployments-empty"
-          >
-            <div className="text-sm font-medium text-foreground">Nothing deployed yet</div>
+          <Card className="p-4" data-testid="infra-deployments-empty">
+            <CardTitle className="text-sm">Nothing deployed yet</CardTitle>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
               A deploy registers what it put live and where it answers. Once one reports to a
               declared stream, the traffic reaching it shows up here.
             </p>
-          </div>
+          </Card>
         ) : (
           loads.map((load) => (
-            <div
+            <Card
               key={load.deployment.id}
-              className="rounded-lg border border-border p-4"
+              className="p-4"
               data-testid="infra-deployment"
               data-name={load.deployment.name}
               data-status={load.deployment.status}
@@ -284,7 +279,7 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
                   <code className="text-foreground">{load.streamNames.join(", ")}</code>
                 </p>
               ) : null}
-            </div>
+            </Card>
           ))
         )}
       </section>
@@ -293,21 +288,21 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
         Packs
       </h2>
       {ordered.length === 0 ? (
-        <div className="rounded-lg border border-border p-4" data-testid="infra-empty">
-          <div className="text-sm font-medium text-foreground">No packs turned on</div>
+        <Card className="p-4" data-testid="infra-empty">
+          <CardTitle className="text-sm">No packs turned on</CardTitle>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             Turning a pack on records that this project uses it and lists what it needs. It does not
             install anything, set anything up, or check whether you have — that part is still yours.
           </p>
-        </div>
+        </Card>
       ) : (
         <section className="grid gap-2" data-testid="infra-enablements">
           {ordered.map((enablement) => {
             const readiness = describeReadiness(enablement);
             return (
-              <div
+              <Card
                 key={enablement.id}
-                className="rounded-lg border border-border p-4"
+                className="p-4"
                 data-testid="infra-enablement"
                 data-pack={enablement.packName}
                 data-ready={readiness.ready}
@@ -364,7 +359,7 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
                     ))}
                   </ul>
                 ) : null}
-              </div>
+              </Card>
             );
           })}
         </section>

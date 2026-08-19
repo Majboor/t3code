@@ -4,12 +4,14 @@ import {
   type AuthClientSession,
   type AuthPairingLink,
   type DesktopServerExposureState,
-  type EnvironmentId,
 } from "@t3tools/contracts";
 import { DateTime } from "effect";
+import { Link } from "@tanstack/react-router";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { cn } from "../../lib/utils";
+import { AddEnvironmentDialog } from "../environments/AddEnvironmentDialog";
+import { EnvironmentConnectList } from "../environments/EnvironmentConnectList";
+import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { ProviderAccountsSection } from "./ProviderAccountsSection";
 import {
@@ -59,16 +61,7 @@ import {
   type ServerPairingLinkRecord,
 } from "~/environments/primary";
 import type { WsRpcClient } from "~/rpc/wsRpcClient";
-import {
-  type SavedEnvironmentRecord,
-  type SavedEnvironmentRuntimeState,
-  useSavedEnvironmentRegistryStore,
-  useSavedEnvironmentRuntimeStore,
-  addSavedEnvironment,
-  getPrimaryEnvironmentConnection,
-  reconnectSavedEnvironment,
-  removeSavedEnvironment,
-} from "~/environments/runtime";
+import { getPrimaryEnvironmentConnection } from "~/environments/runtime";
 
 const accessTimestampFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -81,85 +74,6 @@ function formatAccessTimestamp(value: string): string {
     return value;
   }
   return accessTimestampFormatter.format(parsed);
-}
-
-type ConnectionStatusDotProps = {
-  tooltipText?: string | null;
-  dotClassName: string;
-  pingClassName?: string | null;
-};
-
-function ConnectionStatusDot({
-  tooltipText,
-  dotClassName,
-  pingClassName,
-}: ConnectionStatusDotProps) {
-  const dotContent = (
-    <>
-      {pingClassName ? (
-        <span
-          className={cn(
-            "absolute inline-flex h-full w-full animate-ping rounded-full",
-            pingClassName,
-          )}
-        />
-      ) : null}
-      <span className={cn("relative inline-flex size-2 rounded-full", dotClassName)} />
-    </>
-  );
-
-  if (!tooltipText) {
-    return (
-      <span className="relative flex size-3 shrink-0 items-center justify-center">
-        {dotContent}
-      </span>
-    );
-  }
-
-  const dot = (
-    <button
-      type="button"
-      title={tooltipText}
-      aria-label={tooltipText}
-      className="relative flex size-3 shrink-0 cursor-help items-center justify-center rounded-full outline-hidden"
-    >
-      {dotContent}
-    </button>
-  );
-
-  return (
-    <Tooltip>
-      <TooltipTrigger render={dot} />
-      <TooltipPopup side="top" className="max-w-80 whitespace-pre-wrap leading-tight">
-        {tooltipText}
-      </TooltipPopup>
-    </Tooltip>
-  );
-}
-
-function getSavedBackendStatusTooltip(
-  runtime: SavedEnvironmentRuntimeState | null,
-  record: SavedEnvironmentRecord,
-  nowMs: number,
-) {
-  const connectionState = runtime?.connectionState ?? "disconnected";
-
-  if (connectionState === "connected") {
-    const connectedAt = runtime?.connectedAt ?? record.lastConnectedAt;
-    return connectedAt ? `Connected for ${formatElapsedDurationLabel(connectedAt, nowMs)}` : null;
-  }
-
-  if (connectionState === "connecting") {
-    return null;
-  }
-
-  if (connectionState === "error") {
-    return runtime?.lastError ?? "An unknown connection error occurred.";
-  }
-
-  return record.lastConnectedAt
-    ? `Last connected at ${formatAccessTimestamp(record.lastConnectedAt)}`
-    : "Not connected yet.";
 }
 
 /** Direct row in the card – same pattern as the Provider / ACP-agent list rows. */
@@ -667,92 +581,6 @@ const PairingClientsList = memo(function PairingClientsList({
   );
 });
 
-type SavedBackendListRowProps = {
-  environmentId: EnvironmentId;
-  reconnectingEnvironmentId: EnvironmentId | null;
-  removingEnvironmentId: EnvironmentId | null;
-  onReconnect: (environmentId: EnvironmentId) => void;
-  onRemove: (environmentId: EnvironmentId) => void;
-};
-
-function SavedBackendListRow({
-  environmentId,
-  reconnectingEnvironmentId,
-  removingEnvironmentId,
-  onReconnect,
-  onRemove,
-}: SavedBackendListRowProps) {
-  const nowMs = useRelativeTimeTick(1_000);
-  const record = useSavedEnvironmentRegistryStore((state) => state.byId[environmentId] ?? null);
-  const runtime = useSavedEnvironmentRuntimeStore((state) => state.byId[environmentId] ?? null);
-
-  if (!record) {
-    return null;
-  }
-
-  const connectionState = runtime?.connectionState ?? "disconnected";
-  const stateDotClassName =
-    connectionState === "connected"
-      ? "bg-success"
-      : connectionState === "connecting"
-        ? "bg-warning"
-        : connectionState === "error"
-          ? "bg-destructive"
-          : "bg-muted-foreground/40";
-  const roleLabel = runtime?.role ? (runtime.role === "owner" ? "Owner" : "Client") : null;
-  const descriptorLabel = runtime?.descriptor?.label ?? null;
-  const statusTooltip = getSavedBackendStatusTooltip(runtime, record, nowMs);
-  const metadataBits = [
-    roleLabel,
-    record.lastConnectedAt
-      ? `Last connected ${formatAccessTimestamp(record.lastConnectedAt)}`
-      : null,
-  ].filter((value): value is string => value !== null);
-
-  return (
-    <div className={ITEM_ROW_CLASSNAME}>
-      <div className={ITEM_ROW_INNER_CLASSNAME}>
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex min-h-5 items-center gap-1.5">
-            <ConnectionStatusDot
-              tooltipText={statusTooltip}
-              dotClassName={stateDotClassName}
-              pingClassName={
-                connectionState === "connecting" ? "bg-warning/60 duration-2000" : null
-              }
-            />
-            <h3 className="text-sm font-medium text-foreground">{record.label}</h3>
-          </div>
-          {metadataBits.length > 0 ? (
-            <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
-          ) : null}
-          {descriptorLabel && descriptorLabel !== record.label ? (
-            <p className="text-xs text-muted-foreground">Server label: {descriptorLabel}</p>
-          ) : null}
-        </div>
-        <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={reconnectingEnvironmentId === environmentId}
-            onClick={() => void onReconnect(environmentId)}
-          >
-            {reconnectingEnvironmentId === environmentId ? "Reconnecting…" : "Reconnect"}
-          </Button>
-          <Button
-            size="xs"
-            variant="destructive-outline"
-            disabled={removingEnvironmentId === environmentId}
-            onClick={() => void onRemove(environmentId)}
-          >
-            {removingEnvironmentId === environmentId ? "Removing…" : "Remove"}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
   const [currentSessionRole, setCurrentSessionRole] = useState<"owner" | "client" | null>(
@@ -761,15 +589,6 @@ export function ConnectionsSettings() {
   const [currentAuthPolicy, setCurrentAuthPolicy] = useState<
     "desktop-managed-local" | "loopback-browser" | "remote-reachable" | "unsafe-no-auth" | null
   >(desktopBridge ? null : null);
-  const savedEnvironmentsById = useSavedEnvironmentRegistryStore((state) => state.byId);
-  const savedEnvironmentIds = useMemo(
-    () =>
-      Object.values(savedEnvironmentsById)
-        .toSorted((left, right) => left.label.localeCompare(right.label))
-        .map((record) => record.environmentId),
-    [savedEnvironmentsById],
-  );
-
   const [desktopServerExposureState, setDesktopServerExposureState] =
     useState<DesktopServerExposureState | null>(null);
   const [desktopServerExposureError, setDesktopServerExposureError] = useState<string | null>(null);
@@ -790,20 +609,6 @@ export function ConnectionsSettings() {
     string | null
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
-  const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
-  const [savedBackendMode, setSavedBackendMode] = useState<"pairing-url" | "host-code">(
-    "pairing-url",
-  );
-  const [savedBackendLabel, setSavedBackendLabel] = useState("");
-  const [savedBackendPairingUrl, setSavedBackendPairingUrl] = useState("");
-  const [savedBackendHost, setSavedBackendHost] = useState("");
-  const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
-  const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
-  const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
-  const [reconnectingSavedEnvironmentId, setReconnectingSavedEnvironmentId] =
-    useState<EnvironmentId | null>(null);
-  const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
-    useState<EnvironmentId | null>(null);
   const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
   const [pendingDesktopServerExposureMode, setPendingDesktopServerExposureMode] = useState<
     DesktopServerExposureState["mode"] | null
@@ -906,84 +711,6 @@ export function ConnectionsSettings() {
       });
     } finally {
       setIsRevokingOtherDesktopClients(false);
-    }
-  }, []);
-
-  const handleAddSavedBackend = useCallback(async () => {
-    setIsAddingSavedBackend(true);
-    setSavedBackendError(null);
-    try {
-      const record = await addSavedEnvironment({
-        label: savedBackendLabel,
-        ...(savedBackendMode === "pairing-url"
-          ? { pairingUrl: savedBackendPairingUrl }
-          : {
-              host: savedBackendHost,
-              pairingCode: savedBackendPairingCode,
-            }),
-      });
-      setSavedBackendLabel("");
-      setSavedBackendPairingUrl("");
-      setSavedBackendHost("");
-      setSavedBackendPairingCode("");
-      setAddBackendDialogOpen(false);
-      toastManager.add({
-        type: "success",
-        title: "Backend added",
-        description: `${record.label} is now saved and will reconnect on app startup.`,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to add backend.";
-      setSavedBackendError(message);
-      toastManager.add({
-        type: "error",
-        title: "Could not add backend",
-        description: message,
-      });
-    } finally {
-      setIsAddingSavedBackend(false);
-    }
-  }, [
-    savedBackendHost,
-    savedBackendLabel,
-    savedBackendMode,
-    savedBackendPairingCode,
-    savedBackendPairingUrl,
-  ]);
-
-  const handleReconnectSavedBackend = useCallback(async (environmentId: EnvironmentId) => {
-    setReconnectingSavedEnvironmentId(environmentId);
-    setSavedBackendError(null);
-    try {
-      await reconnectSavedEnvironment(environmentId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to reconnect backend.";
-      setSavedBackendError(message);
-      toastManager.add({
-        type: "error",
-        title: "Could not reconnect backend",
-        description: message,
-      });
-    } finally {
-      setReconnectingSavedEnvironmentId(null);
-    }
-  }, []);
-
-  const handleRemoveSavedBackend = useCallback(async (environmentId: EnvironmentId) => {
-    setRemovingSavedEnvironmentId(environmentId);
-    setSavedBackendError(null);
-    try {
-      await removeSavedEnvironment(environmentId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to remove backend.";
-      setSavedBackendError(message);
-      toastManager.add({
-        type: "error",
-        title: "Could not remove backend",
-        description: message,
-      });
-    } finally {
-      setRemovingSavedEnvironmentId(null);
     }
   }, []);
 
@@ -1276,164 +1003,33 @@ export function ConnectionsSettings() {
       )}
 
       <SettingsSection
-        title="Remote environments"
+        title="Environments"
         headerAction={
-          <Dialog
-            open={addBackendDialogOpen}
-            onOpenChange={(open) => {
-              setAddBackendDialogOpen(open);
-              if (!open) {
-                setSavedBackendError(null);
-              }
-            }}
-          >
-            <DialogTrigger
-              render={
+          <div className="flex items-center gap-2">
+            <Button size="xs" variant="ghost" render={<Link to="/environments" />}>
+              Open full page
+            </Button>
+            <AddEnvironmentDialog
+              trigger={
                 <Button size="xs" variant="outline">
                   <PlusIcon className="size-3" />
                   Add environment
                 </Button>
               }
             />
-            <DialogPopup>
-              <DialogHeader>
-                <DialogTitle>Add Environment</DialogTitle>
-                <DialogDescription>Pair another environment to this client.</DialogDescription>
-                <div className="flex gap-1 rounded-lg border border-border/60 bg-muted/50 p-1">
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                      savedBackendMode === "pairing-url"
-                        ? "bg-background text-foreground shadow-xs"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    disabled={isAddingSavedBackend}
-                    onClick={() => setSavedBackendMode("pairing-url")}
-                  >
-                    Pairing URL
-                  </button>
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                      savedBackendMode === "host-code"
-                        ? "bg-background text-foreground shadow-xs"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    disabled={isAddingSavedBackend}
-                    onClick={() => setSavedBackendMode("host-code")}
-                  >
-                    Host + code
-                  </button>
-                </div>
-              </DialogHeader>
-              <DialogPanel>
-                <div className="space-y-4">
-                  {savedBackendMode === "pairing-url" ? (
-                    <p className="text-xs text-muted-foreground">
-                      Enter the full pairing URL from the environment you want to connect to.
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Enter the backend host and pairing code separately.
-                    </p>
-                  )}
-                  <div className="space-y-3">
-                    <label className="block">
-                      <span className="mb-1.5 block text-xs font-medium text-foreground">
-                        Label
-                      </span>
-                      <Input
-                        value={savedBackendLabel}
-                        onChange={(event) => setSavedBackendLabel(event.target.value)}
-                        placeholder="My backend (optional)"
-                        disabled={isAddingSavedBackend}
-                        spellCheck={false}
-                      />
-                    </label>
-                    {savedBackendMode === "pairing-url" ? (
-                      <label className="block">
-                        <span className="mb-1.5 block text-xs font-medium text-foreground">
-                          Pairing URL
-                        </span>
-                        <Input
-                          value={savedBackendPairingUrl}
-                          onChange={(event) => setSavedBackendPairingUrl(event.target.value)}
-                          placeholder="https://backend.example.com/pair#token=..."
-                          disabled={isAddingSavedBackend}
-                          spellCheck={false}
-                        />
-                        <span className="mt-1 block text-[11px] text-muted-foreground">
-                          The full URL including the pairing token.
-                        </span>
-                      </label>
-                    ) : (
-                      <>
-                        <label className="block">
-                          <span className="mb-1.5 block text-xs font-medium text-foreground">
-                            Host
-                          </span>
-                          <Input
-                            value={savedBackendHost}
-                            onChange={(event) => setSavedBackendHost(event.target.value)}
-                            placeholder="https://backend.example.com"
-                            disabled={isAddingSavedBackend}
-                            spellCheck={false}
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="mb-1.5 block text-xs font-medium text-foreground">
-                            Pairing code
-                          </span>
-                          <Input
-                            value={savedBackendPairingCode}
-                            onChange={(event) => setSavedBackendPairingCode(event.target.value)}
-                            placeholder="Pairing code"
-                            disabled={isAddingSavedBackend}
-                            spellCheck={false}
-                          />
-                        </label>
-                      </>
-                    )}
-                  </div>
-                  {savedBackendError ? (
-                    <p className="text-xs text-destructive">{savedBackendError}</p>
-                  ) : null}
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    disabled={isAddingSavedBackend}
-                    onClick={() => void handleAddSavedBackend()}
-                  >
-                    <PlusIcon className="size-3.5" />
-                    {isAddingSavedBackend ? "Adding…" : "Add Backend"}
-                  </Button>
-                </div>
-              </DialogPanel>
-            </DialogPopup>
-          </Dialog>
+          </div>
         }
       >
-        {savedEnvironmentIds.map((environmentId) => (
-          <SavedBackendListRow
-            key={environmentId}
-            environmentId={environmentId}
-            reconnectingEnvironmentId={reconnectingSavedEnvironmentId}
-            removingEnvironmentId={removingSavedEnvironmentId}
-            onReconnect={handleReconnectSavedBackend}
-            onRemove={handleRemoveSavedBackend}
-          />
-        ))}
-
-        {savedEnvironmentIds.length === 0 ? (
-          <div className={ITEM_ROW_CLASSNAME}>
-            <p className="text-xs text-muted-foreground">
-              No remote environments yet. Click &ldquo;Add environment&rdquo; to pair another
-              environment.
-            </p>
-          </div>
-        ) : null}
+        <EnvironmentConnectList
+          emptyState={
+            <div className={ITEM_ROW_CLASSNAME}>
+              <p className="text-xs text-muted-foreground">
+                No environments yet. An environment is a machine running the T3 server &mdash;
+                usually your own. Add one and its projects appear in the sidebar.
+              </p>
+            </div>
+          }
+        />
       </SettingsSection>
 
       <ProviderAccountsSection />

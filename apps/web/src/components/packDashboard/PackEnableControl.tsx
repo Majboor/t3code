@@ -12,6 +12,7 @@ import { selectProjectsAcrossEnvironments, useStore } from "../../store";
 import { usePrimaryEnvironmentId } from "../../environments/primary/context";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Card, CardTitle } from "../ui/card";
 
 /**
  * Turns this pack on for one of the reader's projects.
@@ -74,8 +75,8 @@ export function PackEnableControl({ identity }: { identity: PackIdentity }) {
   const available = projects;
 
   return (
-    <section className="rounded-lg border border-border p-4" data-testid="pack-detail-enable">
-      <h2 className="text-sm font-medium text-foreground">Use it in a project</h2>
+    <Card className="p-4" render={<section />} data-testid="pack-detail-enable">
+      <CardTitle className="text-sm">Use it in a project</CardTitle>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">
         This records that a project uses this pack and shows what it still needs. It does not
         install anything or set anything up.
@@ -107,6 +108,6 @@ export function PackEnableControl({ identity }: { identity: PackIdentity }) {
           </Button>
         </div>
       )}
-    </section>
+    </Card>
   );
 }

@@ -14,9 +14,12 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+import { Field, FieldLabel } from "../ui/field";
+import { Fieldset } from "../ui/fieldset";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 
 /**
  * Publishes a project as a pack.
@@ -131,9 +134,11 @@ export function PublishPackDialog({
       <DialogPopup>
         <DialogPanel data-testid="publish-pack-dialog">
           <DialogTitle>Publish as a pack</DialogTitle>
-          <div className="mt-3 grid gap-3">
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">Name</span>
+          {/* One <fieldset> so assistive tech reads these as one group of
+              related controls rather than seven unrelated inputs. */}
+          <Fieldset className="mt-3 gap-3">
+            <Field className="w-full gap-1 text-xs">
+              <FieldLabel className="font-normal text-muted-foreground text-xs">Name</FieldLabel>
               <Input
                 value={name}
                 data-testid="publish-pack-name"
@@ -144,10 +149,12 @@ export function PublishPackDialog({
                   {problemFor("name")}
                 </span>
               ) : null}
-            </label>
+            </Field>
 
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">What it does, in one line</span>
+            <Field className="w-full gap-1 text-xs">
+              <FieldLabel className="font-normal text-muted-foreground text-xs">
+                What it does, in one line
+              </FieldLabel>
               <Input
                 value={summary}
                 data-testid="publish-pack-summary"
@@ -158,12 +165,12 @@ export function PublishPackDialog({
                   {problemFor("summary")}
                 </span>
               ) : null}
-            </label>
+            </Field>
 
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">
+            <Field className="w-full gap-1 text-xs">
+              <FieldLabel className="font-normal text-muted-foreground text-xs">
                 What you built, what you tried, what you left undone
-              </span>
+              </FieldLabel>
               <Textarea
                 value={handover}
                 rows={5}
@@ -175,40 +182,45 @@ export function PublishPackDialog({
                   {problemFor("handover")}
                 </span>
               ) : null}
-            </label>
+            </Field>
 
             <div className="grid gap-1 text-xs">
               <span className="text-muted-foreground">What is it?</span>
-              <div className="flex gap-1">
+              {/* Exactly one shape is always chosen, so the group owns the
+                  selection and an empty change is ignored. */}
+              <ToggleGroup
+                onValueChange={(next) => {
+                  const [selected] = next;
+                  if (selected === "web" || selected === "tui") {
+                    setShape(selected);
+                  }
+                }}
+                value={[shape]}
+                variant="segmented"
+              >
                 {(["web", "tui"] as const).map((option) => (
-                  <Button
-                    key={option}
-                    size="xs"
-                    variant={option === shape ? "default" : "outline"}
-                    data-testid="publish-pack-shape"
-                    onClick={() => setShape(option)}
-                  >
+                  <ToggleGroupItem key={option} data-testid="publish-pack-shape" value={option}>
                     {option === "web" ? "A web surface" : "A terminal program"}
-                  </Button>
+                  </ToggleGroupItem>
                 ))}
-              </div>
+              </ToggleGroup>
             </div>
 
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">
+            <Field className="w-full gap-1 text-xs">
+              <FieldLabel className="font-normal text-muted-foreground text-xs">
                 {shape === "web" ? "How it starts, if you know" : "The command that runs it"}
-              </span>
+              </FieldLabel>
               <Input
                 value={startCommand}
                 data-testid="publish-pack-start"
                 onChange={(event) => setStartCommand(event.currentTarget.value)}
               />
-            </label>
+            </Field>
 
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">
+            <Field className="w-full gap-1 text-xs">
+              <FieldLabel className="font-normal text-muted-foreground text-xs">
                 What whoever uses it must supply — one name per line, a trailing ! for a secret
-              </span>
+              </FieldLabel>
               <Textarea
                 value={requirements}
                 rows={3}
@@ -216,13 +228,13 @@ export function PublishPackDialog({
                 data-testid="publish-pack-requirements"
                 onChange={(event) => setRequirements(event.currentTarget.value)}
               />
-            </label>
+            </Field>
 
-            <p className="text-[11px] leading-5 text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground leading-5">
               It starts private to this workspace, with an empty record — nothing has been installed
               or deployed from it yet, and saying so is the point.
             </p>
-          </div>
+          </Fieldset>
 
           <DialogFooter>
             <DialogClose render={<Button variant="ghost" size="sm" />}>Cancel</DialogClose>

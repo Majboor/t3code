@@ -5,6 +5,7 @@ import { buildDeployPrompt } from "./packDetail.logic";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Card, CardTitle } from "../ui/card";
 
 /**
  * The lifecycle entries worth showing, in the order somebody runs them. The
@@ -75,20 +76,20 @@ export function PackDeployControl({
 
   if (steps.length === 0) {
     return (
-      <section className="rounded-lg border border-border p-4" data-testid="pack-detail-deploy">
-        <h2 className="text-sm font-medium text-foreground">Deploy</h2>
+      <Card className="p-4" render={<section />} data-testid="pack-detail-deploy">
+        <CardTitle className="text-sm">Deploy</CardTitle>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
           This pack declares no runtime commands, so there is nothing to start. It is a library
           rather than something you deploy.
         </p>
-      </section>
+      </Card>
     );
   }
 
   return (
-    <section className="rounded-lg border border-border p-4" data-testid="pack-detail-deploy">
+    <Card className="p-4" render={<section />} data-testid="pack-detail-deploy">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-medium text-foreground">Deploy</h2>
+        <CardTitle className="text-sm">Deploy</CardTitle>
         {deployPrompt === null ? null : (
           <Button
             size="sm"
@@ -143,6 +144,6 @@ export function PackDeployControl({
           </div>
         ))}
       </div>
-    </section>
+    </Card>
   );
 }

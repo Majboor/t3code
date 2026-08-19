@@ -1,6 +1,8 @@
+import { canBrowserSatisfyAuthGate } from "./components/environments/environmentConnect.logic";
 import type { ServerAuthGateState } from "./environments/primary";
 
 const DEFAULT_AUTH_ENTRY_PATH = "/pair";
+const ENVIRONMENTS_ENTRY_PATH = "/environments";
 
 export function resolveAuthGateRedirect(input: {
   readonly authGateState: ServerAuthGateState;
@@ -30,5 +32,15 @@ export function resolvePrivateRouteRedirect(input: {
     return null;
   }
 
-  return input.authEntryPath ?? DEFAULT_AUTH_ENTRY_PATH;
+  if (input.authEntryPath !== undefined) {
+    return input.authEntryPath;
+  }
+
+  // `/pair` asks for a credential. When the environment that served this page
+  // admits nothing a browser can produce — `desktop-managed-local` advertises
+  // only `desktop-bootstrap` — that screen is a dead end, and the useful
+  // answer is to connect a machine of your own instead.
+  return canBrowserSatisfyAuthGate(input.authGateState.auth)
+    ? DEFAULT_AUTH_ENTRY_PATH
+    : ENVIRONMENTS_ENTRY_PATH;
 }

@@ -20,6 +20,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Separator } from "../ui/separator";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 
 const PACK_QUERY_DEBOUNCE_MS = 400;
 /** Below this a draft is still a fragment, and anything matched is a coincidence. */
@@ -41,25 +42,32 @@ function OptionRow<T extends number | string>({
   return (
     <div>
       <div className="mb-1.5 text-[11px] text-muted-foreground">{label}</div>
-      <div className="grid grid-cols-3 gap-1" data-testid={testId}>
+      {/* Single-choice, so the group owns the selection: clicking the pressed
+          option must not clear it, which is why an empty change is ignored. */}
+      <ToggleGroup
+        className="grid w-full grid-cols-3"
+        data-testid={testId}
+        onValueChange={(next) => {
+          const [selected] = next;
+          const option = options.find((candidate) => String(candidate.value) === selected);
+          if (option && option.value !== value) {
+            onChange(option.value);
+          }
+        }}
+        value={[String(value)]}
+        variant="segmented"
+      >
         {options.map((option) => (
-          <button
+          <ToggleGroupItem
+            className="px-2 text-[11px]"
             key={String(option.value)}
-            type="button"
             title={option.hint}
-            aria-pressed={option.value === value}
-            className={cn(
-              "rounded-md border px-2 py-1 text-[11px] transition-colors",
-              option.value === value
-                ? "border-primary bg-primary/10 text-foreground"
-                : "border-border text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => onChange(option.value)}
+            value={String(option.value)}
           >
             {option.label}
-          </button>
+          </ToggleGroupItem>
         ))}
-      </div>
+      </ToggleGroup>
     </div>
   );
 }

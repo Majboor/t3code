@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   CloudIcon,
   GitPullRequestIcon,
+  MonitorSmartphoneIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
@@ -2421,11 +2422,24 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const handleSettingsClick = useCallback(() => {
     void navigate({ to: "/settings" });
   }, [navigate]);
+  const handleEnvironmentsClick = useCallback(() => {
+    void navigate({ to: "/environments" });
+  }, [navigate]);
 
   return (
     <SidebarFooter className="p-2">
       <SidebarUpdatePill />
       <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            size="sm"
+            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+            onClick={handleEnvironmentsClick}
+          >
+            <MonitorSmartphoneIcon className="size-3.5" />
+            <span className="text-xs">Environments</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
             size="sm"

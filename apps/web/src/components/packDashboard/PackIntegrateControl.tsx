@@ -8,9 +8,10 @@ import {
   resolveIntegrationPrompt,
 } from "./packDetail.logic";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { toastManager } from "../ui/toast";
+import { Card, CardTitle } from "../ui/card";
 
 /**
  * The paste-into-another-agent surface. Targets are offered only where the
@@ -41,9 +42,9 @@ export function PackIntegrateControl({ integration }: { integration: PackIntegra
   });
 
   return (
-    <section className="rounded-lg border border-border p-4" data-testid="pack-detail-integrate">
+    <Card className="p-4" render={<section />} data-testid="pack-detail-integrate">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-medium text-foreground">Integrate</h2>
+        <CardTitle className="text-sm">Integrate</CardTitle>
         <Button
           size="sm"
           data-testid="pack-detail-integrate-copy"
@@ -61,26 +62,30 @@ export function PackIntegrateControl({ integration }: { integration: PackIntegra
       </p>
 
       {targets.length > 1 ? (
-        <div className="mt-3 flex flex-wrap gap-1" data-testid="pack-detail-integrate-targets">
+        <ToggleGroup
+          className="mt-3 flex-wrap"
+          data-testid="pack-detail-integrate-targets"
+          onValueChange={(next) => {
+            const [selected] = next;
+            const entry = targets.find((candidate) => candidate === selected);
+            if (entry !== undefined) {
+              setTarget(entry);
+            }
+          }}
+          value={[target]}
+          variant="segmented"
+        >
           {targets.map((entry) => (
-            <button
+            <ToggleGroupItem
               key={entry}
-              type="button"
-              aria-pressed={entry === target}
-              data-testid="pack-detail-integrate-target"
               data-target={entry}
-              className={cn(
-                "rounded-md border px-2 py-1 text-xs transition-colors",
-                entry === target
-                  ? "border-primary bg-primary/10 text-foreground"
-                  : "border-border text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setTarget(entry)}
+              data-testid="pack-detail-integrate-target"
+              value={entry}
             >
               {PACK_INTEGRATION_TARGET_LABELS[entry]}
-            </button>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       ) : null}
 
       <pre
@@ -122,6 +127,6 @@ export function PackIntegrateControl({ integration }: { integration: PackIntegra
           </ul>
         </div>
       ) : null}
-    </section>
+    </Card>
   );
 }
