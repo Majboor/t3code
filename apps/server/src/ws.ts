@@ -3983,10 +3983,25 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                     }),
                 ),
               );
+              /**
+               * A project with no ownership was never scoped to a tenant, so
+               * there is nobody it can be shown to by matching one — and hiding
+               * it from everybody makes it unreachable rather than private.
+               *
+               * That is what happened to projects registered before tenancy: on
+               * a desktop install they vanished from the dashboard, could not be
+               * re-added because the workspace root was already taken, and left
+               * a thread whose project never resolved, which reads as a send
+               * button that hangs. A hosted deployment always stamps ownership
+               * at creation, so an absent one means a local project that
+               * predates the concept. `ShareLinkService.readProject` makes the
+               * same allowance for the same reason.
+               */
               const isVisibleProject = (project: OrchestrationProjectShell): boolean =>
                 visibleTenantIds === null ||
-                (project.ownership !== undefined &&
-                  visibleTenantIds.has(project.ownership.tenantId));
+                project.ownership === undefined ||
+                project.ownership === null ||
+                visibleTenantIds.has(project.ownership.tenantId);
               const visibleProjectIds = new Set(
                 snapshot.projects.filter(isVisibleProject).map((project) => project.id),
               );
