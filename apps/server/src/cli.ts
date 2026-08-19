@@ -14,7 +14,6 @@ import {
   CommandId,
   OrchestrationReadModel,
   ProjectId,
-  type DeployTarget,
   DeployTargetId,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
@@ -57,7 +56,32 @@ import { readBootstrapEnvelope } from "./bootstrap.ts";
 import { expandHomePath, resolveBaseDir } from "./os-jank.ts";
 import { runServer } from "./server.ts";
 import { DeployService, type DeployServiceShape } from "./deploy/Services/DeployService.ts";
-import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
+import { DeployServiceLive, DEFAULT_INGEST_KEY_VARIABLE } from "./deploy/Layers/DeployService.ts";
+import {
+  analyticsPageUrl,
+  deployRunJson,
+  deployRunJsonEntry,
+  deployTargetJson,
+  formatDeployRunFailure,
+  formatDeployRuns,
+  formatDeployRunSuccess,
+  formatDeployTargetList,
+  formatTargetAdded,
+  formatUnknownTarget,
+  infrastructurePageUrl,
+  packPageUrl,
+  type DeployAnalyticsOutcome,
+  type WorkspaceOrigin,
+} from "./deploy/cliOutput.ts";
+import {
+  analyticsStreamJson,
+  describeStreamNameProblem,
+  formatDeclaredStream,
+  formatQueryResult,
+  formatStreamList,
+  formatUnknownStream,
+  parseAnalyticsProperties,
+} from "./analytics/cliOutput.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
 import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
@@ -490,6 +514,30 @@ const resolveCliAuthConfig = (
     },
     cliLogLevel,
   );
+
+/**
+ * Where this workspace's own pages are, so a command can say where its effect
+ * landed.
+ *
+ * The running server writes its origin down; without it there is nothing to
+ * observe, so the default port is used and marked as a guess. Falling back
+ * silently would print an address that looks checked and is not, which is how
+ * somebody concludes the Infrastructure page is broken when the server is
+ * simply not running.
+ */
+const resolveWorkspaceOrigin = Effect.fn("resolveWorkspaceOrigin")(function* (
+  config: ServerConfigShape,
+) {
+  const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  return Option.match(runtimeState, {
+    onSome: (state) => ({ origin: state.origin, observed: true }) satisfies WorkspaceOrigin,
+    onNone: () =>
+      ({
+        origin: `http://127.0.0.1:${DEFAULT_PORT}`,
+        observed: false,
+      }) satisfies WorkspaceOrigin,
+  });
+});
 
 const DurationShorthandPattern = /^(?<value>\d+)(?<unit>ms|s|m|h|d|w)$/i;
 
@@ -1211,22 +1259,50 @@ const projectCommand = Command.make("project").pipe(
   Command.withSubcommands([projectAddCommand, projectRemoveCommand, projectRenameCommand]),
 );
 
+/**
+ * Say the long version on stdout, then fail with the short one.
+ *
+ * A failed Effect is reported with a timestamp, a log level and a stack trace.
+ * That is right for a bug and wrong for "that target does not exist, here are
+ * the ones that do" — the guidance is the output, and the failure only has to
+ * make the exit code non-zero.
+ */
+const failWithGuidance = (summary: string, guidance: string): Effect.Effect<never, Error> =>
+  Console.log(guidance).pipe(Effect.andThen(Effect.fail(new Error(summary))));
+
+interface DeployCommandContext {
+  readonly deploy: DeployServiceShape;
+  /**
+   * Merged in so a deploy command can look at the streams before running.
+   * Whether a stream is about to be declared or reissued is only knowable
+   * beforehand, and it is the fact the caller most needs told.
+   */
+  readonly analytics: AnalyticsStoreShape;
+  readonly workspace: WorkspaceOrigin;
+}
+
 const runDeployCommand = Effect.fn("runDeployCommand")(function* (
   flags: { readonly baseDir: Option.Option<string> },
-  run: (deploy: DeployServiceShape) => Effect.Effect<string, Error>,
+  run: (context: DeployCommandContext) => Effect.Effect<string, Error>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const workspace = yield* resolveWorkspaceOrigin(config);
   return yield* Effect.gen(function* () {
     const deploy = yield* DeployService;
-    const output = yield* run(deploy);
+    const analytics = yield* AnalyticsStore;
+    const output = yield* run({ deploy, analytics, workspace });
     yield* Console.log(output);
+    // The service logs `deploy.run.completed` at Info, which lands in the
+    // middle of the report that says the same thing better. Errors still get
+    // through.
   }).pipe(
+    Effect.provideService(References.MinimumLogLevel, "Error" as const),
     Effect.provide(
       DeployServiceLive.pipe(
         Layer.provide(DeployRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
         Layer.provide(ServerSecretStoreLive),
-        Layer.provide(
+        Layer.provideMerge(
           AnalyticsStoreLive.pipe(
             Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive))),
           ),
@@ -1245,14 +1321,6 @@ const runDeployCommand = Effect.fn("runDeployCommand")(function* (
   );
 });
 
-const formatDeployTarget = (target: DeployTarget): string => {
-  const location =
-    target.kind === "ssh" && target.ssh
-      ? `ssh ${target.ssh.user}@${target.ssh.host}${target.ssh.remotePath ? `:${target.ssh.remotePath}` : ""}`
-      : "local";
-  return `${target.id}  ${target.name}  [${location}]  ${target.command}`;
-};
-
 const deployListCommand = Command.make("list", {
   baseDir: baseDirFlag,
   devUrl: devUrlFlag,
@@ -1260,10 +1328,11 @@ const deployListCommand = Command.make("list", {
     Flag.withDescription("Only list targets for this project id."),
     Flag.optional,
   ),
+  json: jsonFlag,
 }).pipe(
   Command.withDescription("List deploy targets."),
   Command.withHandler((flags) =>
-    runDeployCommand(flags, (deploy) =>
+    runDeployCommand(flags, ({ deploy, workspace }) =>
       deploy
         .listTargets(
           Option.isSome(flags.project) ? { projectId: ProjectId.make(flags.project.value) } : {},
@@ -1271,9 +1340,23 @@ const deployListCommand = Command.make("list", {
         .pipe(
           Effect.mapError((error) => new Error(error.message)),
           Effect.map((targets) =>
-            targets.length === 0
-              ? "No deploy targets configured."
-              : targets.map(formatDeployTarget).join("\n"),
+            flags.json
+              ? JSON.stringify({
+                  targets: targets.map(deployTargetJson),
+                  links: Object.fromEntries(
+                    [...new Set(targets.map((target) => target.projectId as string))].map(
+                      (projectId) => [
+                        projectId,
+                        { infrastructure: infrastructurePageUrl(workspace, projectId) },
+                      ],
+                    ),
+                  ),
+                })
+              : formatDeployTargetList({
+                  targets,
+                  workspace,
+                  ...(Option.isSome(flags.project) ? { projectId: flags.project.value } : {}),
+                }),
           ),
         ),
     ),
@@ -1306,48 +1389,71 @@ const deployAddCommand = Command.make("add", {
     Flag.withDescription("Path to an SSH private key."),
     Flag.optional,
   ),
+  json: jsonFlag,
 }).pipe(
   Command.withDescription("Add a deploy target."),
   Command.withHandler((flags) =>
-    runDeployCommand(flags, (deploy) => {
-      const host = Option.getOrUndefined(flags.sshHost);
-      const user = Option.getOrUndefined(flags.sshUser);
-      if (host !== undefined && user === undefined) {
-        return Effect.fail(new Error("--ssh-user is required when --ssh-host is provided."));
-      }
-      const remotePath = Option.getOrUndefined(flags.sshPath);
-      const passwordSecretName = Option.getOrUndefined(flags.sshPasswordSecret);
-      const identityFile = Option.getOrUndefined(flags.sshIdentityFile);
-      return deploy
-        .createTarget({
-          projectId: ProjectId.make(flags.project),
-          name: flags.name,
-          command: flags.command,
-          kind: host !== undefined ? "ssh" : "command",
-          ...(host !== undefined && user !== undefined
-            ? {
-                ssh: {
-                  host,
-                  user,
-                  ...(remotePath !== undefined ? { remotePath } : {}),
-                  ...(passwordSecretName !== undefined ? { passwordSecretName } : {}),
-                  ...(identityFile !== undefined ? { identityFile } : {}),
-                },
-              }
-            : {}),
-        })
-        .pipe(
-          Effect.mapError((error) => new Error(error.message)),
-          Effect.map((target) => `Added deploy target ${target.id} (${target.name}).`),
-        );
-    }),
+    runDeployCommand(flags, ({ deploy, workspace }) =>
+      Effect.gen(function* () {
+        const host = Option.getOrUndefined(flags.sshHost);
+        const user = Option.getOrUndefined(flags.sshUser);
+        if (host !== undefined && user === undefined) {
+          return yield* Effect.fail(
+            new Error("--ssh-user is required when --ssh-host is provided."),
+          );
+        }
+        const remotePath = Option.getOrUndefined(flags.sshPath);
+        const passwordSecretName = Option.getOrUndefined(flags.sshPasswordSecret);
+        const identityFile = Option.getOrUndefined(flags.sshIdentityFile);
+        const projectId = ProjectId.make(flags.project);
+
+        // Read before writing purely so the output can say "updated" rather
+        // than "added": re-registering a name replaces that target, and an
+        // agent that runs `deploy add` before every deploy should be able to
+        // see that it did not just make a second one.
+        const siblings = yield* deploy
+          .listTargets({ projectId })
+          .pipe(Effect.mapError((error) => new Error(error.message)));
+        const reused = siblings.some((candidate) => candidate.name === flags.name);
+
+        const target = yield* deploy
+          .createTarget({
+            projectId,
+            name: flags.name,
+            command: flags.command,
+            kind: host !== undefined ? "ssh" : "command",
+            ...(host !== undefined && user !== undefined
+              ? {
+                  ssh: {
+                    host,
+                    user,
+                    ...(remotePath !== undefined ? { remotePath } : {}),
+                    ...(passwordSecretName !== undefined ? { passwordSecretName } : {}),
+                    ...(identityFile !== undefined ? { identityFile } : {}),
+                  },
+                }
+              : {}),
+          })
+          .pipe(Effect.mapError((error) => new Error(error.message)));
+
+        return flags.json
+          ? JSON.stringify({
+              target: deployTargetJson(target),
+              reused,
+              links: { infrastructure: infrastructurePageUrl(workspace, target.projectId) },
+            })
+          : formatTargetAdded({ target, reused, workspace });
+      }),
+    ),
   ),
 );
 
 const deployRunCommand = Command.make("run", {
   baseDir: baseDirFlag,
   devUrl: devUrlFlag,
-  target: Argument.string("target").pipe(Argument.withDescription("Deploy target id to run.")),
+  target: Argument.string("target").pipe(
+    Argument.withDescription("Deploy target id, or its exact name when that names only one."),
+  ),
   // Without these the CLI could start a deploy but never wire it to analytics,
   // so the one path an agent actually drives could not do the thing the deploy
   // service was built to do: mint the key, inject it, and record what went live
@@ -1357,7 +1463,9 @@ const deployRunCommand = Command.make("run", {
     Flag.optional,
   ),
   analyticsKeyVariable: Flag.string("analytics-key-var").pipe(
-    Flag.withDescription("Environment variable the ingest key arrives as."),
+    Flag.withDescription(
+      `Environment variable the ingest key arrives as. Defaults to ${DEFAULT_INGEST_KEY_VARIABLE}.`,
+    ),
     Flag.optional,
   ),
   analyticsPurpose: Flag.string("analytics-purpose").pipe(
@@ -1376,56 +1484,141 @@ const deployRunCommand = Command.make("run", {
     Flag.withDescription("Where the deployment is reachable, when known up front."),
     Flag.optional,
   ),
+  json: jsonFlag,
 }).pipe(
-  Command.withDescription("Run a deploy target from the current working directory."),
+  Command.withDescription(
+    "Run a deploy target from the current working directory. This is what records the run, registers what went live, and — with --analytics-stream — mints and injects the ingest key.",
+  ),
   Command.withHandler((flags) =>
-    runDeployCommand(flags, (deploy) =>
-      Effect.try({
-        try: () =>
-          Option.match(flags.analyticsProperties, {
-            onNone: () => undefined,
-            onSome: (value) => parseAnalyticsProperties(value),
-          }),
-        catch: (cause) => new AnalyticsPropertiesError({ cause }),
-      }).pipe(
-        Effect.mapError((error) => new Error(String(error.cause))),
-        Effect.flatMap((properties) =>
-          deploy
-            .run({
-              targetId: DeployTargetId.make(flags.target),
-              actor: { label: "cli" },
-              workspaceRoot: process.cwd(),
-              ...(Option.isSome(flags.analyticsStream)
-                ? {
-                    analytics: {
-                      stream: flags.analyticsStream.value as never,
-                      ...(Option.isSome(flags.analyticsKeyVariable)
-                        ? { keyVariable: flags.analyticsKeyVariable.value }
-                        : {}),
-                      ...(Option.isSome(flags.analyticsPurpose)
-                        ? { purpose: flags.analyticsPurpose.value }
-                        : {}),
-                      ...(properties === undefined ? {} : { properties: properties as never }),
-                      ...(Option.isSome(flags.deploymentName)
-                        ? { deploymentName: flags.deploymentName.value }
-                        : {}),
-                      ...(Option.isSome(flags.url) ? { url: flags.url.value } : {}),
-                    },
-                  }
-                : {}),
-            })
-            .pipe(Effect.mapError((error) => new Error(error.message))),
-        ),
-        Effect.flatMap((deployRun) =>
-          deployRun.status === "succeeded"
-            ? Effect.succeed(`Deploy ${deployRun.id} succeeded.\n${deployRun.output}`.trimEnd())
-            : Effect.fail(
-                new Error(
-                  `Deploy ${deployRun.id} failed (exit ${deployRun.exitCode ?? "unknown"}).\n${deployRun.output}`.trimEnd(),
+    runDeployCommand(flags, ({ deploy, analytics, workspace }) =>
+      Effect.gen(function* () {
+        const requested = flags.target.trim();
+        const targets = yield* deploy
+          .listTargets({})
+          .pipe(Effect.mapError((error) => new Error(error.message)));
+        // Resolving here rather than letting the service fail on a missing row
+        // is the whole point: the service can only say "not found", and the
+        // thing the caller needs is what does exist. Accepting the name too,
+        // because that is what `deploy add` was told and what gets pasted back.
+        const namesakes = targets.filter((candidate) => candidate.name === requested);
+        const target =
+          targets.find((candidate) => candidate.id === requested) ??
+          (namesakes.length === 1 ? namesakes[0] : undefined);
+        if (target === undefined) {
+          return yield* failWithGuidance(
+            `No deploy target '${requested}'.`,
+            formatUnknownTarget({ requested, targets, ambiguous: namesakes }),
+          );
+        }
+
+        const properties = yield* Effect.try({
+          try: () =>
+            Option.match(flags.analyticsProperties, {
+              onNone: () => undefined,
+              onSome: (value) => parseAnalyticsProperties(value),
+            }),
+          catch: (cause) => new AnalyticsPropertiesError({ cause }),
+        }).pipe(Effect.mapError((error) => new Error(String(error.cause))));
+
+        const streamName = Option.getOrUndefined(flags.analyticsStream)?.trim();
+        // Checked before the deploy starts, because a bad name would otherwise
+        // surface as a schema failure after the command had already run.
+        const streamProblem =
+          streamName === undefined ? null : describeStreamNameProblem(streamName);
+        if (streamProblem !== null) {
+          return yield* Effect.fail(new Error(streamProblem));
+        }
+
+        const plannedAction =
+          streamName === undefined
+            ? undefined
+            : yield* analytics.listStreams({ projectId: target.projectId }).pipe(
+                Effect.mapError((error) => new Error(error.message)),
+                Effect.map((listed) =>
+                  listed.streams.some((stream) => stream.name === streamName)
+                    ? ("reissued" as const)
+                    : ("declared" as const),
                 ),
-              ),
-        ),
-      ),
+              );
+
+        const deploymentName = Option.getOrElse(flags.deploymentName, () => target.name);
+        const url = Option.getOrUndefined(flags.url);
+        const keyVariable = Option.getOrElse(
+          flags.analyticsKeyVariable,
+          () => DEFAULT_INGEST_KEY_VARIABLE,
+        );
+
+        const deployRun = yield* deploy
+          .run({
+            targetId: target.id,
+            actor: { label: "cli" },
+            workspaceRoot: process.cwd(),
+            ...(streamName === undefined
+              ? {}
+              : {
+                  analytics: {
+                    stream: streamName as never,
+                    keyVariable,
+                    ...(Option.isSome(flags.analyticsPurpose)
+                      ? { purpose: flags.analyticsPurpose.value }
+                      : {}),
+                    ...(properties === undefined ? {} : { properties: properties as never }),
+                    deploymentName,
+                    ...(url === undefined ? {} : { url }),
+                  },
+                }),
+          })
+          .pipe(
+            Effect.catch((error) =>
+              // A refusal is a decision, not a crash, and the two ways out of
+              // it are not guessable from the sentence that explains it.
+              error.code === "analytics-conflict"
+                ? failWithGuidance(
+                    error.message,
+                    [
+                      error.message,
+                      "",
+                      "Nothing was deployed. Either redeploy under the name that already owns the stream (--deployment-name <that name>), or report to a different one (--analytics-stream <other>).",
+                      `Who reports to what: t3 analytics list --project ${target.projectId}`,
+                    ].join("\n"),
+                  )
+                : Effect.fail(new Error(error.message)),
+            ),
+          );
+
+        const report = {
+          run: deployRun,
+          target,
+          ...(streamName === undefined || plannedAction === undefined
+            ? {}
+            : {
+                analytics: {
+                  stream: streamName,
+                  action: plannedAction,
+                  keyVariable,
+                  deploymentName,
+                  ...(url === undefined ? {} : { url }),
+                } satisfies DeployAnalyticsOutcome,
+              }),
+          deploymentName,
+          ...(url === undefined ? {} : { url }),
+          workspace,
+        };
+
+        if (deployRun.status === "succeeded") {
+          return flags.json
+            ? JSON.stringify(deployRunJson(report))
+            : formatDeployRunSuccess(report);
+        }
+
+        // A failed deploy still has to exit non-zero, so what happened goes to
+        // stdout and only the summary into the failure.
+        const summary = `Deploy ${deployRun.id} failed (exit ${deployRun.exitCode ?? "unknown"}).`;
+        return yield* failWithGuidance(
+          summary,
+          flags.json ? JSON.stringify(deployRunJson(report)) : formatDeployRunFailure(report),
+        );
+      }),
     ),
   ),
 );
@@ -1437,42 +1630,57 @@ const deployRunsCommand = Command.make("runs", {
     Flag.withDescription("Only show runs for this target id."),
     Flag.optional,
   ),
+  json: jsonFlag,
 }).pipe(
-  Command.withDescription("Show recent deploy runs."),
+  Command.withDescription("Show recent deploy runs: when, how long, what came of them."),
   Command.withHandler((flags) =>
-    runDeployCommand(flags, (deploy) =>
-      deploy
-        .listRuns(
-          Option.isSome(flags.target)
-            ? { targetId: DeployTargetId.make(flags.target.value), limit: 20 }
-            : { limit: 20 },
-        )
-        .pipe(
-          Effect.mapError((error) => new Error(error.message)),
-          Effect.map((runs) =>
-            runs.length === 0
-              ? "No deploy runs recorded."
-              : runs
-                  .map(
-                    (entry) =>
-                      `${entry.startedAt}  ${entry.status.padEnd(9)}  ${entry.targetId}  by ${entry.triggeredBy}`,
-                  )
-                  .join("\n"),
-          ),
-        ),
+    runDeployCommand(flags, ({ deploy, workspace }) =>
+      Effect.gen(function* () {
+        const runs = yield* deploy
+          .listRuns(
+            Option.isSome(flags.target)
+              ? { targetId: DeployTargetId.make(flags.target.value), limit: 20 }
+              : { limit: 20 },
+          )
+          .pipe(Effect.mapError((error) => new Error(error.message)));
+        // A run row carries a target id and nothing a person recognises, so the
+        // names are read back to make the history legible.
+        const targets = yield* deploy
+          .listTargets({})
+          .pipe(Effect.mapError((error) => new Error(error.message)));
+        const targetNames = new Map(
+          targets.map((target) => [target.id as string, target.name as string]),
+        );
+
+        return flags.json
+          ? JSON.stringify({
+              runs: runs.map((run) => deployRunJsonEntry(run, targetNames)),
+              links: Object.fromEntries(
+                [...new Set(runs.map((run) => run.projectId as string))].map((projectId) => [
+                  projectId,
+                  { infrastructure: infrastructurePageUrl(workspace, projectId) },
+                ]),
+              ),
+            })
+          : formatDeployRuns({ runs, targetNames, workspace });
+      }),
     ),
   ),
 );
 
 const runAnalyticsCommand = Effect.fn("runAnalyticsCommand")(function* (
   flags: { readonly baseDir: Option.Option<string> },
-  run: (analytics: AnalyticsStoreShape) => Effect.Effect<string, Error>,
+  run: (context: {
+    readonly analytics: AnalyticsStoreShape;
+    readonly workspace: WorkspaceOrigin;
+  }) => Effect.Effect<string, Error>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const workspace = yield* resolveWorkspaceOrigin(config);
   return yield* Effect.gen(function* () {
     const analytics = yield* AnalyticsStore;
-    const output = yield* run(analytics);
+    const output = yield* run({ analytics, workspace });
     yield* Console.log(output);
   }).pipe(
     Effect.provide(
@@ -1489,34 +1697,6 @@ class AnalyticsPropertiesError extends Data.TaggedError("AnalyticsPropertiesErro
   readonly cause: unknown;
 }> {}
 
-/**
- * Properties as `name:type:required` triples, so declaring a stream stays one
- * command. The shape is the point of the contract, so it cannot be optional.
- */
-function parseAnalyticsProperties(raw: string): ReadonlyArray<{
-  name: string;
-  type: "string" | "number" | "boolean";
-  purpose: string;
-  required: boolean;
-}> {
-  return raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .map((entry) => {
-      const [name = "", type = "string", required = "false"] = entry.split(":");
-      if (type !== "string" && type !== "number" && type !== "boolean") {
-        throw new Error(`${name} has type ${type}; expected string, number or boolean.`);
-      }
-      return {
-        name,
-        type,
-        purpose: name,
-        required: required === "true" || required === "required",
-      };
-    });
-}
-
 const analyticsDeclareCommand = Command.make("declare", {
   baseDir: baseDirFlag,
   devUrl: devUrlFlag,
@@ -1531,29 +1711,32 @@ const analyticsDeclareCommand = Command.make("declare", {
 }).pipe(
   Command.withDescription("Declare an event stream and print its ingest key once."),
   Command.withHandler((flags) =>
-    runAnalyticsCommand(flags, (analytics) =>
-      Effect.try({
-        try: () => parseAnalyticsProperties(flags.properties),
-        catch: (cause) => new AnalyticsPropertiesError({ cause }),
-      }).pipe(
-        Effect.mapError((error) => new Error(String(error.cause))),
-        Effect.flatMap((properties) =>
-          analytics
-            .declareStream({
-              projectId: ProjectId.make(flags.project),
-              name: flags.name as never,
-              purpose: flags.purpose,
-              properties: properties as never,
-            })
-            .pipe(
-              Effect.mapError((error) => new Error(error.message)),
-              Effect.map(
-                (result) =>
-                  `Declared ${result.stream.name} (${result.stream.id}).\nIngest key (shown once): ${result.ingestKey}`,
-              ),
-            ),
-        ),
-      ),
+    runAnalyticsCommand(flags, ({ analytics, workspace }) =>
+      Effect.gen(function* () {
+        const nameProblem = describeStreamNameProblem(flags.name);
+        if (nameProblem !== null) {
+          return yield* Effect.fail(new Error(nameProblem));
+        }
+        const properties = yield* Effect.try({
+          try: () => parseAnalyticsProperties(flags.properties),
+          catch: (cause) => new AnalyticsPropertiesError({ cause }),
+        }).pipe(Effect.mapError((error) => new Error(String(error.cause))));
+
+        const result = yield* analytics
+          .declareStream({
+            projectId: ProjectId.make(flags.project),
+            name: flags.name.trim() as never,
+            purpose: flags.purpose,
+            properties: properties as never,
+          })
+          .pipe(Effect.mapError((error) => new Error(error.message)));
+
+        return formatDeclaredStream({
+          stream: result.stream,
+          ingestKey: result.ingestKey,
+          workspace,
+        });
+      }),
     ),
   ),
 );
@@ -1565,24 +1748,31 @@ const analyticsListCommand = Command.make("list", {
     Flag.withDescription("Only list streams for this project."),
     Flag.optional,
   ),
+  json: jsonFlag,
 }).pipe(
-  Command.withDescription("List declared event streams."),
+  Command.withDescription("List declared event streams and what each one accepts."),
   Command.withHandler((flags) =>
-    runAnalyticsCommand(flags, (analytics) => {
+    runAnalyticsCommand(flags, ({ analytics, workspace }) => {
       const projectId = Option.getOrUndefined(flags.project);
       return analytics
         .listStreams(projectId === undefined ? {} : { projectId: ProjectId.make(projectId) })
         .pipe(
           Effect.mapError((error) => new Error(error.message)),
           Effect.map((result) =>
-            result.streams.length === 0
-              ? "No streams declared."
-              : result.streams
-                  .map(
-                    (stream) =>
-                      `${stream.name}  ${stream.properties.map((property) => `${property.name}:${property.type}`).join(",")}`,
-                  )
-                  .join("\n"),
+            flags.json
+              ? JSON.stringify({
+                  streams: result.streams.map(analyticsStreamJson),
+                  links: Object.fromEntries(
+                    [...new Set(result.streams.map((stream) => stream.projectId as string))].map(
+                      (id) => [id, { analytics: analyticsPageUrl(workspace, id) }],
+                    ),
+                  ),
+                })
+              : formatStreamList({
+                  streams: result.streams,
+                  workspace,
+                  ...(projectId === undefined ? {} : { projectId }),
+                }),
           ),
         );
     }),
@@ -1606,34 +1796,58 @@ const analyticsQueryCommand = Command.make("query", {
     Flag.withDescription("Property to split the result by."),
     Flag.optional,
   ),
+  json: jsonFlag,
 }).pipe(
   Command.withDescription("Ask an aggregate question of a stream."),
   Command.withHandler((flags) =>
-    runAnalyticsCommand(flags, (analytics) => {
-      const value = Option.getOrUndefined(flags.value);
-      const groupBy = Option.getOrUndefined(flags.groupBy);
-      return analytics
-        .query({
-          projectId: ProjectId.make(flags.project),
-          stream: flags.stream as never,
-          aggregate: flags.aggregate as never,
-          ...(value === undefined ? {} : { valueProperty: value as never }),
-          ...(groupBy === undefined ? {} : { groupBy: groupBy as never }),
-        })
-        .pipe(
-          Effect.mapError((error) => new Error(error.message)),
-          Effect.map((result) =>
-            result.buckets.length === 0
-              ? "No events yet."
-              : result.buckets
-                  .map(
-                    (bucket) =>
-                      `${bucket.group ?? "all"}  ${bucket.value}  (${bucket.events} events)`,
-                  )
-                  .join("\n"),
-          ),
-        );
-    }),
+    runAnalyticsCommand(flags, ({ analytics, workspace }) =>
+      Effect.gen(function* () {
+        const projectId = ProjectId.make(flags.project);
+        const value = Option.getOrUndefined(flags.value);
+        const groupBy = Option.getOrUndefined(flags.groupBy);
+
+        // The store can only say the stream is not there. Naming the streams
+        // that are is what turns a typo into a one-step fix.
+        const listed = yield* analytics
+          .listStreams({ projectId })
+          .pipe(Effect.mapError((error) => new Error(error.message)));
+        if (!listed.streams.some((stream) => stream.name === flags.stream)) {
+          return yield* failWithGuidance(
+            `No stream named ${flags.stream} on ${projectId}.`,
+            formatUnknownStream({
+              requested: flags.stream,
+              streams: listed.streams,
+              projectId,
+            }),
+          );
+        }
+
+        const result = yield* analytics
+          .query({
+            projectId,
+            stream: flags.stream as never,
+            aggregate: flags.aggregate as never,
+            ...(value === undefined ? {} : { valueProperty: value as never }),
+            ...(groupBy === undefined ? {} : { groupBy: groupBy as never }),
+          })
+          .pipe(Effect.mapError((error) => new Error(error.message)));
+
+        return flags.json
+          ? JSON.stringify({
+              stream: result.stream,
+              aggregate: result.aggregate,
+              groupBy: groupBy ?? null,
+              buckets: result.buckets,
+              links: { analytics: analyticsPageUrl(workspace, projectId) },
+            })
+          : formatQueryResult({
+              result,
+              workspace,
+              projectId,
+              ...(groupBy === undefined ? {} : { groupBy }),
+            });
+      }),
+    ),
   ),
 );
 
@@ -1806,7 +2020,7 @@ class PackCommandError extends Data.TaggedError("PackCommandError")<{
 function runPackCommand(
   command: Parameters<typeof runPackCliCommand>[0],
   registryRoot: string | undefined,
-): Effect.Effect<string, PackCommandError> {
+): Effect.Effect<{ readonly human: string; readonly result: unknown }, PackCommandError> {
   return Effect.tryPromise({
     try: async () => {
       const store = makeNodePackStore();
@@ -1817,7 +2031,7 @@ function runPackCommand(
         now: () => new Date(),
         newId: (prefix: string) => `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
       });
-      return outcome.human;
+      return { human: outcome.human, result: outcome.result };
     },
     catch: (cause) =>
       new PackCommandError({
@@ -1827,12 +2041,60 @@ function runPackCommand(
   });
 }
 
+/**
+ * The pack ids out of a pack-cli result, so the CLI can point at the page.
+ *
+ * Read defensively rather than typed against pack-cli's view types: the
+ * registry's result shape is its own business, and a pack whose manifest omits
+ * an id should cost a missing link and nothing else.
+ */
+const packRefOf = (value: unknown) =>
+  typeof value === "object" && value !== null && "ref" in value
+    ? (value as { readonly ref?: { readonly id?: unknown; readonly name?: unknown } }).ref
+    : undefined;
+
+function readPackIds(
+  result: unknown,
+): ReadonlyArray<{ readonly id: string; readonly name: string }> {
+  const entries =
+    typeof result === "object" && result !== null && "results" in result
+      ? ((result as { readonly results?: unknown }).results ?? [])
+      : [result];
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry) => {
+    const ref = packRefOf(entry);
+    return typeof ref?.id === "string" && typeof ref.name === "string"
+      ? [{ id: ref.id, name: ref.name }]
+      : [];
+  });
+}
+
 const packRegistryFlag = Flag.string("registry").pipe(
   Flag.withDescription("Registry directory to read packs from."),
   Flag.optional,
 );
 
+const runPackCliCommandWithLinks = Effect.fn("runPackCliCommandWithLinks")(function* (
+  flags: { readonly baseDir: Option.Option<string>; readonly registry: Option.Option<string> },
+  command: Parameters<typeof runPackCliCommand>[0],
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const workspace = yield* resolveWorkspaceOrigin(config);
+  const outcome = yield* runPackCommand(command, Option.getOrUndefined(flags.registry));
+  const packs = readPackIds(outcome.result);
+  yield* Console.log(
+    [
+      outcome.human,
+      ...(packs.length === 0
+        ? []
+        : ["", ...packs.map((pack) => `${pack.name}: ${packPageUrl(workspace, pack.id)}`)]),
+    ].join("\n"),
+  );
+});
+
 const packSearchCommand = Command.make("search", {
+  baseDir: baseDirFlag,
   registry: packRegistryFlag,
   query: Argument.string("query").pipe(
     Argument.withDescription('What the pack should help with, e.g. "deploy".'),
@@ -1840,23 +2102,24 @@ const packSearchCommand = Command.make("search", {
 }).pipe(
   Command.withDescription("Find a pack that covers a capability."),
   Command.withHandler((flags) =>
-    runPackCommand(
-      { kind: "search", query: flags.query, limit: 10, category: undefined, tag: undefined },
-      Option.getOrUndefined(flags.registry),
-    ).pipe(Effect.flatMap((text) => Console.log(text))),
+    runPackCliCommandWithLinks(flags, {
+      kind: "search",
+      query: flags.query,
+      limit: 10,
+      category: undefined,
+      tag: undefined,
+    }),
   ),
 );
 
 const packShowCommand = Command.make("show", {
+  baseDir: baseDirFlag,
   registry: packRegistryFlag,
   pack: Argument.string("pack").pipe(Argument.withDescription("Pack name to read.")),
 }).pipe(
   Command.withDescription("Read a pack: what it does, what it needs, and how to use it."),
   Command.withHandler((flags) =>
-    runPackCommand(
-      { kind: "show", pack: flags.pack, version: undefined },
-      Option.getOrUndefined(flags.registry),
-    ).pipe(Effect.flatMap((text) => Console.log(text))),
+    runPackCliCommandWithLinks(flags, { kind: "show", pack: flags.pack, version: undefined }),
   ),
 );
 

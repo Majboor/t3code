@@ -340,6 +340,139 @@ it.layer(NodeServices.layer)("cli log-level parsing", (it) => {
     }),
   );
 
+  it.effect("wires a deploy to analytics and says where the result landed", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-deploy-test-"));
+
+      const added = yield* captureStdout(
+        runCli([
+          "deploy",
+          "add",
+          "--base-dir",
+          baseDir,
+          "--project",
+          "project-cli",
+          "--name",
+          "web-3000",
+          "--command",
+          "echo deployed",
+        ]),
+      );
+      // A target on its own puts nothing live, and saying so is the whole point
+      // of the added output.
+      assert.isTrue(added.output.includes("Nothing is live yet"));
+
+      // Resolved by name rather than id: an agent has the name it just chose
+      // and not the uuid the store made up.
+      const deployed = yield* captureStdout(
+        runCli([
+          "deploy",
+          "run",
+          "web-3000",
+          "--base-dir",
+          baseDir,
+          "--analytics-stream",
+          "page.view",
+          "--analytics-properties",
+          "path:string:required",
+          "--url",
+          "http://127.0.0.1:3000",
+        ]),
+      );
+
+      assert.isTrue(deployed.output.includes("succeeded"));
+      assert.isTrue(deployed.output.includes("page.view — stream declared"));
+      assert.isTrue(deployed.output.includes("T3_ANALYTICS_INGEST_KEY"));
+      assert.isTrue(deployed.output.includes("/infra/project-cli"));
+      assert.isTrue(deployed.output.includes("/analytics/project-cli"));
+
+      // The deploy is what declared the stream, which is the link the
+      // infrastructure and analytics pages are drawn from.
+      const streams = yield* captureStdout(
+        runCli(["analytics", "list", "--base-dir", baseDir, "--project", "project-cli", "--json"]),
+      );
+      const listed = JSON.parse(streams.output) as {
+        readonly streams: ReadonlyArray<{ readonly name: string }>;
+      };
+      assert.equal(listed.streams.length, 1);
+      assert.equal(listed.streams[0]?.name, "page.view");
+
+      const runs = yield* captureStdout(
+        runCli(["deploy", "runs", "--base-dir", baseDir, "--json"]),
+      );
+      const history = JSON.parse(runs.output) as {
+        readonly runs: ReadonlyArray<{ readonly status: string; readonly targetName: string }>;
+      };
+      assert.equal(history.runs.length, 1);
+      assert.equal(history.runs[0]?.status, "succeeded");
+      assert.equal(history.runs[0]?.targetName, "web-3000");
+    }),
+  );
+
+  it.effect("names the targets that do exist when the one asked for does not", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-deploy-missing-test-"));
+
+      yield* runCliWithRuntime([
+        "deploy",
+        "add",
+        "--base-dir",
+        baseDir,
+        "--project",
+        "project-cli",
+        "--name",
+        "web-3000",
+        "--command",
+        "echo deployed",
+      ]);
+
+      const attempt = yield* captureStdout(
+        runCli(["deploy", "run", "web-4000", "--base-dir", baseDir]).pipe(Effect.flip),
+      );
+
+      assert.isTrue(attempt.output.includes("No deploy target 'web-4000'"));
+      assert.isTrue(attempt.output.includes("web-3000"));
+    }),
+  );
+
+  it.effect("refuses a stream name the contract would reject, before deploying", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-deploy-stream-name-test-"));
+
+      yield* runCliWithRuntime([
+        "deploy",
+        "add",
+        "--base-dir",
+        baseDir,
+        "--project",
+        "project-cli",
+        "--name",
+        "web-3000",
+        "--command",
+        "echo deployed",
+      ]);
+
+      const error = yield* runCliWithRuntime([
+        "deploy",
+        "run",
+        "web-3000",
+        "--base-dir",
+        baseDir,
+        "--analytics-stream",
+        "Page.View",
+      ]).pipe(Effect.flip);
+
+      assert.isTrue(String(error).includes("not a usable stream name"));
+
+      // Nothing ran, so there is no run to find.
+      const runs = yield* captureStdout(
+        runCli(["deploy", "runs", "--base-dir", baseDir, "--json"]),
+      );
+      const history = JSON.parse(runs.output) as { readonly runs: ReadonlyArray<unknown> };
+      assert.equal(history.runs.length, 0);
+    }),
+  );
+
   it.effect("rejects dev-url on project commands", () =>
     Effect.gen(function* () {
       const workspaceRoot = mkdtempSync(
