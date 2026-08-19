@@ -11,8 +11,12 @@ import {
   cloudSyncBlobDownloadRouteLayer,
   cloudSyncBlobUploadRouteLayer,
   cloudSyncCommitRouteLayer,
+  cloudSyncHandoffRegisterRouteLayer,
+  cloudSyncHandoffRouteLayer,
+  cloudSyncLiveCopyRouteLayer,
   cloudSyncNegotiateRouteLayer,
   cloudSyncPassRouteLayer,
+  cloudSyncVisitRouteLayer,
 } from "./cloudSync/http.ts";
 import {
   providerAuthAccountRouteLayer,
@@ -496,6 +500,12 @@ export const makeRoutesLayer = Layer.mergeAll(
   cloudSyncBlobDownloadRouteLayer,
   cloudSyncPassRouteLayer,
   cloudSyncCommitRouteLayer,
+  cloudSyncLiveCopyRouteLayer,
+  cloudSyncVisitRouteLayer,
+  cloudSyncHandoffRegisterRouteLayer,
+  // Unauthenticated on purpose: the caller is a visitor on the tunnel, and the
+  // answer is the durable address they were always meant to end up at.
+  cloudSyncHandoffRouteLayer,
   providerAuthPageRouteLayer,
   providerAuthStartRouteLayer,
   providerAuthCodeRouteLayer,

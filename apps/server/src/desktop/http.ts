@@ -35,7 +35,7 @@ import { ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { CollaborationService } from "../collaboration/Services/CollaborationService.ts";
 import { DeploymentRegistry } from "../deploy/Services/DeploymentRegistry.ts";
 import { DeployService } from "../deploy/Services/DeployService.ts";
-import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TenancyRepository } from "../persistence/Services/Tenancy.ts";
 import { ShareLinkService } from "../shareLinks/Services/ShareLinkService.ts";
 
@@ -155,9 +155,7 @@ export function sumBucketEvents(buckets: ReadonlyArray<{ readonly events: number
 }
 
 /** `null` when the caller asked about the account rather than one project. */
-function readRequestedProjectId(
-  request: HttpServerRequest.HttpServerRequest,
-): ProjectId | null {
+function readRequestedProjectId(request: HttpServerRequest.HttpServerRequest): ProjectId | null {
   const url = HttpServerRequest.toURL(request);
   if (Option.isNone(url)) {
     return null;
@@ -187,20 +185,25 @@ const readProjectActivity = (
 ): Effect.Effect<
   ProjectReading,
   DesktopActivityError,
-  ProjectionProjectRepository | DeploymentRegistry | DeployService | AnalyticsStore
+  ProjectionSnapshotQuery | DeploymentRegistry | DeployService | AnalyticsStore
 > =>
   Effect.gen(function* () {
-    const projects = yield* ProjectionProjectRepository;
+    const projection = yield* ProjectionSnapshotQuery;
     const registry = yield* DeploymentRegistry;
     const deploys = yield* DeployService;
     const analytics = yield* AnalyticsStore;
 
-    const fail = (message: string) => (cause: unknown) => new DesktopActivityError({ message, cause });
+    const fail =
+      (message: string) =>
+      (cause: unknown): DesktopActivityError =>
+        new DesktopActivityError({ message, cause });
 
-    const found = yield* projects
-      .getById({ projectId })
+    // The shell row, not the full projection: this needs the project's
+    // ownership and nothing else, and only active projects have one.
+    const found = yield* projection
+      .getProjectShellById(projectId)
       .pipe(Effect.mapError(fail("Failed to read the project.")));
-    if (Option.isNone(found) || found.value.deletedAt !== null) {
+    if (Option.isNone(found)) {
       return { kind: "not-found" };
     }
     // Project ids are global and this one arrives in a query string, so without
@@ -210,7 +213,7 @@ const readProjectActivity = (
     // `ShareLinkService.readProject` makes, and for the same reason: refusing it
     // would break every single-user install for a comparison with no other side.
     const ownership = found.value.ownership;
-    if (ownership !== null && ownership.tenantId !== tenantId) {
+    if (ownership != null && ownership.tenantId !== tenantId) {
       return { kind: "not-found" };
     }
 

@@ -375,13 +375,19 @@ export function formatElapsed(iso: string, now: number = Date.now()): string {
   return new Date(then).toLocaleDateString();
 }
 
-/** A slot with no figure. The label is filled in by the context, not here. */
-function absentSlot(note: string, detail: string): NotchSlotView {
-  return { label: "", value: EM_DASH, note, detail };
+/**
+ * A figure without its name. Only the context knows what a row is called, so
+ * nothing below this line is in a position to label one.
+ */
+type NotchFigureView = Omit<NotchSlotView, "label">;
+
+/** A slot with no figure, carrying the reason there is none. */
+function absentSlot(note: string, detail: string): NotchFigureView {
+  return { value: EM_DASH, note, detail };
 }
 
-function presentSlot(value: string, note: string, detail: string): NotchSlotView {
-  return { label: "", value, note, detail };
+function presentSlot(value: string, note: string, detail: string): NotchFigureView {
+  return { value, note, detail };
 }
 
 /**
@@ -392,8 +398,8 @@ function presentSlot(value: string, note: string, detail: string): NotchSlotView
 function withActivity(
   outcome: NotchActivityOutcome,
   subject: string,
-  fromActivity: (activity: DesktopActivity) => NotchSlotView,
-): NotchSlotView {
+  fromActivity: (activity: DesktopActivity) => NotchFigureView,
+): NotchFigureView {
   switch (outcome.kind) {
     case "offline":
       return absentSlot(
@@ -422,8 +428,8 @@ function withActivity(
 function buildAccountSlot(
   outcome: NotchActivityOutcome,
   subject: string,
-  fromActivity: (activity: DesktopActivity) => NotchSlotView,
-): NotchSlotView {
+  fromActivity: (activity: DesktopActivity) => NotchFigureView,
+): NotchFigureView {
   return withActivity(outcome, subject, (activity) =>
     activity.workspaceCount === 0
       ? absentSlot("no workspace", `This account has no workspace yet, so there is no ${subject}.`)
@@ -439,8 +445,8 @@ function buildAccountSlot(
 function buildProjectSlot(
   outcome: NotchActivityOutcome,
   subject: string,
-  fromProject: (project: DesktopProjectActivity) => NotchSlotView,
-): NotchSlotView {
+  fromProject: (project: DesktopProjectActivity) => NotchFigureView,
+): NotchFigureView {
   return withActivity(outcome, subject, (activity) =>
     activity.project === null
       ? absentSlot("unavailable", `The server could not read this project's ${subject}.`)
@@ -452,7 +458,7 @@ function partialSuffix(activity: DesktopActivity): string {
   return activity.partial ? " Some workspaces could not be read, so this is a floor." : "";
 }
 
-function buildShareClicks(outcome: NotchActivityOutcome): NotchSlotView {
+function buildShareClicks(outcome: NotchActivityOutcome): NotchFigureView {
   return buildAccountSlot(outcome, "share activity", (activity) => {
     const views = activity.shareViews;
     if (views === null) {
@@ -471,7 +477,7 @@ function buildShareClicks(outcome: NotchActivityOutcome): NotchSlotView {
   });
 }
 
-function buildTokenSpend(outcome: NotchActivityOutcome): NotchSlotView {
+function buildTokenSpend(outcome: NotchActivityOutcome): NotchFigureView {
   return buildAccountSlot(outcome, "token spend", (activity) => {
     const spend = activity.tokenSpend;
     if (spend === null) {
@@ -498,7 +504,7 @@ function buildTokenSpend(outcome: NotchActivityOutcome): NotchSlotView {
  * this stays a dash whatever the server says. A zero here would be a claim that
  * nothing is syncing, which is a different and unsupported statement.
  */
-function buildActiveSyncs(): NotchSlotView {
+function buildActiveSyncs(): NotchFigureView {
   return absentSlot(
     "not wired",
     "Nothing in T3 Code reports sync activity yet, so this is blank rather than zero.",
@@ -519,7 +525,7 @@ function eventFloorSuffix(project: DesktopProjectActivity): string {
  * the tooltip says so rather than letting a green-looking number imply a health
  * check nobody ran.
  */
-function buildLiveDeployments(outcome: NotchActivityOutcome): NotchSlotView {
+function buildLiveDeployments(outcome: NotchActivityOutcome): NotchFigureView {
   return buildProjectSlot(outcome, "deployments", (project) => {
     if (project.deploymentCount === 0) {
       return presentSlot("0", "none registered", "This project has no registered deployments.");
@@ -541,7 +547,7 @@ function buildLiveDeployments(outcome: NotchActivityOutcome): NotchSlotView {
  * to no stream *cannot* report load, and printing `0` against it would be a
  * measurement nobody took.
  */
-function buildDeploymentTraffic(outcome: NotchActivityOutcome): NotchSlotView {
+function buildDeploymentTraffic(outcome: NotchActivityOutcome): NotchFigureView {
   return buildProjectSlot(outcome, "traffic", (project) => {
     if (project.deploymentCount === 0) {
       return absentSlot(
@@ -571,7 +577,7 @@ function buildDeploymentTraffic(outcome: NotchActivityOutcome): NotchSlotView {
   });
 }
 
-function buildLastDeploy(outcome: NotchActivityOutcome): NotchSlotView {
+function buildLastDeploy(outcome: NotchActivityOutcome): NotchFigureView {
   return buildProjectSlot(outcome, "deploy history", (project) => {
     if (project.lastDeployAt === null) {
       return absentSlot(
@@ -588,7 +594,7 @@ function buildLastDeploy(outcome: NotchActivityOutcome): NotchSlotView {
   });
 }
 
-function buildAnalyticsStreams(outcome: NotchActivityOutcome): NotchSlotView {
+function buildAnalyticsStreams(outcome: NotchActivityOutcome): NotchFigureView {
   return buildProjectSlot(outcome, "streams", (project) =>
     presentSlot(
       project.streamCount.toLocaleString(),
@@ -607,7 +613,7 @@ function buildAnalyticsStreams(outcome: NotchActivityOutcome): NotchSlotView {
  * `apps/web/src/components/infra/deploymentLoad.logic.ts`. The addition happens
  * on the server so the panel is handed a figure, not a table.
  */
-function buildAnalyticsEvents(outcome: NotchActivityOutcome): NotchSlotView {
+function buildAnalyticsEvents(outcome: NotchActivityOutcome): NotchFigureView {
   return buildProjectSlot(outcome, "events", (project) => {
     if (project.streamCount === 0) {
       return absentSlot(
@@ -629,7 +635,7 @@ function buildAnalyticsEvents(outcome: NotchActivityOutcome): NotchSlotView {
 }
 
 /** How much of what is deployed is visible to analytics at all. */
-function buildAnalyticsReporters(outcome: NotchActivityOutcome): NotchSlotView {
+function buildAnalyticsReporters(outcome: NotchActivityOutcome): NotchFigureView {
   return buildProjectSlot(outcome, "reporting deployments", (project) => {
     if (project.deploymentCount === 0) {
       return presentSlot(
@@ -655,7 +661,7 @@ function buildAnalyticsReporters(outcome: NotchActivityOutcome): NotchSlotView {
  * state lives in the renderer and there is no channel to it here. So this says
  * what the route says and no more.
  */
-function buildThreadRoute(context: NotchContext): NotchSlotView {
+function buildThreadRoute(context: NotchContext): NotchFigureView {
   if (context.thread === "draft") {
     return presentSlot(
       "draft",
@@ -674,7 +680,7 @@ function buildThreadRoute(context: NotchContext): NotchSlotView {
  * drawing something nobody looked at, so it stays a dash with the reason
  * attached — the same rule `buildActiveSyncs` follows.
  */
-function buildTurnState(): NotchSlotView {
+function buildTurnState(): NotchFigureView {
   return absentSlot(
     "not visible",
     "The desktop shell can see which page the app is on, not what a turn is doing, so this stays blank rather than guessing.",
@@ -685,7 +691,7 @@ function buildFigure(
   figure: NotchFigureKey,
   context: NotchContext,
   outcome: NotchActivityOutcome,
-): NotchSlotView {
+): NotchFigureView {
   switch (figure) {
     case "shareClicks":
       return buildShareClicks(outcome);
@@ -724,10 +730,10 @@ export function toNotchPanelView(
   const panel = NOTCH_CONTEXT_PANELS[context.kind];
   return {
     title: panel.title,
-    slots: panel.slots.map(({ figure, label }) => ({
-      ...buildFigure(figure, context, outcome),
-      label,
-    })),
+    slots: panel.slots.map(({ figure, label }) => {
+      const view = buildFigure(figure, context, outcome);
+      return { label, value: view.value, note: view.note, detail: view.detail };
+    }),
   };
 }
 

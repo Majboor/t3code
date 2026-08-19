@@ -684,10 +684,7 @@ describe("init and validate", () => {
     });
     const context = makeContext(store);
 
-    const outcome = await run(
-      { kind: "validate", directory: "/work/receipts.pack" },
-      context,
-    );
+    const outcome = await run({ kind: "validate", directory: "/work/receipts.pack" }, context);
     const codes = (outcome.result as Record<string, any>)["issues"].map(
       (issue: { code: string }) => issue.code,
     );

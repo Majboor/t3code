@@ -4,7 +4,7 @@ import * as nodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProjectId, TenantId, UserId, WorkspaceId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 
 import { CloudSyncServiceLive } from "./CloudSyncService.ts";
 import { blobStoreRoot, hashBytes, storeBytes } from "../blobStore.ts";
@@ -467,5 +467,125 @@ it.effect("lists conflicts until a person deals with them", () =>
       .resolveConflict(owner, { ...scope, conflictId: conflict.id.replace("-", "x") as never })
       .pipe(Effect.flip);
     assert.strictEqual(unknown.code, "conflict-not-found");
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("a visitor arriving mid-pass is offered the live copy, and never waits for one", () =>
+  Effect.gen(function* () {
+    const cloudSync = yield* CloudSyncService;
+    yield* beVisible(owner);
+    yield* makeProject;
+    yield* cloudSync.start(owner, { ...scope, mode: "mirror" });
+
+    // Sharing starts the upload and the tunnel together, so the first thing a
+    // visitor sees is a pass in flight with nowhere to go yet.
+    const waiting = yield* cloudSync.getVisitorView(owner, scope);
+    assert.strictEqual(waiting.state, "sharer-away");
+
+    // The laptop says it is there but has nothing to publish — cloudflared
+    // missing, or the auth gate refusing to publish this server. The sync
+    // proceeds and the visitor is told the truth rather than sent nowhere.
+    const withoutTunnel = yield* cloudSync.registerLiveCopy(owner, { ...scope, url: null });
+    assert.strictEqual(withoutTunnel.liveCopy, null);
+    assert.strictEqual((yield* cloudSync.getVisitorView(owner, scope)).state, "first-pass");
+
+    const registered = yield* cloudSync.registerLiveCopy(owner, {
+      ...scope,
+      url: "https://tiny-fox-42.trycloudflare.com",
+    });
+    assert.strictEqual(registered.liveCopy?.url, "https://tiny-fox-42.trycloudflare.com");
+
+    const offered = yield* cloudSync.getVisitorView(owner, scope);
+    assert.strictEqual(offered.state, "first-pass-live");
+    assert.strictEqual(offered.liveCopy?.url, "https://tiny-fox-42.trycloudflare.com");
+    // Whichever route they take, a turn is refused until the first pass lands.
+    assert.strictEqual(offered.turnsAllowed, false);
+
+    // Withdrawn, and the offer goes with it in the same breath rather than
+    // ageing out.
+    yield* cloudSync.registerLiveCopy(owner, { ...scope, url: null });
+    assert.strictEqual((yield* cloudSync.getVisitorView(owner, scope)).state, "first-pass");
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("refuses an address it would later have to redirect somebody to", () =>
+  Effect.gen(function* () {
+    const cloudSync = yield* CloudSyncService;
+    yield* beVisible(owner);
+    yield* makeProject;
+    yield* cloudSync.start(owner, { ...scope, mode: "mirror" });
+
+    for (const url of ["javascript:alert(1)", "http://example.com", "https://a:b@evil.example"]) {
+      const refused = yield* cloudSync.registerLiveCopy(owner, { ...scope, url }).pipe(Effect.flip);
+      assert.strictEqual(refused.code, "unusable-url");
+    }
+
+    // And a stranger cannot register one at all: this address is offered to
+    // visitors, so who may set it is who may be in the workspace.
+    const forbidden = yield* cloudSync
+      .registerLiveCopy(stranger, { ...scope, url: "https://tiny-fox-42.trycloudflare.com" })
+      .pipe(Effect.flip);
+    assert.strictEqual(forbidden.code, "forbidden");
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("stops offering the laptop the moment the cloud copy is canonical", () =>
+  Effect.gen(function* () {
+    const cloudSync = yield* CloudSyncService;
+    yield* beVisible(owner);
+    const workspaceRoot = yield* makeProject;
+    yield* cloudSync.start(owner, { ...scope, mode: "handoff" });
+    yield* cloudSync.registerLiveCopy(owner, {
+      ...scope,
+      url: "https://tiny-fox-42.trycloudflare.com",
+    });
+
+    const file = yield* writeRemote(workspaceRoot, "src/app.ts", "export const app = 1;\n");
+    const config = yield* ServerConfig;
+    yield* Effect.promise(() =>
+      storeBytes(
+        blobStoreRoot(config.stateDir, projectId),
+        new TextEncoder().encode("export const app = 1;\n"),
+      ),
+    );
+    const committed = yield* cloudSync.commitPass(owner, {
+      ...scope,
+      files: [file],
+      deletions: [],
+      conflicts: [],
+      final: true,
+    });
+    assert.ok(committed.sync.lastAgreedAt !== null);
+
+    // The registration is still there and is deliberately not consulted: from
+    // here the cloud copy is the answer, and every link handed out was always
+    // pointing at it.
+    const view = yield* cloudSync.getVisitorView(owner, scope);
+    assert.strictEqual(view.state, "synced");
+    assert.strictEqual(view.liveCopy, null);
+    assert.strictEqual(view.turnsAllowed, true);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("forgets a live copy when a new pass begins, rather than offering last run's", () =>
+  Effect.gen(function* () {
+    const cloudSync = yield* CloudSyncService;
+    const repository = yield* CloudSyncRepository;
+    yield* beVisible(owner);
+    yield* makeProject;
+    yield* cloudSync.start(owner, { ...scope, mode: "mirror" });
+    yield* cloudSync.registerLiveCopy(owner, {
+      ...scope,
+      url: "https://tiny-fox-42.trycloudflare.com",
+    });
+
+    // A quick tunnel gets a new address every time it starts, so a registration
+    // that survived a restart would point at a name that no longer resolves.
+    yield* cloudSync.start(owner, { ...scope, mode: "mirror" });
+    const record = yield* repository.getProjectSync(scope);
+    assert.ok(Option.isSome(record));
+    assert.strictEqual(record.value.liveCopyUrl, null);
+    assert.strictEqual(record.value.laptopConfirmedAt, null);
+    assert.strictEqual((yield* cloudSync.getVisitorView(owner, scope)).state, "sharer-away");
   }).pipe(Effect.provide(layer)),
 );

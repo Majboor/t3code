@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DESKTOP_ACTIVITY_PATH, extendWindow } from "./http.ts";
+import { DESKTOP_ACTIVITY_PATH, extendWindow, sumBucketEvents } from "./http.ts";
 
 describe("extendWindow", () => {
   const earlier = "2026-07-17T00:00:00.000Z";
@@ -22,6 +22,16 @@ describe("extendWindow", () => {
   it("is stable when the two agree", () => {
     expect(extendWindow(later, later, "latest")).toBe(later);
     expect(extendWindow(later, later, "earliest")).toBe(later);
+  });
+});
+
+describe("sumBucketEvents", () => {
+  it("adds every group up, because a grouped query answers with one row each", () => {
+    expect(sumBucketEvents([{ events: 3 }, { events: 4 }, { events: 5 }])).toBe(12);
+  });
+
+  it("is zero for a stream that answered with nothing", () => {
+    expect(sumBucketEvents([])).toBe(0);
   });
 });
 

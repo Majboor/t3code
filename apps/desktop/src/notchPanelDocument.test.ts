@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { NOTCH_CONTEXT_PANELS, NOTCH_SLOT_COUNT } from "./notchContext.ts";
 import { type NotchDisplayMetrics, resolveNotchLayout } from "./notchGeometry.ts";
 import {
   buildNotchCssVariables,
@@ -8,7 +9,6 @@ import {
   buildNotchPanelDataUrl,
   buildNotchPanelHtml,
   buildNotchStateScript,
-  NOTCH_SLOTS,
   type NotchPanelView,
 } from "./notchPanelDocument.ts";
 
@@ -56,12 +56,21 @@ describe("buildNotchCssVariables", () => {
 describe("buildNotchPanelHtml", () => {
   const html = buildNotchPanelHtml(resolveNotchLayout(notchedDisplay));
 
-  it("renders the title and the three placeholder slots", () => {
-    expect(html).toContain("Live activity");
-    for (const label of ["Share clicks", "Token spend", "Active syncs"]) {
+  it("renders the default context's title and rows", () => {
+    expect(html).toContain(NOTCH_CONTEXT_PANELS.default.title);
+    for (const { label } of NOTCH_CONTEXT_PANELS.default.slots) {
       expect(html).toContain(`<dt>${label}</dt>`);
     }
-    expect(html.match(/&mdash;/g)).toHaveLength(3);
+    expect(html.match(/&mdash;/g)).toHaveLength(NOTCH_SLOT_COUNT);
+  });
+
+  /*
+   * The window is sized once and never resized, so a label that wrapped would
+   * make the panel taller on one page than on another.
+   */
+  it("pins the rows and the heading to one line each", () => {
+    expect(html).toMatch(/\.slot dt \{[^}]*white-space: nowrap;/);
+    expect(html).toMatch(/\.panel-title \{[^}]*white-space: nowrap;/);
   });
 
   it("references nothing outside itself", () => {
@@ -112,40 +121,63 @@ describe("panel scripts", () => {
 describe("slot markup", () => {
   const html = buildNotchPanelHtml(resolveNotchLayout(notchedDisplay));
 
-  it("gives every slot the hook the update script targets", () => {
-    for (const { key } of NOTCH_SLOTS) {
-      expect(html).toContain(`data-slot="${key}"`);
+  it("gives every row the hook the update script targets", () => {
+    for (let index = 0; index < NOTCH_SLOT_COUNT; index += 1) {
+      expect(html).toContain(`data-slot="${index}"`);
     }
+    expect(html).toContain("data-panel-title");
   });
 
   it("starts every slot as a dash, so nothing reads as zero before a read lands", () => {
-    expect(html.match(/&mdash;/g)).toHaveLength(NOTCH_SLOTS.length);
+    expect(html.match(/&mdash;/g)).toHaveLength(NOTCH_SLOT_COUNT);
+  });
+
+  /*
+   * The rows are numbered rather than named because what they hold depends on
+   * the page. A row keyed by figure would need the document rebuilt — and the
+   * window reloaded — every time someone navigated.
+   */
+  it("carries no figure's name in the markup itself", () => {
+    expect(html).not.toContain('data-slot="shareClicks"');
   });
 });
 
 describe("buildNotchDataScript", () => {
   const view: NotchPanelView = {
-    shareClicks: { value: "1,284", note: "", detail: "1,284 opens." },
-    tokenSpend: { value: "$12.50", note: "est.", detail: "Not a bill." },
-    activeSyncs: { value: "—", note: "not wired", detail: "Nothing reports this." },
+    title: "Deployment",
+    slots: [
+      { label: "Live", value: "2", note: "of 3 deployments", detail: "2 of 3 are live." },
+      { label: "Traffic", value: "—", note: "not wired", detail: "Nothing can report." },
+      { label: "Last deploy", value: "3h ago", note: "succeeded", detail: "Ran at noon." },
+    ],
   };
 
-  it("writes value, note and detail for every slot", () => {
+  it("writes label, value, note and detail for every row", () => {
     const script = buildNotchDataScript(view);
 
-    for (const { key } of NOTCH_SLOTS) {
-      const slot = view[key];
+    view.slots.forEach((slot, index) => {
       expect(script).toContain(
-        `w("${key}",${JSON.stringify(slot.value)},${JSON.stringify(slot.note)},${JSON.stringify(slot.detail)});`,
+        `w(${index},${JSON.stringify(slot.label)},${JSON.stringify(slot.value)},` +
+          `${JSON.stringify(slot.note)},${JSON.stringify(slot.detail)});`,
       );
-    }
+    });
+  });
+
+  it("repoints the heading, so the figures say what they are about", () => {
+    expect(buildNotchDataScript(view)).toContain('t.textContent="Deployment"');
+  });
+
+  it("blanks a row the view does not fill rather than leaving the last page's", () => {
+    const script = buildNotchDataScript({ title: "Analytics", slots: [view.slots[0]!] });
+
+    expect(script).toContain(`w(1,"","—","","");`);
   });
 
   it("encodes text that would otherwise end the literal it sits in", () => {
     const hostile = 'a" + alert(1) + "\nb';
     const script = buildNotchDataScript({
-      ...view,
-      shareClicks: { value: hostile, note: "", detail: "x" },
+      title: hostile,
+      slots: [{ label: hostile, value: hostile, note: "", detail: "x" }],
     });
 
     expect(script).toContain(JSON.stringify(hostile));

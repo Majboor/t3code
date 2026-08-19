@@ -266,7 +266,8 @@ describe("readSignedInAccessToken", () => {
   });
 });
 
-describe("toNotchPanelView", () => {
+describe("toNotchPanelView, account figures", () => {
+  const account = defaultNotchContext;
   const okOutcome: NotchActivityOutcome = {
     kind: "ok",
     activity: {
@@ -280,22 +281,35 @@ describe("toNotchPanelView", () => {
         since: "2026-07-17T00:00:00.000Z",
         until: "2026-08-16T00:00:00.000Z",
       },
+      project: null,
+    },
+  };
+
+  const emptyAccount: NotchActivityOutcome = {
+    kind: "ok",
+    activity: {
+      workspaceCount: 0,
+      partial: false,
+      shareViews: null,
+      tokenSpend: null,
+      project: null,
     },
   };
 
   it("fills every slot the document draws", () => {
-    const view = toNotchPanelView(okOutcome);
+    const view = toNotchPanelView(account, okOutcome);
 
-    for (const { key } of NOTCH_SLOTS) {
-      expect(view[key].detail.length).toBeGreaterThan(0);
+    for (const row of view.slots) {
+      expect(row.detail.length).toBeGreaterThan(0);
+      expect(row.label.length).toBeGreaterThan(0);
     }
   });
 
   it("shows the figures when there are figures", () => {
-    const view = toNotchPanelView(okOutcome);
+    const view = toNotchPanelView(account, okOutcome);
 
-    expect(view.shareClicks.value).toBe("1,284");
-    expect(view.tokenSpend.value).toBe("$12.50");
+    expect(slot(view, "Share clicks").value).toBe("1,284");
+    expect(slot(view, "Token spend").value).toBe("$12.50");
   });
 
   it("never renders a missing figure as a number", () => {
@@ -303,17 +317,14 @@ describe("toNotchPanelView", () => {
       { kind: "offline" },
       { kind: "signed-out" },
       { kind: "failed" },
-      {
-        kind: "ok",
-        activity: { workspaceCount: 0, partial: false, shareViews: null, tokenSpend: null },
-      },
+      emptyAccount,
     ];
 
     for (const outcome of absent) {
-      const view = toNotchPanelView(outcome);
-      expect(view.shareClicks.value).toBe(EM_DASH);
-      expect(view.tokenSpend.value).toBe(EM_DASH);
-      expect(view.shareClicks.note.length).toBeGreaterThan(0);
+      const view = toNotchPanelView(account, outcome);
+      expect(slot(view, "Share clicks").value).toBe(EM_DASH);
+      expect(slot(view, "Token spend").value).toBe(EM_DASH);
+      expect(slot(view, "Share clicks").note.length).toBeGreaterThan(0);
     }
   });
 
@@ -323,18 +334,16 @@ describe("toNotchPanelView", () => {
         { kind: "offline" },
         { kind: "signed-out" },
         { kind: "failed" },
-        {
-          kind: "ok",
-          activity: { workspaceCount: 0, partial: false, shareViews: null, tokenSpend: null },
-        },
+        { kind: "unknown-project" },
+        emptyAccount,
       ] satisfies NotchActivityOutcome[]
-    ).map((outcome) => toNotchPanelView(outcome).shareClicks.note);
+    ).map((outcome) => slot(toNotchPanelView(account, outcome), "Share clicks").note);
 
     expect(new Set(notes).size).toBe(notes.length);
   });
 
   it("distinguishes a genuine zero from an unknown", () => {
-    const zero = toNotchPanelView({
+    const zero = toNotchPanelView(account, {
       kind: "ok",
       activity: {
         workspaceCount: 1,
@@ -347,35 +356,42 @@ describe("toNotchPanelView", () => {
           since: null,
           until: null,
         },
+        project: null,
       },
     });
 
-    expect(zero.shareClicks.value).toBe("0");
-    expect(zero.tokenSpend.value).toBe("$0.00");
+    expect(slot(zero, "Share clicks").value).toBe("0");
+    expect(slot(zero, "Token spend").value).toBe("$0.00");
   });
 
   it("marks a section the server could not read as unavailable, not empty", () => {
-    const view = toNotchPanelView({
+    const view = toNotchPanelView(account, {
       kind: "ok",
-      activity: { workspaceCount: 1, partial: false, shareViews: null, tokenSpend: null },
+      activity: {
+        workspaceCount: 1,
+        partial: false,
+        shareViews: null,
+        tokenSpend: null,
+        project: null,
+      },
     });
 
-    expect(view.shareClicks.value).toBe(EM_DASH);
-    expect(view.shareClicks.note).toBe("unavailable");
-    expect(view.tokenSpend.note).toBe("unavailable");
+    expect(slot(view, "Share clicks").value).toBe(EM_DASH);
+    expect(slot(view, "Share clicks").note).toBe("unavailable");
+    expect(slot(view, "Token spend").note).toBe("unavailable");
   });
 
   it("labels money as an estimate and says what the estimate ignores", () => {
-    const view = toNotchPanelView(okOutcome);
+    const spend = slot(toNotchPanelView(account, okOutcome), "Token spend");
 
-    expect(view.tokenSpend.note).toBe("est.");
-    expect(view.tokenSpend.detail).toMatch(/not a bill/i);
-    expect(view.tokenSpend.detail).toMatch(/plan pricing/i);
-    expect(view.tokenSpend.detail).toContain("over the last 30 days");
+    expect(spend.note).toBe("est.");
+    expect(spend.detail).toMatch(/not a bill/i);
+    expect(spend.detail).toMatch(/plan pricing/i);
+    expect(spend.detail).toContain("over the last 30 days");
   });
 
   it("says so when unpriced models were left out", () => {
-    const view = toNotchPanelView({
+    const view = toNotchPanelView(account, {
       kind: "ok",
       activity: {
         workspaceCount: 1,
@@ -388,32 +404,289 @@ describe("toNotchPanelView", () => {
           since: null,
           until: null,
         },
+        project: null,
       },
     });
 
-    expect(view.tokenSpend.detail).toMatch(/no published rate/i);
+    expect(slot(view, "Token spend").detail).toMatch(/no published rate/i);
   });
 
   it("admits when workspaces were skipped instead of quietly under-reporting", () => {
-    const view = toNotchPanelView({
+    const view = toNotchPanelView(account, {
       kind: "ok",
       activity: {
         workspaceCount: 3,
         partial: true,
         shareViews: { total: 5, linkCount: 1, lastViewedAt: null },
         tokenSpend: null,
+        project: null,
       },
     });
 
-    expect(view.shareClicks.detail).toMatch(/floor/i);
+    expect(slot(view, "Share clicks").detail).toMatch(/floor/i);
   });
 
   it("keeps active syncs a dash in every state, because nothing reports it", () => {
     for (const outcome of [{ kind: "offline" } as const, okOutcome]) {
-      const view = toNotchPanelView(outcome);
-      expect(view.activeSyncs.value).toBe(EM_DASH);
-      expect(view.activeSyncs.note).toBe("not wired");
+      const syncs = slot(toNotchPanelView(account, outcome), "Active syncs");
+      expect(syncs.value).toBe(EM_DASH);
+      expect(syncs.note).toBe("not wired");
     }
+  });
+});
+
+describe("toNotchPanelView, per context", () => {
+  const contexts: NotchContext[] = [
+    defaultNotchContext,
+    deploymentContext,
+    analyticsContext,
+    threadContext,
+  ];
+
+  it("draws the same number of rows whatever page the app is on", () => {
+    for (const context of contexts) {
+      const view = toNotchPanelView(context, { kind: "offline" });
+      expect(view.slots).toHaveLength(NOTCH_CONTEXT_PANELS.default.slots.length);
+    }
+  });
+
+  it("labels every row from the context, so no figure is drawn under another's name", () => {
+    for (const context of contexts) {
+      const view = toNotchPanelView(context, { kind: "offline" });
+      expect(view.slots.map((row) => row.label)).toEqual(
+        NOTCH_CONTEXT_PANELS[context.kind].slots.map((definition) => definition.label),
+      );
+      expect(view.title).toBe(NOTCH_CONTEXT_PANELS[context.kind].title);
+    }
+  });
+
+  it("says the server is off in every context rather than only the default one", () => {
+    for (const context of contexts) {
+      const view = toNotchPanelView(context, { kind: "offline" });
+      const serverBacked = view.slots.filter((row) => row.note === "server off");
+      expect(serverBacked.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("starts a context's rows blank rather than carrying the last page's numbers", () => {
+    const pending = pendingNotchPanelView(analyticsContext);
+
+    expect(pending.title).toBe(NOTCH_CONTEXT_PANELS.analytics.title);
+    for (const row of pending.slots) {
+      expect(row.value).toBe(EM_DASH);
+      expect(row.detail).toBe("Not read yet.");
+    }
+  });
+});
+
+describe("toNotchPanelView, deployment", () => {
+  it("counts what is live against what is registered", () => {
+    const view = toNotchPanelView(
+      deploymentContext,
+      projectOutcome({ deploymentCount: 3, liveCount: 2 }),
+    );
+
+    expect(slot(view, "Live").value).toBe("2");
+    expect(slot(view, "Live").note).toBe("of 3 deployments");
+    // The registry was told this; nothing probed it, and the tooltip has to say so.
+    expect(slot(view, "Live").detail).toMatch(/not a probe/i);
+  });
+
+  it("reports a project with nothing deployed as a real zero", () => {
+    const view = toNotchPanelView(deploymentContext, projectOutcome({ deploymentCount: 0 }));
+
+    expect(slot(view, "Live").value).toBe("0");
+    expect(slot(view, "Live").note).toBe("none registered");
+  });
+
+  it("refuses to call unmeasurable traffic zero", () => {
+    const view = toNotchPanelView(
+      deploymentContext,
+      projectOutcome({ deploymentCount: 2, liveCount: 2, reportingCount: 0 }),
+    );
+
+    expect(slot(view, "Traffic").value).toBe(EM_DASH);
+    expect(slot(view, "Traffic").note).toBe("not wired");
+  });
+
+  it("keeps a failed count apart from a deployment that cannot report", () => {
+    const view = toNotchPanelView(
+      deploymentContext,
+      projectOutcome({ deploymentCount: 1, reportingCount: 1, reportedEvents: null }),
+    );
+
+    expect(slot(view, "Traffic").note).toBe("unavailable");
+  });
+
+  it("shows a stream that genuinely saw nothing as zero", () => {
+    const view = toNotchPanelView(
+      deploymentContext,
+      projectOutcome({ deploymentCount: 1, reportingCount: 1, reportedEvents: 0, streamCount: 1 }),
+    );
+
+    expect(slot(view, "Traffic").value).toBe("0");
+    expect(slot(view, "Traffic").note).toBe("");
+  });
+
+  it("calls a floor a floor when a stream was skipped", () => {
+    const view = toNotchPanelView(
+      deploymentContext,
+      projectOutcome({
+        deploymentCount: 1,
+        reportingCount: 1,
+        reportedEvents: 40,
+        streamCount: 2,
+        partial: true,
+      }),
+    );
+
+    expect(slot(view, "Traffic").note).toBe("floor");
+  });
+
+  it("says no deploy was ever run instead of showing an epoch", () => {
+    const view = toNotchPanelView(deploymentContext, projectOutcome({ deploymentCount: 1 }));
+
+    expect(slot(view, "Last deploy").value).toBe(EM_DASH);
+    expect(slot(view, "Last deploy").note).toBe("never");
+  });
+
+  it("carries the run's outcome beside how long ago it was", () => {
+    const view = toNotchPanelView(
+      deploymentContext,
+      projectOutcome({
+        deploymentCount: 1,
+        lastDeployAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+        lastDeployStatus: "succeeded",
+      }),
+    );
+
+    expect(slot(view, "Last deploy").value).toBe("3h ago");
+    expect(slot(view, "Last deploy").note).toBe("succeeded");
+  });
+
+  it("blames neither the project nor the server when the page names one we cannot see", () => {
+    const view = toNotchPanelView(deploymentContext, { kind: "unknown-project" });
+
+    for (const row of view.slots) {
+      expect(row.value).toBe(EM_DASH);
+      expect(row.note).toBe("unknown project");
+    }
+  });
+});
+
+describe("toNotchPanelView, analytics", () => {
+  it("counts declared streams, and says when none are", () => {
+    expect(slot(toNotchPanelView(analyticsContext, projectOutcome({})), "Streams").note).toBe(
+      "none declared",
+    );
+    expect(
+      slot(toNotchPanelView(analyticsContext, projectOutcome({ streamCount: 4 })), "Streams").value,
+    ).toBe("4");
+  });
+
+  it("will not count events for streams that do not exist", () => {
+    const view = toNotchPanelView(analyticsContext, projectOutcome({ streamCount: 0 }));
+
+    expect(slot(view, "Events").value).toBe(EM_DASH);
+    expect(slot(view, "Events").note).toBe("no streams");
+  });
+
+  it("keeps a stream that saw nothing apart from one nobody could count", () => {
+    const real = toNotchPanelView(analyticsContext, projectOutcome({ streamCount: 1, events: 0 }));
+    const unknown = toNotchPanelView(
+      analyticsContext,
+      projectOutcome({ streamCount: 1, events: null }),
+    );
+
+    expect(slot(real, "Events").value).toBe("0");
+    expect(slot(unknown, "Events").value).toBe(EM_DASH);
+    expect(slot(unknown, "Events").note).toBe("unavailable");
+  });
+
+  it("names the deployments that are blind spots", () => {
+    const view = toNotchPanelView(
+      analyticsContext,
+      projectOutcome({ deploymentCount: 3, reportingCount: 1, streamCount: 2 }),
+    );
+
+    expect(slot(view, "Reporting").value).toBe("1");
+    expect(slot(view, "Reporting").detail).toMatch(/other 2 cannot report/i);
+  });
+});
+
+describe("toNotchPanelView, prompting", () => {
+  it("says what the route says and no more", () => {
+    expect(slot(toNotchPanelView(threadContext, { kind: "offline" }), "Thread").value).toBe("open");
+    expect(slot(toNotchPanelView(draftContext, { kind: "offline" }), "Thread").value).toBe("draft");
+  });
+
+  /*
+   * The point of the whole context: main can see the URL, not the thread. A
+   * running spinner here would be a drawing of something nobody measured.
+   */
+  it("never claims to see a turn it cannot see", () => {
+    for (const outcome of [
+      { kind: "offline" } as const,
+      { kind: "signed-out" } as const,
+      projectOutcome({ deploymentCount: 9 }),
+    ]) {
+      const view = toNotchPanelView(threadContext, outcome);
+      expect(slot(view, "Turn").value).toBe(EM_DASH);
+      expect(slot(view, "Turn").note).toBe("not visible");
+    }
+  });
+
+  it("still shows what the account has spent, which is the real figure it has", () => {
+    const view = toNotchPanelView(threadContext, {
+      kind: "ok",
+      activity: {
+        workspaceCount: 1,
+        partial: false,
+        shareViews: null,
+        tokenSpend: {
+          estimatedUsd: 3.25,
+          totalTokens: 1000,
+          unpricedTokens: 0,
+          since: null,
+          until: null,
+        },
+        project: null,
+      },
+    });
+
+    expect(slot(view, "Token spend").value).toBe("$3.25");
+  });
+});
+
+describe("buildNotchActivityUrl", () => {
+  it("asks about the account when no project was named", () => {
+    expect(buildNotchActivityUrl("http://host")).toBe(`http://host${NOTCH_ACTIVITY_PATH}`);
+    expect(buildNotchActivityUrl("http://host", null)).toBe(`http://host${NOTCH_ACTIVITY_PATH}`);
+    expect(buildNotchActivityUrl("http://host", "")).toBe(`http://host${NOTCH_ACTIVITY_PATH}`);
+  });
+
+  it("escapes the id rather than pasting it in", () => {
+    expect(buildNotchActivityUrl("http://host", "a&b")).toBe(
+      `http://host${NOTCH_ACTIVITY_PATH}?projectId=a%26b`,
+    );
+  });
+});
+
+describe("formatElapsed", () => {
+  const now = Date.parse("2026-08-19T12:00:00.000Z");
+
+  it("answers the question a glance is asking", () => {
+    expect(formatElapsed("2026-08-19T11:58:00.000Z", now)).toBe("2m ago");
+    expect(formatElapsed("2026-08-19T09:00:00.000Z", now)).toBe("3h ago");
+    expect(formatElapsed("2026-08-17T12:00:00.000Z", now)).toBe("2d ago");
+  });
+
+  it("does not look into the future when the clocks disagree", () => {
+    expect(formatElapsed("2026-08-19T12:05:00.000Z", now)).toBe("just now");
+  });
+
+  it("is a dash rather than an epoch when the date will not parse", () => {
+    expect(formatElapsed("not a date", now)).toBe(EM_DASH);
   });
 });
 
@@ -422,7 +695,7 @@ describe("createNotchRefreshScheduler", () => {
     const applied: unknown[] = [];
     let tick: (() => void) | null = null;
     const cancelled: unknown[] = [];
-    const view = toNotchPanelView({ kind: "offline" });
+    const view = toNotchPanelView(defaultNotchContext, { kind: "offline" });
     const read = vi.fn(readView ?? (async () => view));
 
     const scheduler = createNotchRefreshScheduler({

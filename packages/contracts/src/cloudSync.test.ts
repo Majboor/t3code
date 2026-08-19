@@ -2,15 +2,22 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
+  CLOUD_SYNC_LIVE_COPY_HEARTBEAT_MS,
+  CLOUD_SYNC_LIVE_COPY_STALE_AFTER_MS,
   CloudSyncConflict,
   CloudSyncConflictId,
   CloudSyncConflictListInput,
   CloudSyncConflictResolveInput,
   CloudSyncFile,
+  CloudSyncHandoffRegisterInput,
   CloudSyncHash,
+  CloudSyncLiveCopyRegisterInput,
   CloudSyncMode,
   CloudSyncStartInput,
   CloudSyncStatus,
+  CloudSyncVisitorView,
+  isLiveCopyFresh,
+  isSafeCloudSyncCopyUrl,
   ProjectCloudSync,
   ProjectId,
   TenantId,
@@ -193,5 +200,87 @@ describe("cloud sync contracts", () => {
     expect(WS_METHODS.cloudSyncStop).toBe("cloudSync.stop");
     expect(WS_METHODS.cloudSyncConflictsList).toBe("cloudSync.conflicts.list");
     expect(WS_METHODS.cloudSyncConflictsResolve).toBe("cloudSync.conflicts.resolve");
+  });
+});
+
+describe("sharing before the sync has finished", () => {
+  const decodeView = Schema.decodeUnknownSync(CloudSyncVisitorView);
+  const decodeRegister = Schema.decodeUnknownSync(CloudSyncLiveCopyRegisterInput);
+  const decodeHandoff = Schema.decodeUnknownSync(CloudSyncHandoffRegisterInput);
+
+  it("takes an address a visitor could safely be redirected to, and nothing else", () => {
+    expect(isSafeCloudSyncCopyUrl("https://tiny-fox-42.trycloudflare.com")).toBe(true);
+    expect(isSafeCloudSyncCopyUrl("https://app.t3.tools/projects/atlas")).toBe(true);
+    // A developer's cloud is a loopback address, and refusing it would make this
+    // whole path untestable outside production.
+    expect(isSafeCloudSyncCopyUrl("http://127.0.0.1:5173")).toBe(true);
+    expect(isSafeCloudSyncCopyUrl("http://localhost:5173")).toBe(true);
+
+    // Plain http to anywhere else carries a private project in the clear.
+    expect(isSafeCloudSyncCopyUrl("http://example.com")).toBe(false);
+    // These all end up in a Location header, which is the whole reason the
+    // check lives at the door rather than at the point of use.
+    expect(isSafeCloudSyncCopyUrl("javascript:alert(1)")).toBe(false);
+    expect(isSafeCloudSyncCopyUrl("data:text/html,<script>")).toBe(false);
+    expect(isSafeCloudSyncCopyUrl("https://user:pass@example.com")).toBe(false);
+    expect(isSafeCloudSyncCopyUrl("/relative")).toBe(false);
+    expect(isSafeCloudSyncCopyUrl("")).toBe(false);
+    expect(isSafeCloudSyncCopyUrl(`https://example.com/${"x".repeat(600)}`)).toBe(false);
+  });
+
+  it("stops believing a registration three heartbeats after the last one", () => {
+    const now = new Date("2026-08-19T12:00:00.000Z");
+    const at = (msAgo: number) => new Date(now.getTime() - msAgo).toISOString();
+
+    expect(isLiveCopyFresh(at(0), now)).toBe(true);
+    expect(isLiveCopyFresh(at(CLOUD_SYNC_LIVE_COPY_HEARTBEAT_MS), now)).toBe(true);
+    // Two missed beats is still believed: a garbage-collection pause or a train
+    // tunnel must not make the cloud announce that somebody closed their laptop.
+    expect(isLiveCopyFresh(at(2 * CLOUD_SYNC_LIVE_COPY_HEARTBEAT_MS), now)).toBe(true);
+    expect(isLiveCopyFresh(at(CLOUD_SYNC_LIVE_COPY_STALE_AFTER_MS), now)).toBe(true);
+    expect(isLiveCopyFresh(at(CLOUD_SYNC_LIVE_COPY_STALE_AFTER_MS + 1), now)).toBe(false);
+
+    // Never registered, and never parseable, are both "no live copy" rather
+    // than an address somebody might click.
+    expect(isLiveCopyFresh(null, now)).toBe(false);
+    expect(isLiveCopyFresh("not a date", now)).toBe(false);
+  });
+
+  it("lets a heartbeat carry the absence of a live copy", () => {
+    // Not a no-op: sharing goes ahead when cloudflared is missing or the auth
+    // gate refuses to publish this server, and this is the call that keeps
+    // "still uploading" apart from "they closed their laptop".
+    expect(decodeRegister({ ...scope, url: null }).url).toBeNull();
+    expect(decodeRegister({ ...scope, url: "https://tiny-fox-42.trycloudflare.com" }).url).toBe(
+      "https://tiny-fox-42.trycloudflare.com",
+    );
+    expect(() => decodeRegister(scope)).toThrow();
+  });
+
+  it("requires an address for a handoff, because a handoff is a redirect", () => {
+    expect(
+      decodeHandoff({ ...scope, canonicalUrl: "https://app.t3.tools/p/atlas" }).canonicalUrl,
+    ).toBe("https://app.t3.tools/p/atlas");
+    expect(() => decodeHandoff({ ...scope, canonicalUrl: null })).toThrow();
+  });
+
+  it("refuses turns until the first pass has completed, in the contract itself", () => {
+    const waiting = decodeView({
+      state: "first-pass-live",
+      sync: { ...baseSync, lastAgreedAt: null },
+      liveCopy: {
+        url: "https://tiny-fox-42.trycloudflare.com",
+        confirmedAt: "2026-08-19T12:00:00.000Z",
+        staleAfterMs: CLOUD_SYNC_LIVE_COPY_STALE_AFTER_MS,
+      },
+      turnsAllowed: false,
+    });
+    expect(waiting.state).toBe("first-pass-live");
+    expect(waiting.turnsAllowed).toBe(false);
+
+    // The state a visitor is in is a literal, not something inferred from a
+    // progress bar: "still uploading" and "they closed their laptop" are
+    // different advice and have to survive the wire as different words.
+    expect(() => decodeView({ ...waiting, state: "waiting" })).toThrow();
   });
 });

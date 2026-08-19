@@ -235,9 +235,7 @@ export function resolveNotchContext(url: string | null | undefined): NotchContex
 
 export function areNotchContextsEqual(left: NotchContext, right: NotchContext): boolean {
   return (
-    left.kind === right.kind &&
-    left.projectId === right.projectId &&
-    left.thread === right.thread
+    left.kind === right.kind && left.projectId === right.projectId && left.thread === right.thread
   );
 }
 
