@@ -218,6 +218,11 @@ export interface ReadNotchActivityInput {
   readonly baseUrl: string | null;
   readonly accessToken: string | null;
   /**
+   * The app window's session cookie, used when there is no bearer token — the
+   * desktop owner signs in locally and never gets one.
+   */
+  readonly sessionCookie?: string | null;
+  /**
    * Names one project instead of the account. The route answers one or the
    * other, never both, because the panel only ever draws one of them.
    */
@@ -241,9 +246,12 @@ export async function readNotchActivity(
   if (!input.baseUrl) {
     return { kind: "offline" };
   }
-  // No token means nobody is signed in on this machine yet. Asking anyway would
-  // get a 401 that says the same thing a round trip later.
-  if (!input.accessToken) {
+  // Nobody signed in on this machine yet — asking anyway buys a 401 that says
+  // the same thing a round trip later. A cookie counts: the desktop owner signs
+  // in locally and never gets a Supabase token, and reading only the token told
+  // that person they were signed out while they were using the app.
+  const credential = resolveNotchCredential(input);
+  if (!credential) {
     return { kind: "signed-out" };
   }
 
@@ -255,7 +263,7 @@ export async function readNotchActivity(
 
   try {
     const response = await fetchImpl(buildNotchActivityUrl(input.baseUrl, input.projectId), {
-      headers: { authorization: `Bearer ${input.accessToken}` },
+      headers: credential,
       signal: controller.signal,
     });
     // A rejected credential is the signed-out story, not a broken one: the
@@ -292,6 +300,35 @@ export async function readNotchActivity(
  * the storage key ever moves, this returns `null` and the panel says "sign in"
  * — the failure mode is a dash, never a wrong number.
  */
+/**
+ * How the panel proves who is asking.
+ *
+ * A Supabase account carries a bearer token; the desktop owner signs in locally
+ * and never has one, and reading only the token reported "sign in" to somebody
+ * who was signed in and using the app — with a button whose only act was to
+ * reveal a window already in front of them.
+ *
+ * The session cookie was rejected for this once, on the grounds that it
+ * resolved to an identity with no tenant memberships and would have rendered a
+ * confident zero. That is no longer true: the machine-owner subjects are
+ * provisioned a personal tenant like any other account, so the cookie now names
+ * a real person with a real workspace.
+ */
+export function resolveNotchCredential(input: {
+  readonly accessToken?: string | null;
+  readonly sessionCookie?: string | null;
+}): Record<string, string> | null {
+  const token = input.accessToken?.trim();
+  if (token !== undefined && token.length > 0) {
+    return { authorization: `Bearer ${token}` };
+  }
+  const cookie = input.sessionCookie?.trim();
+  if (cookie !== undefined && cookie.length > 0) {
+    return { cookie };
+  }
+  return null;
+}
+
 export async function readSignedInAccessToken(
   host: NotchScriptHost | null,
 ): Promise<string | null> {
@@ -787,6 +824,11 @@ export interface NotchActivitySource {
   readonly baseUrl: () => string | null;
   /** The app window, or `null` before one exists. */
   readonly host: () => NotchScriptHost | null;
+  /**
+   * The app window's session cookie. Optional so a test can leave it out, and
+   * the only credential a locally-signed-in desktop owner has.
+   */
+  readonly sessionCookie?: () => Promise<string | null>;
   readonly fetchImpl?: typeof globalThis.fetch;
 }
 
@@ -909,12 +951,14 @@ export function createNotchViewReader(
 ): (context: NotchContext) => Promise<NotchPanelView> {
   return async (context) => {
     const accessToken = await readSignedInAccessToken(source.host());
+    const sessionCookie = source.sessionCookie ? await source.sessionCookie() : null;
     const feed = resolveNotchFeed(context);
     return toNotchPanelView(
       context,
       await readNotchActivity({
         baseUrl: source.baseUrl(),
         accessToken,
+        sessionCookie,
         ...(feed.kind === "project" ? { projectId: feed.projectId } : {}),
         ...(source.fetchImpl ? { fetchImpl: source.fetchImpl } : {}),
       }),

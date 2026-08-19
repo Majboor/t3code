@@ -16,6 +16,7 @@ import {
   nativeTheme,
   protocol,
   safeStorage,
+  session,
   shell,
 } from "electron";
 import type { MenuItemConstructorOptions, OpenDialogOptions } from "electron";
@@ -2331,6 +2332,24 @@ app
       readView: createNotchViewReader({
         baseUrl: () => backendHttpUrl || null,
         host: () => mainWindow?.webContents ?? null,
+        /**
+         * The credential a locally-signed-in owner actually has. Only a
+         * Supabase account carries a bearer token, so reading that alone told
+         * the desktop owner they were signed out while they were using the app
+         * — and offered a sign-in button whose only act was to reveal a window
+         * already in front of them.
+         */
+        sessionCookie: async () => {
+          const target = backendHttpUrl;
+          if (!target) return null;
+          try {
+            const cookies = await session.defaultSession.cookies.get({ url: target });
+            const pairs = cookies.map((entry) => `${entry.name}=${entry.value}`);
+            return pairs.length > 0 ? pairs.join("; ") : null;
+          } catch {
+            return null;
+          }
+        },
       }),
       // What the panel shows follows the page the app is on. The web app runs
       // on hash history under Electron, so the active route is already in this

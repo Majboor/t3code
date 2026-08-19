@@ -19,6 +19,7 @@ import {
   parseNotchActivityBody,
   pendingNotchPanelView,
   readNotchActivity,
+  resolveNotchCredential,
   readSignedInAccessToken,
   toNotchPanelView,
 } from "./notchData.ts";
@@ -865,5 +866,64 @@ describe("formatters", () => {
     expect(formatEstimatedCost(0)).toBe("$0.00");
     expect(formatEstimatedCost(0.004)).toBe("<$0.01");
     expect(formatEstimatedCost(12.5)).toBe("$12.50");
+  });
+});
+
+/**
+ * The desktop owner signs in locally and never receives a Supabase token, so a
+ * panel that only looked for one told a signed-in person they were signed out
+ * and offered them a button whose only act was to raise a window already in
+ * front of them.
+ */
+describe("resolveNotchCredential", () => {
+  it("prefers a bearer token when there is one", () => {
+    expect(resolveNotchCredential({ accessToken: "abc", sessionCookie: "t3_session=x" })).toEqual({
+      authorization: "Bearer abc",
+    });
+  });
+
+  it("falls back to the session cookie a local sign-in leaves behind", () => {
+    expect(resolveNotchCredential({ accessToken: null, sessionCookie: "t3_session=x" })).toEqual({
+      cookie: "t3_session=x",
+    });
+  });
+
+  it("treats blank as absent, so a stray empty string is not a credential", () => {
+    expect(resolveNotchCredential({ accessToken: "   ", sessionCookie: "  " })).toBeNull();
+    expect(resolveNotchCredential({ accessToken: null, sessionCookie: null })).toBeNull();
+  });
+});
+
+describe("readNotchActivity with only a cookie", () => {
+  it("asks the server rather than reporting signed-out", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ signedIn: true, workspaceCount: 1, shareClicks: 2, tokenSpendUsd: 0 }),
+          { status: 200 },
+        ),
+    ) as unknown as typeof globalThis.fetch;
+
+    const outcome = await readNotchActivity({
+      baseUrl: "http://127.0.0.1:3773",
+      accessToken: null,
+      sessionCookie: "t3_session_3773=abc",
+      fetchImpl,
+    });
+
+    expect(outcome.kind).not.toBe("signed-out");
+    const call = (fetchImpl as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect((call?.[1] as { headers: Record<string, string> }).headers).toEqual({
+      cookie: "t3_session_3773=abc",
+    });
+  });
+
+  it("still reports signed-out when it holds neither", async () => {
+    const outcome = await readNotchActivity({
+      baseUrl: "http://127.0.0.1:3773",
+      accessToken: null,
+      sessionCookie: null,
+    });
+    expect(outcome.kind).toBe("signed-out");
   });
 });
