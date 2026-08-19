@@ -7,6 +7,7 @@ import {
   resolveAssistantMessageCopyState,
   resolveMessageAuthor,
 } from "./MessagesTimeline.logic";
+import { memberColorForUserId } from "../collaboration/collaborationRoster.logic";
 import { UserId, type CollaborationMember } from "@t3tools/contracts";
 
 describe("computeMessageDurationStart", () => {
@@ -445,17 +446,55 @@ describe("resolveMessageAuthor", () => {
     status: "active",
   } as unknown as CollaborationMember;
 
+  const grace = {
+    userId: UserId.make("user-grace"),
+    displayName: "Grace Hopper",
+    avatarInitials: "GH",
+    color: "hsl(142 55% 45%)",
+    status: "active",
+  } as unknown as CollaborationMember;
+
   const members = {
-    byUserId: new Map([["user-ada", ada]]),
+    byUserId: new Map([
+      ["user-ada", ada],
+      ["user-grace", grace],
+    ]),
     viewerUserId: "user-grace",
   };
 
   it("names the colleague who sent a message", () => {
-    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-ada") }, members)).toBe(ada);
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-ada") }, members)).toEqual({
+      userId: "user-ada",
+      displayName: "Ada Lovelace",
+      avatarInitials: "AL",
+      color: "hsl(215 80% 58%)",
+      isViewer: false,
+      isKnown: true,
+    });
   });
 
-  it("leaves the reader's own messages unlabelled", () => {
-    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, members)).toBeNull();
+  it("names the reader too once somebody else is in the workspace", () => {
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, members)).toEqual({
+      userId: "user-grace",
+      displayName: "Grace Hopper",
+      avatarInitials: "GH",
+      color: "hsl(142 55% 45%)",
+      isViewer: true,
+      isKnown: true,
+    });
+  });
+
+  it("leaves a solo thread's own messages unlabelled", () => {
+    const alone = {
+      byUserId: new Map([["user-grace", grace]]),
+      viewerUserId: "user-grace",
+    };
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, alone)).toBeNull();
+  });
+
+  it("says nothing while the roster is still on its way", () => {
+    const loading = { byUserId: new Map(), viewerUserId: null };
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, loading)).toBeNull();
   });
 
   it("leaves an unattributed message alone rather than guessing", () => {
@@ -463,9 +502,40 @@ describe("resolveMessageAuthor", () => {
     expect(resolveMessageAuthor({}, members)).toBeNull();
   });
 
-  it("draws nothing for an author who is no longer in the roster", () => {
-    expect(
-      resolveMessageAuthor({ authorUserId: UserId.make("user-departed") }, members),
-    ).toBeNull();
+  // The regression. Somebody removed from the workspace, or whose roster entry
+  // has not arrived, used to render with no name and no colour — and an
+  // unlabelled message reads as the reader's own, so their words were silently
+  // handed to whoever was looking.
+  it("still names and colours an author the roster has never heard of", () => {
+    const label = resolveMessageAuthor({ authorUserId: UserId.make("user-departed") }, members);
+
+    expect(label).not.toBeNull();
+    expect(label?.displayName).toBe("Someone else");
+    expect(label?.isKnown).toBe(false);
+    expect(label?.isViewer).toBe(false);
+    expect(label?.color).toBe(memberColorForUserId("user-departed"));
+    expect(label?.color).toMatch(/^hsl\(\d+ 70% 55%\)$/);
+    expect(label?.avatarInitials).toBe("?");
+  });
+
+  it("keeps a departed colleague the colour they had while they were present", () => {
+    const departed = {
+      byUserId: new Map([["user-grace", grace]]),
+      viewerUserId: "user-grace",
+    };
+    const present = {
+      byUserId: new Map([
+        ["user-grace", grace],
+        [
+          "user-ada",
+          { ...ada, color: memberColorForUserId("user-ada") } as unknown as CollaborationMember,
+        ],
+      ]),
+      viewerUserId: "user-grace",
+    };
+
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-ada") }, departed)?.color).toBe(
+      resolveMessageAuthor({ authorUserId: UserId.make("user-ada") }, present)?.color,
+    );
   });
 });

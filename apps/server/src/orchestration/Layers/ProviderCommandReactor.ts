@@ -127,6 +127,36 @@ function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServic
   return Cause.pretty(cause).toLowerCase().includes("unknown pending user-input request");
 }
 
+/**
+ * The sentence to put in front of a person, out of a cause written for a log.
+ *
+ * `Cause.pretty` is right in a log file and wrong in the work log, which shows
+ * one truncated line. A refusal whose whole point is "No Codex account is
+ * connected for you. Connect one in Settings → Connections" arrives there as
+ * "ProviderAdapterRequestError: Provider adapter request failed (codex) for
+ * thread.turn.start: No Code…" — the frame eats the width and the instruction
+ * is what gets cut. Worse, the frames below it name a file inside the installed
+ * app bundle, so a refusal that is working exactly as designed reads as a
+ * crash.
+ *
+ * The provider errors already carry the sentence as a field, so use it; failing
+ * that, keep the cause's own text and drop the stack frames. The full cause is
+ * still logged beside the activity, so nothing is lost to debugging.
+ */
+function readableFailureDetail(cause: Cause.Cause<unknown>): string {
+  const error = Cause.squash(cause);
+  if (Schema.is(ProviderAdapterRequestError)(error)) {
+    return error.detail;
+  }
+  const pretty = Cause.pretty(cause);
+  const withoutFrames = pretty
+    .split("\n")
+    .filter((line) => !/^\s+at\s/.test(line))
+    .join("\n")
+    .trim();
+  return withoutFrames.length > 0 ? withoutFrames : pretty;
+}
+
 function stalePendingRequestDetail(
   requestKind: "approval" | "user-input",
   requestId: string,
@@ -818,13 +848,19 @@ const make = Effect.gen(function* () {
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.catchCause((cause) =>
-        appendProviderFailureActivity({
-          threadId: event.payload.threadId,
-          kind: "provider.turn.start.failed",
-          summary: "Provider turn start failed",
-          detail: Cause.pretty(cause),
-          turnId: null,
-          createdAt: event.payload.createdAt,
+        Effect.gen(function* () {
+          yield* Effect.logWarning("provider command reactor failed to start a turn", {
+            threadId: event.payload.threadId,
+            cause: Cause.pretty(cause),
+          });
+          yield* appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.start.failed",
+            summary: "Provider turn start failed",
+            detail: readableFailureDetail(cause),
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          });
         }),
       ),
     );
@@ -888,7 +924,7 @@ const make = Effect.gen(function* () {
               summary: "Provider approval response failed",
               detail: isUnknownPendingApprovalRequestError(cause)
                 ? stalePendingRequestDetail("approval", event.payload.requestId)
-                : Cause.pretty(cause),
+                : readableFailureDetail(cause),
               turnId: null,
               createdAt: event.payload.createdAt,
               requestId: event.payload.requestId,
@@ -935,7 +971,7 @@ const make = Effect.gen(function* () {
               summary: "Provider user input response failed",
               detail: isUnknownPendingUserInputRequestError(cause)
                 ? stalePendingRequestDetail("user-input", event.payload.requestId)
-                : Cause.pretty(cause),
+                : readableFailureDetail(cause),
               turnId: null,
               createdAt: event.payload.createdAt,
               requestId: event.payload.requestId,

@@ -7,7 +7,11 @@ import { TenantId, ThreadId, UserId, WorkspaceId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 
-import { CollaborationServiceLive, deriveUsageObservation } from "./CollaborationService.ts";
+import {
+  CollaborationServiceLive,
+  defaultMemberColor,
+  deriveUsageObservation,
+} from "./CollaborationService.ts";
 import { CollaborationService } from "../Services/CollaborationService.ts";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
@@ -847,4 +851,21 @@ it.effect("leaves an opted-out member out of every total the workspace can see",
     assert.strictEqual(asSelf.totals.totalTokens, 1_000);
     assert.strictEqual(asSelf.hiddenMemberCount, 0);
   }).pipe(Effect.provide(makeLayer())),
+);
+
+/**
+ * The other half of a contract. `memberColorForUserId` in the web app's
+ * collaborationRoster.logic.ts is a deliberate copy of `defaultMemberColor`,
+ * and asserts these same two values — that is how the transcript can colour a
+ * message from somebody the roster no longer lists without their colour
+ * changing. If this test and its twin ever disagree, the copy has drifted.
+ */
+it.effect("hands out the member colours the web app derives for itself", () =>
+  Effect.sync(() => {
+    assert.strictEqual(defaultMemberColor("user-ada"), "hsl(276 70% 55%)");
+    assert.strictEqual(
+      defaultMemberColor("local:6d0229b2-9974-43a2-878a-4c9a2a1de273"),
+      "hsl(251 70% 55%)",
+    );
+  }),
 );

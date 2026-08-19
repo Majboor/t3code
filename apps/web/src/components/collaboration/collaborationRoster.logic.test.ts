@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { applyPresenceToRoster } from "./collaborationRoster.logic";
+import { applyPresenceToRoster, memberColorForUserId } from "./collaborationRoster.logic";
 
 const TENANT_ID = TenantId.make("tenant-roster");
 const WORKSPACE_ID = WorkspaceId.make("workspace-roster");
@@ -95,5 +95,25 @@ describe("applyPresenceToRoster", () => {
 
     expect(outcome.isKnownMember).toBe(false);
     expect(outcome.members).toEqual([]);
+  });
+});
+
+describe("memberColorForUserId", () => {
+  /**
+   * These two values are the contract with the server's `defaultMemberColor`,
+   * which has the same test on the same ids. If either side is changed the pair
+   * stops agreeing and one of the two tests fails — which is the point, because
+   * a colleague who leaves the workspace would otherwise silently change
+   * colour in every message they ever wrote.
+   */
+  it("agrees with the server's default member colour", () => {
+    expect(memberColorForUserId("user-ada")).toBe("hsl(276 70% 55%)");
+    expect(memberColorForUserId("local:6d0229b2-9974-43a2-878a-4c9a2a1de273")).toBe(
+      "hsl(251 70% 55%)",
+    );
+  });
+
+  it("gives the same person the same colour every time", () => {
+    expect(memberColorForUserId("user-ada")).toBe(memberColorForUserId("user-ada"));
   });
 });

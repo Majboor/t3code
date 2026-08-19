@@ -68,7 +68,19 @@ type BootstrapExchangeResult = {
 
 const LOOPBACK_OWNER_SUBJECT = "loopback-local-owner";
 const UNSAFE_NO_AUTH_OWNER_SUBJECT = "unsafe-no-auth-owner";
+const DESKTOP_BOOTSTRAP_SUBJECT = "desktop-bootstrap";
 const LOCAL_USER_SUBJECT_PREFIX = "local-user:";
+
+/**
+ * The subjects that mean "whoever is at this machine", as opposed to somebody
+ * who signed up. They own the install, so they get a personal tenant the same
+ * way a signed-up account does.
+ */
+const MACHINE_OWNER_SUBJECTS: ReadonlySet<string> = new Set([
+  DESKTOP_BOOTSTRAP_SUBJECT,
+  LOOPBACK_OWNER_SUBJECT,
+  UNSAFE_NO_AUTH_OWNER_SUBJECT,
+]);
 
 const AVATAR_DATA_URL_PATTERN = /^data:([\w.+-]+\/[\w.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/;
 
@@ -124,6 +136,30 @@ export const makeServerAuth = Effect.gen(function* () {
       return UserId.make(subject.slice(LOCAL_USER_SUBJECT_PREFIX.length));
     }
     return undefined;
+  };
+
+  /**
+   * The user id a session acts as, including the ones that never signed up.
+   *
+   * A machine's own owner — the desktop app letting its window in, the CLI on
+   * loopback, a server started with authentication off — has no email and so no
+   * local account, and until now had no user id and no tenant either. Everything
+   * scoped to a workspace was therefore dead for them: publishing a pack, an
+   * invite, anything reading `organizations.list()`. That is not a policy about
+   * single-user installs, it is an omission — the desktop app has exactly one
+   * person in it and that person owns the machine.
+   *
+   * The id is the one those sessions already appear under everywhere else
+   * (`toAuthUserProfile` falls back to `auth:<subject>`), so giving them a
+   * tenant re-uses the identity their existing threads and provider logins are
+   * already filed under rather than minting a second one beside it.
+   */
+  const sessionUserIdFromSubject = (subject: string): UserId | undefined => {
+    const localUserId = localUserIdFromSubject(subject);
+    if (localUserId) {
+      return localUserId;
+    }
+    return MACHINE_OWNER_SUBJECTS.has(subject) ? UserId.make(`auth:${subject}`) : undefined;
   };
 
   const uniqueTenantRoles = (
@@ -229,7 +265,7 @@ export const makeServerAuth = Effect.gen(function* () {
     readonly expiresAt?: DateTime.DateTime;
   }): Effect.Effect<TenantSessionContext | undefined, AuthError> =>
     Effect.gen(function* () {
-      const userId = localUserIdFromSubject(input.subject);
+      const userId = sessionUserIdFromSubject(input.subject);
       if (!userId) {
         return undefined;
       }
@@ -254,9 +290,18 @@ export const makeServerAuth = Effect.gen(function* () {
           Effect.map((entry) => (Option.isSome(entry) ? entry.value : undefined)),
           Effect.mapError(tenancyLoadError),
         );
+        // A machine owner has no local account to be named after, but may well
+        // have named themselves in Settings, and the workspace is going to
+        // carry that name from here on.
+        const profile = account
+          ? undefined
+          : yield* userProfiles.getBySubject({ subject: input.subject }).pipe(
+              Effect.map((entry) => (Option.isSome(entry) ? entry.value : undefined)),
+              Effect.mapError(tenancyLoadError),
+            );
         const provisioned = yield* provisionPersonalTenant({
           userId,
-          displayName: account?.displayName ?? "Personal",
+          displayName: account?.displayName ?? profile?.displayName ?? "Personal",
         });
         activeMemberships = [provisioned];
       }

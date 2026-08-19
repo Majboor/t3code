@@ -49,6 +49,7 @@
     "test:pack-ecosystem": "node scripts/pack-ecosystem-e2e.mjs",
     "test:analytics-agent": "node scripts/analytics-agent-e2e.mjs",
     "test:tui-deploy": "node scripts/tui-deploy-e2e.mjs",
+    "test:app-smoke": "node scripts/app-smoke.mjs",
     "fmt": "bun --bun oxfmt",
     "fmt:check": "bun --bun oxfmt --check",
     "build:contracts": "turbo run build --filter=@t3tools/contracts",

@@ -400,6 +400,12 @@ function defaultSettings(input: {
  * A stable colour per person, derived from the id so every client agrees
  * without the server handing out a palette. Hues are spread far enough apart
  * that neighbouring members stay tellable apart.
+ *
+ * The web app keeps its own copy of this — `memberColorForUserId` in
+ * apps/web/src/components/collaboration/collaborationRoster.logic.ts — so that
+ * a transcript can still colour a message whose author the roster no longer
+ * lists. A test on each side pins the same two values; change one and the
+ * other fails.
  */
 export function defaultMemberColor(userId: string): string {
   let hash = 0;

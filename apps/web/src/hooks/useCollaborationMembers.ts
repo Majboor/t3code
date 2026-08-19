@@ -13,6 +13,16 @@ export interface CollaborationMembers {
 const NO_MEMBERS: ReadonlyMap<string, CollaborationMember> = new Map();
 
 /**
+ * How long to wait before asking for the roster again, doubling each time.
+ *
+ * Short at first because the usual reason for a miss is a socket that is a
+ * moment from being registered; capped so a genuinely absent environment costs
+ * a request a minute rather than a request a frame.
+ */
+const ROSTER_RETRY_BASE_MS = 500;
+const ROSTER_RETRY_MAX_ATTEMPT = 7;
+
+/**
  * The roster, indexed for looking up the author of a message.
  *
  * The transcript needs the same colour and initials the roster shows, or the
@@ -35,57 +45,109 @@ export function useCollaborationMembers(input: {
     [tenantId, workspaceId],
   );
 
-  const refresh = useCallback(() => {
+  const retryTimerRef = useRef<number | null>(null);
+  const retryAttemptRef = useRef(0);
+
+  const clearRetry = useCallback(() => {
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
+  const refresh = useCallback(
+    (onUnavailable?: () => void) => {
+      if (!environmentId || !scope) {
+        return;
+      }
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        // The socket for this environment is not registered yet, or is being
+        // rebound. Bailing out silently is what used to strand the roster: the
+        // effect never runs again on its own, so the transcript spent the rest
+        // of its life with nobody to name.
+        onUnavailable?.();
+        return;
+      }
+
+      // A slow earlier load must not overwrite the results of a later one.
+      requestSequenceRef.current += 1;
+      const sequence = requestSequenceRef.current;
+
+      api.collaboration
+        .listMembers(scope)
+        .then((result) => {
+          if (sequence !== requestSequenceRef.current) {
+            return;
+          }
+          // Answered, so the next hiccup starts backing off from the top again
+          // rather than inheriting a wait from an outage long since over.
+          retryAttemptRef.current = 0;
+          setMembers(result.members);
+          setViewerUserId(result.viewerUserId);
+        })
+        .catch(() => onUnavailable?.());
+    },
+    [environmentId, scope],
+  );
+
+  useEffect(() => {
     if (!environmentId || !scope) {
       return;
     }
-    const api = readEnvironmentApi(environmentId);
-    if (!api) {
-      return;
+
+    const subscribedEnvironmentId = environmentId;
+    const subscribedScope = scope;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+
+    // Keep asking until the environment answers. Anything that leaves the roster
+    // empty leaves every message in the thread unattributed, which is a worse
+    // failure than a handful of retries.
+    function attempt() {
+      if (disposed) {
+        return;
+      }
+      retryTimerRef.current = null;
+      refresh(scheduleRetry);
+      if (!unsubscribe) {
+        const api = readEnvironmentApi(subscribedEnvironmentId);
+        unsubscribe = api?.collaboration.subscribe(
+          subscribedScope,
+          (event) => {
+            if (
+              event.type === "member-updated" ||
+              event.type === "member-removed" ||
+              event.type === "presence-upserted"
+            ) {
+              refresh();
+            }
+          },
+          { onResubscribe: () => refresh() },
+        );
+      }
     }
 
-    // A slow earlier load must not overwrite the results of a later one.
-    requestSequenceRef.current += 1;
-    const sequence = requestSequenceRef.current;
-
-    api.collaboration
-      .listMembers(scope)
-      .then((result) => {
-        if (sequence !== requestSequenceRef.current) {
-          return;
-        }
-        setMembers(result.members);
-        setViewerUserId(result.viewerUserId);
-      })
-      .catch(() => undefined);
-  }, [environmentId, scope]);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    if (!environmentId || !scope) {
-      return;
+    function scheduleRetry() {
+      if (disposed || retryTimerRef.current !== null) {
+        return;
+      }
+      retryAttemptRef.current = Math.min(retryAttemptRef.current + 1, ROSTER_RETRY_MAX_ATTEMPT);
+      retryTimerRef.current = window.setTimeout(
+        attempt,
+        ROSTER_RETRY_BASE_MS * 2 ** (retryAttemptRef.current - 1),
+      );
     }
-    const api = readEnvironmentApi(environmentId);
-    if (!api) {
-      return;
-    }
-    return api.collaboration.subscribe(
-      scope,
-      (event) => {
-        if (
-          event.type === "member-updated" ||
-          event.type === "member-removed" ||
-          event.type === "presence-upserted"
-        ) {
-          refresh();
-        }
-      },
-      { onResubscribe: refresh },
-    );
-  }, [environmentId, refresh, scope]);
+
+    retryAttemptRef.current = 0;
+    attempt();
+
+    return () => {
+      disposed = true;
+      clearRetry();
+      unsubscribe?.();
+    };
+  }, [clearRetry, environmentId, refresh, scope]);
 
   const byUserId = useMemo(() => {
     if (members.length === 0) {

@@ -26,6 +26,37 @@ export const MEMBER_COLORS = [
  */
 export const ROSTER_REFRESH_DEBOUNCE_MS = 1_500;
 
+/**
+ * The colour a person is drawn with when the roster cannot say.
+ *
+ * This is a deliberate copy of `defaultMemberColor` in the server's
+ * CollaborationService: the two must agree character for character, because
+ * this is what keeps a colleague who has left the workspace the same colour
+ * their messages had while they were in it. Their transcript does not change
+ * colour the moment their membership does. A test on each side pins the same
+ * pair of values so the copy cannot drift unnoticed.
+ */
+export function memberColorForUserId(userId: string): string {
+  let hash = 0;
+  for (let index = 0; index < userId.length; index += 1) {
+    hash = (hash * 31 + userId.charCodeAt(index)) % 360;
+  }
+  return `hsl(${hash} 70% 55%)`;
+}
+
+/**
+ * What to call somebody the roster has no entry for.
+ *
+ * Saying "someone else" is not a shrug — it is the honest answer, and it is a
+ * better one than drawing nothing at all. A message with no label reads as the
+ * reader's own, so leaving an unrecognised author blank does not merely omit a
+ * name, it silently misattributes the message.
+ */
+export const UNKNOWN_MEMBER_NAME = "Someone else";
+
+/** Matches the server's `toAvatarInitials` when it has nothing to work from. */
+export const UNKNOWN_MEMBER_INITIALS = "?";
+
 export interface RosterPresenceOutcome {
   readonly members: readonly CollaborationMember[];
   /**

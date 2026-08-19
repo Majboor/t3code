@@ -1,29 +1,110 @@
 import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 import { type CollaborationMembers } from "../../hooks/useCollaborationMembers";
-import { type CollaborationMember, type MessageId } from "@t3tools/contracts";
+import {
+  memberColorForUserId,
+  UNKNOWN_MEMBER_INITIALS,
+  UNKNOWN_MEMBER_NAME,
+} from "../collaboration/collaborationRoster.logic";
+import { type MessageId } from "@t3tools/contracts";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 
 /**
- * The collaborator to label a message with, or null to leave it as it was.
+ * How to draw the person a message came from.
  *
- * A label is only worth drawing for somebody else: the reader's own messages
- * are already unmistakable by position, and naming them adds noise to every
- * single-person thread. Anything the server did not attribute — the assistant,
- * a message from before authors were recorded, one this browser has added
- * optimistically — stays unlabelled rather than being guessed at, and an author
- * who has since left the workspace has no roster entry to draw.
+ * Always complete: a name, initials and a colour, whether or not the roster
+ * this browser holds happens to know who the author is.
+ */
+export interface MessageAuthorLabel {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly avatarInitials: string;
+  readonly color: string;
+  /** The reader themself. Their own name, drawn the same way everyone else's is. */
+  readonly isViewer: boolean;
+  /** False when the roster had no entry and this label was derived from the id. */
+  readonly isKnown: boolean;
+}
+
+/**
+ * The label to draw on a message, or null when there is honestly nothing to say.
+ *
+ * Two rules, and the second one is the whole point:
+ *
+ * A message the server did not attribute — the assistant, one written before
+ * authors were recorded, one this browser has only just added optimistically —
+ * has no author to name, so it stays bare rather than being guessed at.
+ *
+ * A message that *does* name an author is always labelled, even when the roster
+ * this browser holds has never heard of them. It used to fall through to null
+ * there, which looks like a missing decoration but is worse than that: an
+ * unlabelled message reads as the reader's own, so a colleague who had been
+ * removed from the workspace — or whose roster entry simply had not arrived yet
+ * — had every message they ever wrote quietly re-attributed to whoever was
+ * reading. "Someone else", in the colour their id has always hashed to, is both
+ * honest and stable.
+ *
+ * Two things are still worth suppressing. A solo thread: with nobody else in
+ * the workspace, naming yourself on every line is noise and nothing more, so
+ * the reader's own messages are labelled only once somebody else is in the
+ * roster. And a roster that has not answered yet: without it this browser does
+ * not even know its own user id, so every message — including the reader's own
+ * — would come out as a stranger's. Silence is the honest answer there, and it
+ * is why `useCollaborationMembers` retries rather than giving up on a roster it
+ * could not fetch first time.
  */
 export function resolveMessageAuthor(
   message: Pick<ChatMessage, "authorUserId">,
   members: CollaborationMembers,
-): CollaborationMember | null {
+): MessageAuthorLabel | null {
   const authorUserId = message.authorUserId;
-  if (!authorUserId || authorUserId === members.viewerUserId) {
+  if (!authorUserId) {
     return null;
   }
-  return members.byUserId.get(authorUserId) ?? null;
+
+  // No roster yet. Not even the reader's own id is known, so every message
+  // would come out as a stranger's — say nothing until there is something true
+  // to say.
+  if (members.viewerUserId === null) {
+    return null;
+  }
+
+  const isViewer = authorUserId === members.viewerUserId;
+  if (isViewer && !hasOtherMembers(members)) {
+    return null;
+  }
+
+  const member = members.byUserId.get(authorUserId);
+  if (member) {
+    return {
+      userId: member.userId,
+      displayName: member.displayName,
+      avatarInitials: member.avatarInitials,
+      color: member.color,
+      isViewer,
+      isKnown: true,
+    };
+  }
+
+  return {
+    userId: authorUserId,
+    displayName: UNKNOWN_MEMBER_NAME,
+    avatarInitials: UNKNOWN_MEMBER_INITIALS,
+    color: memberColorForUserId(authorUserId),
+    isViewer,
+    isKnown: false,
+  };
+}
+
+/** Whether this workspace holds anybody other than the person reading. */
+function hasOtherMembers(members: CollaborationMembers): boolean {
+  for (const userId of members.byUserId.keys()) {
+    if (userId !== members.viewerUserId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export interface TimelineDurationMessage {

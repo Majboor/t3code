@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@t3tools/client-runtime";
-import { EnvironmentId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { EnvironmentId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type EnvironmentState, useStore } from "../store";
 import { type Thread } from "../types";
@@ -9,6 +9,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveLockedProvider,
   hasServerAcknowledgedLocalDispatch,
   reconcileMountedTerminalThreadIds,
   resolveSendEnvMode,
@@ -352,6 +353,90 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   setStoreThreads([]);
+});
+
+describe("deriveLockedProvider", () => {
+  const message = (role: "user" | "assistant", id: string) => ({
+    id: MessageId.make(id),
+    role,
+    text: "hello",
+    createdAt: "2026-03-29T00:00:01.000Z",
+    streaming: false,
+  });
+
+  it("leaves the provider switchable on a thread nothing has run in", () => {
+    expect(
+      deriveLockedProvider({
+        thread: makeThread(),
+        selectedProvider: "codex",
+        threadProvider: "codex",
+      }),
+    ).toBeNull();
+  });
+
+  // The first message of a fresh install is refused when no provider account is
+  // connected: it leaves a user message and nothing else. Locking there strands
+  // the thread on the provider that just said no.
+  it("leaves the provider switchable when a message was never answered", () => {
+    expect(
+      deriveLockedProvider({
+        thread: { ...makeThread(), messages: [message("user", "message-1")] },
+        selectedProvider: "codex",
+        threadProvider: "codex",
+      }),
+    ).toBeNull();
+  });
+
+  it("locks to the session's provider once one is bound", () => {
+    expect(
+      deriveLockedProvider({
+        thread: {
+          ...makeThread(),
+          messages: [message("user", "message-1")],
+          session: {
+            provider: "claudeAgent",
+            status: "ready",
+            createdAt: "2026-03-29T00:00:01.000Z",
+            updatedAt: "2026-03-29T00:00:02.000Z",
+            orchestrationStatus: "idle",
+          },
+        },
+        selectedProvider: "codex",
+        threadProvider: "codex",
+      }),
+    ).toBe("claudeAgent");
+  });
+
+  it("locks once a turn has run, even after its session went away", () => {
+    expect(
+      deriveLockedProvider({
+        thread: makeThread({
+          latestTurn: {
+            turnId: TurnId.make("turn-1"),
+            state: "completed",
+            requestedAt: "2026-03-29T00:00:01.000Z",
+            startedAt: "2026-03-29T00:00:01.000Z",
+            completedAt: "2026-03-29T00:00:09.000Z",
+          },
+        }),
+        selectedProvider: "codex",
+        threadProvider: "claudeAgent",
+      }),
+    ).toBe("claudeAgent");
+  });
+
+  it("locks once the agent has replied", () => {
+    expect(
+      deriveLockedProvider({
+        thread: {
+          ...makeThread(),
+          messages: [message("user", "message-1"), message("assistant", "message-2")],
+        },
+        selectedProvider: "codex",
+        threadProvider: "codex",
+      }),
+    ).toBe("codex");
+  });
 });
 
 describe("waitForStartedServerThread", () => {

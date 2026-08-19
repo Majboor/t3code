@@ -322,6 +322,7 @@ function TimelineRowContent({ row }: { row: TimelineRow }) {
                     data-testid="message-author"
                     data-author-user-id={author.userId}
                     data-author-name={author.displayName}
+                    data-author-known={author.isKnown ? "true" : "false"}
                   >
                     <CollaborationAvatar member={author} size="xs" />
                     <span className="truncate text-[11px] font-medium text-muted-foreground">

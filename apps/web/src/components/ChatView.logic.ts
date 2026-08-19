@@ -226,12 +226,36 @@ export function threadHasStarted(thread: Thread | null | undefined): boolean {
   );
 }
 
+/**
+ * Whether a provider has actually run in this thread.
+ *
+ * Deliberately narrower than `threadHasStarted`, which counts a user message as
+ * a start because a message is enough to say the thread is no longer a blank
+ * draft. Committing to a provider is a stronger claim: it means the transcript
+ * belongs to one agent's session and cannot be handed to another mid-way.
+ *
+ * A message that was never answered makes no such claim. A turn refused before
+ * it began — no account connected, the usual first run of a fresh install —
+ * leaves a user message, no session and no turn, and the thread is still
+ * exactly as switchable as it was a second earlier.
+ */
+export function threadHasCommittedToProvider(thread: Thread | null | undefined): boolean {
+  if (!thread) {
+    return false;
+  }
+  return (
+    thread.session !== null ||
+    thread.latestTurn !== null ||
+    thread.messages.some((message) => message.role !== "user")
+  );
+}
+
 export function deriveLockedProvider(input: {
   thread: Thread | null | undefined;
   selectedProvider: ProviderKind | null;
   threadProvider: ProviderKind | null;
 }): ProviderKind | null {
-  if (!threadHasStarted(input.thread)) {
+  if (!threadHasCommittedToProvider(input.thread)) {
     return null;
   }
   return input.thread?.session?.provider ?? input.threadProvider ?? input.selectedProvider ?? null;

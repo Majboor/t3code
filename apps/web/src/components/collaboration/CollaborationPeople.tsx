@@ -30,7 +30,12 @@ export function CollaborationAvatar({
   size = "sm",
   showStatus = false,
 }: {
-  member: Pick<CollaborationMember, "displayName" | "avatarInitials" | "color" | "status">;
+  // Status is only read when `showStatus` asks for it, and the transcript draws
+  // people the roster may never have listed — so it is optional here rather
+  // than something every caller has to invent an answer for.
+  member: Pick<CollaborationMember, "displayName" | "avatarInitials" | "color"> & {
+    status?: CollaborationMember["status"] | undefined;
+  };
   size?: "xs" | "sm" | "md";
   showStatus?: boolean;
 }) {
