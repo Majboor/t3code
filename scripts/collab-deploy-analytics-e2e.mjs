@@ -36,7 +36,7 @@
 // Needs a configured provider, since every deploy here is a real agent turn.
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -130,11 +130,15 @@ function writeFile(dir, relativePath, contents) {
 function resolveStateDatabase() {
   const explicit = process.env["T3_STATE_DB"];
   if (explicit) return existsSync(explicit) ? explicit : null;
-  for (const home of ["dev", "userdata"]) {
-    const candidate = path.join(BASE_DIR, home, "state.sqlite");
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
+  // Both can exist — an earlier run's CLI leaves a `dev/` database behind — so
+  // existence is not the test. The server writes continuously, so the freshest
+  // file is the one under test; picking the other reads a stale database where
+  // the project of this run simply is not there.
+  const candidates = ["dev", "userdata"]
+    .map((home) => path.join(BASE_DIR, home, "state.sqlite"))
+    .filter((candidate) => existsSync(candidate));
+  if (candidates.length === 0) return null;
+  return candidates.sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs)[0];
 }
 
 function projectIdFor(dir) {
