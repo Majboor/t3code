@@ -5,6 +5,7 @@
 //   bun run test:app-smoke
 //   node scripts/app-smoke.mjs --keep            # keep the sandbox home
 //   node scripts/app-smoke.mjs --only chat       # one phase
+//   node scripts/app-smoke.mjs --no-provider     # nothing logged in anywhere
 //
 // The point is the listeners, not the clicks. "The app crashes" is not a bug
 // report you can act on; a `pageerror` with a stack is. So every window this
@@ -37,6 +38,7 @@ const APP_PATH =
   "/Applications/LogicPacks (Alpha).app/Contents/MacOS/LogicPacks (Alpha)";
 const ARGS = process.argv.slice(2);
 const KEEP = ARGS.includes("--keep");
+const NO_PROVIDER = ARGS.includes("--no-provider");
 const ONLY = readFlag("--only");
 const SANDBOX =
   readFlag("--home") ??
@@ -79,10 +81,17 @@ const record = (kind, text) => {
   if (kind !== "console.log") console.log(`  [35m${kind}[0m  ${entry.text.slice(0, 300)}`);
 };
 
+/** The agent CLIs' own credentials, which `--no-provider` withholds. */
+const PROVIDER_HOME_ENTRIES = [".claude", ".claude.json", ".codex"];
+
 /**
  * The home a run is allowed to write to. Only the entries a packaged app needs
  * to find the agent CLIs are linked through; everything the app itself stores
  * lands inside the sandbox and is thrown away with it.
+ *
+ * `--no-provider` leaves the CLI credentials out, which is the state a person
+ * who has never run `codex login` installs into — and the state in which every
+ * refusal path this run cares about is reachable.
  */
 function buildSandboxHome() {
   if (!KEEP) rmSync(SANDBOX, { recursive: true, force: true });
@@ -96,15 +105,13 @@ function buildSandboxHome() {
     ".cargo",
     ".pyenv",
     "bin",
-    ".claude",
-    ".claude.json",
-    ".codex",
     ".config",
     ".npmrc",
     ".zshrc",
     ".zprofile",
     ".zshenv",
     ".gitconfig",
+    ...(NO_PROVIDER ? [] : PROVIDER_HOME_ENTRIES),
   ]) {
     const source = path.join(real, entry);
     const target = path.join(SANDBOX, entry);
@@ -337,7 +344,7 @@ async function chatPhase({ page }) {
   check("a composer is on screen", (await composer.count()) > 0, await bodyText(page));
   if ((await composer.count()) === 0) return;
   await composer.click().catch(() => undefined);
-  await page.keyboard.type("Say hello and stop.");
+  await page.keyboard.type(SENT);
   await sleep(1_000);
   await shoot(page, "05-chat-typed");
   const typed = await bodyText(page);
@@ -349,14 +356,20 @@ async function chatPhase({ page }) {
   check("sending does not blank the app", after.trim().length > 0, after);
 
   // A turn that cannot run is fine; a turn that cannot run *silently* is the
-  // bug. Either an answer or a reason has to be on screen.
-  const answered = /Working|Thinking|Ran |assistant/i.test(after);
+  // bug. Either an answer or a reason has to be on screen — the sent message
+  // sitting alone is neither, and that is exactly what a fresh install showed
+  // for twenty seconds and counting.
+  const transcript = (text) => text.split(SENT).join("");
+  const answered = transcript(after).length > transcript(typed).length + 8;
   const refused = /connect|not connected|Settings → Connections|failed|error|unavailable/i.test(
     after,
   );
   check("a send either answers or explains itself", answered || refused, after);
   note(`after send: ${after.replaceAll("\n", " | ").slice(0, 800)}`);
 }
+
+/** What the chat phase sends, subtracted from the page to see what came back. */
+const SENT = "Say hello and stop.";
 
 /** The composer's model chip, which is the only way into the picker. */
 const PICKER = '[data-chat-provider-model-picker="true"]';

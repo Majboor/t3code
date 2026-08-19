@@ -138,8 +138,16 @@ const WORKSPACE_ACCEPTED_DIFF_STORAGE_PREFIX = "t3code:workspace-accepted-diffs:
 const WORKSPACE_DIFF_REVIEW_STORAGE_PREFIX = "t3code:workspace-diff-review:v1";
 
 /**
- * A stable colour per collaborator, derived from the id so everyone's browser
- * agrees without the server having to hand out a palette.
+ * The fallback colour for a collaborator, derived from the id so everyone's
+ * browser agrees without the server having to hand out a palette.
+ *
+ * A fallback only. It matches what the server assigns by default — the same
+ * hash lives in `defaultMemberColor` — but an approver may override any
+ * member's colour from the roster, and that override exists only on the
+ * server. Deriving the colour here regardless is why a recoloured person kept
+ * their old colour against every file they touched: the roster changed and the
+ * tree did not, so one person wore two colours. Prefer `memberColorByUserId`
+ * and come here only for somebody the roster does not list.
  */
 function authorColor(userId: string): string {
   let hash = 0;
@@ -312,6 +320,8 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   status?: GitWorkingTreeFileStatus | null;
   /** Who last wrote this file, when someone else did. */
   author?: { userId: string; displayName: string } | null;
+  /** The roster's colour for that person, so a recolour reaches this mark too. */
+  authorColorValue?: string | null;
   onToggleDirectory: (directoryPath: string) => void;
   onOpenFile: (relativePath: string) => void;
   /** Absent when this workspace has no tenancy to hand a public link out of. */
@@ -398,7 +408,9 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
         {props.author ? (
           <span
             className="ml-1 size-1.5 shrink-0 rounded-full"
-            style={{ backgroundColor: authorColor(props.author.userId) }}
+            style={{
+              backgroundColor: props.authorColorValue || authorColor(props.author.userId),
+            }}
             title={`Last changed by ${props.author.displayName}`}
             data-testid="workspace-entry-author"
             data-author={props.author.displayName}
@@ -554,6 +566,7 @@ export default function WorkspacePanel({
     collaborationGovernance.preferences?.showOthersFiles === false
       ? EMPTY_WORKSPACE_AUTHORS
       : collaborationGovernance.touchesByPath;
+  const workspaceAuthorColors = collaborationGovernance.memberColorByUserId;
   const workspaceLabel = activeWorkspaceRoot ? basenameOfPath(activeWorkspaceRoot) : "Workspace";
   const workspaceScopeLabel = activeThread?.worktreePath ? "Thread workspace" : "Project workspace";
   const activeRunningTurnId =
@@ -2707,6 +2720,12 @@ export default function WorkspacePanel({
             diffStat={visibleDiffState?.stat ?? null}
             status={status}
             author={entry.kind === "file" ? (workspaceAuthorByPath.get(entryPath) ?? null) : null}
+            authorColorValue={
+              entry.kind === "file"
+                ? (workspaceAuthorColors.get(workspaceAuthorByPath.get(entryPath)?.userId ?? "") ??
+                  null)
+                : null
+            }
             onToggleDirectory={toggleDirectory}
             onOpenFile={openFile}
             onCopyShareLink={
@@ -2743,6 +2762,7 @@ export default function WorkspacePanel({
       toggleDirectory,
       workingTreeStatusByPath,
       workspaceAuthorByPath,
+      workspaceAuthorColors,
     ],
   );
 

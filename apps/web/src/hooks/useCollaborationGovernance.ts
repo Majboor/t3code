@@ -37,6 +37,14 @@ export interface CollaborationGovernance {
   /** Latest author per workspace-relative path. */
   readonly touchesByPath: ReadonlyMap<string, CollaborationFileTouch>;
   /**
+   * The colour the workspace has agreed on for each member, which is the
+   * roster's colour and so the only one an approver can change. Anywhere a
+   * person is drawn outside the roster has to read it from here — deriving a
+   * colour from the id instead is right until somebody is recoloured, and
+   * silently wrong forever after.
+   */
+  readonly memberColorByUserId: ReadonlyMap<string, string>;
+  /**
    * Every touch, unreduced. `touchesByPath` keeps only the latest per path,
    * which is exactly what throws away the fact that two people touched one.
    */
@@ -71,8 +79,11 @@ interface CollaborationGovernanceSnapshot {
   readonly viewerDisplayName: string;
   readonly viewerUserId: string | null;
   readonly touches: readonly CollaborationFileTouch[];
+  readonly memberColorByUserId: ReadonlyMap<string, string>;
   readonly loading: boolean;
 }
+
+const NO_MEMBER_COLORS: ReadonlyMap<string, string> = new Map();
 
 const EMPTY_SNAPSHOT: CollaborationGovernanceSnapshot = {
   settings: null,
@@ -85,6 +96,7 @@ const EMPTY_SNAPSHOT: CollaborationGovernanceSnapshot = {
   viewerDisplayName: "collaborator",
   viewerUserId: null,
   touches: NO_TOUCHES,
+  memberColorByUserId: NO_MEMBER_COLORS,
   loading: false,
 };
 
@@ -170,6 +182,9 @@ function refreshSharedGovernance(entry: SharedCollaborationGovernance): void {
           viewerDisplayName: claimsResult.viewerDisplayName,
           touches: touchesResult.touches,
           viewerUserId: membersResult.viewerUserId,
+          memberColorByUserId: new Map(
+            membersResult.members.map((member) => [member.userId, member.color]),
+          ),
         });
       },
     )
@@ -473,6 +488,7 @@ export function useCollaborationGovernance(input: {
     viewerUserId: snapshot.viewerUserId,
     claimBranch,
     touchesByPath,
+    memberColorByUserId: snapshot.memberColorByUserId,
     /** Unreduced, so contention between two people is still visible in it. */
     touches: snapshot.touches,
     loading: snapshot.loading,
