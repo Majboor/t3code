@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   ProjectId,
   ShareLink,
+  ShareLinkAudience,
   ShareLinkId,
   ShareLinkScope,
   TenantId,
@@ -22,6 +23,12 @@ export interface ShareLinksState {
   readonly refresh: () => void;
   readonly mint: (input: {
     readonly scope: ShareLinkScope;
+    /**
+     * Required, like the contract's own field. There is no default: a link
+     * created without anybody saying who it is for would be a public link
+     * nobody chose to make public.
+     */
+    readonly audience: ShareLinkAudience;
     readonly filePath?: string | null;
     readonly label?: string | null;
   }) => Promise<MintedShareLink | null>;
@@ -112,6 +119,7 @@ export function useShareLinks(input: {
         create: {
           ...tenancy,
           scope: draft.scope,
+          audience: draft.audience,
           projectId: target.projectId,
           filePath: target.filePath,
           label: draft.label?.trim() ? draft.label.trim() : null,

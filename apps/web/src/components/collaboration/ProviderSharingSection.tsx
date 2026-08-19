@@ -1,4 +1,4 @@
-import type { EnvironmentId, ProviderAuthKind, TenantId, WorkspaceId } from "@t3tools/contracts";
+import type { ProviderAuthKind } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { SettingsIcon } from "lucide-react";
 import { useState } from "react";
@@ -11,7 +11,6 @@ import {
   readViewerSharing,
   type ViewerProviderSharing,
 } from "./providerSharing.logic";
-import { ProviderUsageRequests } from "./ProviderUsageRequests";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
@@ -159,28 +158,23 @@ function ProviderRow({
  * The compact half of provider sharing: what this person contributes, to this
  * workspace, and how to stop. Anything that needs a roster or a permission
  * matrix lives in the dialog behind Manage — this popover is 22rem wide.
+ *
+ * The other end of the same exchange — asking somebody to lend you an account —
+ * used to hang off the bottom of this section. It is its own row in the
+ * collaboration overview now, because stacking the two made a section nobody
+ * could take in at a glance, and what you give and what you need are asked at
+ * different moments.
  */
 export function ProviderSharingSection({
   workspaceTitle,
   sharing,
   onManage,
-  environmentId = null,
-  tenantId = null,
-  workspaceId = null,
 }: {
   /** What people call this workspace; the switches are scoped to it. */
   workspaceTitle: string | null;
   sharing: ProviderSharing;
   /** Opens the admin dialog. Absent when there is nowhere to open it from. */
   onManage?: (() => void) | undefined;
-  /**
-   * Requests are read on their own call rather than folded into the sharing
-   * overview, so the usage half needs the scope again. Absent means the panel
-   * shows what is contributed and nothing about asking.
-   */
-  environmentId?: EnvironmentId | null;
-  tenantId?: TenantId | null;
-  workspaceId?: WorkspaceId | null;
 }) {
   const overview = sharing.overview;
   // Nothing has loaded, or this server does not answer: say nothing rather than
@@ -194,9 +188,9 @@ export function ProviderSharingSection({
   const anySharing = views.some((view) => view.isSharing);
 
   return (
-    <div className="border-t border-border pt-3" data-testid="provider-sharing-section">
+    <div data-testid="provider-sharing-section">
       <div className="mb-1 flex items-center justify-between gap-2">
-        <div className="text-xs font-medium text-muted-foreground">Provider accounts</div>
+        <div className="text-xs font-medium text-muted-foreground">What you contribute</div>
         {overview.canManage && onManage ? (
           <Button
             size="xs"
@@ -234,16 +228,6 @@ export function ProviderSharingSection({
           keeps it until it finishes.
         </p>
       ) : null}
-
-      <ProviderUsageRequests
-        environmentId={environmentId}
-        tenantId={tenantId}
-        workspaceId={workspaceId}
-        workspaceLabel={workspaceLabel}
-        viewerUserId={overview.viewerUserId}
-        viewerAccounts={overview.viewerAccounts}
-        workspaceAccounts={overview.workspaceAccounts}
-      />
     </div>
   );
 }

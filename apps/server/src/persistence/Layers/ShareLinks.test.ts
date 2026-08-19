@@ -22,6 +22,8 @@ const fileLink = {
   projectId: "project-atlas",
   filePath: "src/index.ts",
   createdByUserId: "user-ana",
+  audience: "public",
+  recipientEmails: [],
   label: "Handover",
   createdAt: "2026-08-16T09:00:00.000Z",
   expiresAt: null,
@@ -256,6 +258,66 @@ layer("ShareLinkRepository", (it) => {
         limit: 10,
       });
       assert.equal(views.length, 0);
+    }),
+  );
+
+  it.effect("stores a restricted link's recipients alongside it, and scopes the read", () =>
+    Effect.gen(function* () {
+      const repository = yield* ShareLinkRepository;
+      const scope = { tenantId: "tenant-audience", workspaceId: "workspace-audience" };
+
+      yield* repository.createLink({
+        ...fileLink,
+        ...scope,
+        linkId: "link-restricted",
+        token: "token-restricted",
+        scope: "workspace",
+        projectId: null,
+        filePath: null,
+        audience: "restricted",
+        recipientEmails: ["ana@example.test", "bo@example.test"],
+      });
+      yield* repository.createLink({
+        ...fileLink,
+        ...scope,
+        linkId: "link-open",
+        token: "token-open",
+        scope: "workspace",
+        projectId: null,
+        filePath: null,
+      });
+      // Another workspace's restricted link. Its recipients are the thing a
+      // leak here would disclose, so the workspace read must not reach them.
+      yield* repository.createLink({
+        ...fileLink,
+        tenantId: "tenant-audience",
+        workspaceId: "workspace-elsewhere",
+        linkId: "link-audience-elsewhere",
+        token: "token-elsewhere-audience",
+        scope: "workspace",
+        projectId: null,
+        filePath: null,
+        audience: "restricted",
+        recipientEmails: ["cass@example.test"],
+      });
+
+      const stored = yield* repository.getLinkByToken({ token: "token-restricted" });
+      assert.equal(Option.getOrUndefined(stored)?.audience, "restricted");
+      const open = yield* repository.getLinkByToken({ token: "token-open" });
+      assert.equal(Option.getOrUndefined(open)?.audience, "public");
+
+      const forLink = yield* repository.listRecipients({ linkId: "link-restricted" });
+      assert.deepStrictEqual(
+        forLink.map((recipient) => recipient.email),
+        ["ana@example.test", "bo@example.test"],
+      );
+      assert.equal((yield* repository.listRecipients({ linkId: "link-open" })).length, 0);
+
+      const forWorkspace = yield* repository.listRecipientsForWorkspace(scope);
+      assert.deepStrictEqual(
+        forWorkspace.map((recipient) => `${recipient.linkId}:${recipient.email}`),
+        ["link-restricted:ana@example.test", "link-restricted:bo@example.test"],
+      );
     }),
   );
 

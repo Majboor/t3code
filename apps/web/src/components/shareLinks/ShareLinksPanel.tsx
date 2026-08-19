@@ -2,11 +2,12 @@ import type {
   EnvironmentId,
   ProjectId,
   ShareLink,
+  ShareLinkAudience,
   ShareLinkScope,
   TenantId,
   WorkspaceId,
 } from "@t3tools/contracts";
-import { CopyIcon, LinkIcon, UsersIcon, XIcon } from "lucide-react";
+import { CopyIcon, GlobeIcon, LinkIcon, MailIcon, UsersIcon, XIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
@@ -15,6 +16,10 @@ import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
 import { useShareLinks } from "./useShareLinks";
 import {
+  checkShareLinkAudience,
+  describeShareLinkAudience,
+  describeShareLinkAudienceSummary,
+  emptyShareLinkAudienceDraft,
   describeShareLinkScope,
   describeShareLinkState,
   describeShareLinkViews,
@@ -22,6 +27,7 @@ import {
   readShareLinkState,
   selectShareLinksForPanel,
   shareLinkTitle,
+  type ShareLinkAudienceDraft,
 } from "./shareLinks.logic";
 
 /**
@@ -56,27 +62,109 @@ export function ShareLinksPanel({
   const shareLinks = useShareLinks({ environmentId, tenantId, workspaceId, projectId });
   const [labels, setLabels] = useState<Partial<Record<ShareLinkScope, string>>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  /**
+   * Who the workspace link being drafted is for. Starts `unchosen`, and there
+   * is no code path that turns that into `public` on the drafter's behalf: the
+   * button stays off until somebody has said which of the two acts this is.
+   */
+  const [audience, setAudience] = useState<ShareLinkAudienceDraft>(emptyShareLinkAudienceDraft);
   /** The one URL a clipboard refused, kept only until somebody has read it. */
   const [uncopied, setUncopied] = useState<string | null>(null);
   const nowIso = new Date().toISOString();
 
   const visible = selectShareLinksForPanel(shareLinks.links, projectId);
+  const audienceCheck = checkShareLinkAudience(audience);
 
-  const mint = (scope: ShareLinkScope) => {
+  const mint = (scope: ShareLinkScope, chosen: ShareLinkAudience) => {
     setBusyKey(scope);
     void shareLinks
-      .mint({ scope, label: labels[scope] ?? null })
+      .mint({ scope, audience: chosen, label: labels[scope] ?? null })
       .then((minted) => {
         if (!minted) {
           return;
         }
         setLabels((current) => ({ ...current, [scope]: "" }));
+        // The audience is cleared too, so the next link starts from "say who
+        // this is for" rather than inheriting the last answer.
+        setAudience(emptyShareLinkAudienceDraft);
         // Kept only when the clipboard refused it. The token is not in any
         // later reply, so this render is the last place the URL can be read.
         setUncopied(minted.copied ? null : minted.url);
       })
       .finally(() => setBusyKey(null));
   };
+
+  /**
+   * The audience question, asked before the link exists and never after.
+   *
+   * Two buttons rather than a checkbox, because they are two different acts and
+   * neither is the default. Choosing "anyone with the link" shows the warning
+   * about forwarding in the same breath — the moment it can still change
+   * somebody's mind.
+   */
+  const renderAudience = (): ReactNode => (
+    <div className="mt-1.5" data-testid="share-links-audience">
+      <div className="text-[10px] font-medium text-foreground">Who is this link for?</div>
+      <div className="mt-1 grid grid-cols-2 gap-1">
+        {(["public", "restricted"] as const).map((choice) => (
+          <Button
+            key={choice}
+            size="xs"
+            variant={audience.choice === choice ? "secondary" : "outline"}
+            aria-pressed={audience.choice === choice}
+            data-testid="share-links-audience-choice"
+            data-choice={choice}
+            onClick={() => setAudience({ ...audience, choice })}
+          >
+            {choice === "public" ? (
+              <GlobeIcon className="size-3" />
+            ) : (
+              <MailIcon className="size-3" />
+            )}
+            {choice === "public" ? "Anyone with the link" : "Specific people"}
+          </Button>
+        ))}
+      </div>
+
+      <p
+        className={cn(
+          "mt-1 text-[10px] leading-4",
+          audience.choice === "public" ? "text-destructive" : "text-muted-foreground",
+        )}
+        data-testid="share-links-audience-consequence"
+      >
+        {describeShareLinkAudience(audience.choice, workspaceLabel)}
+      </p>
+
+      {audience.choice === "restricted" ? (
+        <div className="mt-1.5">
+          <Input
+            size="sm"
+            value={audience.emailsText}
+            aria-label="Email addresses this link is for"
+            placeholder="ana@example.com, bo@example.com"
+            data-testid="share-links-audience-emails"
+            onChange={(event) =>
+              setAudience({ ...audience, emailsText: event.currentTarget.value })
+            }
+          />
+          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+            Separate addresses with commas. Each person signs in — or signs up — with the address
+            you name here, and no other account can use the link.
+          </p>
+        </div>
+      ) : null}
+
+      {!audienceCheck.ok ? (
+        <p
+          className="mt-1 text-[10px] leading-4 text-muted-foreground"
+          data-testid="share-links-audience-reason"
+        >
+          {audienceCheck.reason}
+        </p>
+      ) : null}
+    </div>
+  );
 
   const renderCreate = (scope: "project" | "workspace"): ReactNode => {
     const copy = describeShareLinkScope(scope, { projectLabel, workspaceLabel });
@@ -96,6 +184,10 @@ export function ShareLinksPanel({
           {scope === "workspace" ? "Invite a collaborator" : "Share the whole project"}
         </div>
         <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">{copy.consequence}</p>
+        {/* Only a workspace link can be addressed to people. A project link is
+            read by a browser with no account, so there would be nobody to
+            check — and the server refuses one that claims otherwise. */}
+        {scope === "workspace" ? renderAudience() : null}
         <div className="mt-1.5 flex items-center gap-1">
           <Input
             size="sm"
@@ -110,10 +202,21 @@ export function ShareLinksPanel({
             size="xs"
             variant="outline"
             className="shrink-0"
-            disabled={busyKey !== null || blocked}
+            disabled={busyKey !== null || blocked || (scope === "workspace" && !audienceCheck.ok)}
             data-testid="share-links-mint"
             data-scope={scope}
-            onClick={() => mint(scope)}
+            onClick={() => {
+              // A project link is public by definition and says so above; a
+              // workspace link cannot be minted until the picker produced an
+              // audience, which is what disables the button until it has.
+              if (scope === "project") {
+                mint(scope, { kind: "public" });
+                return;
+              }
+              if (audienceCheck.ok) {
+                mint(scope, audienceCheck.audience);
+              }
+            }}
           >
             {copy.action}
           </Button>
@@ -158,6 +261,20 @@ export function ShareLinksPanel({
         <div className="text-[10px] leading-4 text-muted-foreground">
           Made {formatShareLinkTime(link.createdAt)} · {describeShareLinkViews(link)}
         </div>
+        {/* Who it was for, which is a thing only a member ever sees: the
+            redemption path never returns an address. */}
+        {link.scope === "workspace" ? (
+          <div
+            className={cn(
+              "text-[10px] leading-4",
+              link.audience === "public" ? "text-destructive" : "text-muted-foreground",
+            )}
+            data-testid="share-links-row-audience"
+            data-audience={link.audience}
+          >
+            {describeShareLinkAudienceSummary(link)}
+          </div>
+        ) : null}
         <div className="text-[10px] leading-4 text-muted-foreground">
           {describeShareLinkState(link, nowIso)}
         </div>

@@ -99,12 +99,14 @@ function makeEnvironmentApi(input: {
   }));
   const recordSharedPrompt = vi.fn(async (request: { prompt: string }) => ({
     activity: {
+      id: "activity-shared-browser",
       tenantId: TENANT_ID,
       workspaceId: WORKSPACE_ID,
       threadId: THREAD_ID,
       userId: UserId.make("user-fresh-browser"),
       kind: "prompted" as const,
       summary: `${input.freshUserName} shared a prompt: ${request.prompt}`,
+      hiddenAt: null,
       createdAt: NOW_ISO,
     },
   }));
@@ -139,16 +141,19 @@ function makeEnvironmentApi(input: {
       listActivity: vi.fn(async () => ({
         activities: [
           {
+            id: "activity-joined-browser",
             tenantId: TENANT_ID,
             workspaceId: WORKSPACE_ID,
             threadId: THREAD_ID,
             userId: UserId.make("user-returning-browser"),
             kind: "joined" as const,
             summary: "Existing collaborator joined this shared workspace.",
+            hiddenAt: null,
             createdAt: NOW_ISO,
           },
         ],
       })),
+      setActivityVisibility: vi.fn(),
       // The roster is read directly rather than through a promise chain, so an
       // override without it takes the whole panel down.
       listMembers: vi.fn(async () => ({
@@ -206,6 +211,36 @@ function makeEnvironmentApi(input: {
   } as unknown as EnvironmentApi;
 }
 
+/**
+ * The bar links to Settings → Connections, and a router link outside a router
+ * throws, so it is mounted as a route rather than bare.
+ */
+async function renderBar() {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <CollaborationPresenceBar
+        environmentId={ENVIRONMENT_ID}
+        projectId={PROJECT_ID}
+        threadId={THREAD_ID}
+      />
+    ),
+  });
+  const router = createRouter({
+    routeTree: rootRoute,
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  return render(<RouterProvider router={router} />);
+}
+
+/**
+ * Rows are addressed by the section they open rather than by their label, so
+ * the test opens the row the panel would open rather than whichever one happens
+ * to read "People".
+ */
+function openRow(section: string) {
+  return page.getByTestId(`collaboration-row-${section}`);
+}
+
 describe("CollaborationPresenceBar browser flow", () => {
   beforeEach(async () => {
     await clearBrowserState();
@@ -223,22 +258,7 @@ describe("CollaborationPresenceBar browser flow", () => {
     const api = makeEnvironmentApi({ freshUserName });
     __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, api);
 
-    // The panel links to Settings → Connections, and a router link outside a
-    // router throws, so the bar is mounted as a route rather than bare.
-    const rootRoute = createRootRoute({
-      component: () => (
-        <CollaborationPresenceBar
-          environmentId={ENVIRONMENT_ID}
-          projectId={PROJECT_ID}
-          threadId={THREAD_ID}
-        />
-      ),
-    });
-    const router = createRouter({
-      routeTree: rootRoute,
-      history: createMemoryHistory({ initialEntries: ["/"] }),
-    });
-    const screen = await render(<RouterProvider router={router} />);
+    const screen = await renderBar();
 
     try {
       await expect
@@ -246,9 +266,23 @@ describe("CollaborationPresenceBar browser flow", () => {
         .toBeInTheDocument();
       await page.getByRole("button", { name: /open collaboration panel/i }).click();
 
-      await expect.element(page.getByText(freshUserName)).toBeInTheDocument();
+      // The overview is previews only: the roster and the activity feed live
+      // one click away rather than stacked on top of each other.
+      await expect.element(page.getByTestId("collaboration-overview")).toBeInTheDocument();
+      await expect.element(openRow("people")).toHaveTextContent("2 people here");
       await expect.element(page.getByTitle(`${freshUserName} · active`)).toHaveTextContent("FU");
+      expect(document.querySelectorAll('[data-testid="collaboration-working-pill"]')).toHaveLength(
+        0,
+      );
+
+      await openRow("people").click();
+      await expect.element(page.getByText(freshUserName)).toBeInTheDocument();
       await expect.element(page.getByText("Returning Browser User")).toBeInTheDocument();
+
+      await page.getByTestId("collaboration-panel-back").click();
+      await expect.element(page.getByTestId("collaboration-overview")).toBeInTheDocument();
+
+      await openRow("activity").click();
       await expect
         .element(page.getByText("Existing collaborator joined this shared workspace."))
         .toBeInTheDocument();
@@ -272,6 +306,34 @@ describe("CollaborationPresenceBar browser flow", () => {
         threadId: THREAD_ID,
         prompt,
       });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps the provider sections reachable, one at a time", async () => {
+    const api = makeEnvironmentApi({ freshUserName: "Fresh Browser User" });
+    __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, api);
+
+    const screen = await renderBar();
+
+    try {
+      await page.getByRole("button", { name: /open collaboration panel/i }).click();
+      await expect.element(page.getByTestId("collaboration-overview")).toBeInTheDocument();
+
+      // Contributing an account and asking for one are two rows now, and
+      // neither is on screen until it is asked for.
+      expect(document.querySelectorAll('[data-testid="provider-sharing-section"]')).toHaveLength(0);
+      expect(document.querySelectorAll('[data-testid="provider-usage-requests"]')).toHaveLength(0);
+
+      await openRow("sharing").click();
+      await expect.element(page.getByTestId("provider-sharing-section")).toBeInTheDocument();
+      expect(document.querySelectorAll('[data-testid="provider-usage-requests"]')).toHaveLength(0);
+
+      await page.getByTestId("collaboration-panel-back").click();
+      await openRow("requests").click();
+      await expect.element(page.getByTestId("provider-usage-requests")).toBeInTheDocument();
+      expect(document.querySelectorAll('[data-testid="provider-sharing-section"]')).toHaveLength(0);
     } finally {
       await screen.unmount();
     }

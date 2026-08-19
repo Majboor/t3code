@@ -3,9 +3,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildShareLinkUrl,
+  checkShareLinkAudience,
   checkShareLinkTarget,
+  describeShareLinkAudience,
+  describeShareLinkAudienceSummary,
+  describeShareLinkJoin,
   describeMintedShareLink,
   describeShareLinkFailure,
+  emptyShareLinkAudienceDraft,
+  parseShareLinkEmails,
   describeShareLinkScope,
   describeShareLinkState,
   describeShareLinkViews,
@@ -28,6 +34,8 @@ function makeLink(overrides: Partial<ShareLink> = {}): ShareLink {
     projectId: "project-1",
     filePath: "src/index.ts",
     createdByUserId: "user-1",
+    audience: "public",
+    allowedEmails: [],
     label: null,
     createdAt: "2026-08-17T09:00:00.000Z",
     expiresAt: null,
@@ -276,5 +284,124 @@ describe("describeMintedShareLink", () => {
 
     expect(notice.tone).toBe("error");
     expect(notice.description).toMatch(/only time/i);
+  });
+});
+
+describe("checkShareLinkAudience", () => {
+  it("refuses to guess when nobody has said who the link is for", () => {
+    const check = checkShareLinkAudience(emptyShareLinkAudienceDraft);
+
+    // Not a fallback to "public": that is how a link meant for three people
+    // ends up readable by a mailing list.
+    expect(check.ok).toBe(false);
+    expect(check.ok === false ? check.reason : "").toMatch(/who this link is for/i);
+  });
+
+  it("takes 'anyone with the link' only when it was chosen outright", () => {
+    const check = checkShareLinkAudience({ choice: "public", emailsText: "" });
+
+    expect(check).toEqual({ ok: true, audience: { kind: "public" } });
+  });
+
+  it("accepts a pasted list however it is punctuated, and normalises it", () => {
+    const check = checkShareLinkAudience({
+      choice: "restricted",
+      emailsText: " Ana@Example.com, bo@example.com\n ana@example.com;  cass@example.com,",
+    });
+
+    expect(check).toEqual({
+      ok: true,
+      audience: {
+        kind: "restricted",
+        emails: ["ana@example.com", "bo@example.com", "cass@example.com"],
+      },
+    });
+  });
+
+  it("names the address it could not read rather than refusing the whole paste silently", () => {
+    const check = checkShareLinkAudience({
+      choice: "restricted",
+      emailsText: "ana@example.com, not-an-address",
+    });
+
+    expect(check.ok).toBe(false);
+    expect(check.ok === false ? check.reason : "").toContain("not-an-address");
+  });
+
+  it("refuses 'specific people' with nobody named", () => {
+    expect(checkShareLinkAudience({ choice: "restricted", emailsText: "   " }).ok).toBe(false);
+  });
+});
+
+describe("parseShareLinkEmails", () => {
+  it("drops repeats and blank runs", () => {
+    expect(parseShareLinkEmails("a@b.com,,  a@b.com\n\nc@d.com ")).toEqual(["a@b.com", "c@d.com"]);
+  });
+});
+
+describe("describeShareLinkAudience", () => {
+  it("warns about forwarding when the link is for anyone", () => {
+    const copy = describeShareLinkAudience("public", "Platform");
+
+    expect(copy).toMatch(/forwarded/i);
+    expect(copy).toContain("Platform");
+  });
+
+  it("says an unknown recipient will be taken to sign up", () => {
+    expect(describeShareLinkAudience("restricted", "Platform")).toMatch(/sign up/i);
+  });
+
+  it("has nothing to promise until a choice is made", () => {
+    expect(describeShareLinkAudience("unchosen", "Platform")).toMatch(/choose who/i);
+  });
+});
+
+describe("describeShareLinkAudienceSummary", () => {
+  it("says so plainly when a link is open to anyone", () => {
+    expect(describeShareLinkAudienceSummary(makeLink({ scope: "workspace" }))).toBe(
+      "Anyone with the link",
+    );
+  });
+
+  it("names a short list and counts a long one", () => {
+    const two = makeLink({
+      scope: "workspace",
+      audience: "restricted",
+      allowedEmails: ["ana@example.com", "bo@example.com"],
+    });
+    expect(describeShareLinkAudienceSummary(two)).toBe("ana@example.com, bo@example.com");
+
+    const many = makeLink({
+      scope: "workspace",
+      audience: "restricted",
+      allowedEmails: ["ana@example.com", "bo@example.com", "cass@example.com", "dee@example.com"],
+    });
+    expect(describeShareLinkAudienceSummary(many)).toBe(
+      "ana@example.com, bo@example.com and 2 more",
+    );
+  });
+
+  it("does not claim a restricted link is open when the addresses were withheld", () => {
+    // `null` is what every unauthenticated read returns, and it means "not
+    // disclosed here" rather than "nobody".
+    const withheld = makeLink({ scope: "workspace", audience: "restricted", allowedEmails: null });
+
+    expect(describeShareLinkAudienceSummary(withheld)).toBe("Specific people");
+  });
+});
+
+describe("describeShareLinkJoin", () => {
+  it("tells a named recipient which account to use", () => {
+    const copy = describeShareLinkJoin("restricted", "Design review");
+
+    expect(copy.title).toContain("Design review");
+    expect(copy.detail).toMatch(/address it was sent to/i);
+  });
+
+  it("says an open link is open, and never mentions pairing", () => {
+    const copy = describeShareLinkJoin("public", null);
+
+    expect(copy.detail).toMatch(/anyone with this link/i);
+    expect(`${copy.title} ${copy.detail}`).not.toMatch(/pair|token/i);
   });
 });

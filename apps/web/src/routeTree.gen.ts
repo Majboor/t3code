@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as ShareRouteImport } from './routes/share'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as InviteRouteImport } from './routes/invite'
@@ -26,6 +27,11 @@ import { Route as ChatAnalyticsProjectIdRouteImport } from './routes/_chat.analy
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 import { Route as ChatProjectEnvironmentIdProjectIdRouteImport } from './routes/_chat.project.$environmentId.$projectId'
 
+const ShareRoute = ShareRouteImport.update({
+  id: '/share',
+  path: '/share',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -113,6 +119,7 @@ export interface FileRoutesByFullPath {
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/share': typeof ShareRoute
   '/settings/account': typeof SettingsAccountRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -129,6 +136,7 @@ export interface FileRoutesByTo {
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/share': typeof ShareRoute
   '/settings/account': typeof SettingsAccountRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -148,6 +156,7 @@ export interface FileRoutesById {
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/share': typeof ShareRoute
   '/settings/account': typeof SettingsAccountRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -168,6 +177,7 @@ export interface FileRouteTypes {
     | '/invite'
     | '/pair'
     | '/settings'
+    | '/share'
     | '/settings/account'
     | '/settings/archived'
     | '/settings/connections'
@@ -184,6 +194,7 @@ export interface FileRouteTypes {
     | '/invite'
     | '/pair'
     | '/settings'
+    | '/share'
     | '/settings/account'
     | '/settings/archived'
     | '/settings/connections'
@@ -202,6 +213,7 @@ export interface FileRouteTypes {
     | '/invite'
     | '/pair'
     | '/settings'
+    | '/share'
     | '/settings/account'
     | '/settings/archived'
     | '/settings/connections'
@@ -221,10 +233,18 @@ export interface RootRouteChildren {
   InviteRoute: typeof InviteRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
+  ShareRoute: typeof ShareRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/share': {
+      id: '/share'
+      path: '/share'
+      fullPath: '/share'
+      preLoaderRoute: typeof ShareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -388,6 +408,7 @@ const rootRouteChildren: RootRouteChildren = {
   InviteRoute: InviteRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
+  ShareRoute: ShareRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

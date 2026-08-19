@@ -30,6 +30,12 @@ const projectId = ProjectId.make("project-share-links");
 const member = { userId: UserId.make("user-member"), displayName: "Member" };
 const stranger = { userId: UserId.make("user-stranger"), displayName: "Stranger" };
 
+/** "Anyone with the link", said out loud, because the contract makes you say it. */
+const anyone = { kind: "public" } as const;
+/** The other act entirely: a link addressed to particular people. */
+const onlyThesePeople = (...emails: ReadonlyArray<string>) =>
+  ({ kind: "restricted", emails: emails as unknown as readonly [string, ...string[]] }) as const;
+
 /**
  * A fresh database and a fresh directory per test. Nothing is written to the
  * workspace, so nobody is a member until they show up — which is how these
@@ -131,10 +137,16 @@ it.effect("refuses everything to somebody who is not in the workspace", () =>
     const shareLinks = yield* ShareLinkService;
     yield* beVisible(member);
 
-    const minted = yield* shareLinks.create(member, { ...scope, scope: "workspace" });
+    const minted = yield* shareLinks.create(member, {
+      ...scope,
+      audience: anyone,
+      scope: "workspace",
+    });
 
     for (const refused of [
-      yield* shareLinks.create(stranger, { ...scope, scope: "workspace" }).pipe(Effect.flip),
+      yield* shareLinks
+        .create(stranger, { ...scope, audience: anyone, scope: "workspace" })
+        .pipe(Effect.flip),
       yield* shareLinks.list(stranger, scope).pipe(Effect.flip),
       yield* shareLinks.revoke(stranger, { ...scope, linkId: minted.link.id }).pipe(Effect.flip),
     ]) {
@@ -167,20 +179,32 @@ it.effect("holds every scope to the target it needs, and to no more", () =>
       { scope: "file" as const, projectId, filePath: ".env" },
     ];
     for (const input of invalid) {
-      const refused = yield* shareLinks.create(member, { ...scope, ...input }).pipe(Effect.flip);
+      const refused = yield* shareLinks
+        .create(member, { ...scope, audience: anyone, ...input })
+        .pipe(Effect.flip);
       assert.strictEqual(refused.code, "invalid-target", JSON.stringify(input));
     }
 
     const file = yield* shareLinks.create(member, {
       ...scope,
+      audience: anyone,
       scope: "file",
       projectId,
       filePath: "src/index.ts",
     });
     assert.strictEqual(file.link.scope, "file");
-    const project = yield* shareLinks.create(member, { ...scope, scope: "project", projectId });
+    const project = yield* shareLinks.create(member, {
+      ...scope,
+      audience: anyone,
+      scope: "project",
+      projectId,
+    });
     assert.strictEqual(project.link.projectId, projectId);
-    const workspace = yield* shareLinks.create(member, { ...scope, scope: "workspace" });
+    const workspace = yield* shareLinks.create(member, {
+      ...scope,
+      audience: anyone,
+      scope: "workspace",
+    });
     assert.strictEqual(workspace.link.projectId, null);
     assert.strictEqual(workspace.link.filePath, null);
   }).pipe(Effect.provide(makeLayer())),
@@ -193,6 +217,7 @@ it.effect("hands the token back once, and never again", () =>
 
     const minted = yield* shareLinks.create(member, {
       ...scope,
+      audience: anyone,
       scope: "workspace",
       label: "Onboarding",
     });
@@ -215,9 +240,14 @@ it.effect("reads a revoked link and an expired one as the same dead end", () =>
     const shareLinks = yield* ShareLinkService;
     yield* beVisible(member);
 
-    const revokedLink = yield* shareLinks.create(member, { ...scope, scope: "workspace" });
+    const revokedLink = yield* shareLinks.create(member, {
+      ...scope,
+      audience: anyone,
+      scope: "workspace",
+    });
     const expiredLink = yield* shareLinks.create(member, {
       ...scope,
+      audience: anyone,
       scope: "workspace",
       expiresAt: "2020-01-01T00:00:00.000Z",
     });
@@ -258,7 +288,12 @@ it.effect("refuses every shape of path that leaves the project", () =>
     yield* beVisible(member);
     yield* makeProject;
 
-    const projectLink = yield* shareLinks.create(member, { ...scope, scope: "project", projectId });
+    const projectLink = yield* shareLinks.create(member, {
+      ...scope,
+      audience: anyone,
+      scope: "project",
+      projectId,
+    });
     const token = projectLink.link.token;
 
     const escapes = [
@@ -321,6 +356,8 @@ it.effect("treats a stored file path as untrusted, however it got there", () =>
       projectId,
       filePath: "../outside/secret.txt",
       createdByUserId: member.userId,
+      audience: "public",
+      recipientEmails: [],
       label: null,
       createdAt: "2026-08-01T00:00:00.000Z",
       expiresAt: null,
@@ -332,6 +369,7 @@ it.effect("treats a stored file path as untrusted, however it got there", () =>
     // A file link is not widened into a project link by a query parameter.
     const fileLink = yield* shareLinks.create(member, {
       ...scope,
+      audience: anyone,
       scope: "file",
       projectId,
       filePath: "README.md",
@@ -344,7 +382,11 @@ it.effect("treats a stored file path as untrusted, however it got there", () =>
 
     // A workspace link grants no files at all, so asking it for one is refused
     // rather than quietly ignored.
-    const workspaceLink = yield* shareLinks.create(member, { ...scope, scope: "workspace" });
+    const workspaceLink = yield* shareLinks.create(member, {
+      ...scope,
+      audience: anyone,
+      scope: "workspace",
+    });
     const overreach = yield* shareLinks
       .redeem({ token: workspaceLink.link.token, path: "README.md" })
       .pipe(Effect.flip);
@@ -361,12 +403,18 @@ it.effect("records a view when something was served, and not when it was refused
 
     const minted = yield* shareLinks.create(member, {
       ...scope,
+      audience: anyone,
       scope: "file",
       projectId,
       filePath: "README.md",
     });
 
-    const probed = yield* shareLinks.create(member, { ...scope, scope: "project", projectId });
+    const probed = yield* shareLinks.create(member, {
+      ...scope,
+      audience: anyone,
+      scope: "project",
+      projectId,
+    });
 
     yield* shareLinks.redeem({ token: minted.link.token, viewerFingerprint: "salted-digest" });
     yield* shareLinks.redeem({ token: minted.link.token, viewerFingerprint: "salted-digest" });
@@ -411,13 +459,20 @@ it.effect("will not share a project belonging to another workspace", () =>
       // cannot be used to find out which ids are real.
       { scope: "project" as const, projectId: ProjectId.make("no-such-project") },
     ]) {
-      const refused = yield* shareLinks.create(member, { ...scope, ...target }).pipe(Effect.flip);
+      const refused = yield* shareLinks
+        .create(member, { ...scope, audience: anyone, ...target })
+        .pipe(Effect.flip);
       assert.strictEqual(refused.code, "invalid-target");
     }
 
     // Ownership is re-read on every visit, so a project that moves takes the
     // links already handed out dead with it.
-    const minted = yield* shareLinks.create(member, { ...scope, scope: "project", projectId });
+    const minted = yield* shareLinks.create(member, {
+      ...scope,
+      audience: anyone,
+      scope: "project",
+      projectId,
+    });
     assert.strictEqual((yield* shareLinks.redeem({ token: minted.link.token })).kind, "project");
 
     yield* projects.upsert({
@@ -452,8 +507,8 @@ it.effect("lists a workspace's links, and narrows to one project on request", ()
     yield* beVisible(member);
     yield* makeProject;
 
-    yield* shareLinks.create(member, { ...scope, scope: "workspace" });
-    yield* shareLinks.create(member, { ...scope, scope: "project", projectId });
+    yield* shareLinks.create(member, { ...scope, audience: anyone, scope: "workspace" });
+    yield* shareLinks.create(member, { ...scope, audience: anyone, scope: "project", projectId });
 
     const all = yield* shareLinks.list(member, scope);
     assert.strictEqual(all.links.length, 2);
@@ -461,5 +516,195 @@ it.effect("lists a workspace's links, and narrows to one project on request", ()
     const narrowed = yield* shareLinks.list(member, { ...scope, projectId });
     assert.strictEqual(narrowed.links.length, 1);
     assert.strictEqual(narrowed.links[0]?.scope, "project");
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("only lets a workspace link name people, and says so about the others", () =>
+  Effect.gen(function* () {
+    const shareLinks = yield* ShareLinkService;
+    yield* beVisible(member);
+    yield* makeProject;
+
+    // A file or a project is served to a browser with no session, so there is
+    // nobody to check an address against. Refused rather than accepted and
+    // ignored: a control that renders as a reassurance and enforces nothing is
+    // worse than no control.
+    for (const target of [
+      { scope: "project" as const, projectId },
+      { scope: "file" as const, projectId, filePath: "README.md" },
+    ]) {
+      const refused = yield* shareLinks
+        .create(member, { ...scope, ...target, audience: onlyThesePeople("ana@example.test") })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused.code, "invalid-target");
+    }
+
+    for (const bad of ["", "   ", "ana", "ana@", "@example.test", "ana example@test.com"]) {
+      const refused = yield* shareLinks
+        .create(member, { ...scope, scope: "workspace", audience: onlyThesePeople(bad) })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused.code, "invalid-target", `accepted ${JSON.stringify(bad)}`);
+    }
+
+    // Case and padding are one person, decided at the point of writing so that
+    // the check at redemption is a string equality.
+    const minted = yield* shareLinks.create(member, {
+      ...scope,
+      scope: "workspace",
+      audience: onlyThesePeople(" Ana@Example.TEST ", "ana@example.test", "bo@example.test"),
+    });
+    assert.strictEqual(minted.link.audience, "restricted");
+    assert.deepStrictEqual(minted.link.allowedEmails, ["ana@example.test", "bo@example.test"]);
+
+    // The members' own list shows who a link was sent to; the redemption path
+    // never does.
+    const listed = yield* shareLinks.list(member, scope);
+    assert.deepStrictEqual(listed.links[0]?.allowedEmails, ["ana@example.test", "bo@example.test"]);
+    const redeemed = yield* shareLinks.redeem({ token: minted.link.token });
+    assert.strictEqual(redeemed.link.audience, "restricted");
+    assert.strictEqual(redeemed.link.allowedEmails, null);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("previews a workspace link without counting it or naming anybody", () =>
+  Effect.gen(function* () {
+    const shareLinks = yield* ShareLinkService;
+    yield* beVisible(member);
+    yield* makeProject;
+
+    const restricted = yield* shareLinks.create(member, {
+      ...scope,
+      scope: "workspace",
+      label: "Design review",
+      audience: onlyThesePeople("ana@example.test"),
+    });
+
+    const preview = yield* shareLinks.previewWorkspaceLink({ token: restricted.link.token });
+    assert.deepStrictEqual(preview, {
+      scope: "workspace",
+      audience: "restricted",
+      label: "Design review",
+    });
+    // Nothing in the reply names the person it was sent to, and nothing counts
+    // as a visit: this is read again on every render of the join page.
+    assert.strictEqual(
+      JSON.stringify(preview).includes("ana@example.test"),
+      false,
+      "the preview disclosed a recipient",
+    );
+    const listed = yield* shareLinks.list(member, scope);
+    assert.strictEqual(listed.links.find((link) => link.id === restricted.link.id)?.viewCount, 0);
+
+    // A project link, a revoked link and a token nobody ever issued are one
+    // answer, so the join page cannot be used to sort real tokens from guesses.
+    const project = yield* shareLinks.create(member, {
+      ...scope,
+      scope: "project",
+      projectId,
+      audience: anyone,
+    });
+    const gone = yield* shareLinks.create(member, {
+      ...scope,
+      scope: "workspace",
+      audience: anyone,
+    });
+    yield* shareLinks.revoke(member, { ...scope, linkId: gone.link.id });
+    const answers = [
+      yield* shareLinks.previewWorkspaceLink({ token: project.link.token }).pipe(Effect.flip),
+      yield* shareLinks.previewWorkspaceLink({ token: gone.link.token }).pipe(Effect.flip),
+      yield* shareLinks.previewWorkspaceLink({ token: generateShareLinkToken() }).pipe(Effect.flip),
+    ];
+    for (const answer of answers) {
+      assert.strictEqual(answer.code, "not-found");
+      assert.strictEqual(answer.message, answers[0]?.message);
+    }
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("admits the person a restricted link names, and refuses everyone else", () =>
+  Effect.gen(function* () {
+    const shareLinks = yield* ShareLinkService;
+    const collaboration = yield* CollaborationService;
+    yield* beVisible(member);
+
+    const minted = yield* shareLinks.create(member, {
+      ...scope,
+      scope: "workspace",
+      audience: onlyThesePeople("Ana@Example.test"),
+    });
+    const token = minted.link.token;
+
+    const ana = { userId: UserId.make("user-ana"), displayName: "Ana", email: "ana@example.test" };
+    const bo = { userId: UserId.make("user-bo"), displayName: "Bo", email: "bo@example.test" };
+    const anonymous = { userId: UserId.make("user-nobody"), displayName: "Nobody", email: null };
+
+    // Holding the URL is not enough. The address on the session's own account
+    // is what decides, and it is the same refusal whether the wrong person is
+    // signed in or nobody's account has an address at all.
+    for (const wrong of [bo, anonymous]) {
+      const refused = yield* shareLinks.claim(wrong, { token }).pipe(Effect.flip);
+      assert.strictEqual(refused.code, "forbidden");
+      assert.strictEqual(refused.message.includes("@"), false, "the refusal disclosed an address");
+    }
+
+    // And being refused left no trace of a membership behind.
+    const beforeJoin = yield* collaboration.listMembers(member, scope);
+    assert.strictEqual(
+      beforeJoin.members.some((person) => person.userId === bo.userId),
+      false,
+    );
+
+    const joined = yield* shareLinks.claim(ana, { token });
+    assert.deepStrictEqual(joined, { tenantId, workspaceId, joined: true });
+
+    const roster = yield* collaboration.listMembers(member, scope);
+    assert.strictEqual(
+      roster.members.some((person) => person.userId === ana.userId),
+      true,
+    );
+
+    // Clicking the same bookmark again is a person, not an error, and does not
+    // stack up a second membership.
+    const again = yield* shareLinks.claim(ana, { token });
+    assert.deepStrictEqual(again, { tenantId, workspaceId, joined: false });
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("lets anyone with a public link in, and records who came through it", () =>
+  Effect.gen(function* () {
+    const shareLinks = yield* ShareLinkService;
+    const repository = yield* ShareLinkRepository;
+    yield* beVisible(member);
+    yield* makeProject;
+
+    const open = yield* shareLinks.create(member, {
+      ...scope,
+      scope: "workspace",
+      audience: anyone,
+    });
+    const passerby = {
+      userId: UserId.make("user-passerby"),
+      displayName: "Passerby",
+      email: "passerby@example.test",
+    };
+    const joined = yield* shareLinks.claim(passerby, { token: open.link.token });
+    assert.strictEqual(joined.joined, true);
+
+    // A join is the most meaningful thing a workspace link ever does, and it is
+    // the one redemption that knows who did it.
+    const views = yield* repository.listViews({ linkId: open.link.id, limit: 10 });
+    assert.strictEqual(views.length, 1);
+    assert.strictEqual(views[0]?.viewerUserId, passerby.userId);
+
+    // A file link is not a way into the workspace, whatever is done with it.
+    const file = yield* shareLinks.create(member, {
+      ...scope,
+      scope: "file",
+      projectId,
+      filePath: "README.md",
+      audience: anyone,
+    });
+    const refused = yield* shareLinks.claim(passerby, { token: file.link.token }).pipe(Effect.flip);
+    assert.strictEqual(refused.code, "not-found");
   }).pipe(Effect.provide(makeLayer())),
 );

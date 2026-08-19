@@ -5,8 +5,11 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
+import type { ShareLinkToken } from "@t3tools/contracts";
+
 import { ServerSecretStoreLive } from "../auth/Layers/ServerSecretStore.ts";
 import { ServerSecretStore } from "../auth/Services/ServerSecretStore.ts";
+import { AuthError, ServerAuth, type AuthenticatedSession } from "../auth/Services/ServerAuth.ts";
 import { ShareLinkService } from "./Services/ShareLinkService.ts";
 
 /**
@@ -24,6 +27,31 @@ import { ShareLinkService } from "./Services/ShareLinkService.ts";
 
 /** Short because it is pasted; the token after it carries all the entropy. */
 export const SHARE_LINK_ROUTE_PREFIX = "/s";
+
+/**
+ * Where a workspace link lands.
+ *
+ * A workspace link is not content, it is an offer to join, and taking it up
+ * means signing in or signing up — which is the app's own surface and not
+ * something this route can render inside a `sandbox` CSP. So the redemption of
+ * one ends in a redirect to the app, which then asks the two questions below.
+ *
+ * The token travels in the query rather than the path so that the app's router
+ * treats `/share` as one route however the token is shaped, and it stays in the
+ * URL rather than being stashed somewhere because the page has to survive the
+ * full reload that a sign-in performs. It is the same secret the visitor was
+ * sent; putting it back in their address bar tells them nothing new.
+ *
+ * `/share` must also be listed in the app's own "do not bounce this to the
+ * pairing screen" paths — `apps/web/src/routes/__root.tsx` and `authRouting.ts`
+ * — or a recipient lands on a pairing-token form they can never satisfy.
+ */
+export const SHARE_LINK_JOIN_ROUTE = "/share";
+export const SHARE_LINK_JOIN_TOKEN_PARAM = "s";
+
+/** The two exchanges the join page makes, in the order it makes them. */
+export const SHARE_LINK_PREVIEW_ROUTE = "/api/share-links/preview";
+export const SHARE_LINK_CLAIM_ROUTE = "/api/share-links/claim";
 
 const SHARE_LINK_FINGERPRINT_SALT = "share-link-fingerprint";
 const SHARE_LINK_FINGERPRINT_SALT_BYTES = 32;
@@ -207,18 +235,26 @@ const shareLinkRedeemRoute = Effect.gen(function* () {
     );
   }
 
-  // Enough to offer joining and nothing else. No member list, no project names,
-  // no file listing: whoever holds this URL has not joined yet, and everything
-  // beyond the invitation itself is for people who have.
-  return HttpServerResponse.jsonUnsafe(
-    {
-      scope: "workspace",
-      label: redemption.link.label,
-      tenantId: redemption.link.tenantId,
-      workspaceId: redemption.link.workspaceId,
-    },
-    { status: 200, headers: SAFETY_HEADERS },
-  );
+  // A workspace link goes to the join page, which is a page in the app rather
+  // than anything this route can draw: it has to be able to sign somebody in,
+  // sign somebody up, and then put them inside the workspace.
+  //
+  // Nothing about the link travels in the redirect but the token the visitor
+  // already holds — no workspace id, no label, and above all no address. The
+  // page asks for all of that afterwards, over routes that can decide what the
+  // caller has earned.
+  //
+  // 303, not 302: the visitor arrived by GET and must continue by GET, and
+  // spelling that out costs nothing.
+  // Relative, and built from the token this request arrived with rather than
+  // from anything in the row: `redemption.link.token` is the withheld
+  // placeholder, and a `Location` assembled from a host header would be an
+  // open redirect with a valid share token attached.
+  const joinSearch = new URLSearchParams([[SHARE_LINK_JOIN_TOKEN_PARAM, token]]).toString();
+  return HttpServerResponse.redirect(`${SHARE_LINK_JOIN_ROUTE}?${joinSearch}`, {
+    status: 303,
+    headers: SAFETY_HEADERS,
+  });
 }).pipe(
   // Every failure the service can raise, and every defect underneath it, land
   // on the same reply. A 500 with a stack trace would be its own oracle.
@@ -239,4 +275,162 @@ export const shareLinkRedeemRouteLayer = HttpRouter.add(
   "GET",
   `${SHARE_LINK_ROUTE_PREFIX}/*`,
   shareLinkRedeemRoute,
+);
+
+/**
+ * The two exchanges behind the join page.
+ *
+ * Both are POST with a JSON body, and that is a decision rather than a habit.
+ * A token in a query string is a credential in an access log and in a
+ * `Referer`; a JSON body is also the one thing a cross-site form cannot send,
+ * so a page on another origin cannot make a signed-in user's browser join a
+ * workspace behind their back. The CORS layer allows no credentials, so a
+ * cross-origin `fetch` cannot carry the session cookie either.
+ *
+ * Neither route caches, for the same reason `/s/` does not.
+ */
+const JOIN_HEADERS: Readonly<Record<string, string>> = {
+  "cache-control": "no-store, private",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "x-robots-tag": "noindex, nofollow",
+};
+
+/**
+ * The one refusal both routes share, and the same words `/s/` uses.
+ *
+ * Missing, expired, revoked, not a workspace link, or a body that made no
+ * sense: one status and one sentence. The join page renders it verbatim, so a
+ * visitor cannot learn from the wording whether the token they hold was ever
+ * real.
+ */
+const joinUnavailable = HttpServerResponse.jsonUnsafe(
+  { error: "This link is not available." },
+  { status: 404, headers: JOIN_HEADERS },
+);
+
+/** The token out of a JSON body, judged exactly as strictly as the path is. */
+function tokenFromBody(body: unknown): string | null {
+  if (typeof body !== "object" || body === null || !("token" in body)) {
+    return null;
+  }
+  const token = (body as { token: unknown }).token;
+  return typeof token === "string" && token.trim().length > 0 ? token.trim() : null;
+}
+
+const shareLinkPreviewRoute = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const body = yield* request.json;
+  const token = tokenFromBody(body);
+  if (token === null) {
+    return joinUnavailable;
+  }
+
+  const shareLinks = yield* ShareLinkService;
+  const preview = yield* shareLinks.previewWorkspaceLink({ token });
+  // Exactly the three fields of `ShareLinkPreview` and nothing wider: this
+  // reply goes to whoever holds the URL, which may be whoever the URL was
+  // forwarded to.
+  return HttpServerResponse.jsonUnsafe(
+    { scope: preview.scope, audience: preview.audience, label: preview.label },
+    { status: 200, headers: JOIN_HEADERS },
+  );
+}).pipe(
+  Effect.catch(() => Effect.succeed(joinUnavailable)),
+  Effect.catchDefect(() => Effect.succeed(joinUnavailable)),
+);
+
+/**
+ * Who the claimant is, according to this server and not according to them.
+ *
+ * The address comes from the local account row or from the verified claims of
+ * the token that established the session — never from the request body, which
+ * is why the body carries nothing but the share token. `null` here is not
+ * "unknown, allow it": the service refuses an email-scoped link outright when
+ * it gets one.
+ */
+const resolveClaimActor = (session: AuthenticatedSession) =>
+  Effect.gen(function* () {
+    const serverAuth = yield* ServerAuth;
+    const profile = yield* serverAuth.resolveUserProfile(session);
+    const localAccount = yield* serverAuth.resolveLocalAccount(session);
+    return {
+      userId: profile.userId,
+      displayName: profile.displayName,
+      avatarInitials: profile.avatarInitials,
+      email: localAccount?.email ?? session.email ?? null,
+    };
+  });
+
+const shareLinkClaimRoute = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const serverAuth = yield* ServerAuth;
+
+  // Before the token is even read. A visitor who has not signed in is told to,
+  // in the one place that can tell them so — and learns nothing about the link.
+  const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+    Effect.mapError(
+      () =>
+        new AuthError({
+          message: "Sign in to open this link.",
+          status: 401,
+        }),
+    ),
+  );
+
+  const body = yield* request.json.pipe(Effect.catch(() => Effect.succeed(null)));
+  const token = tokenFromBody(body);
+  if (token === null) {
+    return joinUnavailable;
+  }
+
+  const actor = yield* resolveClaimActor(session);
+  const shareLinks = yield* ShareLinkService;
+  const claimed = yield* Effect.result(shareLinks.claim(actor, { token: token as ShareLinkToken }));
+  if (claimed._tag === "Failure") {
+    // `forbidden` is the audience refusing this account, and it is the one
+    // outcome worth telling apart: the visitor is signed in as the wrong person
+    // and can do something about it. Its message names no address. Everything
+    // else collapses into the same "not available" as always.
+    return claimed.failure.code === "forbidden"
+      ? HttpServerResponse.jsonUnsafe(
+          { error: claimed.failure.message },
+          { status: 403, headers: JOIN_HEADERS },
+        )
+      : joinUnavailable;
+  }
+
+  return HttpServerResponse.jsonUnsafe(
+    {
+      tenantId: claimed.success.tenantId,
+      workspaceId: claimed.success.workspaceId,
+      joined: claimed.success.joined,
+    },
+    { status: 200, headers: JOIN_HEADERS },
+  );
+}).pipe(
+  Effect.catchTag("AuthError", (error) =>
+    Effect.succeed(
+      HttpServerResponse.jsonUnsafe(
+        { error: error.message },
+        { status: error.status ?? 500, headers: JOIN_HEADERS },
+      ),
+    ),
+  ),
+  Effect.catch(() => Effect.succeed(joinUnavailable)),
+  Effect.catchDefect(() => Effect.succeed(joinUnavailable)),
+);
+
+/** What a page may say about a link to someone who has not signed in. */
+export const shareLinkPreviewRouteLayer = HttpRouter.add(
+  "POST",
+  SHARE_LINK_PREVIEW_ROUTE,
+  shareLinkPreviewRoute,
+);
+
+/** The only route that grants anything, and the only one that needs a session. */
+export const shareLinkClaimRouteLayer = HttpRouter.add(
+  "POST",
+  SHARE_LINK_CLAIM_ROUTE,
+  shareLinkClaimRoute,
 );

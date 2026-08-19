@@ -2394,6 +2394,10 @@ export default function WorkspacePanel({
           scope: "file",
           projectId: shareProjectId,
           filePath: relativePath,
+          // A file link is served to a browser with no session, so there is
+          // nobody it could be addressed to. Said here rather than defaulted,
+          // because the contract makes every caller say it.
+          audience: { kind: "public" },
         },
       });
     },

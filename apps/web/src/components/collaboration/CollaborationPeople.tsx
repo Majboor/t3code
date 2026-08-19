@@ -179,11 +179,33 @@ function MemberRow({
   );
 }
 
+export interface CollaborationRoster {
+  readonly members: readonly CollaborationMember[];
+  /** Whether this person may recolour, promote, demote or remove anybody. */
+  readonly canManage: boolean;
+  readonly viewerUserId: string | null;
+  /**
+   * False until the first read lands. An empty roster and an unanswered one are
+   * the same array, and only one of them is worth telling somebody about.
+   */
+  readonly loaded: boolean;
+  readonly refresh: () => void;
+  readonly updateMember: (
+    userId: CollaborationMember["userId"],
+    patch: { color?: string; isApprover?: boolean; readOnly?: boolean },
+  ) => void;
+  readonly removeMember: (userId: CollaborationMember["userId"]) => void;
+}
+
 /**
- * Everyone in the workspace, with the controls a lead needs: recolour someone,
- * hand them approval rights, or remove them.
+ * The workspace roster, and the four things a lead can do to it.
+ *
+ * Lifted out of the list it draws because the collaboration popover now
+ * summarises the roster before anybody opens it — "3 of 5 here" needs the same
+ * members the list needs, and fetching them twice would double what opening the
+ * panel costs for a sentence.
  */
-export function CollaborationPeople({
+export function useCollaborationRoster({
   environmentId,
   tenantId,
   workspaceId,
@@ -191,9 +213,10 @@ export function CollaborationPeople({
   environmentId: EnvironmentId | null;
   tenantId: TenantId | null;
   workspaceId: WorkspaceId | null;
-}) {
+}): CollaborationRoster {
   const [members, setMembers] = useState<readonly CollaborationMember[]>([]);
   const [canManage, setCanManage] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [viewerUserId, setViewerUserId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -210,6 +233,7 @@ export function CollaborationPeople({
         setMembers(result.members);
         setCanManage(result.canManage);
         setViewerUserId(result.viewerUserId);
+        setLoaded(true);
       })
       .catch(() => undefined);
   }, [environmentId, tenantId, workspaceId]);
@@ -303,14 +327,52 @@ export function CollaborationPeople({
     [environmentId, refresh],
   );
 
-  if (!tenantId || !workspaceId || members.length === 0) {
-    return null;
+  const updateMember = useCallback<CollaborationRoster["updateMember"]>(
+    (userId, patch) => {
+      if (!tenantId || !workspaceId) {
+        return;
+      }
+      void mutate((api) =>
+        api.collaboration.updateMember({ tenantId, workspaceId, userId, ...patch }),
+      );
+    },
+    [mutate, tenantId, workspaceId],
+  );
+
+  const removeMember = useCallback<CollaborationRoster["removeMember"]>(
+    (userId) => {
+      if (!tenantId || !workspaceId) {
+        return;
+      }
+      void mutate((api) => api.collaboration.removeMember({ tenantId, workspaceId, userId }));
+    },
+    [mutate, tenantId, workspaceId],
+  );
+
+  return { members, canManage, viewerUserId, loaded, refresh, updateMember, removeMember };
+}
+
+/**
+ * Everyone in the workspace, with the controls a lead needs: recolour someone,
+ * hand them approval rights, make them read-only, or remove them.
+ */
+export function CollaborationPeople({ roster }: { roster: CollaborationRoster }) {
+  const { members, canManage, viewerUserId } = roster;
+
+  if (members.length === 0) {
+    return (
+      <p className="text-[11px] text-muted-foreground" data-testid="collaboration-people-empty">
+        {roster.loaded
+          ? "Nobody has been added to this workspace yet."
+          : "Loading the workspace roster…"}
+      </p>
+    );
   }
 
   return (
-    <div className="border-t border-border pt-3">
+    <div>
       <div className="mb-2 flex items-center justify-between">
-        <div className="text-xs font-medium text-muted-foreground">People</div>
+        <div className="text-xs font-medium text-muted-foreground">Members</div>
         <div className="text-[10px] text-muted-foreground">{members.length}</div>
       </div>
       <div className="grid gap-1">
@@ -320,45 +382,14 @@ export function CollaborationPeople({
             member={member}
             canManage={canManage}
             isViewer={member.userId === viewerUserId}
-            onSetColor={(color) => {
-              void mutate((api) =>
-                api.collaboration.updateMember({
-                  tenantId,
-                  workspaceId,
-                  userId: member.userId,
-                  color,
-                }),
-              );
-            }}
-            onToggleApprover={() => {
-              void mutate((api) =>
-                api.collaboration.updateMember({
-                  tenantId,
-                  workspaceId,
-                  userId: member.userId,
-                  isApprover: !member.isApprover,
-                }),
-              );
-            }}
-            onToggleReadOnly={() => {
-              void mutate((api) =>
-                api.collaboration.updateMember({
-                  tenantId,
-                  workspaceId,
-                  userId: member.userId,
-                  readOnly: !isReadOnly(member),
-                }),
-              );
-            }}
-            onRemove={() => {
-              void mutate((api) =>
-                api.collaboration.removeMember({
-                  tenantId,
-                  workspaceId,
-                  userId: member.userId,
-                }),
-              );
-            }}
+            onSetColor={(color) => roster.updateMember(member.userId, { color })}
+            onToggleApprover={() =>
+              roster.updateMember(member.userId, { isApprover: !member.isApprover })
+            }
+            onToggleReadOnly={() =>
+              roster.updateMember(member.userId, { readOnly: !isReadOnly(member) })
+            }
+            onRemove={() => roster.removeMember(member.userId)}
           />
         ))}
       </div>

@@ -197,7 +197,13 @@ function authEntryPathHeaders() {
     return {};
   }
   const pathname = window.location.pathname;
-  return pathname === "/invite" || pathname === "/pair" ? { "x-t3-auth-entry-path": pathname } : {};
+  // Pages where the visitor is arriving as themselves. The server reads this to
+  // decline its own loopback shortcut, which would otherwise hand a share
+  // recipient's browser the local owner's session — and with it every workspace
+  // on the machine.
+  return pathname === "/invite" || pathname === "/pair" || pathname === "/share"
+    ? { "x-t3-auth-entry-path": pathname }
+    : {};
 }
 
 function currentBearerAuthenticatedRequestInput(

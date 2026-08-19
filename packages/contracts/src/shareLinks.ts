@@ -62,6 +62,46 @@ export const ShareLinkScope = Schema.Literals(["file", "project", "workspace"]);
 export type ShareLinkScope = typeof ShareLinkScope.Type;
 
 /**
+ * Who the link is for.
+ *
+ * `public` is the original behaviour and the dangerous one: the token is the
+ * whole credential, so anyone it is forwarded to is inside. `restricted` names
+ * the people it was meant for and is enforced against the account that redeems
+ * it, not against what a form was rendered with.
+ *
+ * A second literal rather than a `requiresEmail` boolean, and for the same
+ * reason the scopes are literals: widening "these three people" into "anyone
+ * with the link" has to be a different call with a different payload, not a
+ * flipped flag.
+ */
+export const ShareLinkAudienceKind = Schema.Literals(["public", "restricted"]);
+export type ShareLinkAudienceKind = typeof ShareLinkAudienceKind.Type;
+
+/**
+ * The audience, as the creator states it.
+ *
+ * A union rather than a kind beside an optional list, so that "anyone with the
+ * link" cannot be sent carrying a list of people and "these people" cannot be
+ * sent with an empty one. The two cases are different acts and the caller has
+ * to have decided which one it is making before it can build this value at all.
+ *
+ * Emails are normalised by the server before they are stored or compared —
+ * whatever case and padding a form supplies, the comparison at redemption is
+ * against the trimmed, lower-cased form.
+ */
+export const ShareLinkAudience = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("public"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("restricted"),
+    /** At least one; a restricted link with nobody on it could never be used. */
+    emails: Schema.NonEmptyArray(TrimmedNonEmptyString),
+  }),
+]);
+export type ShareLinkAudience = typeof ShareLinkAudience.Type;
+
+/**
  * One link. `projectId` and `filePath` are the target and are nullable because
  * which of them is meaningful depends on the scope: a workspace link has
  * neither, a project link has a project, a file link has both. The schema
@@ -90,6 +130,23 @@ export const ShareLink = Schema.Struct({
   /** Project-relative, and only ever set for scope `file`. */
   filePath: Schema.NullOr(TrimmedNonEmptyString),
   createdByUserId: UserId,
+  /**
+   * Who may redeem it. Only a `workspace` link may be `restricted`: the other
+   * two scopes are served to an anonymous browser with no session to check an
+   * email against, so an audience there would be a promise the redemption path
+   * cannot keep.
+   */
+  audience: ShareLinkAudienceKind,
+  /**
+   * The people a `restricted` link names, and `null` on any path that has not
+   * earned them.
+   *
+   * Null is not "nobody": it means this reply is not one that discloses them.
+   * Only `create`, `list` and `revoke` — all of which already know the caller
+   * is a member of the workspace — ever fill it in. Redemption leaves it null,
+   * because a leaked link must not become a way to find out who was invited.
+   */
+  allowedEmails: Schema.NullOr(Schema.Array(TrimmedNonEmptyString)),
   /** What the creator called it, for their own list. Null if they said nothing. */
   label: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -166,6 +223,15 @@ export const ShareLinkCreateInput = Schema.Struct({
   workspaceId: WorkspaceId,
   scope: ShareLinkScope,
   /**
+   * Required, and deliberately not defaulted to `public`.
+   *
+   * "Anyone with the link" is the most consequential thing this call can do,
+   * so it is something a caller says rather than something it gets by leaving
+   * a field out. An older client that omits it fails to decode instead of
+   * quietly publishing a workspace.
+   */
+  audience: ShareLinkAudience,
+  /**
    * Optional-and-nullable throughout, so a form that leaves a field untouched
    * and one that clears it both decode to the absent value the record stores.
    */
@@ -217,3 +283,63 @@ export const ShareLinkRevokeResult = Schema.Struct({
   link: ShareLink,
 });
 export type ShareLinkRevokeResult = typeof ShareLinkRevokeResult.Type;
+
+/**
+ * Joining a workspace from a link, and the two exchanges it takes.
+ *
+ * A `workspace` link is not content to be served, it is an offer to become a
+ * member, and a member is a person rather than a browser. So the redemption of
+ * one is split in two: an unauthenticated *preview* that says only enough to
+ * draw a page, and an authenticated *claim* that is the only thing that grants
+ * anything.
+ *
+ * The split is what makes an email-scoped link enforceable. Nothing about who
+ * the link is for is decided in the browser; the browser only learns that it
+ * must produce somebody, and the server compares that somebody's own account
+ * email against the list it holds.
+ */
+
+/**
+ * What a stranger holding the URL may be told, and nothing beyond it.
+ *
+ * No emails, no workspace name, no ids, no member list. `audience` is here
+ * because the page has to say something true about what is being asked of the
+ * visitor — "anyone with this link can join" is a different sentence from
+ * "sign in with the address this was sent to" — and saying which of the two it
+ * is discloses nobody.
+ *
+ * A missing, expired or revoked token produces no preview at all: it fails
+ * exactly as a token that never existed does.
+ */
+export const ShareLinkPreview = Schema.Struct({
+  /** Always `workspace`. The other scopes are served as bytes, never previewed. */
+  scope: Schema.Literal("workspace"),
+  audience: ShareLinkAudienceKind,
+  /** What the creator called it. Chosen by a member, shown to the visitor. */
+  label: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ShareLinkPreview = typeof ShareLinkPreview.Type;
+
+/**
+ * The token, again, from a caller who has now signed in.
+ *
+ * No email field: the address that is checked is the one on the session's own
+ * account, which the caller cannot choose. A claim that took an email would be
+ * a claim anybody could make about anybody.
+ */
+export const ShareLinkClaimInput = Schema.Struct({
+  token: ShareLinkToken,
+});
+export type ShareLinkClaimInput = typeof ShareLinkClaimInput.Type;
+
+/**
+ * Where the claimant now belongs. `joined` is false when they were already a
+ * member — re-opening a link you have already used is not an error, and saying
+ * so lets the page skip the celebration and go straight in.
+ */
+export const ShareLinkClaimResult = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  joined: Schema.Boolean,
+});
+export type ShareLinkClaimResult = typeof ShareLinkClaimResult.Type;

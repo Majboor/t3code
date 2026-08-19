@@ -6,7 +6,11 @@ import type { Socket as NodeNetSocket } from "node:net";
 import { ServerConfig } from "./config.ts";
 import { analyticsIngestRouteLayer } from "./analytics/http.ts";
 import { desktopActivityRouteLayer } from "./desktop/http.ts";
-import { shareLinkRedeemRouteLayer } from "./shareLinks/http.ts";
+import {
+  shareLinkClaimRouteLayer,
+  shareLinkPreviewRouteLayer,
+  shareLinkRedeemRouteLayer,
+} from "./shareLinks/http.ts";
 import {
   cloudSyncBlobDownloadRouteLayer,
   cloudSyncBlobUploadRouteLayer,
@@ -497,6 +501,11 @@ export const makeRoutesLayer = Layer.mergeAll(
   desktopActivityRouteLayer,
   // Before the static catch-all: `/s/*` is a public route, not an app path.
   shareLinkRedeemRouteLayer,
+  // The join page's two exchanges. `preview` is unauthenticated by design and
+  // discloses nothing; `claim` is the only one that grants anything and is the
+  // only one that reads a session.
+  shareLinkPreviewRouteLayer,
+  shareLinkClaimRouteLayer,
   cloudSyncNegotiateRouteLayer,
   cloudSyncBlobUploadRouteLayer,
   cloudSyncBlobDownloadRouteLayer,

@@ -1,4 +1,11 @@
-import type { ProjectId, ShareLink, ShareLinkError, ShareLinkScope } from "@t3tools/contracts";
+import type {
+  ProjectId,
+  ShareLink,
+  ShareLinkAudience,
+  ShareLinkAudienceKind,
+  ShareLinkError,
+  ShareLinkScope,
+} from "@t3tools/contracts";
 
 /**
  * Everything the share-link UI decides without a server.
@@ -298,4 +305,153 @@ export function describeMintedShareLink(input: {
     title: "The link was made but not copied",
     description: "Copy it from the panel now — this is the only time it can be read.",
   };
+}
+
+/**
+ * Who a link is for, decided before it exists.
+ *
+ * Everything below is about one rule: "anyone with the link" and "these three
+ * people" are two different acts, and the person clicking must have chosen one
+ * of them on purpose. There is no default. A draft with nothing chosen cannot
+ * produce a `ShareLinkAudience` at all, so the button that would create the
+ * link has nothing to send and stays off.
+ */
+export type ShareLinkAudienceChoice = "unchosen" | "public" | "restricted";
+
+export interface ShareLinkAudienceDraft {
+  readonly choice: ShareLinkAudienceChoice;
+  /** Raw, as typed: commas, spaces and newlines are all separators. */
+  readonly emailsText: string;
+}
+
+export const emptyShareLinkAudienceDraft: ShareLinkAudienceDraft = {
+  choice: "unchosen",
+  emailsText: "",
+};
+
+/**
+ * The addresses out of a free-text field.
+ *
+ * People paste lists. They come separated by commas, by spaces, by newlines and
+ * by all three at once, and refusing the paste because of a trailing comma is a
+ * way of making somebody retype six addresses. Splitting on any run of those is
+ * the forgiving half; `isShareLinkEmail` below is the strict half.
+ */
+export function parseShareLinkEmails(text: string): readonly string[] {
+  const seen: string[] = [];
+  for (const candidate of text.split(/[\s,;]+/)) {
+    const email = candidate.trim().toLowerCase();
+    if (email.length > 0 && !seen.includes(email)) {
+      seen.push(email);
+    }
+  }
+  return seen;
+}
+
+/**
+ * The client's half of the server's check, and worth no more than that.
+ *
+ * The server normalises and validates again, and its answer is the one that
+ * counts. This exists so a typo is caught while the person is looking at the
+ * field rather than as a red toast after the fact.
+ */
+export function isShareLinkEmail(value: string): boolean {
+  if (value.length === 0 || value.length > 254 || /\s|[<>,;]/.test(value)) {
+    return false;
+  }
+  const at = value.indexOf("@");
+  return at > 0 && at === value.lastIndexOf("@") && value.indexOf(".", at) > at + 1;
+}
+
+export type ShareLinkAudienceCheck =
+  | { readonly ok: true; readonly audience: ShareLinkAudience }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * A draft becomes an audience, or says why it cannot.
+ *
+ * `unchosen` is a refusal rather than a fallback to `public`. Falling back is
+ * how a link meant for three people ends up readable by a mailing list: the
+ * person never said "anyone", the form said it for them.
+ */
+export function checkShareLinkAudience(draft: ShareLinkAudienceDraft): ShareLinkAudienceCheck {
+  if (draft.choice === "unchosen") {
+    return { ok: false, reason: "Say who this link is for." };
+  }
+  if (draft.choice === "public") {
+    return { ok: true, audience: { kind: "public" } };
+  }
+
+  const emails = parseShareLinkEmails(draft.emailsText);
+  if (emails.length === 0) {
+    return { ok: false, reason: "Add the email addresses this link is for." };
+  }
+  const bad = emails.find((email) => !isShareLinkEmail(email));
+  if (bad !== undefined) {
+    return { ok: false, reason: `"${bad}" is not an email address.` };
+  }
+  const [first, ...rest] = emails;
+  if (first === undefined) {
+    return { ok: false, reason: "Add the email addresses this link is for." };
+  }
+  return { ok: true, audience: { kind: "restricted", emails: [first, ...rest] } };
+}
+
+/**
+ * What the creator is told they are about to do.
+ *
+ * The public warning is deliberately blunt and mentions forwarding, because
+ * forwarding is how these links actually escape: nobody publishes one, somebody
+ * pastes it into a channel.
+ */
+export function describeShareLinkAudience(
+  choice: ShareLinkAudienceChoice,
+  workspaceLabel: string,
+): string {
+  if (choice === "public") {
+    return `Anyone who has the link can join ${workspaceLabel} and read every file in it — including anyone it is forwarded to. Nobody has to be invited first.`;
+  }
+  if (choice === "restricted") {
+    return `Only the people you name can use this link. Everyone else is refused, even if they have the URL. If they have no account yet, the link takes them to sign up with that address.`;
+  }
+  return "Choose who this link is for before making it.";
+}
+
+/** How an existing row says who it was for, without repeating the whole list. */
+export function describeShareLinkAudienceSummary(link: ShareLink): string {
+  if (link.audience === "public") {
+    return "Anyone with the link";
+  }
+  const emails = link.allowedEmails ?? [];
+  if (emails.length === 0) {
+    return "Specific people";
+  }
+  return emails.length <= 2
+    ? emails.join(", ")
+    : `${emails.slice(0, 2).join(", ")} and ${emails.length - 2} more`;
+}
+
+/**
+ * The join page, in the two states it can be in before anything is claimed.
+ *
+ * A restricted link and a public one ask different things of the visitor, and
+ * saying which is which discloses nobody — the addresses themselves never leave
+ * the server.
+ */
+export function describeShareLinkJoin(
+  audience: ShareLinkAudienceKind,
+  label: string | null,
+): { readonly title: string; readonly detail: string } {
+  const named = label === null ? "a workspace" : `“${label}”`;
+  return audience === "restricted"
+    ? {
+        title: `You have been invited to ${named}`,
+        detail:
+          "This link was sent to particular people. Sign in with the address it was sent to, or create an account with it, and you will land inside.",
+      }
+    : {
+        title: `You have been invited to ${named}`,
+        detail:
+          "Anyone with this link can join. Sign in, or create an account, and you will land inside.",
+      };
 }

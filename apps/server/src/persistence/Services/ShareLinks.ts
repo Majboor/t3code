@@ -64,6 +64,11 @@ export interface ShareLinkRecord {
   /** Project-relative, and only ever set for scope `file`. */
   readonly filePath: string | null;
   readonly createdByUserId: string;
+  /**
+   * `public` | `restricted`. Rows written before audiences existed read as
+   * `public`, which is what they were: the migration's default, not a guess.
+   */
+  readonly audience: string;
   readonly label: string | null;
   readonly createdAt: string;
   /** Null means it never lapses on its own. */
@@ -72,6 +77,20 @@ export interface ShareLinkRecord {
   readonly revokedAt: string | null;
   readonly lastViewedAt: string | null;
   readonly viewCount: number;
+}
+
+/**
+ * One address a `restricted` link was addressed to.
+ *
+ * Stored already normalised — trimmed and lower-cased above this layer — so
+ * that "is this person on the list" is a key probe rather than a question about
+ * collation. Nothing here is ever returned on an unauthenticated path; see the
+ * note on `ShareLink.allowedEmails` in the contracts for why.
+ */
+export interface ShareLinkRecipientRecord {
+  readonly linkId: string;
+  readonly email: string;
+  readonly createdAt: string;
 }
 
 /** One click, appended and never updated. */
@@ -100,11 +119,39 @@ export const CreateShareLinkInput = Schema.Struct({
   projectId: Schema.NullOr(Schema.String),
   filePath: Schema.NullOr(Schema.String),
   createdByUserId: Schema.String,
+  audience: Schema.String,
+  /**
+   * Already normalised and de-duplicated by the service. Empty for a public
+   * link — and the two are written in one transaction with the link itself, so
+   * a restricted link can never exist for the instant before its list does,
+   * which is an instant in which it would let anybody in.
+   */
+  recipientEmails: Schema.Array(Schema.String),
   label: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   expiresAt: Schema.NullOr(Schema.String),
 });
 export type CreateShareLinkInput = typeof CreateShareLinkInput.Type;
+
+/**
+ * Every recipient of every link in one workspace, in one query.
+ *
+ * Keyed by workspace rather than by link id because the caller is the
+ * management panel, which has just read a page of links and would otherwise
+ * ask once per row. The service pairs the rows back up by link id.
+ */
+export const ListShareLinkRecipientsForWorkspaceInput = Schema.Struct({
+  tenantId: Schema.String,
+  workspaceId: Schema.String,
+});
+export type ListShareLinkRecipientsForWorkspaceInput =
+  typeof ListShareLinkRecipientsForWorkspaceInput.Type;
+
+/** One link's list, for the check that decides whether a claimant may join. */
+export const ListShareLinkRecipientsInput = Schema.Struct({
+  linkId: Schema.String,
+});
+export type ListShareLinkRecipientsInput = typeof ListShareLinkRecipientsInput.Type;
 
 export const ListShareLinksForWorkspaceInput = Schema.Struct({
   tenantId: Schema.String,
@@ -210,6 +257,17 @@ export interface ShareLinkRepositoryShape {
   readonly listViews: (
     input: ListShareLinkViewsInput,
   ) => Effect.Effect<ReadonlyArray<ShareLinkViewRecord>, PersistenceSqlError>;
+  /**
+   * Who one link names. Empty for a public link, and empty is not a licence:
+   * the service refuses a restricted link with no recipients rather than
+   * reading an empty list as "everybody".
+   */
+  readonly listRecipients: (
+    input: ListShareLinkRecipientsInput,
+  ) => Effect.Effect<ReadonlyArray<ShareLinkRecipientRecord>, PersistenceSqlError>;
+  readonly listRecipientsForWorkspace: (
+    input: ListShareLinkRecipientsForWorkspaceInput,
+  ) => Effect.Effect<ReadonlyArray<ShareLinkRecipientRecord>, PersistenceSqlError>;
 }
 
 export class ShareLinkRepository extends Context.Service<

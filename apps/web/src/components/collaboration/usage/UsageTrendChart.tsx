@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { cn } from "../../../lib/utils";
+import { UsageBarSeries } from "./UsageBarSeries";
 import {
   formatEstimatedCost,
   formatTokenCount,
@@ -52,37 +52,18 @@ export function UsageTrendChart({
         ) : null}
       </div>
 
-      <div
-        className="mt-2 flex h-16 items-end gap-px"
-        onMouseLeave={() => setHovered(null)}
-        role="img"
-        aria-label={`Daily tokens for ${trend.points.length} UTC days`}
-      >
-        {trend.points.map((point, index) => {
-          const share = trend.maxTokens > 0 ? point.tokens / trend.maxTokens : 0;
-          const isFocus = index === focus;
-          return (
-            <div
-              key={point.day}
-              className="flex h-full flex-1 items-end"
-              onMouseEnter={() => setHovered(index)}
-              title={`${point.label} (UTC) · ${formatTokenCount(point.tokens)} tokens · est. ${formatEstimatedCost(point.cost)}`}
-            >
-              <div
-                className={cn("w-full transition-colors", point.tokens > 0 && "rounded-t-[3px]")}
-                style={{
-                  height: point.tokens > 0 ? `${Math.max(share * 100, 4)}%` : "1px",
-                  backgroundColor: point.tokens
-                    ? isFocus
-                      ? "var(--usage-accent)"
-                      : "var(--usage-accent-soft)"
-                    : "var(--usage-grid)",
-                }}
-              />
-            </div>
-          );
-        })}
-      </div>
+      <UsageBarSeries
+        ariaLabel={`Daily tokens for ${trend.points.length} UTC days`}
+        bars={trend.points.map((point) => ({
+          key: point.day,
+          value: point.tokens,
+          title: `${point.label} (UTC) · ${formatTokenCount(point.tokens)} tokens · est. ${formatEstimatedCost(point.cost)}`,
+        }))}
+        className="mt-2 h-16"
+        focusIndex={focus}
+        onFocus={setHovered}
+        onLeave={() => setHovered(null)}
+      />
 
       <div className="mt-1 flex items-center justify-between text-[10px] tabular-nums text-muted-foreground">
         <span>{trend.points[0]?.label ?? ""}</span>

@@ -90,7 +90,11 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  if (pathname === "/pair" || pathname === "/invite") {
+  // The three routes that draw their own surface for somebody who is not inside
+  // yet. `/share` is here for the same reason as `/invite`: wrapping it in the
+  // authenticated shell would mean a share recipient has to already be a member
+  // to reach the page whose entire job is making them one.
+  if (pathname === "/pair" || pathname === "/invite" || pathname === "/share") {
     return <Outlet />;
   }
 

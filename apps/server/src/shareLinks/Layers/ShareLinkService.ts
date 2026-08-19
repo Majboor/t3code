@@ -6,6 +6,8 @@ import {
   ShareLinkError,
   type ProjectId,
   type ShareLink,
+  type ShareLinkAudience,
+  type ShareLinkAudienceKind,
   type ShareLinkId,
   type ShareLinkScope,
   type ShareLinkToken,
@@ -59,6 +61,81 @@ const WITHHELD_TOKEN = "«withheld»" as ShareLinkToken;
 const MAX_SHARED_FILE_BYTES = 512_000;
 const MAX_LISTED_ENTRIES = 2_000;
 const MAX_LISTING_DEPTH = 12;
+
+/**
+ * How many people one restricted link may name.
+ *
+ * Not a storage limit — the table would hold thousands — but a shape limit. A
+ * link addressed to two hundred people is a public link with extra steps, and
+ * the person making it should be making a public one and saying so. It also
+ * bounds the write this call performs, which is a bounded write on a path a
+ * member can trigger repeatedly.
+ */
+const MAX_SHARE_LINK_RECIPIENTS = 50;
+
+/**
+ * How long a share-link join stays open once it is claimed.
+ *
+ * The claim mints an invite and accepts it in the same breath, so this window
+ * exists for a matter of milliseconds and never reaches an inbox. It is not
+ * zero because an invite that has already expired cannot be accepted, and a
+ * clock that ticks between the two calls would turn a legitimate join into an
+ * unexplainable failure.
+ */
+const CLAIM_INVITE_LIFETIME_MS = 5 * 60 * 1000;
+
+/**
+ * What the roles a share-link joiner arrives with.
+ *
+ * The same `developer` the workspace invite dialog hands out, deliberately:
+ * this link says "come and work in this workspace", and arriving with less
+ * than the invite flow grants would make the same sentence mean two things
+ * depending on which button the sender happened to press.
+ */
+const CLAIM_INVITE_ROLES = ["developer"] as const;
+
+/**
+ * One spelling per person.
+ *
+ * Case and padding are the two ways the same address arrives looking like two,
+ * and both are decided here — at the point of writing and at the point of
+ * comparing, which is the same function — so that the check at redemption is a
+ * string equality and never a question about collation.
+ */
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Enough of an address to be worth storing, and no more.
+ *
+ * Deliberately not a full RFC 5322 parser: the addresses here are compared
+ * against whatever the account system recorded at sign-up, so the only
+ * definition that matters is that one's. This catches the mistakes a person
+ * makes in a form — a name with no domain, a stray space, a pasted "Name
+ * <addr>" — and leaves the rest to the comparison.
+ */
+function isPlausibleEmail(value: string): boolean {
+  if (value.length === 0 || value.length > 254 || /\s|[<>,;]/.test(value)) {
+    return false;
+  }
+  const at = value.indexOf("@");
+  return at > 0 && at === value.lastIndexOf("@") && value.indexOf(".", at) > at + 1;
+}
+
+/**
+ * Storage keeps primitives, so the audience is re-narrowed on the way out —
+ * and an unrecognised one reads as `restricted` rather than `public`.
+ *
+ * This is the opposite of how `toScope` treats an unknown value, and for the
+ * same underlying reason: the safe reading of a grant nobody here understands
+ * is the narrowest one. An unknown scope grants nothing at all; an unknown
+ * audience admits nobody, because `restricted` with a list this build cannot
+ * interpret refuses every claimant.
+ */
+function toAudience(value: string): ShareLinkAudienceKind {
+  return value === "public" ? "public" : "restricted";
+}
 
 /**
  * Path segments a share link may never reach, whoever wrote the path.
@@ -131,6 +208,7 @@ function toShareLinkFields(record: ShareLinkRecord, scope: ShareLinkScope) {
     projectId: record.projectId === null ? null : (record.projectId as ProjectId),
     filePath: record.filePath,
     createdByUserId: record.createdByUserId as UserId,
+    audience: toAudience(record.audience),
     label: record.label,
     createdAt: record.createdAt,
     expiresAt: record.expiresAt,
@@ -140,18 +218,49 @@ function toShareLinkFields(record: ShareLinkRecord, scope: ShareLinkScope) {
   };
 }
 
-/** Everything about a link except the credential. Every read but `create`. */
+/**
+ * Everything about a link except the credential and the people it names.
+ *
+ * `allowedEmails` is null rather than empty, and the difference carries the
+ * security property: this is the shape the *redemption* path hands back, where
+ * an empty array would read as a fact about the link and null reads as "this
+ * reply does not disclose that". Turning a leaked URL into a way to confirm
+ * who was invited is the one thing an email-scoped link must never do.
+ */
 function toRedactedShareLink(record: ShareLinkRecord): ShareLink | null {
-  const scope = toScope(record.scope);
-  return scope === null ? null : { ...toShareLinkFields(record, scope), token: WITHHELD_TOKEN };
-}
-
-/** The one reply that carries the secret, to the one person who just minted it. */
-function toMintedShareLink(record: ShareLinkRecord): ShareLink | null {
   const scope = toScope(record.scope);
   return scope === null
     ? null
-    : { ...toShareLinkFields(record, scope), token: record.token as ShareLinkToken };
+    : { ...toShareLinkFields(record, scope), token: WITHHELD_TOKEN, allowedEmails: null };
+}
+
+/**
+ * The same row for a caller already proven to be a member of the workspace,
+ * who may therefore see who the link was addressed to.
+ */
+function toListedShareLink(
+  record: ShareLinkRecord,
+  emails: ReadonlyArray<string>,
+): ShareLink | null {
+  const scope = toScope(record.scope);
+  return scope === null
+    ? null
+    : { ...toShareLinkFields(record, scope), token: WITHHELD_TOKEN, allowedEmails: emails };
+}
+
+/** The one reply that carries the secret, to the one person who just minted it. */
+function toMintedShareLink(
+  record: ShareLinkRecord,
+  emails: ReadonlyArray<string>,
+): ShareLink | null {
+  const scope = toScope(record.scope);
+  return scope === null
+    ? null
+    : {
+        ...toShareLinkFields(record, scope),
+        token: record.token as ShareLinkToken,
+        allowedEmails: emails,
+      };
 }
 
 /** Null means it never lapses; anything unparseable is treated as lapsed. */
@@ -252,6 +361,59 @@ const makeShareLinkService = Effect.gen(function* () {
     return safeSegments(input.filePath) === null
       ? invalid("That file path cannot be shared.")
       : Effect.void;
+  };
+
+  /**
+   * The audience, checked against the scope and reduced to a list of addresses.
+   *
+   * Restricted is refused on anything but a workspace link, rather than being
+   * accepted and ignored. A file or a project is served as bytes to a browser
+   * with no session — there is nobody to compare an address against — so a
+   * restricted file link would be a promise the redemption path cannot keep,
+   * and the worst kind of security control is one that renders as a
+   * reassurance and enforces nothing.
+   */
+  const resolveAudience = (input: {
+    readonly scope: ShareLinkScope;
+    readonly audience: ShareLinkAudience;
+  }): Effect.Effect<
+    { readonly kind: ShareLinkAudienceKind; readonly emails: ReadonlyArray<string> },
+    ShareLinkError
+  > => {
+    const invalid = (message: string) =>
+      Effect.fail(new ShareLinkError({ code: "invalid-target", message }));
+
+    if (input.audience.kind === "public") {
+      return Effect.succeed({ kind: "public" as const, emails: [] });
+    }
+    if (input.scope !== "workspace") {
+      return invalid(
+        "Only a workspace link can be limited to particular people. A file or project link is read by a browser with no account, so there is nobody to check.",
+      );
+    }
+
+    const emails: string[] = [];
+    for (const candidate of input.audience.emails) {
+      const email = normalizeEmail(candidate);
+      if (!isPlausibleEmail(email)) {
+        // The address is echoed because the person reading this typed it and
+        // is looking at it. This reply goes only to a member of the workspace
+        // who is mid-way through creating the link.
+        return invalid(`"${candidate.trim()}" is not an email address.`);
+      }
+      if (!emails.includes(email)) {
+        emails.push(email);
+      }
+    }
+    if (emails.length === 0) {
+      return invalid("Name at least one person, or choose to share with anyone who has the link.");
+    }
+    if (emails.length > MAX_SHARE_LINK_RECIPIENTS) {
+      return invalid(
+        `A link can name at most ${MAX_SHARE_LINK_RECIPIENTS} people. Beyond that, share it with anyone who has the link and say so.`,
+      );
+    }
+    return Effect.succeed({ kind: "restricted" as const, emails });
   };
 
   /**
@@ -424,16 +586,22 @@ const makeShareLinkService = Effect.gen(function* () {
    * failed write here is logged and swallowed: refusing the content because the
    * analytics row would not go in would break the feature to protect a counter.
    */
-  const recordView = (linkId: string, viewerFingerprint: string | null) =>
+  const recordView = (
+    linkId: string,
+    viewerFingerprint: string | null,
+    // Null for an ordinary redemption: that arrives with no session, and the
+    // route is mounted where there is none to read, so recording a viewer
+    // would mean inventing one. A *claim* is the exception — the person is
+    // signing themselves into the workspace, and who joined through which link
+    // is the one thing the owner of that link will want to know.
+    viewerUserId: string | null = null,
+  ) =>
     repository
       .recordView({
         viewId: Crypto.randomUUID(),
         linkId,
         viewedAt: nowIso(),
-        // Always null. A share link is redeemed with no session, and the route
-        // is mounted where there is none to read — recording a viewer here
-        // would mean inventing one.
-        viewerUserId: null,
+        viewerUserId,
         viewerFingerprint,
       })
       .pipe(
@@ -457,6 +625,7 @@ const makeShareLinkService = Effect.gen(function* () {
       const projectId = input.projectId ?? null;
       const filePath = input.filePath ?? null;
       yield* validateTarget({ scope: input.scope, projectId, filePath });
+      const audience = yield* resolveAudience({ scope: input.scope, audience: input.audience });
       if (projectId !== null) {
         // A project that is missing and a project belonging to somebody else
         // give the same answer, so this cannot be used to discover which
@@ -486,13 +655,15 @@ const makeShareLinkService = Effect.gen(function* () {
           // From the session, never the payload — otherwise anyone could mint
           // links in somebody else's name.
           createdByUserId: actor.userId,
+          audience: audience.kind,
+          recipientEmails: audience.emails,
           label: input.label ?? null,
           createdAt: nowIso(),
           expiresAt: input.expiresAt ?? null,
         })
         .pipe(Effect.mapError(storageFailure("Could not create that share link.")));
 
-      const link = toMintedShareLink(record);
+      const link = toMintedShareLink(record, audience.emails);
       return link === null ? yield* notFound() : { link };
     });
 
@@ -511,6 +682,24 @@ const makeShareLinkService = Effect.gen(function* () {
               .listLinksForProject({ tenantId: input.tenantId, projectId })
               .pipe(Effect.mapError(storageFailure("Could not read this project's links.")));
 
+      // One query for every recipient in the workspace rather than one per
+      // row: the panel renders a page of links at a time, and a lookup per row
+      // would make the cost of opening it depend on how many links a workspace
+      // has ever made. Scoped by workspace in SQL, so a link belonging to
+      // another one cannot contribute an address here even by accident.
+      const recipients = yield* repository
+        .listRecipientsForWorkspace(scope)
+        .pipe(Effect.mapError(storageFailure("Could not read who these links were sent to.")));
+      const emailsByLink = new Map<string, string[]>();
+      for (const recipient of recipients) {
+        const existing = emailsByLink.get(recipient.linkId);
+        if (existing) {
+          existing.push(recipient.email);
+        } else {
+          emailsByLink.set(recipient.linkId, [recipient.email]);
+        }
+      }
+
       const links: ShareLink[] = [];
       for (const record of records) {
         // The project read is keyed by tenant and project, not by workspace, so
@@ -520,7 +709,7 @@ const makeShareLinkService = Effect.gen(function* () {
         if (record.workspaceId !== input.workspaceId) {
           continue;
         }
-        const link = toRedactedShareLink(record);
+        const link = toListedShareLink(record, emailsByLink.get(record.linkId) ?? []);
         if (link !== null) {
           links.push(link);
         }
@@ -554,24 +743,42 @@ const makeShareLinkService = Effect.gen(function* () {
         });
       }
 
-      const link = toRedactedShareLink(record.value.record);
+      // The caller is a member and has just switched this link off; the row
+      // they get back is the one their list will render, so it carries the
+      // recipients like every other authorised read of it.
+      const recipients = yield* repository
+        .listRecipients({ linkId: input.linkId })
+        .pipe(Effect.mapError(storageFailure("Could not read who that link was sent to.")));
+      const link = toListedShareLink(
+        record.value.record,
+        recipients.map((recipient) => recipient.email),
+      );
       return link === null ? yield* notFound() : { link };
     });
 
-  const redeem: ShareLinkServiceShape["redeem"] = (input) =>
+  /**
+   * The one lookup behind every unauthenticated entry point, and the one place
+   * the three ways of being unusable collapse into a single answer.
+   *
+   * Missing, expired, revoked, and a scope this build does not recognise all
+   * leave by the same door with the same wording. Every caller below is
+   * reachable by someone holding nothing but a guess, so any of them that told
+   * these apart would confirm that a guessed token was once real.
+   */
+  const readActiveLinkByToken = (token: string) =>
     Effect.gen(function* () {
       const found = yield* repository
-        .getLinkByToken({ token: input.token })
+        .getLinkByToken({ token })
         .pipe(Effect.mapError(storageFailure("Could not read that link.")));
       if (Option.isNone(found)) {
         return yield* notFound();
       }
 
       const record = found.value;
+      // Redacted before it is handed back even here. A visitor holding the
+      // token in their URL bar gains nothing from being told it again, and
+      // every place the token is not is a place it cannot leak from.
       const link = toRedactedShareLink(record);
-      // The link is redacted before it is handed back even here. A visitor
-      // holding the token in their URL bar gains nothing from being told it
-      // again, and every place the token is not is a place it cannot leak from.
       if (link === null) {
         return yield* notFound();
       }
@@ -581,6 +788,12 @@ const makeShareLinkService = Effect.gen(function* () {
       if (record.revokedAt !== null || hasExpired(record.expiresAt, Date.now())) {
         return yield* notFound();
       }
+      return { record, link };
+    });
+
+  const redeem: ShareLinkServiceShape["redeem"] = (input) =>
+    Effect.gen(function* () {
+      const { record, link } = yield* readActiveLinkByToken(input.token);
 
       const redemption: ShareLinkRedemption = yield* Effect.gen(function* () {
         if (link.scope === "workspace") {
@@ -631,7 +844,133 @@ const makeShareLinkService = Effect.gen(function* () {
       return redemption;
     });
 
-  return { create, list, revoke, redeem } satisfies ShareLinkServiceShape;
+  const previewWorkspaceLink: ShareLinkServiceShape["previewWorkspaceLink"] = (input) =>
+    Effect.gen(function* () {
+      const { link } = yield* readActiveLinkByToken(input.token);
+      // A file or project token asked about here is answered as if it did not
+      // exist, rather than as "wrong kind of link". The join page is reached by
+      // whoever holds a URL, and "that token is real but not a workspace" is a
+      // sentence worth nothing to its owner and a great deal to a guesser.
+      if (link.scope !== "workspace") {
+        return yield* notFound();
+      }
+      return {
+        scope: "workspace" as const,
+        audience: link.audience,
+        // The label is the creator's own words about the workspace. No id, no
+        // title, no members, and above all no addresses.
+        label: link.label,
+      };
+    });
+
+  /**
+   * Joining, and the only place an audience is enforced.
+   *
+   * The order matters. The link is read first, so a wrong account learns
+   * nothing a right one would not; the audience is checked before anything is
+   * written, so a refused claim leaves no invite behind; and membership is
+   * checked before the invite is minted, so a second click does not stack up a
+   * second membership.
+   */
+  const claim: ShareLinkServiceShape["claim"] = (actor, input) =>
+    Effect.gen(function* () {
+      const { record, link } = yield* readActiveLinkByToken(input.token);
+      if (link.scope !== "workspace") {
+        return yield* notFound();
+      }
+
+      const scope: LinkScope = { tenantId: link.tenantId, workspaceId: link.workspaceId };
+      const claimant = normalizeEmail(actor.email ?? "");
+
+      if (link.audience === "restricted") {
+        const recipients = yield* repository
+          .listRecipients({ linkId: record.linkId })
+          .pipe(Effect.mapError(storageFailure("Could not read who that link was sent to.")));
+        // One refusal for "your account has no email", "your email is not on
+        // the list" and "this link names nobody". The person holding the URL
+        // is told what to do about it and nothing about who else was named —
+        // an error that distinguished those cases would let whoever forwarded
+        // themselves the link probe for the addresses it was meant for.
+        const allowed =
+          claimant.length > 0 &&
+          recipients.some((recipient) => normalizeEmail(recipient.email) === claimant);
+        if (!allowed) {
+          return yield* new ShareLinkError({
+            code: "forbidden",
+            message:
+              "This link was sent to particular people. Sign in with the address it was sent to.",
+          });
+        }
+      }
+
+      const roster = yield* collaboration
+        .listMembers(actor, scope)
+        .pipe(Effect.mapError(storageFailure("Could not read who belongs to this workspace.")));
+      if (roster.members.some((member) => member.userId === actor.userId)) {
+        // Already inside. Not an error and not a second membership: this is
+        // somebody re-opening the link they joined with last week.
+        return { tenantId: link.tenantId, workspaceId: link.workspaceId, joined: false };
+      }
+
+      /**
+       * The grant itself is the invite flow's, not a second way in.
+       *
+       * `acceptInvite` is the only thing in this product that creates a
+       * membership, and it is what writes the roster row, the activity entry
+       * and the stream event that make a new member appear to everyone already
+       * in the workspace. Minting a membership here instead would be a second
+       * definition of "joined" that the collaboration panel would eventually
+       * disagree with — so this mints an invite addressed to the person who
+       * just proved who they are, and accepts it on their behalf.
+       *
+       * The invite is attributed to whoever made the link, because they are
+       * the person who decided this visitor could come in.
+       */
+      const inviter = roster.members.find((member) => member.userId === link.createdByUserId);
+      const invited = yield* collaboration
+        .createInvite(
+          {
+            userId: link.createdByUserId,
+            displayName: inviter?.displayName ?? "A workspace member",
+            ...(inviter?.avatarInitials ? { avatarInitials: inviter.avatarInitials } : {}),
+          },
+          {
+            tenantId: link.tenantId,
+            workspaceId: link.workspaceId,
+            // The claimant's own address when the account has one. A public
+            // link may be claimed by an account with no email at all, and the
+            // display name is then the only true thing to record — inventing
+            // an address for the activity feed would be worse than admitting
+            // there is none.
+            email: claimant.length > 0 ? claimant : actor.displayName.trim() || "share link",
+            scope: "workspace",
+            roles: CLAIM_INVITE_ROLES,
+            expiresAt: new Date(Date.now() + CLAIM_INVITE_LIFETIME_MS).toISOString(),
+          },
+        )
+        .pipe(Effect.mapError(storageFailure("Could not add you to this workspace.")));
+
+      yield* collaboration
+        .acceptInvite(actor, { inviteId: invited.invite.id })
+        .pipe(Effect.mapError(storageFailure("Could not add you to this workspace.")));
+
+      // Recorded only once the join succeeded, and against the person who
+      // joined: a claim that was refused must not show up in the owner's list
+      // as traffic, and a claim that worked is the most meaningful thing a
+      // workspace link ever does.
+      yield* recordView(record.linkId, null, actor.userId);
+
+      return { tenantId: link.tenantId, workspaceId: link.workspaceId, joined: true };
+    });
+
+  return {
+    create,
+    list,
+    revoke,
+    redeem,
+    previewWorkspaceLink,
+    claim,
+  } satisfies ShareLinkServiceShape;
 });
 
 export const ShareLinkServiceLive: Layer.Layer<

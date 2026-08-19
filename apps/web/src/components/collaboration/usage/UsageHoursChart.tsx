@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { UsageBarSeries } from "./UsageBarSeries";
 import { formatTokenCount, type HourOfDayView } from "./usageMetrics.logic";
 
 const AXIS_HOURS = new Set([0, 6, 12, 18]);
@@ -44,37 +45,20 @@ export function UsageHoursChart({
         )}
       </div>
 
-      <div
-        className="mt-2 flex h-14 items-end gap-[2px]"
-        onMouseLeave={() => setHovered(null)}
-        role="img"
-        aria-label={`Tokens by hour of day, ${hours.zoneLabel}`}
-      >
-        {hours.buckets.map((bucket, index) => {
-          const share = hours.maxTokens > 0 ? bucket.tokens / hours.maxTokens : 0;
-          const isFocus = index === focus;
-          return (
-            <div
-              key={bucket.hour}
-              className="flex h-full flex-1 items-end"
-              onMouseEnter={() => setHovered(index)}
-              title={`${bucket.label} ${hours.zoneLabel} (${String(bucket.utcHour).padStart(2, "0")}:00 UTC) · ${formatTokenCount(bucket.tokens)} tokens`}
-            >
-              <div
-                className="w-full rounded-t-[3px]"
-                style={{
-                  height: bucket.tokens > 0 ? `${Math.max(share * 100, 5)}%` : "1px",
-                  backgroundColor: bucket.tokens
-                    ? isFocus
-                      ? "var(--usage-accent)"
-                      : "var(--usage-accent-soft)"
-                    : "var(--usage-grid)",
-                }}
-              />
-            </div>
-          );
-        })}
-      </div>
+      <UsageBarSeries
+        ariaLabel={`Tokens by hour of day, ${hours.zoneLabel}`}
+        bars={hours.buckets.map((bucket) => ({
+          key: String(bucket.hour),
+          value: bucket.tokens,
+          title: `${bucket.label} ${hours.zoneLabel} (${String(bucket.utcHour).padStart(2, "0")}:00 UTC) · ${formatTokenCount(bucket.tokens)} tokens`,
+        }))}
+        className="mt-2 h-14"
+        focusIndex={focus}
+        gapClassName="gap-[2px]"
+        minPercent={5}
+        onFocus={setHovered}
+        onLeave={() => setHovered(null)}
+      />
 
       <div className="mt-1 flex text-[10px] tabular-nums text-muted-foreground">
         {hours.buckets.map((bucket) => (

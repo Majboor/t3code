@@ -6,11 +6,14 @@ import { toPersistenceSqlError } from "../Errors.ts";
 import {
   CreateShareLinkInput,
   GetShareLinkByTokenInput,
+  ListShareLinkRecipientsForWorkspaceInput,
+  ListShareLinkRecipientsInput,
   ListShareLinksForProjectInput,
   ListShareLinksForWorkspaceInput,
   ListShareLinkViewsInput,
   RecordShareLinkViewInput,
   RevokeShareLinkInput,
+  type ShareLinkRecipientRecord,
   type ShareLinkRecord,
   ShareLinkRepository,
   type ShareLinkRepositoryShape,
@@ -26,12 +29,19 @@ const ShareLinkRow = Schema.Struct({
   projectId: Schema.NullOr(Schema.String),
   filePath: Schema.NullOr(Schema.String),
   createdByUserId: Schema.String,
+  audience: Schema.String,
   label: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   expiresAt: Schema.NullOr(Schema.String),
   revokedAt: Schema.NullOr(Schema.String),
   lastViewedAt: Schema.NullOr(Schema.String),
   viewCount: Schema.Int,
+});
+
+const ShareLinkRecipientRow = Schema.Struct({
+  linkId: Schema.String,
+  email: Schema.String,
+  createdAt: Schema.String,
 });
 
 const ShareLinkViewRow = Schema.Struct({
@@ -50,12 +60,22 @@ const linkColumns = `link_id AS "linkId",
   project_id AS "projectId",
   file_path AS "filePath",
   created_by_user_id AS "createdByUserId",
+  audience,
   label,
   created_at AS "createdAt",
   expires_at AS "expiresAt",
   revoked_at AS "revokedAt",
   last_viewed_at AS "lastViewedAt",
   view_count AS "viewCount"`;
+
+const recipientColumns = `link_id AS "linkId",
+  email,
+  created_at AS "createdAt"`;
+
+/** The same three columns, qualified for the read that joins to `share_links`. */
+const joinedRecipientColumns = `r.link_id AS "linkId",
+  r.email,
+  r.created_at AS "createdAt"`;
 
 const viewColumns = `view_id AS "viewId",
   link_id AS "linkId",
@@ -85,6 +105,7 @@ const makeShareLinkRepository = Effect.gen(function* () {
           project_id,
           file_path,
           created_by_user_id,
+          audience,
           label,
           created_at,
           expires_at,
@@ -101,6 +122,7 @@ const makeShareLinkRepository = Effect.gen(function* () {
           ${input.projectId},
           ${input.filePath},
           ${input.createdByUserId},
+          ${input.audience},
           ${input.label},
           ${input.createdAt},
           ${input.expiresAt},
@@ -222,6 +244,30 @@ const makeShareLinkRepository = Effect.gen(function* () {
       `,
   });
 
+  const listRecipientsRows = SqlSchema.findAll({
+    Request: ListShareLinkRecipientsInput,
+    Result: ShareLinkRecipientRow,
+    execute: ({ linkId }) =>
+      sql`SELECT ${sql.literal(recipientColumns)} FROM share_link_recipients
+          WHERE link_id = ${linkId}
+          ORDER BY email ASC`,
+  });
+
+  const listRecipientsForWorkspaceRows = SqlSchema.findAll({
+    Request: ListShareLinkRecipientsForWorkspaceInput,
+    Result: ShareLinkRecipientRow,
+    // Joined rather than filtered in the caller: a recipient row carries no
+    // tenant of its own, and handing back rows for links the caller was never
+    // authorised to read would make the panel's own filtering the only thing
+    // standing between one workspace and another's recipient lists.
+    execute: ({ tenantId, workspaceId }) =>
+      sql`SELECT ${sql.literal(joinedRecipientColumns)}
+          FROM share_link_recipients r
+          JOIN share_links l ON l.link_id = r.link_id
+          WHERE l.tenant_id = ${tenantId} AND l.workspace_id = ${workspaceId}
+          ORDER BY r.link_id ASC, r.email ASC`,
+  });
+
   const listViewsRows = SqlSchema.findAll({
     Request: ListShareLinkViewsInput,
     Result: ShareLinkViewRow,
@@ -232,11 +278,34 @@ const makeShareLinkRepository = Effect.gen(function* () {
           LIMIT ${limit}`,
   });
 
+  /**
+   * The link and the people it is for, in one transaction.
+   *
+   * Not two calls, because the gap between them is a window in which a
+   * restricted link exists with an empty recipient list — and an empty list is
+   * exactly what the redemption check reads when it decides nobody may enter.
+   * A half-written link that lets nobody in is recoverable; the reverse
+   * ordering would be a link that briefly lets everybody in, and it is not
+   * worth reasoning about which of the two a crash would leave behind.
+   */
   const createLink: ShareLinkRepositoryShape["createLink"] = (input) =>
-    createLinkRow(input).pipe(
-      Effect.mapError(toPersistenceSqlError("ShareLinkRepository.createLink:query")),
-      Effect.map(toShareLink),
-    );
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const row = yield* createLinkRow(input);
+          yield* Effect.forEach(
+            input.recipientEmails,
+            (email) =>
+              sql`
+                INSERT INTO share_link_recipients (link_id, email, created_at)
+                VALUES (${input.linkId}, ${email}, ${input.createdAt})
+              `,
+            { discard: true },
+          );
+          return toShareLink(row);
+        }),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("ShareLinkRepository.createLink:query")));
 
   const listLinksForWorkspace: ShareLinkRepositoryShape["listLinksForWorkspace"] = (input) =>
     listLinksForWorkspaceRows(input).pipe(
@@ -309,6 +378,22 @@ const makeShareLinkRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.map(toShareLinkView)),
     );
 
+  const listRecipients: ShareLinkRepositoryShape["listRecipients"] = (input) =>
+    listRecipientsRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("ShareLinkRepository.listRecipients:query")),
+      Effect.map((rows) => rows.map(toShareLinkRecipient)),
+    );
+
+  const listRecipientsForWorkspace: ShareLinkRepositoryShape["listRecipientsForWorkspace"] = (
+    input,
+  ) =>
+    listRecipientsForWorkspaceRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ShareLinkRepository.listRecipientsForWorkspace:query"),
+      ),
+      Effect.map((rows) => rows.map(toShareLinkRecipient)),
+    );
+
   return {
     createLink,
     listLinksForWorkspace,
@@ -317,6 +402,8 @@ const makeShareLinkRepository = Effect.gen(function* () {
     revokeLink,
     recordView,
     listViews,
+    listRecipients,
+    listRecipientsForWorkspace,
   } satisfies ShareLinkRepositoryShape;
 });
 
@@ -330,12 +417,21 @@ function toShareLink(row: typeof ShareLinkRow.Type): ShareLinkRecord {
     projectId: row.projectId,
     filePath: row.filePath,
     createdByUserId: row.createdByUserId,
+    audience: row.audience,
     label: row.label,
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
     revokedAt: row.revokedAt,
     lastViewedAt: row.lastViewedAt,
     viewCount: row.viewCount,
+  };
+}
+
+function toShareLinkRecipient(row: typeof ShareLinkRecipientRow.Type): ShareLinkRecipientRecord {
+  return {
+    linkId: row.linkId,
+    email: row.email,
+    createdAt: row.createdAt,
   };
 }
 

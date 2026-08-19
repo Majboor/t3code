@@ -1,10 +1,13 @@
 import type {
   ShareLink,
+  ShareLinkClaimInput,
+  ShareLinkClaimResult,
   ShareLinkCreateInput,
   ShareLinkCreateResult,
   ShareLinkError,
   ShareLinkListInput,
   ShareLinkListResult,
+  ShareLinkPreview,
   ShareLinkRevokeInput,
   ShareLinkRevokeResult,
   UserId,
@@ -24,6 +27,24 @@ export interface ShareLinkActor {
   readonly userId: UserId;
   readonly displayName: string;
   readonly avatarInitials?: string;
+}
+
+/**
+ * Whoever is redeeming an email-scoped link, which is a stricter thing than a
+ * `ShareLinkActor`.
+ *
+ * `email` is the whole point and it is not optional-by-omission: it is either
+ * an address the server itself holds for this session's account, or `null`
+ * because the session has none. It never comes from the request body. A claim
+ * that accepted an email from its caller would be a claim anybody could make
+ * about anybody, and the enforcement below would be theatre.
+ */
+export interface ShareLinkClaimActor {
+  readonly userId: UserId;
+  readonly displayName: string;
+  readonly avatarInitials?: string;
+  /** The session's own verified address, or null when the session has none. */
+  readonly email: string | null;
 }
 
 /** One file inside a project listing. Names and sizes, never contents. */
@@ -132,6 +153,39 @@ export interface ShareLinkServiceShape {
   readonly redeem: (
     input: ShareLinkRedemptionInput,
   ) => Effect.Effect<ShareLinkRedemption, ShareLinkError>;
+
+  /**
+   * What a page may say about a workspace link to somebody who has not yet
+   * said who they are.
+   *
+   * Deliberately not `redeem`: this is read on every render of the join page,
+   * including the reload that follows a sign-in, and counting those as views
+   * would make a link's traffic a measure of how long somebody took to find
+   * their password. `redeem` counts the arrival; this only describes it.
+   *
+   * Returns no email, no id and no member list — see `ShareLinkPreview`. A
+   * token that is missing, expired, revoked, or points at a file or a project
+   * fails the same way, so this cannot be used to sort real tokens from
+   * guesses any better than `/s/` already can.
+   */
+  readonly previewWorkspaceLink: (input: {
+    readonly token: string;
+  }) => Effect.Effect<ShareLinkPreview, ShareLinkError>;
+
+  /**
+   * Turns a signed-in visitor into a member, if the link says they may be.
+   *
+   * The only method that enforces an audience, and the only one that grants
+   * anything. For a `restricted` link the actor's own account email has to be
+   * on the link's list; nothing the caller sends takes part in that decision.
+   *
+   * Idempotent for someone who is already a member: re-opening a link you have
+   * used is not an error, it is a person clicking their bookmark.
+   */
+  readonly claim: (
+    actor: ShareLinkClaimActor,
+    input: ShareLinkClaimInput,
+  ) => Effect.Effect<ShareLinkClaimResult, ShareLinkError>;
 }
 
 export class ShareLinkService extends Context.Service<ShareLinkService, ShareLinkServiceShape>()(

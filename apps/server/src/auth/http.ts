@@ -207,8 +207,13 @@ export const authSessionRouteLayer = HttpRouter.add(
       });
     }
 
+    // Pages where somebody is arriving *as themselves* and the shortcut would
+    // sign them in as somebody else. `/share` joins the list because a share
+    // recipient is by definition not the person running this server, and
+    // handing them the local owner's session would put a stranger's browser
+    // inside every workspace on it.
     const authEntryPath = request.headers["x-t3-auth-entry-path"];
-    if (authEntryPath === "/invite" || authEntryPath === "/pair") {
+    if (authEntryPath === "/invite" || authEntryPath === "/pair" || authEntryPath === "/share") {
       return HttpServerResponse.jsonUnsafe(session, { status: 200 });
     }
 

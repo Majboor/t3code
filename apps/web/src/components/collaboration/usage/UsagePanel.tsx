@@ -9,6 +9,7 @@ import { UsageHoursChart } from "./UsageHoursChart";
 import { UsageLeaderboard } from "./UsageLeaderboard";
 import { UsageProviderSplit } from "./UsageProviderSplit";
 import { UsageTrendChart } from "./UsageTrendChart";
+import { USAGE_PALETTE } from "./usagePalette";
 import {
   buildDayTrendView,
   describeUsageError,
@@ -21,20 +22,6 @@ import {
   formatWindowLabel,
   viewerUtcOffsetMinutes,
 } from "./usageMetrics.logic";
-
-/**
- * The panel's own chart palette, kept local because the app has no chart ramp
- * of its own yet. Slots come from a validated categorical set: blue and orange
- * clear the colourblind separation gates in both modes, and the unattributed
- * slice takes a neutral grey on purpose — it is the absence of an identity,
- * not a third one.
- */
-const USAGE_PALETTE = cn(
-  "[--usage-accent:#2a78d6] [--usage-accent-soft:#86b6ef] [--usage-codex:#2a78d6]",
-  "[--usage-claude:#eb6834] [--usage-unrecorded:#8a8983] [--usage-grid:#e5e4df]",
-  "dark:[--usage-accent:#3987e5] dark:[--usage-accent-soft:#184f95] dark:[--usage-codex:#3987e5]",
-  "dark:[--usage-claude:#d95926] dark:[--usage-unrecorded:#7d7c76] dark:[--usage-grid:#33322f]",
-);
 
 export function UsagePanel({
   usage,

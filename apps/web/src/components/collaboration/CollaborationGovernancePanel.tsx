@@ -133,10 +133,13 @@ function ApprovalRow({
 }
 
 /**
- * The governance half of the collaboration popover: who may prompt, what is
- * waiting on a decision, whose branch is whose, and this person's own filter.
+ * Whose branch is whose, and a way to bring one in.
+ *
+ * Split out of the governance panel so the collaboration popover can file it
+ * under branches, where somebody looking for a branch would go, rather than
+ * under the approval rules it has nothing to do with.
  */
-export function CollaborationGovernancePanel({
+export function CollaborationBranchClaims({
   governance,
   environmentId,
   workspaceRoot,
@@ -146,25 +149,7 @@ export function CollaborationGovernancePanel({
   /** Needed to merge somebody else's branch; without it the list is read-only. */
   workspaceRoot: string | null;
 }) {
-  const {
-    settings,
-    canManage,
-    pendingApprovals,
-    canDecide,
-    preferences,
-    branchClaims,
-    touches,
-    myBranchClaim,
-    decide,
-    setApprovalMode,
-    setViewPreferences,
-  } = governance;
-
-  const showOthers = preferences?.showOthersPrompts ?? true;
-  // Recomputed on render rather than memoised on `touches`: the window is
-  // relative to now, so a memo would keep saying two people are in a file long
-  // after they both left.
-  const contested = findContention(touches, { now: Date.now() });
+  const { branchClaims, canManage } = governance;
   const [merging, setMerging] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<Record<string, ReadonlyArray<string>>>({});
 
@@ -212,9 +197,100 @@ export function CollaborationGovernancePanel({
     }
   };
 
+  if (branchClaims.length === 0) {
+    return (
+      <p className="text-[11px] text-muted-foreground" data-testid="collaboration-branch-claims">
+        Nobody has claimed a branch of their own, so everybody's work lands on the shared one.
+      </p>
+    );
+  }
+
+  return (
+    <div data-testid="collaboration-branch-claims">
+      <div className="mb-2 text-xs font-medium text-muted-foreground">Who is on what</div>
+      <div className="grid gap-1">
+        {branchClaims.map((claim) => (
+          <div
+            key={claim.userId}
+            className="flex items-center gap-2 text-[11px]"
+            data-testid="collaboration-branch-claim"
+          >
+            <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-foreground">{claim.branch}</span>
+            <span className="shrink-0 text-muted-foreground">{claim.displayName}</span>
+            {canManage && workspaceRoot ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={merging !== null}
+                data-testid="collaboration-merge-claim"
+                onClick={() => void mergeClaim(claim.branch)}
+              >
+                {merging === claim.branch ? "Merging…" : "Merge"}
+              </Button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+
+      {Object.entries(conflicts).map(([branch, paths]) => (
+        <div
+          key={branch}
+          className="mt-1.5 rounded border border-destructive/40 bg-destructive/5 p-1.5"
+          data-testid="collaboration-merge-conflict"
+          data-branch={branch}
+        >
+          <div className="text-[11px] font-medium text-destructive">
+            {branch} needs somebody to decide
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">
+            Both sides changed the same lines. Open each file, decide what it should say, and
+            commit.
+          </div>
+          <div className="mt-1 grid gap-0.5">
+            {paths.map((path) => (
+              <div key={path} className="truncate font-mono text-[10px] text-foreground">
+                {path}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The governance half of the collaboration popover: who may prompt, what is
+ * waiting on a decision, and this person's own filter.
+ */
+export function CollaborationGovernancePanel({
+  governance,
+}: {
+  governance: CollaborationGovernance;
+}) {
+  const {
+    settings,
+    canManage,
+    pendingApprovals,
+    canDecide,
+    preferences,
+    touches,
+    myBranchClaim,
+    decide,
+    setApprovalMode,
+    setViewPreferences,
+  } = governance;
+
+  const showOthers = preferences?.showOthersPrompts ?? true;
+  // Recomputed on render rather than memoised on `touches`: the window is
+  // relative to now, so a memo would keep saying two people are in a file long
+  // after they both left.
+  const contested = findContention(touches, { now: Date.now() });
+
   return (
     <div className="grid gap-3">
-      <div className="border-t border-border pt-3">
+      <div>
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-xs font-medium">Collaborative view</div>
@@ -317,60 +393,6 @@ export function CollaborationGovernancePanel({
               ? "You are on your own branch, so your edits are not landing on top of theirs."
               : "Both sets of edits land in the same file, and the last one written wins. Your own branch keeps them apart until somebody merges."}
           </p>
-        </div>
-      ) : null}
-
-      {branchClaims.length > 0 ? (
-        <div className="border-t border-border pt-3">
-          <div className="mb-2 text-xs font-medium text-muted-foreground">Branches</div>
-          <div className="grid gap-1">
-            {branchClaims.map((claim) => (
-              <div
-                key={claim.userId}
-                className="flex items-center gap-2 text-[11px]"
-                data-testid="collaboration-branch-claim"
-              >
-                <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-foreground">{claim.branch}</span>
-                <span className="shrink-0 text-muted-foreground">{claim.displayName}</span>
-                {canManage && workspaceRoot ? (
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={merging !== null}
-                    data-testid="collaboration-merge-claim"
-                    onClick={() => void mergeClaim(claim.branch)}
-                  >
-                    {merging === claim.branch ? "Merging…" : "Merge"}
-                  </Button>
-                ) : null}
-              </div>
-            ))}
-          </div>
-
-          {Object.entries(conflicts).map(([branch, paths]) => (
-            <div
-              key={branch}
-              className="mt-1.5 rounded border border-destructive/40 bg-destructive/5 p-1.5"
-              data-testid="collaboration-merge-conflict"
-              data-branch={branch}
-            >
-              <div className="text-[11px] font-medium text-destructive">
-                {branch} needs somebody to decide
-              </div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground">
-                Both sides changed the same lines. Open each file, decide what it should say, and
-                commit.
-              </div>
-              <div className="mt-1 grid gap-0.5">
-                {paths.map((path) => (
-                  <div key={path} className="truncate font-mono text-[10px] text-foreground">
-                    {path}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
         </div>
       ) : null}
     </div>

@@ -526,13 +526,20 @@ describe("share links", () => {
     const result = await createT3Api(transport).shareLinks.create({
       ...scope,
       scope: "file",
+      audience: { kind: "public" },
       projectId: "project-1" as never,
       filePath: "src/index.ts" as never,
     });
 
     expect(calls[0]).toEqual({
       method: WS_METHODS.shareLinksCreate,
-      input: { ...scope, scope: "file", projectId: "project-1", filePath: "src/index.ts" },
+      input: {
+        ...scope,
+        scope: "file",
+        audience: { kind: "public" },
+        projectId: "project-1",
+        filePath: "src/index.ts",
+      },
     });
     expect(result).toEqual({ link });
   });
@@ -543,6 +550,7 @@ describe("share links", () => {
     await createT3Api(transport).shareLinks.create({
       ...scope,
       scope: "workspace",
+      audience: { kind: "restricted", emails: ["ana@example.test" as never] },
       label: "For the design review" as never,
     });
 

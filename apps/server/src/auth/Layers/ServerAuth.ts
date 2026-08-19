@@ -552,6 +552,10 @@ export const makeServerAuth = Effect.gen(function* () {
         role: "client",
         client,
         userId: identity.userId,
+        // Carried through from the verified token's claims, not from anything
+        // the caller typed. It is what lets a share link addressed to a person
+        // be enforced against the account redeeming it.
+        ...(identity.email ? { email: identity.email } : {}),
         expiresAt,
         ...(tenantSessionContext ? { tenantSessionContext } : {}),
       };

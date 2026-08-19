@@ -21,6 +21,19 @@ describe("resolveAuthGateRedirect", () => {
     ).toBeNull();
   });
 
+  it("leaves a share recipient on the join page, which is where membership comes from", () => {
+    // Somebody who has just created an account to open a share link has no
+    // membership yet — acquiring one is what the page they are on does.
+    // Bouncing them to `/invite` would drop the share token and strand them on
+    // "invite link is missing".
+    expect(
+      resolveAuthGateRedirect({
+        authGateState: { status: "authenticated", tenantStatus: "pending-membership" },
+        pathname: "/share",
+      }),
+    ).toBeNull();
+  });
+
   it("does not redirect active members or unauthenticated visitors", () => {
     expect(
       resolveAuthGateRedirect({

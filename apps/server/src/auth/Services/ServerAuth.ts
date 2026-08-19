@@ -30,6 +30,21 @@ export interface AuthenticatedSession {
   readonly role: SessionRole;
   readonly client: AuthClientMetadata;
   readonly userId?: UserId;
+  /**
+   * The address the identity provider says this session belongs to, when it
+   * says anything at all.
+   *
+   * Present for a session established from a Supabase token, whose claims
+   * carry one. Absent for a local-account session — that address lives in the
+   * account record and is read with `resolveLocalAccount` — and absent for the
+   * loopback owner, who is a machine rather than a person.
+   *
+   * Whatever reads this must treat "absent" as "this session cannot prove an
+   * address", never as "any address will do". `shareLinks` is the first caller
+   * and refuses an email-scoped link outright when it finds nothing here and
+   * nothing on the account.
+   */
+  readonly email?: string;
   readonly expiresAt?: DateTime.DateTime;
   readonly tenantSessionContext?: TenantSessionContext;
 }

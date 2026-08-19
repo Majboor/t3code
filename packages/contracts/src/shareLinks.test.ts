@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   ProjectId,
   ShareLink,
+  ShareLinkAudience,
+  ShareLinkAudienceKind,
   ShareLinkCreateInput,
+  ShareLinkPreview,
   ShareLinkId,
   ShareLinkScope,
   ShareLinkToken,
@@ -36,6 +39,8 @@ const baseLink = {
   projectId,
   filePath: "src/index.ts",
   createdByUserId,
+  audience: "public",
+  allowedEmails: [],
   label: null,
   createdAt: "2026-08-16T09:00:00.000Z",
   expiresAt: null,
@@ -99,6 +104,7 @@ describe("share link contracts", () => {
       tenantId,
       workspaceId,
       scope: "project",
+      audience: { kind: "public" },
       projectId,
       token: "chosen-by-the-caller",
       createdByUserId: UserId.make("user-someone-else"),
@@ -113,12 +119,18 @@ describe("share link contracts", () => {
       tenantId,
       workspaceId,
       scope: "workspace",
+      audience: { kind: "public" },
       projectId: null,
       filePath: null,
     });
     expect(cleared.projectId).toBeNull();
 
-    const omitted = decodeCreate({ tenantId, workspaceId, scope: "workspace" });
+    const omitted = decodeCreate({
+      tenantId,
+      workspaceId,
+      scope: "workspace",
+      audience: { kind: "public" },
+    });
     expect("projectId" in omitted).toBe(false);
   });
 
@@ -126,5 +138,58 @@ describe("share link contracts", () => {
     expect(WS_METHODS.shareLinksCreate).toBe("shareLinks.create");
     expect(WS_METHODS.shareLinksList).toBe("shareLinks.list");
     expect(WS_METHODS.shareLinksRevoke).toBe("shareLinks.revoke");
+  });
+});
+
+describe("share link audiences", () => {
+  const decodeAudience = Schema.decodeUnknownSync(ShareLinkAudience);
+  const decodePreview = Schema.decodeUnknownSync(ShareLinkPreview);
+
+  it("names exactly two audiences", () => {
+    expect(Schema.decodeUnknownSync(ShareLinkAudienceKind)("restricted")).toBe("restricted");
+    expect(() => Schema.decodeUnknownSync(ShareLinkAudienceKind)("domain")).toThrow();
+  });
+
+  it("will not carry a public audience with people attached, or a restricted one with none", () => {
+    expect(decodeAudience({ kind: "public" }).kind).toBe("public");
+    expect(decodeAudience({ kind: "restricted", emails: ["ana@example.test"] }).kind).toBe(
+      "restricted",
+    );
+
+    // An empty list is not "everyone"; it is a link nobody could ever use, and
+    // the shape refuses it rather than leaving the service to interpret it.
+    expect(() => decodeAudience({ kind: "restricted", emails: [] })).toThrow();
+    // And "anyone with the link" cannot be sent carrying a list of people, so
+    // widening a link is a different payload rather than a dropped field.
+    expect(() => decodeAudience({ kind: "restricted" })).toThrow();
+  });
+
+  it("makes a creator say who the link is for", () => {
+    // No default. A caller that omits the audience fails to decode rather than
+    // quietly publishing a workspace to anyone with the URL.
+    expect(() => decodeCreate({ tenantId, workspaceId, scope: "workspace" })).toThrow();
+  });
+
+  it("keeps recipients out of every reply that has not earned them", () => {
+    // Null is not "nobody": it is "this reply does not disclose that", which is
+    // what the unauthenticated redemption path returns.
+    const withheld = decodeLink({ ...baseLink, audience: "restricted", allowedEmails: null });
+    expect(withheld.allowedEmails).toBeNull();
+
+    const listed = decodeLink({
+      ...baseLink,
+      audience: "restricted",
+      allowedEmails: ["ana@example.test"],
+    });
+    expect(listed.allowedEmails).toEqual(["ana@example.test"]);
+  });
+
+  it("previews a link without a workspace, an id, or an address in the shape", () => {
+    const preview = decodePreview({ scope: "workspace", audience: "restricted", label: "Review" });
+
+    expect(preview.audience).toBe("restricted");
+    expect(Object.keys(preview).toSorted()).toEqual(["audience", "label", "scope"]);
+    // A file or project link is never previewed: those are served as bytes.
+    expect(() => decodePreview({ scope: "file", audience: "public", label: null })).toThrow();
   });
 });

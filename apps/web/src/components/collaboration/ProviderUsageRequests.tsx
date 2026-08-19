@@ -12,7 +12,7 @@ import { Link } from "@tanstack/react-router";
 import { HandCoinsIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import { useProviderUsageRequests } from "../../hooks/useProviderUsageRequests";
+import { useProviderUsageRequests, type ProviderUsage } from "../../hooks/useProviderUsageRequests";
 import { cn } from "../../lib/utils";
 import { PROVIDER_LABEL, PROVIDERS } from "./providerSharing.logic";
 import {
@@ -62,34 +62,46 @@ function report(error: unknown, fallbackTitle: string, providerLabel: string) {
   });
 }
 
+export interface ProviderUsageRequestsProps {
+  /** What people call this workspace; every request is scoped to it. */
+  readonly workspaceLabel: string;
+  readonly viewerUserId: string;
+  /** Only genuinely connected accounts — the same list the switches use. */
+  readonly viewerAccounts: readonly ProviderConnectedAccount[];
+  /** Admin-only, and empty for everybody else; used to name who could answer. */
+  readonly workspaceAccounts: readonly ProviderWorkspaceAccount[];
+}
+
 /**
  * The half of provider sharing that starts from not having anything: asking a
  * workspace to lend you an account, and answering somebody who asked.
  *
- * Sits under the contribute switches because the two are the same exchange from
- * opposite ends — what you give, then what you need.
+ * Reads its own requests, which is what anybody rendering it on its own wants.
+ * The collaboration popover summarises them on a row before anybody opens the
+ * section, so it holds the hook itself and draws {@link ProviderUsageRequestsView}
+ * rather than fetching the same list twice.
  */
 export function ProviderUsageRequests({
   environmentId,
   tenantId,
   workspaceId,
+  ...props
+}: ProviderUsageRequestsProps & {
+  environmentId: EnvironmentId | null;
+  tenantId: TenantId | null;
+  workspaceId: WorkspaceId | null;
+}) {
+  const usage = useProviderUsageRequests({ environmentId, tenantId, workspaceId });
+  return <ProviderUsageRequestsView {...props} usage={usage} />;
+}
+
+export function ProviderUsageRequestsView({
+  usage,
   workspaceLabel,
   viewerUserId,
   viewerAccounts,
   workspaceAccounts,
-}: {
-  environmentId: EnvironmentId | null;
-  tenantId: TenantId | null;
-  workspaceId: WorkspaceId | null;
-  /** What people call this workspace; every request is scoped to it. */
-  workspaceLabel: string;
-  viewerUserId: string;
-  /** Only genuinely connected accounts — the same list the switches use. */
-  viewerAccounts: readonly ProviderConnectedAccount[];
-  /** Admin-only, and empty for everybody else; used to name who could answer. */
-  workspaceAccounts: readonly ProviderWorkspaceAccount[];
-}) {
-  const usage = useProviderUsageRequests({ environmentId, tenantId, workspaceId });
+}: ProviderUsageRequestsProps & { usage: ProviderUsage }) {
   const [compose, setCompose] = useState<ComposeState | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [grantAccounts, setGrantAccounts] = useState<Record<string, ProviderAccountId>>({});
@@ -484,7 +496,7 @@ export function ProviderUsageRequests({
   };
 
   return (
-    <div className="mt-3 border-t border-border pt-3" data-testid="provider-usage-requests">
+    <div data-testid="provider-usage-requests">
       <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-muted-foreground">
         <HandCoinsIcon className="size-3.5" />
         Usage requests
