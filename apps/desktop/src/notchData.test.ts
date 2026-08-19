@@ -1,18 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  defaultNotchContext,
+  NOTCH_CONTEXT_PANELS,
+  type NotchContext,
+  resolveNotchContext,
+} from "./notchContext.ts";
+import {
+  buildNotchActivityUrl,
   createNotchRefreshScheduler,
+  type DesktopProjectActivity,
   formatCompactCount,
+  formatElapsed,
   formatEstimatedCost,
   NOTCH_ACTIVITY_PATH,
   type NotchActivityOutcome,
   type NotchScriptHost,
   parseNotchActivityBody,
+  pendingNotchPanelView,
   readNotchActivity,
   readSignedInAccessToken,
   toNotchPanelView,
 } from "./notchData.ts";
-import { EM_DASH, NOTCH_SLOTS } from "./notchPanelDocument.ts";
+import { EM_DASH, type NotchPanelView, type NotchSlotView } from "./notchPanelDocument.ts";
 
 const okBody = {
   signedIn: true,
@@ -26,7 +36,47 @@ const okBody = {
     since: "2026-07-17T00:00:00.000Z",
     until: "2026-08-16T00:00:00.000Z",
   },
+  project: null,
 };
+
+const APP = "http://127.0.0.1:3773/";
+const deploymentContext = resolveNotchContext(`${APP}#/infra/proj_1`);
+const analyticsContext = resolveNotchContext(`${APP}#/analytics/proj_1`);
+const threadContext = resolveNotchContext(`${APP}#/env_1/thread_1`);
+const draftContext = resolveNotchContext(`${APP}#/draft/draft_1`);
+
+/** Rows are positional in the document but named here, so a test reads. */
+function slot(view: NotchPanelView, label: string): NotchSlotView {
+  const found = view.slots.find((candidate) => candidate.label === label);
+  if (found === undefined) {
+    throw new Error(`no slot labelled ${label} in ${JSON.stringify(view.slots)}`);
+  }
+  return found;
+}
+
+function projectOutcome(project: Partial<DesktopProjectActivity>): NotchActivityOutcome {
+  return {
+    kind: "ok",
+    activity: {
+      workspaceCount: 1,
+      partial: false,
+      shareViews: null,
+      tokenSpend: null,
+      project: {
+        deploymentCount: 0,
+        liveCount: 0,
+        reportingCount: 0,
+        streamCount: 0,
+        events: null,
+        reportedEvents: null,
+        lastDeployAt: null,
+        lastDeployStatus: null,
+        partial: false,
+        ...project,
+      },
+    },
+  };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -83,6 +133,32 @@ describe("readNotchActivity", () => {
         fetchImpl: stubFetch(jsonResponse({ error: "no" }, status)),
       }),
     ).resolves.toEqual({ kind: "signed-out" });
+  });
+
+  it("names the project in the query when the panel is on a project's page", async () => {
+    const fetchImpl = stubFetch(jsonResponse(okBody));
+
+    await readNotchActivity({
+      baseUrl: "http://127.0.0.1:3773",
+      accessToken: "jwt",
+      projectId: "proj 1/2",
+      fetchImpl,
+    });
+
+    expect(vi.mocked(fetchImpl).mock.calls[0]?.[0]).toBe(
+      `http://127.0.0.1:3773${NOTCH_ACTIVITY_PATH}?projectId=proj%201%2F2`,
+    );
+  });
+
+  it("keeps a project this account cannot see apart from a broken server", async () => {
+    await expect(
+      readNotchActivity({
+        baseUrl: "http://127.0.0.1:3773",
+        accessToken: "jwt",
+        projectId: "proj_1",
+        fetchImpl: stubFetch(jsonResponse({ error: "Unknown project." }, 404)),
+      }),
+    ).resolves.toEqual({ kind: "unknown-project" });
   });
 
   it("keeps a server error apart from an empty reading", async () => {

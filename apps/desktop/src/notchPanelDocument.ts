@@ -14,26 +14,22 @@
  * numbers arrive the same way: `buildNotchDataScript` writes text into slots
  * the document already laid out, so the page never has to know where a figure
  * came from or how to ask for it.
+ *
+ * The rows are numbered rather than named, because what they hold depends on
+ * what the person is looking at (`notchContext.ts`). The document lays out
+ * exactly `NOTCH_SLOT_COUNT` rows once and the update script rewrites their
+ * labels along with their values, so navigating swaps the *content* of a box
+ * whose size was fixed at load. Nothing a context can do reflows the panel.
  */
 
+import { NOTCH_CONTEXT_PANELS, NOTCH_SLOT_COUNT } from "./notchContext.ts";
 import { type NotchLayout, toWindowLocalRect } from "./notchGeometry.ts";
 
 export const NOTCH_STATE_ATTRIBUTE = "notchState";
 
-/**
- * The slots, in the order they are drawn. The keys are also the selector the
- * update script targets, so adding a row here is the only edit a fourth figure
- * would need on this side.
- */
-export const NOTCH_SLOTS = [
-  { key: "shareClicks", label: "Share clicks" },
-  { key: "tokenSpend", label: "Token spend" },
-  { key: "activeSyncs", label: "Active syncs" },
-] as const;
-
-export type NotchSlotKey = (typeof NOTCH_SLOTS)[number]["key"];
-
 export interface NotchSlotView {
+  /** Drawn on the left of the row; it changes with the context. */
+  readonly label: string;
   /** Display-ready. An em dash whenever there is no number worth showing. */
   readonly value: string;
   /**
@@ -47,15 +43,24 @@ export interface NotchSlotView {
   readonly detail: string;
 }
 
-export type NotchPanelView = Readonly<Record<NotchSlotKey, NotchSlotView>>;
+export interface NotchPanelView {
+  /** The heading, so a changed set of figures says what it is now about. */
+  readonly title: string;
+  /** Always `NOTCH_SLOT_COUNT` long; the page has that many rows and no more. */
+  readonly slots: readonly NotchSlotView[];
+}
 
 export const EM_DASH = "—";
 
 /** What the page shows between being loaded and the first read landing. */
 export const initialNotchPanelView: NotchPanelView = {
-  shareClicks: { value: EM_DASH, note: "", detail: "Not read yet." },
-  tokenSpend: { value: EM_DASH, note: "", detail: "Not read yet." },
-  activeSyncs: { value: EM_DASH, note: "", detail: "Not read yet." },
+  title: NOTCH_CONTEXT_PANELS.default.title,
+  slots: NOTCH_CONTEXT_PANELS.default.slots.map(({ label }) => ({
+    label,
+    value: EM_DASH,
+    note: "",
+    detail: "Not read yet.",
+  })),
 };
 
 /** Corner radius of the expanded panel, in CSS pixels. */
@@ -112,19 +117,21 @@ function escapeHtml(value: string): string {
 }
 
 function renderSlots(): string {
-  return NOTCH_SLOTS.map(({ key, label }) => {
-    const slot = initialNotchPanelView[key];
-    const detail = escapeHtml(slot.detail);
-    // The em dash is written as an entity so the initial markup carries no
-    // non-ASCII, which survives the `data:` URL round trip unambiguously.
-    const value = slot.value === EM_DASH ? "&mdash;" : escapeHtml(slot.value);
-    return (
-      `        <div class="slot"><dt>${label}</dt>` +
-      `<dd data-slot="${key}" title="${detail}" aria-label="${detail}">` +
-      `<span class="value">${value}</span><span class="note">${escapeHtml(slot.note)}</span>` +
-      `</dd></div>`
-    );
-  }).join("\n");
+  return initialNotchPanelView.slots
+    .map((slot, index) => {
+      const detail = escapeHtml(slot.detail);
+      // The em dash is written as an entity so the initial markup carries no
+      // non-ASCII, which survives the `data:` URL round trip unambiguously.
+      const value = slot.value === EM_DASH ? "&mdash;" : escapeHtml(slot.value);
+      return (
+        `        <div class="slot" data-slot="${index}">` +
+        `<dt>${escapeHtml(slot.label)}</dt>` +
+        `<dd title="${detail}" aria-label="${detail}">` +
+        `<span class="value">${value}</span><span class="note">${escapeHtml(slot.note)}</span>` +
+        `</dd></div>`
+      );
+    })
+    .join("\n");
 }
 
 export function buildNotchPanelHtml(layout: NotchLayout): string {
@@ -245,12 +252,19 @@ ${renderCssVariableBlock(layout)}
         transition-delay: 90ms;
       }
 
+      /*
+       * Single-line, clipped rather than wrapped: the heading changes with the
+       * context, and a two-line heading would push the rows below it down.
+       */
       .panel-title {
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.09em;
         text-transform: uppercase;
         color: rgba(255, 255, 255, 0.42);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .slots {
@@ -266,9 +280,17 @@ ${renderCssVariableBlock(layout)}
         gap: 16px;
       }
 
+      /*
+       * Labels are rewritten as the context changes, so they are pinned to one
+       * line. A label allowed to wrap would make the panel taller on some pages
+       * than on others, inside a window whose height was fixed at load.
+       */
       .slot dt {
         font-size: 13px;
         color: rgba(255, 255, 255, 0.55);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .slot dd {
@@ -316,7 +338,7 @@ ${renderCssVariableBlock(layout)}
     <div class="surface">
       <div class="grip"></div>
       <div class="panel">
-        <div class="panel-title">Live activity</div>
+        <div class="panel-title" data-panel-title>${escapeHtml(initialNotchPanelView.title)}</div>
         <dl class="slots">
 ${renderSlots()}
         </dl>
@@ -350,20 +372,28 @@ export function buildNotchStateScript(expanded: boolean): string {
 /**
  * Writes a whole reading into the page in one evaluation.
  *
- * All three slots are always rewritten, even the ones that did not move: the
- * alternative is tracking what the page currently shows in a second place, and
- * a panel that disagrees with itself about which figure is stale is worse than
- * one that repaints three short strings.
+ * Every row is rewritten, even the ones that did not move, and the label is
+ * rewritten with the value: the alternative is tracking what the page currently
+ * shows in a second place, and a panel that disagrees with itself about which
+ * figure is stale — or worse, draws a deployment count under a label saying
+ * "Share clicks" — is far worse than one that repaints a handful of short
+ * strings. Rows the view does not fill are blanked for the same reason.
  */
 export function buildNotchDataScript(view: NotchPanelView): string {
-  const calls = NOTCH_SLOTS.map(({ key }) => {
-    const slot = view[key];
-    return `w(${JSON.stringify(key)},${JSON.stringify(slot.value)},${JSON.stringify(slot.note)},${JSON.stringify(slot.detail)});`;
+  const calls = Array.from({ length: NOTCH_SLOT_COUNT }, (_unused, index) => {
+    const slot = view.slots[index] ?? { label: "", value: EM_DASH, note: "", detail: "" };
+    return (
+      `w(${index},${JSON.stringify(slot.label)},${JSON.stringify(slot.value)},` +
+      `${JSON.stringify(slot.note)},${JSON.stringify(slot.detail)});`
+    );
   }).join("");
   return (
-    `(()=>{const w=(k,v,n,d)=>{` +
+    `(()=>{const t=document.querySelector("[data-panel-title]");` +
+    `if(t)t.textContent=${JSON.stringify(view.title)};` +
+    `const w=(k,l,v,n,d)=>{` +
     `const e=document.querySelector('[data-slot="'+k+'"]');if(!e)return;` +
-    `e.children[0].textContent=v;e.children[1].textContent=n;` +
-    `e.title=d;e.setAttribute("aria-label",d);};${calls}})();`
+    `const c=e.children[1];e.children[0].textContent=l;` +
+    `c.children[0].textContent=v;c.children[1].textContent=n;` +
+    `c.title=d;c.setAttribute("aria-label",d);};${calls}})();`
   );
 }

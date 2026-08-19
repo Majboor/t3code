@@ -215,6 +215,17 @@ export interface WsRpcClient {
     readonly respondToRequest: RpcUnaryMethod<typeof WS_METHODS.providerUsageRequestRespond>;
     readonly withdrawRequest: RpcUnaryMethod<typeof WS_METHODS.providerUsageRequestWithdraw>;
   };
+  readonly cloudSync: {
+    /** `sync` is null for a project nobody ever shared; that is not an error. */
+    readonly getStatus: RpcUnaryMethod<typeof WS_METHODS.cloudSyncStatusGet>;
+    /** Refuses with `mode-locked` rather than reinterpreting a sync already running. */
+    readonly start: RpcUnaryMethod<typeof WS_METHODS.cloudSyncStart>;
+    readonly pause: RpcUnaryMethod<typeof WS_METHODS.cloudSyncPause>;
+    readonly stop: RpcUnaryMethod<typeof WS_METHODS.cloudSyncStop>;
+    readonly listConflicts: RpcUnaryMethod<typeof WS_METHODS.cloudSyncConflictsList>;
+    /** Records that a person dealt with it. Neither copy is deleted. */
+    readonly resolveConflict: RpcUnaryMethod<typeof WS_METHODS.cloudSyncConflictsResolve>;
+  };
   readonly shareLinks: {
     /** The only call that ever yields a token; `list` never returns one again. */
     readonly create: RpcUnaryMethod<typeof WS_METHODS.shareLinksCreate>;
@@ -514,6 +525,17 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.providerUsageRequestRespond](input)),
       withdrawRequest: (input) =>
         transport.request((client) => client[WS_METHODS.providerUsageRequestWithdraw](input)),
+    },
+    cloudSync: {
+      getStatus: (input) =>
+        transport.request((client) => client[WS_METHODS.cloudSyncStatusGet](input)),
+      start: (input) => transport.request((client) => client[WS_METHODS.cloudSyncStart](input)),
+      pause: (input) => transport.request((client) => client[WS_METHODS.cloudSyncPause](input)),
+      stop: (input) => transport.request((client) => client[WS_METHODS.cloudSyncStop](input)),
+      listConflicts: (input) =>
+        transport.request((client) => client[WS_METHODS.cloudSyncConflictsList](input)),
+      resolveConflict: (input) =>
+        transport.request((client) => client[WS_METHODS.cloudSyncConflictsResolve](input)),
     },
     shareLinks: {
       create: (input) => transport.request((client) => client[WS_METHODS.shareLinksCreate](input)),

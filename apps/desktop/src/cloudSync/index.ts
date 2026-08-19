@@ -20,6 +20,7 @@ import { reconcileTree } from "@t3tools/shared/cloudSync/reconcile";
 import { createUnknownPathPredicate, type ScanResult } from "./scan.ts";
 
 export * from "./apply.ts";
+export * from "./liveShare.ts";
 export * from "./scan.ts";
 export * from "./watch.ts";
 

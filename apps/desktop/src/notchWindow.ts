@@ -31,13 +31,28 @@
  *    reason: with no preload there is no channel the page could ask over, and
  *    giving it one would mean handing a sandboxed surface a credential. Main
  *    already holds the server's address, so the read stays on this side and the
- *    page only ever receives three short strings. What it reads and how it
+ *    page only ever receives a few short strings. What it reads and how it
  *    authenticates is `notchData.ts`.
+ *
+ * 5. What it shows follows the app window's route, and that route is *sampled*
+ *    from `webContents.getURL()` in the same loop as the cursor rather than
+ *    subscribed to with `did-navigate`. The app window is not this module's to
+ *    own: it does not exist when the panel is created, it is closed and rebuilt
+ *    on `activate`, and attaching listeners to it would put panel lifecycle
+ *    code inside the main window's constructor. A synchronous string read ten
+ *    times a second costs nothing, survives the window being replaced, and
+ *    needs no renderer channel — the same argument that made hover a poll.
  */
 
 import { app, BaseWindow, screen, WebContentsView } from "electron";
 import type { Display } from "electron";
 
+import {
+  areNotchContextsEqual,
+  defaultNotchContext,
+  type NotchContext,
+  resolveNotchContext,
+} from "./notchContext.ts";
 import {
   areRectsEqual,
   containsPoint,
@@ -50,7 +65,7 @@ import {
   type NotchHoverState,
   reduceNotchHoverState,
 } from "./notchHover.ts";
-import { createNotchRefreshScheduler } from "./notchData.ts";
+import { createNotchRefreshScheduler, pendingNotchPanelView } from "./notchData.ts";
 import {
   buildNotchDataScript,
   buildNotchLayoutScript,
@@ -83,10 +98,17 @@ export interface NotchPanelController {
 
 export interface NotchPanelOptions {
   /**
-   * Reads the current figures. Omitted — as in tests, or before the app has an
-   * account — the panel keeps the dashes it was built with.
+   * Reads the figures the given context calls for. Omitted — as in tests, or
+   * before the app has an account — the panel keeps the dashes it was built
+   * with.
    */
-  readonly readView?: () => Promise<NotchPanelView>;
+  readonly readView?: (context: NotchContext) => Promise<NotchPanelView>;
+  /**
+   * The app window's current URL, or `null` while there is no window. Omitted,
+   * the panel never leaves its default context. Resolved per call rather than
+   * captured, because the window it reads is closed and recreated.
+   */
+  readonly readUrl?: () => string | null;
   readonly refreshIntervalMs?: number;
 }
 
@@ -213,22 +235,60 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
   screen.on("display-added", applyLayout);
   screen.on("display-removed", applyLayout);
 
+  let context: NotchContext = defaultNotchContext;
+
   const readView = options.readView;
   const refresher =
     readView === undefined
       ? null
-      : createNotchRefreshScheduler({
-          readView,
+      : createNotchRefreshScheduler<NotchPanelView | null>({
+          readView: async () => {
+            const asked = context;
+            const view = await readView(asked);
+            // A reading can outlive the page it was about. Dropping it is the
+            // only way the panel cannot draw a project's deployments under the
+            // labels of the page the user has already moved on to.
+            return areNotchContextsEqual(asked, context) ? view : null;
+          },
           apply: (view) => {
-            evaluateInPanel(buildNotchDataScript(view));
+            if (view !== null) {
+              evaluateInPanel(buildNotchDataScript(view));
+            }
           },
           intervalMs: options.refreshIntervalMs ?? DATA_REFRESH_INTERVAL_MS,
         });
 
-  const sampleHover = (): void => {
-    if (destroyed || window.isDestroyed()) {
+  const readUrl = options.readUrl;
+
+  const sampleContext = (): void => {
+    if (readUrl === undefined) {
       return;
     }
+    let url: string | null = null;
+    try {
+      url = readUrl();
+    } catch {
+      // The app window can be mid-teardown, in which case there is no route to
+      // read and the panel falls back to the figures that are true everywhere.
+      url = null;
+    }
+    const next = resolveNotchContext(url);
+    if (areNotchContextsEqual(next, context)) {
+      return;
+    }
+    context = next;
+    // Repaint the new page's labels straight away, so the panel is never
+    // showing one page's numbers beside another page's names while the read
+    // for the new one is still in the air.
+    evaluateInPanel(buildNotchDataScript(pendingNotchPanelView(next)));
+    // Collapsed, the next expansion reads anyway; asking now would be a request
+    // for a surface nobody is looking at.
+    if (hover.expanded) {
+      refresher?.readOnce();
+    }
+  };
+
+  const sampleHover = (): void => {
     const target = resolveNotchHoverTarget(layout, hover.expanded);
     const next = reduceNotchHoverState(hover, containsPoint(target, screen.getCursorScreenPoint()));
     if (next.expanded !== hover.expanded) {
@@ -240,7 +300,17 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     hover = next;
   };
 
-  const hoverTimer = setInterval(sampleHover, HOVER_SAMPLE_INTERVAL_MS);
+  const sample = (): void => {
+    if (destroyed || window.isDestroyed()) {
+      return;
+    }
+    // Context first: an expansion in the same tick should read the page the
+    // window is actually on.
+    sampleContext();
+    sampleHover();
+  };
+
+  const hoverTimer = setInterval(sample, HOVER_SAMPLE_INTERVAL_MS);
   // The panel must never be the reason the process stays alive.
   hoverTimer.unref();
 
@@ -251,8 +321,11 @@ export function createNotchPanel(options: NotchPanelOptions = {}): NotchPanelCon
     // `showInactive` rather than `show`: revealing the panel must not steal the
     // active window from whatever the user is typing in.
     window.showInactive();
+    // Whatever the app is already on, before the first read goes out — a panel
+    // shown while the user is mid-navigation should not open on the wrong page.
+    sampleContext();
     // One read on show, so the first hover lands on figures rather than on
-    // three dashes waiting for a round trip.
+    // dashes waiting for a round trip.
     refresher?.readOnce();
   });
   void view.webContents.loadURL(buildNotchPanelDataUrl(layout));

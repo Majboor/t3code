@@ -4,6 +4,8 @@ import type {
   CloudSyncConflictResolveInput,
   CloudSyncConflictResolveResult,
   CloudSyncError,
+  CloudSyncLiveCopyRegisterInput,
+  CloudSyncLiveCopyRegisterResult,
   CloudSyncMode,
   CloudSyncPauseInput,
   CloudSyncPauseResult,
@@ -13,6 +15,8 @@ import type {
   CloudSyncStatusResult,
   CloudSyncStopInput,
   CloudSyncStopResult,
+  CloudSyncVisitInput,
+  CloudSyncVisitorView,
   ProjectCloudSync,
   ProjectId,
   TenantId,
@@ -261,6 +265,42 @@ export interface CloudSyncServiceShape {
     actor: CloudSyncActor,
     input: CloudSyncCommitInput,
   ) => Effect.Effect<CloudSyncCommitResult, CloudSyncError>;
+
+  /**
+   * "A live copy of this project is reachable at <url> as of now", or "I am
+   * still here and have nothing to publish".
+   *
+   * Both are the same call, because sharing must go ahead when the tunnel
+   * cannot start — `cloudflared` missing, or the auth gate refusing to publish
+   * a server that would hand a visitor an owner session. The live link is an
+   * accelerator, never a requirement, and a heartbeat that could only carry an
+   * address would leave the cloud unable to tell a laptop with no tunnel from a
+   * laptop that closed.
+   *
+   * The address is advisory and perishable and is stored as such. Nothing here
+   * makes it an identity: the link a person hands out is the cloud URL, always,
+   * because a quick tunnel's address changes on every restart and dies with the
+   * machine — and it would die in somebody else's inbox.
+   */
+  readonly registerLiveCopy: (
+    actor: CloudSyncActor,
+    input: CloudSyncLiveCopyRegisterInput,
+  ) => Effect.Effect<CloudSyncLiveCopyRegisterResult, CloudSyncError>;
+
+  /**
+   * What to show someone who opened the cloud URL: the spec's four cases, plus
+   * "this project has no sync".
+   *
+   * Membership-gated like everything else here, and that gate is doing real
+   * work rather than being copied from the call above it. The reply carries a
+   * working address for somebody's laptop, and handing that to an
+   * unauthenticated caller would publish the tunnel URL — the one thing this
+   * whole design exists to keep out of circulation.
+   */
+  readonly getVisitorView: (
+    actor: CloudSyncActor,
+    input: CloudSyncVisitInput,
+  ) => Effect.Effect<CloudSyncVisitorView, CloudSyncError>;
 
   /**
    * The membership gate on its own, for the blob routes.

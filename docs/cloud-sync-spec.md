@@ -144,6 +144,45 @@ The sync button reports what a person actually wants to know:
 - when the last full agreement completed, in plain words
 - how many conflicts are waiting, if any
 
+## Sharing before the sync has finished
+
+The default flow does not make anyone wait for a first pass to complete. Sharing a project
+starts two things at once: the sync to the cloud, and a Cloudflare quick tunnel publishing
+the laptop's own copy. The person gets a link immediately, and the cloud copy fills in
+behind it.
+
+**The link handed out is always the cloud URL, never the tunnel URL.** A quick tunnel is
+ephemeral: its address changes on every restart and dies when the laptop closes. A link
+built on it is dead by tomorrow, and it will be dead in someone else's inbox, which is
+worse than making them wait. So the durable cloud address is the identity, and the tunnel
+is transport that happens to be faster to stand up.
+
+What a visitor to that cloud URL sees depends on where the sync has got to:
+
+- **First pass still running, tunnel live** — the progress (files and bytes done, whether
+  the laptop is actively changing), and a way straight through to the live copy on the
+  tunnel. Taking it should be one click, or automatic; nobody came here to watch a bar.
+- **First pass still running, no tunnel** — the same progress, and an honest "there is no
+  live copy to show you yet". Distinguish this from the next case: the difference is
+  whether anyone can do anything.
+- **The laptop went away mid-sync** — say so. "The person sharing this closed their laptop"
+  is different advice from "still uploading", and the spec already requires telling them
+  apart.
+- **Synced** — serve it from the cloud, and move anyone still sitting on the tunnel over.
+
+Once the first pass completes the tunnel has done its job and can be stopped; the cloud copy
+is canonical from then on, and every link already sent keeps working because it was never
+pointing at the laptop.
+
+**Share links minted at any point in this resolve to the cloud copy.** A file link created
+while the sync is still running is not a link to the laptop that happens to work today — it
+is a link to the project, which the cloud will be serving shortly.
+
+**The tunnel must not hand out an owner session.** Publishing the laptop for sharing is
+exactly the case the auth gate already refuses when the server would auto-issue one; a
+visitor arriving over the tunnel gets share-scoped access, never the keys to the machine.
+That gate is load-bearing here, not incidental.
+
 ## The web side waits
 
 A collaborator opening a shared project before the first sync completes must be told to

@@ -81,7 +81,7 @@ function resolveCredentials(options: T3ClientOptions): T3Credentials {
  * otherwise the websocket keeps the process alive.
  *
  * The grouped API on `workspace`, `threads`, `history`, `changes`,
- * `collaboration`, `packs`, `organizations`, `deploys`, `terminals`, `providers`,
+ * `collaboration`, `cloudSync`, `packs`, `organizations`, `deploys`, `terminals`, `providers`,
  * `providerSharing`, `providerUsage`, `shareLinks`, and `server` covers the whole surface; the flat methods below
  * are shorthands for the handful of things scripts reach for first.
  */
@@ -96,6 +96,7 @@ export class T3Client implements T3Api {
   readonly history: T3Api["history"];
   readonly changes: T3Api["changes"];
   readonly collaboration: T3Api["collaboration"];
+  readonly cloudSync: T3Api["cloudSync"];
   readonly packs: T3Api["packs"];
   readonly organizations: T3Api["organizations"];
   readonly deploys: T3Api["deploys"];
@@ -120,6 +121,7 @@ export class T3Client implements T3Api {
     this.history = this.api.history;
     this.changes = this.api.changes;
     this.collaboration = this.api.collaboration;
+    this.cloudSync = this.api.cloudSync;
     this.packs = this.api.packs;
     this.organizations = this.api.organizations;
     this.deploys = this.api.deploys;

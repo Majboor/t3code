@@ -572,6 +572,88 @@ describe("share links", () => {
   });
 });
 
+describe("cloud sync", () => {
+  const scope = {
+    tenantId: "tenant-1" as never,
+    workspaceId: "workspace-1" as never,
+    projectId: "project-1" as never,
+  };
+
+  it("reads a status that may legitimately be null", async () => {
+    const { transport, calls } = makeStub({ [WS_METHODS.cloudSyncStatusGet]: { sync: null } });
+
+    const result = await createT3Api(transport).cloudSync.getStatus(scope);
+
+    expect(calls[0]).toEqual({ method: WS_METHODS.cloudSyncStatusGet, input: scope });
+    expect(result).toEqual({ sync: null });
+  });
+
+  it("sends the chosen mode, because there is no default for it", async () => {
+    const sync = { projectId: "project-1", mode: "mirror", status: "scanning" };
+    const { transport, calls } = makeStub({ [WS_METHODS.cloudSyncStart]: { sync } });
+
+    const result = await createT3Api(transport).cloudSync.start({ ...scope, mode: "mirror" });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.cloudSyncStart,
+      input: { ...scope, mode: "mirror" },
+    });
+    expect(result).toEqual({ sync });
+  });
+
+  it("carries the project scope on pause and stop without inventing a mode", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.cloudSyncPause]: { sync: {} },
+      [WS_METHODS.cloudSyncStop]: { sync: {} },
+    });
+    const api = createT3Api(transport);
+
+    await api.cloudSync.pause(scope);
+    await api.cloudSync.stop(scope);
+
+    expect(calls[0]).toEqual({ method: WS_METHODS.cloudSyncPause, input: scope });
+    expect(calls[1]).toEqual({ method: WS_METHODS.cloudSyncStop, input: scope });
+    expect(calls[0]?.input["mode"]).toBeUndefined();
+  });
+
+  it("pages conflicts by cursor rather than by offset", async () => {
+    const listed = { conflicts: [], nextCursor: null };
+    const { transport, calls } = makeStub({ [WS_METHODS.cloudSyncConflictsList]: listed });
+
+    const result = await createT3Api(transport).cloudSync.listConflicts({
+      ...scope,
+      afterId: "conflict-9" as never,
+      limit: 50,
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.cloudSyncConflictsList,
+      input: { ...scope, afterId: "conflict-9", limit: 50 },
+    });
+    expect(calls[0]?.input["offset"]).toBeUndefined();
+    expect(result).toBe(listed);
+  });
+
+  it("resolves a conflict without naming a winning side", async () => {
+    const { transport, calls } = makeStub({
+      [WS_METHODS.cloudSyncConflictsResolve]: { conflict: {}, sync: {} },
+    });
+
+    await createT3Api(transport).cloudSync.resolveConflict({
+      ...scope,
+      conflictId: "conflict-1" as never,
+    });
+
+    expect(calls[0]).toEqual({
+      method: WS_METHODS.cloudSyncConflictsResolve,
+      input: { ...scope, conflictId: "conflict-1" },
+    });
+    // Choosing a side here would make the server delete one of two files it was
+    // asked to keep, so the contract has no such field and neither does this.
+    expect(calls[0]?.input["keep"]).toBeUndefined();
+  });
+});
+
 describe("connect", () => {
   it("refuses to connect without credentials or a token", async () => {
     await expect(connect({ baseUrl: "http://127.0.0.1:13773" })).rejects.toThrow(

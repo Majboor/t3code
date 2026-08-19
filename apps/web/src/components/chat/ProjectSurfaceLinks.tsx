@@ -2,6 +2,7 @@ import { ChartNoAxesColumnIcon, ServerIcon } from "lucide-react";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 
+import { CloudSyncBar } from "../cloudSync/CloudSyncBar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { OpenProjectInBrowserButton } from "./OpenProjectInBrowserButton";
 
@@ -55,6 +56,9 @@ export function ProjectSurfaceLinks({
         <TooltipPopup>Analytics — what its live deployments are reporting</TooltipPopup>
       </Tooltip>
       <OpenProjectInBrowserButton environmentId={environmentId} projectId={projectId} />
+      {/* Beside the browser link on purpose: both answer "can somebody else open
+          this", and the sync badge is the only warning that they cannot yet. */}
+      <CloudSyncBar environmentId={environmentId} projectId={projectId} />
     </div>
   );
 }

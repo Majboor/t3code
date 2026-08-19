@@ -15,6 +15,7 @@ import {
   ListProjectCloudSyncsForWorkspaceInput,
   type ProjectCloudSyncRecord,
   RecordCloudSyncConflictInput,
+  RegisterCloudSyncLiveCopyInput,
   ResolveCloudSyncConflictInput,
   UpdateCloudSyncProgressInput,
   UpsertProjectCloudSyncInput,
@@ -35,6 +36,8 @@ const ProjectCloudSyncRow = Schema.Struct({
   /** SQLite has no boolean; 0 or 1, mapped at the edge by `toProjectSync`. */
   activelyChanging: Schema.Int,
   conflictCount: Schema.Int,
+  liveCopyUrl: Schema.NullOr(Schema.String),
+  laptopConfirmedAt: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 });
@@ -70,6 +73,8 @@ const syncColumns = `project_id AS "projectId",
   bytes_done AS "bytesDone",
   actively_changing AS "activelyChanging",
   conflict_count AS "conflictCount",
+  live_copy_url AS "liveCopyUrl",
+  laptop_confirmed_at AS "laptopConfirmedAt",
   created_at AS "createdAt",
   updated_at AS "updatedAt"`;
 
@@ -161,6 +166,14 @@ const makeCloudSyncRepository = Effect.gen(function* () {
           bytes_total = 0,
           bytes_done = 0,
           actively_changing = 0,
+          -- A live copy belongs to the run that published it. A quick tunnel
+          -- gets a new address every time it starts and the old one is dead, so
+          -- carrying a registration across a restart would offer visitors an
+          -- address from the last session until it aged out. The heartbeat that
+          -- follows this call re-registers within seconds if there is anything
+          -- to register.
+          live_copy_url = NULL,
+          laptop_confirmed_at = NULL,
           updated_at = excluded.updated_at
         RETURNING ${sql.literal(syncColumns)}
       `,
@@ -227,6 +240,29 @@ const makeCloudSyncRepository = Effect.gen(function* () {
             last_agreed_at = COALESCE(${input.lastAgreedAt}, last_agreed_at),
             last_error = ${input.lastError},
             updated_at = ${input.updatedAt}
+        WHERE project_id = ${input.projectId}
+          AND tenant_id = ${input.tenantId}
+          AND workspace_id = ${input.workspaceId}
+        RETURNING ${sql.literal(syncColumns)}
+      `,
+  });
+
+  const registerLiveCopyRow = SqlSchema.findOneOption({
+    Request: RegisterCloudSyncLiveCopyInput,
+    Result: ProjectCloudSyncRow,
+    // No COALESCE on either column, unlike every field in `updateProgress`.
+    // Both are assigned outright because both are statements about *now*: the
+    // address, which must be erasable the moment its owner stops serving it,
+    // and the timestamp, which is the whole point of the call.
+    //
+    // `updated_at` is deliberately left alone. A heartbeat is not a change to
+    // the sync, and moving that column every thirty seconds would make a
+    // stalled transfer look like one that is making progress.
+    execute: (input) =>
+      sql`
+        UPDATE project_cloud_sync
+        SET live_copy_url = ${input.liveCopyUrl},
+            laptop_confirmed_at = ${input.confirmedAt}
         WHERE project_id = ${input.projectId}
           AND tenant_id = ${input.tenantId}
           AND workspace_id = ${input.workspaceId}
@@ -534,6 +570,12 @@ const makeCloudSyncRepository = Effect.gen(function* () {
       Effect.map(Option.map(toProjectSync)),
     );
 
+  const registerLiveCopy: CloudSyncRepositoryShape["registerLiveCopy"] = (input) =>
+    registerLiveCopyRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("CloudSyncRepository.registerLiveCopy:query")),
+      Effect.map(Option.map(toProjectSync)),
+    );
+
   return {
     upsertProjectSync,
     getProjectSync,
@@ -545,6 +587,7 @@ const makeCloudSyncRepository = Effect.gen(function* () {
     listConflicts,
     resolveConflict,
     updateProgress,
+    registerLiveCopy,
   } satisfies CloudSyncRepositoryShape;
 });
 
@@ -571,6 +614,8 @@ function toProjectSync(row: typeof ProjectCloudSyncRow.Type): ProjectCloudSyncRe
     bytesDone: row.bytesDone,
     activelyChanging: row.activelyChanging === 1,
     conflictCount: row.conflictCount,
+    liveCopyUrl: row.liveCopyUrl,
+    laptopConfirmedAt: row.laptopConfirmedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

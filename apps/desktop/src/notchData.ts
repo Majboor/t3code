@@ -16,11 +16,22 @@
  * session issued from it authenticates a *machine*, not a person — it would
  * resolve to an account with no memberships and report a confident zero.
  *
- * Everything here is written so that the four ways a figure can be absent stay
- * four different answers. A dash carries the reason with it; nothing in this
- * file can turn "we could not find out" into `0`.
+ * Everything here is written so that the ways a figure can be absent stay
+ * different answers. A dash carries the reason with it; nothing in this file can
+ * turn "we could not find out" into `0`.
+ *
+ * Which figures are read at all is decided by `notchContext.ts`: the account
+ * sums when the panel is showing them, one project's deployments and streams
+ * when the app is on a page about that project, and never both. The route takes
+ * an optional `?projectId=` for exactly that reason.
  */
 
+import {
+  NOTCH_CONTEXT_PANELS,
+  type NotchContext,
+  type NotchFigureKey,
+  resolveNotchFeed,
+} from "./notchContext.ts";
 import { EM_DASH, type NotchPanelView, type NotchSlotView } from "./notchPanelDocument.ts";
 
 /** Mirrors the key `apps/web/src/environments/primary/auth.ts` writes under. */
@@ -48,21 +59,55 @@ export interface DesktopTokenSpend {
   readonly until: string | null;
 }
 
+/**
+ * One project's side of the same read.
+ *
+ * Counts are kept apart from the things that make a count meaningless.
+ * `streamCount` and `reportingCount` are what let the panel tell "nothing has
+ * been declared to report to" from "the count failed" — see
+ * `apps/web/src/components/infra/deploymentLoad.logic.ts`, which draws the same
+ * distinction on the infrastructure page and for the same reason.
+ */
+export interface DesktopProjectActivity {
+  readonly deploymentCount: number;
+  /** Deployments the registry was *told* are live; nothing here probes them. */
+  readonly liveCount: number;
+  /** Deployments naming at least one stream — the rest cannot report load. */
+  readonly reportingCount: number;
+  readonly streamCount: number;
+  /** Events across every declared stream. `null` when none could be counted. */
+  readonly events: number | null;
+  /** Events across the streams the deployments name. `null` when uncountable. */
+  readonly reportedEvents: number | null;
+  readonly lastDeployAt: string | null;
+  readonly lastDeployStatus: string | null;
+  /** A stream or a count was skipped, so the event sums are floors. */
+  readonly partial: boolean;
+}
+
 export interface DesktopActivity {
   readonly workspaceCount: number;
   readonly partial: boolean;
   readonly shareViews: DesktopShareViews | null;
   readonly tokenSpend: DesktopTokenSpend | null;
+  /** Only ever present when the read named a project. */
+  readonly project: DesktopProjectActivity | null;
 }
 
 /**
- * The four states the panel has to keep apart, as one type. `ok` is the only
- * one that carries numbers, so no other branch can accidentally render as zero.
+ * The states the panel has to keep apart, as one type. `ok` is the only one
+ * that carries numbers, so no other branch can accidentally render as zero.
+ *
+ * `unknown-project` is separate from `failed` because they send a reader to two
+ * different places: one means the server is unhappy, the other means the page
+ * is open on a project this account cannot see, which no amount of retrying
+ * fixes.
  */
 export type NotchActivityOutcome =
   | { readonly kind: "ok"; readonly activity: DesktopActivity }
   | { readonly kind: "signed-out" }
   | { readonly kind: "offline" }
+  | { readonly kind: "unknown-project" }
   | { readonly kind: "failed" };
 
 /** The slice of `WebContents` this needs, so the reader is testable off Electron. */
@@ -113,6 +158,28 @@ function parseTokenSpend(value: unknown): DesktopTokenSpend | null {
   };
 }
 
+function parseProjectActivity(value: unknown): DesktopProjectActivity | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const deploymentCount = readFiniteNumber(value.deploymentCount);
+  const streamCount = readFiniteNumber(value.streamCount);
+  if (deploymentCount === null || streamCount === null) {
+    return null;
+  }
+  return {
+    deploymentCount,
+    liveCount: readFiniteNumber(value.liveCount) ?? 0,
+    reportingCount: readFiniteNumber(value.reportingCount) ?? 0,
+    streamCount,
+    events: readFiniteNumber(value.events),
+    reportedEvents: readFiniteNumber(value.reportedEvents),
+    lastDeployAt: readIsoOrNull(value.lastDeployAt),
+    lastDeployStatus: readIsoOrNull(value.lastDeployStatus),
+    partial: value.partial === true,
+  };
+}
+
 /**
  * A body that does not parse is `failed`, never an empty reading — a server
  * that answers with something unrecognisable has told us nothing about how many
@@ -136,6 +203,7 @@ export function parseNotchActivityBody(body: unknown): NotchActivityOutcome {
       partial: body.partial === true,
       shareViews: parseShareViews(body.shareViews),
       tokenSpend: parseTokenSpend(body.tokenSpend),
+      project: parseProjectActivity(body.project),
     },
   };
 }
@@ -144,8 +212,22 @@ export interface ReadNotchActivityInput {
   /** `null` before the backend has an address, which reads as `offline`. */
   readonly baseUrl: string | null;
   readonly accessToken: string | null;
+  /**
+   * Names one project instead of the account. The route answers one or the
+   * other, never both, because the panel only ever draws one of them.
+   */
+  readonly projectId?: string | null;
   readonly fetchImpl?: typeof globalThis.fetch;
   readonly timeoutMs?: number;
+}
+
+/** Kept here so the desktop and the route cannot disagree about the spelling. */
+export function buildNotchActivityUrl(baseUrl: string, projectId?: string | null): string {
+  const query =
+    projectId === undefined || projectId === null || projectId.length === 0
+      ? ""
+      : `?projectId=${encodeURIComponent(projectId)}`;
+  return `${baseUrl}${NOTCH_ACTIVITY_PATH}${query}`;
 }
 
 export async function readNotchActivity(
@@ -167,7 +249,7 @@ export async function readNotchActivity(
   }, input.timeoutMs ?? REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetchImpl(`${input.baseUrl}${NOTCH_ACTIVITY_PATH}`, {
+    const response = await fetchImpl(buildNotchActivityUrl(input.baseUrl, input.projectId), {
       headers: { authorization: `Bearer ${input.accessToken}` },
       signal: controller.signal,
     });
@@ -176,6 +258,11 @@ export async function readNotchActivity(
     // fix is to sign in again.
     if (response.status === 401 || response.status === 403) {
       return { kind: "signed-out" };
+    }
+    // Only a named project can be missing, and it is the one thing a retry
+    // will not fix, so it does not get folded into the general failure.
+    if (response.status === 404) {
+      return { kind: "unknown-project" };
     }
     if (!response.ok) {
       return { kind: "failed" };
@@ -264,17 +351,45 @@ function describeWindow(since: string | null, until: string | null): string {
   return ` over the last ${days} day${days === 1 ? "" : "s"}`;
 }
 
+/**
+ * How long ago, short enough to sit in the value column.
+ *
+ * A timestamp is the wrong shape for a glance — "last deploy: 2h ago" answers
+ * the question, "2026-08-19 14:03" makes the reader do arithmetic. The exact
+ * moment is still in the tooltip. An unparseable date is a dash, not an epoch.
+ */
+export function formatElapsed(iso: string, now: number = Date.now()): string {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) {
+    return EM_DASH;
+  }
+  const minutes = Math.round((now - then) / 60_000);
+  // A clock skew between the server and this machine should not produce "in 3
+  // minutes" on a panel that only ever looks backwards.
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(then).toLocaleDateString();
+}
+
+/** A slot with no figure. The label is filled in by the context, not here. */
 function absentSlot(note: string, detail: string): NotchSlotView {
-  return { value: EM_DASH, note, detail };
+  return { label: "", value: EM_DASH, note, detail };
+}
+
+function presentSlot(value: string, note: string, detail: string): NotchSlotView {
+  return { label: "", value, note, detail };
 }
 
 /**
- * Turns the three number-less outcomes into wording, and only hands a slot its
- * figures once there is genuinely something to count. Written once so that
- * "not signed in" and "the read failed" cannot drift into sounding alike in one
- * slot and different in the next.
+ * Turns the number-less outcomes into wording. Written once so that "not signed
+ * in" and "the read failed" cannot drift into sounding alike in one slot and
+ * different in the next.
  */
-function buildSlot(
+function withActivity(
   outcome: NotchActivityOutcome,
   subject: string,
   fromActivity: (activity: DesktopActivity) => NotchSlotView,
@@ -287,16 +402,50 @@ function buildSlot(
       );
     case "signed-out":
       return absentSlot("sign in", `Sign in to T3 Code to see ${subject}.`);
+    case "unknown-project":
+      return absentSlot(
+        "unknown project",
+        `The server does not have this project, or it belongs to another account, so ${subject} cannot be read.`,
+      );
     case "failed":
       return absentSlot("unavailable", `The server could not be asked about ${subject}.`);
     case "ok":
-      return outcome.activity.workspaceCount === 0
-        ? absentSlot(
-            "no workspace",
-            `This account has no workspace yet, so there is no ${subject}.`,
-          )
-        : fromActivity(outcome.activity);
+      return fromActivity(outcome.activity);
   }
+}
+
+/**
+ * An account-wide figure. Only hands a slot its figures once there is genuinely
+ * something to count: a tenant with no workspace has no share links to have been
+ * clicked, and that is not the same statement as "nobody clicked".
+ */
+function buildAccountSlot(
+  outcome: NotchActivityOutcome,
+  subject: string,
+  fromActivity: (activity: DesktopActivity) => NotchSlotView,
+): NotchSlotView {
+  return withActivity(outcome, subject, (activity) =>
+    activity.workspaceCount === 0
+      ? absentSlot("no workspace", `This account has no workspace yet, so there is no ${subject}.`)
+      : fromActivity(activity),
+  );
+}
+
+/**
+ * A figure about the one project the route named. A missing section here means
+ * the server was asked and could not answer, which is why it does not fall
+ * through to a zero.
+ */
+function buildProjectSlot(
+  outcome: NotchActivityOutcome,
+  subject: string,
+  fromProject: (project: DesktopProjectActivity) => NotchSlotView,
+): NotchSlotView {
+  return withActivity(outcome, subject, (activity) =>
+    activity.project === null
+      ? absentSlot("unavailable", `The server could not read this project's ${subject}.`)
+      : fromProject(activity.project),
+  );
 }
 
 function partialSuffix(activity: DesktopActivity): string {
@@ -304,7 +453,7 @@ function partialSuffix(activity: DesktopActivity): string {
 }
 
 function buildShareClicks(outcome: NotchActivityOutcome): NotchSlotView {
-  return buildSlot(outcome, "share activity", (activity) => {
+  return buildAccountSlot(outcome, "share activity", (activity) => {
     const views = activity.shareViews;
     if (views === null) {
       return absentSlot("unavailable", "The server could not read this account's share links.");
@@ -314,16 +463,16 @@ function buildShareClicks(outcome: NotchActivityOutcome): NotchSlotView {
       views.lastViewedAt === null
         ? ""
         : ` Last opened ${new Date(views.lastViewedAt).toLocaleString()}.`;
-    return {
-      value: formatCompactCount(views.total),
-      note: "",
-      detail: `${views.total.toLocaleString()} opens across ${links}.${lastViewed}${partialSuffix(activity)}`,
-    };
+    return presentSlot(
+      formatCompactCount(views.total),
+      "",
+      `${views.total.toLocaleString()} opens across ${links}.${lastViewed}${partialSuffix(activity)}`,
+    );
   });
 }
 
 function buildTokenSpend(outcome: NotchActivityOutcome): NotchSlotView {
-  return buildSlot(outcome, "token spend", (activity) => {
+  return buildAccountSlot(outcome, "token spend", (activity) => {
     const spend = activity.tokenSpend;
     if (spend === null) {
       return absentSlot("unavailable", "The server could not read this account's token usage.");
@@ -332,16 +481,15 @@ function buildTokenSpend(outcome: NotchActivityOutcome): NotchSlotView {
       spend.unpricedTokens > 0
         ? ` ${formatCompactCount(spend.unpricedTokens)} tokens came from models with no published rate and are not in it.`
         : "";
-    return {
-      value: formatEstimatedCost(spend.estimatedUsd),
+    return presentSlot(
+      formatEstimatedCost(spend.estimatedUsd),
       // The rate table says of itself that it knows nothing about plans or
       // discounts, so the panel must not present its output as a bill.
-      note: "est.",
-      detail:
-        `Estimated from the server's own rate table${describeWindow(spend.since, spend.until)}, not a bill — ` +
+      "est.",
+      `Estimated from the server's own rate table${describeWindow(spend.since, spend.until)}, not a bill — ` +
         `plan pricing, discounts and rate changes are invisible to it. ` +
         `${formatCompactCount(spend.totalTokens)} tokens.${unpriced}${partialSuffix(activity)}`,
-    };
+    );
   });
 }
 
@@ -357,11 +505,248 @@ function buildActiveSyncs(): NotchSlotView {
   );
 }
 
-export function toNotchPanelView(outcome: NotchActivityOutcome): NotchPanelView {
+function ofDeployments(count: number): string {
+  return `of ${count} deployment${count === 1 ? "" : "s"}`;
+}
+
+function eventFloorSuffix(project: DesktopProjectActivity): string {
+  return project.partial ? " Some streams could not be counted, so this is a floor." : "";
+}
+
+/**
+ * How much of the project is live. `status` is what the registry was told by
+ * whatever registered the deployment — the panel is not probing anything, and
+ * the tooltip says so rather than letting a green-looking number imply a health
+ * check nobody ran.
+ */
+function buildLiveDeployments(outcome: NotchActivityOutcome): NotchSlotView {
+  return buildProjectSlot(outcome, "deployments", (project) => {
+    if (project.deploymentCount === 0) {
+      return presentSlot("0", "none registered", "This project has no registered deployments.");
+    }
+    return presentSlot(
+      project.liveCount.toLocaleString(),
+      ofDeployments(project.deploymentCount),
+      `${project.liveCount} of ${project.deploymentCount} registered deployments are recorded as live. ` +
+        `That status is what the deployment reported when it was registered, not a probe run just now.`,
+    );
+  });
+}
+
+/**
+ * Whether anything is reaching what is deployed.
+ *
+ * The two ways of having no number are kept apart exactly as
+ * `describeLoad` keeps them apart on the infrastructure page: a deployment wired
+ * to no stream *cannot* report load, and printing `0` against it would be a
+ * measurement nobody took.
+ */
+function buildDeploymentTraffic(outcome: NotchActivityOutcome): NotchSlotView {
+  return buildProjectSlot(outcome, "traffic", (project) => {
+    if (project.deploymentCount === 0) {
+      return absentSlot(
+        "nothing deployed",
+        "This project has no registered deployments, so nothing can be reporting traffic.",
+      );
+    }
+    if (project.reportingCount === 0) {
+      return absentSlot(
+        "not wired",
+        "No registered deployment reports to an analytics stream, so none of them can report load. " +
+          "This is blank rather than zero because nobody measured it.",
+      );
+    }
+    if (project.reportedEvents === null) {
+      return absentSlot(
+        "unavailable",
+        "The server could not count the streams this project's deployments report to.",
+      );
+    }
+    return presentSlot(
+      formatCompactCount(project.reportedEvents),
+      project.partial ? "floor" : "",
+      `${project.reportedEvents.toLocaleString()} events across the streams ${project.reportingCount} ` +
+        `${ofDeployments(project.deploymentCount)} report to.${eventFloorSuffix(project)}`,
+    );
+  });
+}
+
+function buildLastDeploy(outcome: NotchActivityOutcome): NotchSlotView {
+  return buildProjectSlot(outcome, "deploy history", (project) => {
+    if (project.lastDeployAt === null) {
+      return absentSlot(
+        "never",
+        "No deploy run has been recorded for this project. A deployment registered by other means still shows above.",
+      );
+    }
+    return presentSlot(
+      formatElapsed(project.lastDeployAt),
+      project.lastDeployStatus ?? "",
+      `The most recent deploy run started ${new Date(project.lastDeployAt).toLocaleString()}` +
+        `${project.lastDeployStatus === null ? "" : ` and ${project.lastDeployStatus}`}.`,
+    );
+  });
+}
+
+function buildAnalyticsStreams(outcome: NotchActivityOutcome): NotchSlotView {
+  return buildProjectSlot(outcome, "streams", (project) =>
+    presentSlot(
+      project.streamCount.toLocaleString(),
+      project.streamCount === 0 ? "none declared" : "",
+      project.streamCount === 0
+        ? "No analytics stream is declared for this project, so there is nothing for a deployment to report to."
+        : `${project.streamCount} analytics stream${project.streamCount === 1 ? " is" : "s are"} declared for this project.`,
+    ),
+  );
+}
+
+/**
+ * Events across every declared stream, summed the way the analytics page sums
+ * them: a grouped query answers with one bucket per group, so a stream's total
+ * is the sum of its buckets rather than its first row — see `totalEvents` in
+ * `apps/web/src/components/infra/deploymentLoad.logic.ts`. The addition happens
+ * on the server so the panel is handed a figure, not a table.
+ */
+function buildAnalyticsEvents(outcome: NotchActivityOutcome): NotchSlotView {
+  return buildProjectSlot(outcome, "events", (project) => {
+    if (project.streamCount === 0) {
+      return absentSlot(
+        "no streams",
+        "Nothing is declared for this project to report to, so there is nothing to count.",
+      );
+    }
+    if (project.events === null) {
+      return absentSlot("unavailable", "The server could not count this project's streams.");
+    }
+    return presentSlot(
+      formatCompactCount(project.events),
+      project.partial ? "floor" : "",
+      `${project.events.toLocaleString()} events across ${project.streamCount} declared stream${
+        project.streamCount === 1 ? "" : "s"
+      }.${eventFloorSuffix(project)}`,
+    );
+  });
+}
+
+/** How much of what is deployed is visible to analytics at all. */
+function buildAnalyticsReporters(outcome: NotchActivityOutcome): NotchSlotView {
+  return buildProjectSlot(outcome, "reporting deployments", (project) => {
+    if (project.deploymentCount === 0) {
+      return presentSlot(
+        "0",
+        "none registered",
+        "This project has no registered deployments, so nothing is reporting to its streams.",
+      );
+    }
+    const blind = project.deploymentCount - project.reportingCount;
+    return presentSlot(
+      project.reportingCount.toLocaleString(),
+      ofDeployments(project.deploymentCount),
+      `${project.reportingCount} of ${project.deploymentCount} registered deployments name at least one stream.` +
+        (blind > 0 ? ` The other ${blind} cannot report anything.` : ""),
+    );
+  });
+}
+
+/**
+ * The one thing about an open thread the desktop shell can stand behind.
+ *
+ * Main knows which route the app window is on and nothing else about it: thread
+ * state lives in the renderer and there is no channel to it here. So this says
+ * what the route says and no more.
+ */
+function buildThreadRoute(context: NotchContext): NotchSlotView {
+  if (context.thread === "draft") {
+    return presentSlot(
+      "draft",
+      "",
+      "A draft is open in the composer. Nothing has been sent in it yet.",
+    );
+  }
+  return presentSlot("open", "", "A thread is open in the app window.");
+}
+
+/**
+ * Deliberately, permanently blank.
+ *
+ * Whether a turn is running is renderer state, and the panel is drawn by the
+ * main process from the window's URL alone. Animating a spinner here would be
+ * drawing something nobody looked at, so it stays a dash with the reason
+ * attached — the same rule `buildActiveSyncs` follows.
+ */
+function buildTurnState(): NotchSlotView {
+  return absentSlot(
+    "not visible",
+    "The desktop shell can see which page the app is on, not what a turn is doing, so this stays blank rather than guessing.",
+  );
+}
+
+function buildFigure(
+  figure: NotchFigureKey,
+  context: NotchContext,
+  outcome: NotchActivityOutcome,
+): NotchSlotView {
+  switch (figure) {
+    case "shareClicks":
+      return buildShareClicks(outcome);
+    case "tokenSpend":
+      return buildTokenSpend(outcome);
+    case "activeSyncs":
+      return buildActiveSyncs();
+    case "liveDeployments":
+      return buildLiveDeployments(outcome);
+    case "deploymentTraffic":
+      return buildDeploymentTraffic(outcome);
+    case "lastDeploy":
+      return buildLastDeploy(outcome);
+    case "analyticsStreams":
+      return buildAnalyticsStreams(outcome);
+    case "analyticsEvents":
+      return buildAnalyticsEvents(outcome);
+    case "analyticsReporters":
+      return buildAnalyticsReporters(outcome);
+    case "threadRoute":
+      return buildThreadRoute(context);
+    case "turnState":
+      return buildTurnState();
+  }
+}
+
+/**
+ * The context picks the rows and their labels; the outcome fills them in. The
+ * label always comes from the context rather than the builder, so a figure can
+ * never end up drawn under another figure's name.
+ */
+export function toNotchPanelView(
+  context: NotchContext,
+  outcome: NotchActivityOutcome,
+): NotchPanelView {
+  const panel = NOTCH_CONTEXT_PANELS[context.kind];
   return {
-    shareClicks: buildShareClicks(outcome),
-    tokenSpend: buildTokenSpend(outcome),
-    activeSyncs: buildActiveSyncs(),
+    title: panel.title,
+    slots: panel.slots.map(({ figure, label }) => ({
+      ...buildFigure(figure, context, outcome),
+      label,
+    })),
+  };
+}
+
+/**
+ * The context's rows with nothing in them yet.
+ *
+ * Painted the moment the app navigates, so the panel never shows one page's
+ * numbers under another page's labels while the new read is in the air.
+ */
+export function pendingNotchPanelView(context: NotchContext): NotchPanelView {
+  const panel = NOTCH_CONTEXT_PANELS[context.kind];
+  return {
+    title: panel.title,
+    slots: panel.slots.map(({ label }) => ({
+      label,
+      value: EM_DASH,
+      note: "",
+      detail: "Not read yet.",
+    })),
   };
 }
 
@@ -372,9 +757,9 @@ export interface NotchActivitySource {
   readonly fetchImpl?: typeof globalThis.fetch;
 }
 
-export interface NotchRefreshOptions {
-  readonly readView: () => Promise<NotchPanelView>;
-  readonly apply: (view: NotchPanelView) => void;
+export interface NotchRefreshOptions<T> {
+  readonly readView: () => Promise<T>;
+  readonly apply: (view: T) => void;
   readonly intervalMs: number;
   /** Injectable so the policy can be exercised without a real clock. */
   readonly schedule?: (handler: () => void, ms: number) => unknown;
@@ -396,8 +781,15 @@ export interface NotchRefreshScheduler {
  * startup. Expanding reads immediately and then keeps a cadence only for as
  * long as the cursor stays. Lives here rather than in `notchWindow.ts` so it can
  * be tested without an Electron window.
+ *
+ * Navigating is the one thing that can invalidate a reading rather than merely
+ * age it, so a refresh asked for while one is in flight is remembered and run
+ * once that one settles. Dropping it would leave the panel showing the page you
+ * just left until the next tick.
  */
-export function createNotchRefreshScheduler(options: NotchRefreshOptions): NotchRefreshScheduler {
+export function createNotchRefreshScheduler<T>(
+  options: NotchRefreshOptions<T>,
+): NotchRefreshScheduler {
   const schedule =
     options.schedule ??
     ((handler: () => void, ms: number) => {
@@ -411,12 +803,18 @@ export function createNotchRefreshScheduler(options: NotchRefreshOptions): Notch
   let handle: unknown = null;
   let stopped = false;
   let inFlight = false;
+  let queued = false;
 
   const refresh = (): void => {
+    if (stopped) {
+      return;
+    }
     // One request at a time: the read crosses a socket and a hover can outlive
     // it, so without this a slow server would queue up work that all resolves
-    // into the same three strings.
-    if (stopped || inFlight) {
+    // into the same few strings. At most one follow-up is remembered — the
+    // panel wants the newest reading, not every reading it missed.
+    if (inFlight) {
+      queued = true;
       return;
     }
     inFlight = true;
@@ -430,6 +828,10 @@ export function createNotchRefreshScheduler(options: NotchRefreshOptions): Notch
       })
       .finally(() => {
         inFlight = false;
+        if (queued) {
+          queued = false;
+          refresh();
+        }
       });
   };
 
@@ -462,14 +864,25 @@ export function createNotchRefreshScheduler(options: NotchRefreshOptions): Notch
   };
 }
 
-/** The single function the panel calls; everything above it is pure or mockable. */
-export function createNotchViewReader(source: NotchActivitySource): () => Promise<NotchPanelView> {
-  return async () => {
+/**
+ * The single function the panel calls; everything above it is pure or mockable.
+ *
+ * The context decides both what is asked for and what is drawn: a project-scoped
+ * page asks about that project and nothing else, so the panel never pays for
+ * figures it is not showing.
+ */
+export function createNotchViewReader(
+  source: NotchActivitySource,
+): (context: NotchContext) => Promise<NotchPanelView> {
+  return async (context) => {
     const accessToken = await readSignedInAccessToken(source.host());
+    const feed = resolveNotchFeed(context);
     return toNotchPanelView(
+      context,
       await readNotchActivity({
         baseUrl: source.baseUrl(),
         accessToken,
+        ...(feed.kind === "project" ? { projectId: feed.projectId } : {}),
         ...(source.fetchImpl ? { fetchImpl: source.fetchImpl } : {}),
       }),
     );

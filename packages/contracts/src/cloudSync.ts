@@ -144,6 +144,165 @@ export const ProjectCloudSync = Schema.Struct({
 export type ProjectCloudSync = typeof ProjectCloudSync.Type;
 
 /**
+ * How often the laptop is expected to say "still here", and how long that
+ * statement is believed afterwards.
+ *
+ * A quick tunnel dies without telling anyone — a closed lid, a dropped Wi-Fi
+ * connection, a `cloudflared` that was killed — so a registered address is only
+ * ever a claim about the past. Rather than trusting it, the laptop re-states it
+ * on a heartbeat and the cloud stops believing it after three missed beats.
+ *
+ * Ninety seconds, and not less, because the two ways of being wrong are not
+ * symmetrical. Believing a dead address for a minute costs a visitor one click
+ * that fails loudly and instantly, and they are still on the cloud page that
+ * offered it. Disbelieving a live one tells them "the person sharing this closed
+ * their laptop", which is the sentence that makes somebody give up and go away —
+ * and a single garbage-collection pause or a train tunnel would trigger it.
+ * Three intervals is the ordinary "missed one, missed two, now I believe it".
+ *
+ * Ninety seconds, and not more, because the same clock answers "the laptop went
+ * away mid-sync". Every second added here is a second spent telling a visitor a
+ * transfer is still running when the machine behind it shut hours ago.
+ */
+export const CLOUD_SYNC_LIVE_COPY_HEARTBEAT_MS = 30_000;
+export const CLOUD_SYNC_LIVE_COPY_STALE_AFTER_MS = 3 * CLOUD_SYNC_LIVE_COPY_HEARTBEAT_MS;
+
+const CLOUD_SYNC_COPY_URL_MAX_LENGTH = 512;
+
+/**
+ * An address a visitor's browser will be sent to: a quick tunnel's, or the
+ * cloud's own.
+ *
+ * Both ends of the handoff are checked against this. One of them is registered
+ * by whichever machine holds the local copy and the other is registered by
+ * whichever machine finished a pass, so in both directions this is a URL that
+ * arrived over the wire and will end up in a `Location` header. `javascript:`,
+ * `data:` and a URL carrying `user:password@` are all refused here rather than
+ * at the point of use, because the point of use is a redirect.
+ *
+ * Plain `http` survives only for a loopback host, which is what a developer's
+ * cloud is. Everything reachable by anyone else has to be `https`, since the
+ * whole exchange is a private project moving between two machines.
+ */
+export const CloudSyncCopyUrl = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(CLOUD_SYNC_COPY_URL_MAX_LENGTH),
+);
+export type CloudSyncCopyUrl = typeof CloudSyncCopyUrl.Type;
+
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+export function isSafeCloudSyncCopyUrl(candidate: string): boolean {
+  if (candidate.length === 0 || candidate.length > CLOUD_SYNC_COPY_URL_MAX_LENGTH) {
+    return false;
+  }
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return false;
+  }
+  // Credentials in a redirect target are how a link that looks like ours signs
+  // a visitor in to somewhere else.
+  if (url.username !== "" || url.password !== "") {
+    return false;
+  }
+  return (
+    url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname))
+  );
+}
+
+/**
+ * Where a live copy of this project is reachable right now, and when the machine
+ * holding it last said so.
+ *
+ * Advisory and perishable, and it is never the identity of anything. The link a
+ * person hands out is always the cloud URL; this is transport that happens to be
+ * ready sooner. `confirmedAt` is what makes it safe to hold at all — see the
+ * heartbeat constants above — and a reader that ignores it is handing visitors
+ * an address that may have died with a laptop lid.
+ */
+export const CloudSyncLiveCopy = Schema.Struct({
+  url: CloudSyncCopyUrl,
+  /** The last heartbeat. Older than `staleAfterMs` means there is no live copy. */
+  confirmedAt: IsoDateTime,
+  /** Carried so a client counts down against the server's rule rather than its own. */
+  staleAfterMs: NonNegativeInt,
+});
+export type CloudSyncLiveCopy = typeof CloudSyncLiveCopy.Type;
+
+/**
+ * Whether the machine holding the local copy is still answering, and if so
+ * whether it is publishing one.
+ *
+ * `confirmedAt` is stamped by every heartbeat, including a heartbeat that
+ * carries no URL. That is deliberate and it is the whole reason "still
+ * uploading" and "the person sharing this closed their laptop" can be told apart
+ * from the data: without it, a sync with no tunnel and a sync whose laptop shut
+ * look identical, and the spec requires different advice for each.
+ */
+export function isLiveCopyFresh(confirmedAt: string | null, now: Date): boolean {
+  if (confirmedAt === null) {
+    return false;
+  }
+  const at = Date.parse(confirmedAt);
+  if (Number.isNaN(at)) {
+    return false;
+  }
+  // A timestamp from the future is a clock disagreement, not a dead laptop, and
+  // this whole feature refuses to settle anything by comparing two clocks.
+  return now.getTime() - at <= CLOUD_SYNC_LIVE_COPY_STALE_AFTER_MS;
+}
+
+/**
+ * What a visitor arriving at the cloud URL should be shown. The spec's four
+ * cases, plus the one that precedes all of them.
+ *
+ * These say what a visitor can *do*, which is why they are not the sync's
+ * `status`: `scanning`, `transferring` and a `paused` first pass all leave the
+ * same two options open — wait, or go through to the live copy — and the reason
+ * the bar is not moving belongs in `sync`, which travels alongside.
+ *
+ * `sharer-away` is the one that has to be earned rather than guessed. It means
+ * the heartbeat stopped, and nothing else: a first pass that is genuinely slow
+ * over a slow link keeps saying so, and never degrades into this.
+ */
+export const CloudSyncVisitorState = Schema.Literals([
+  /** This project has no sync at all. Nothing was ever uploaded and nothing is coming. */
+  "not-syncing",
+  /** First pass running, laptop answering, no live copy to offer. */
+  "first-pass",
+  /** First pass running, and a live copy a visitor can be sent straight through to. */
+  "first-pass-live",
+  /** First pass never finished and the laptop stopped answering. */
+  "sharer-away",
+  /** The two sides have agreed at least once: the cloud copy is canonical, serve from here. */
+  "synced",
+]);
+export type CloudSyncVisitorState = typeof CloudSyncVisitorState.Type;
+
+/**
+ * `turnsAllowed` is stated rather than derived, because the spec's requirement —
+ * refuse turns until the first pass completes — is one rule, and a rule
+ * re-derived in every client is a rule that will eventually be derived wrongly
+ * in one of them. An agent let loose on a half-uploaded tree reads a truncated
+ * file, decides the code is broken, and confidently "fixes" it.
+ */
+export const CloudSyncVisitorView = Schema.Struct({
+  state: CloudSyncVisitorState,
+  /** Null only for `not-syncing`. Carries the progress bar and the reason it is stuck. */
+  sync: Schema.NullOr(ProjectCloudSync),
+  /**
+   * Set only in `first-pass-live`. A stale registration is not reported as an
+   * old address — it is reported as no address, because the two are the same
+   * thing to anyone who would click it.
+   */
+  liveCopy: Schema.NullOr(CloudSyncLiveCopy),
+  /** False until the first full agreement. See above; this is the spec's rule, not a hint. */
+  turnsAllowed: Schema.Boolean,
+});
+export type CloudSyncVisitorView = typeof CloudSyncVisitorView.Type;
+
+/**
  * The base revision for one path: what both sides last agreed this file was.
  *
  * This is the heart of the feature. For every path the reconciler compares
@@ -226,6 +385,12 @@ export class CloudSyncError extends Schema.TaggedErrorClass<CloudSyncError>()("C
     "conflict-not-found",
     /** Changing mode means stopping first; see above. */
     "mode-locked",
+    /**
+     * An address that will not be redirected to: not `https` (nor loopback),
+     * or carrying credentials. Refused at the door rather than stored, because
+     * a stored one is a `Location` header waiting to happen.
+     */
+    "unusable-url",
     /** The store refused the write. Never reported as a completed sync. */
     "storage",
   ]),
@@ -353,3 +518,50 @@ export const CloudSyncConflictResolveResult = Schema.Struct({
   sync: ProjectCloudSync,
 });
 export type CloudSyncConflictResolveResult = typeof CloudSyncConflictResolveResult.Type;
+
+/**
+ * "A live copy of this project is reachable at <url>, as of now."
+ *
+ * A null `url` is not a no-op and not a mistake: it is the laptop saying "I am
+ * still here, there is nothing to publish". Sharing must work with no
+ * `cloudflared` installed and behind an auth policy the tunnel refuses to
+ * publish, and in both of those cases the sync goes ahead — so the heartbeat has
+ * to be able to carry the absence of a live copy as easily as its presence.
+ * Sending null is also how a laptop withdraws an address it is about to stop
+ * serving.
+ */
+export const CloudSyncLiveCopyRegisterInput = Schema.Struct({
+  ...CloudSyncProjectScope,
+  url: Schema.NullOr(CloudSyncCopyUrl),
+});
+export type CloudSyncLiveCopyRegisterInput = typeof CloudSyncLiveCopyRegisterInput.Type;
+
+/**
+ * The sync comes back with every heartbeat, which is what tells the laptop the
+ * first pass completed without a second call — and tells it even when the pass
+ * was finished by something other than the process holding the tunnel.
+ */
+export const CloudSyncLiveCopyRegisterResult = Schema.Struct({
+  sync: ProjectCloudSync,
+  /** What the cloud will now hand to visitors, after applying the staleness rule. */
+  liveCopy: Schema.NullOr(CloudSyncLiveCopy),
+});
+export type CloudSyncLiveCopyRegisterResult = typeof CloudSyncLiveCopyRegisterResult.Type;
+
+export const CloudSyncVisitInput = Schema.Struct(CloudSyncProjectScope);
+export type CloudSyncVisitInput = typeof CloudSyncVisitInput.Type;
+
+/**
+ * "This project's canonical copy is at <url>; send anyone who lands here on."
+ *
+ * Registered by the laptop *against its own server* once the first pass
+ * completes, which is the mirror image of the call above and the reason both
+ * exist. The tunnel published this machine, so this machine is the only one that
+ * can catch a visitor still sitting on it — and the address it sends them to was
+ * always the one in their inbox.
+ */
+export const CloudSyncHandoffRegisterInput = Schema.Struct({
+  ...CloudSyncProjectScope,
+  canonicalUrl: CloudSyncCopyUrl,
+});
+export type CloudSyncHandoffRegisterInput = typeof CloudSyncHandoffRegisterInput.Type;

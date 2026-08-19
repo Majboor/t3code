@@ -4,6 +4,7 @@
  * @module api
  */
 import { makeChangesApi, type T3ChangesApi } from "./changes.ts";
+import { makeCloudSyncApi, type T3CloudSyncApi } from "./cloudSync.ts";
 import { makeCollaborationApi, type T3CollaborationApi } from "./collaboration.ts";
 import { makeDeploysApi, type T3DeploysApi } from "./deploys.ts";
 import { makeHistoryApi, type T3HistoryApi } from "./history.ts";
@@ -24,6 +25,7 @@ import { makeWorkspaceApi, type T3WorkspaceApi } from "./workspace.ts";
 import type { T3Transport } from "../transport.ts";
 
 export * from "./changes.ts";
+export * from "./cloudSync.ts";
 export * from "./collaboration.ts";
 export * from "./deploys.ts";
 export * from "./history.ts";
@@ -48,6 +50,8 @@ export interface T3Api {
   readonly changes: T3ChangesApi;
   /** Presence, invites, members, approvals, claims. */
   readonly collaboration: T3CollaborationApi;
+  /** Replicating a project to a cloud copy, and the conflicts that leaves. */
+  readonly cloudSync: T3CloudSyncApi;
   /** The pack registry: publishing, versions, search, and who may see them. */
   readonly packs: T3PacksApi;
   readonly organizations: T3OrganizationsApi;
@@ -70,6 +74,7 @@ export function createT3Api(transport: T3Transport): T3Api {
     history: makeHistoryApi(transport),
     changes: makeChangesApi(transport),
     collaboration: makeCollaborationApi(transport),
+    cloudSync: makeCloudSyncApi(transport),
     packs: makePacksApi(transport),
     organizations: makeOrganizationsApi(transport),
     deploys: makeDeploysApi(transport),

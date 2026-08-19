@@ -94,6 +94,7 @@ import {
   type TurnDiffSummary,
 } from "../types";
 import { useCollaborationMembers } from "../hooks/useCollaborationMembers";
+import { useCloudSyncTurnGate } from "./cloudSync/useCloudSyncTurnGate";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useCommandPaletteStore } from "../commandPaletteStore";
@@ -874,6 +875,14 @@ export default function ChatView(props: ChatViewProps) {
     : null;
   const activeProject = useStore(
     useMemo(() => createProjectSelectorByRef(activeProjectRef), [activeProjectRef]),
+  );
+
+  // Turns are held while a shared project is still arriving. An agent given a
+  // half-uploaded tree reads a truncated file and "fixes" code that was never
+  // broken, which is worse than the wait.
+  const cloudSyncTurnGate = useCloudSyncTurnGate(
+    activeThread?.environmentId ?? null,
+    activeThread?.projectId ?? null,
   );
 
   // Who wrote what. In an unshared project there is no ownership and the roster
@@ -2735,6 +2744,9 @@ export default function ChatView(props: ChatViewProps) {
       }
       return;
     }
+    // Checked here rather than by disabling the composer: the draft is worth
+    // keeping, and the refusal has to explain which wait this is.
+    if (cloudSyncTurnGate.refuse()) return;
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;

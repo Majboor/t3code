@@ -4,6 +4,7 @@ import * as nodePath from "node:path";
 
 import {
   CloudSyncError,
+  isSafeCloudSyncCopyUrl,
   type CloudSyncConflict,
   type CloudSyncConflictId,
   type CloudSyncMode,
@@ -38,6 +39,7 @@ import {
   storeBytes,
   type BlobStoreRoot,
 } from "../blobStore.ts";
+import { classifyVisit } from "../liveCopy.ts";
 import {
   CloudSyncService,
   type CloudSyncActor,
@@ -476,6 +478,63 @@ const makeCloudSyncService = Effect.gen(function* () {
             : Effect.succeed(toProjectCloudSync(record.value)),
         ),
       );
+
+  const registerLiveCopy: CloudSyncServiceShape["registerLiveCopy"] = (actor, input) =>
+    Effect.gen(function* () {
+      yield* requireMember(actor, input);
+
+      // Refused before it is stored, not before it is used. A URL in this
+      // column ends up in a `Location` header, and the moment it is written it
+      // is something a later reader will trust.
+      if (input.url !== null && !isSafeCloudSyncCopyUrl(input.url)) {
+        return yield* new CloudSyncError({
+          code: "unusable-url",
+          message: "A live copy has to be an https address with no credentials in it.",
+        });
+      }
+
+      const confirmedAt = nowIso();
+      const record = yield* repository
+        .registerLiveCopy({
+          ...input,
+          liveCopyUrl: input.url,
+          confirmedAt,
+        })
+        .pipe(Effect.mapError(storageFailure("Could not record where the live copy is.")));
+
+      if (Option.isNone(record)) {
+        return yield* notFound("This project is not being synced.");
+      }
+
+      const sync = toProjectCloudSync(record.value);
+      // The freshness rule is applied to our own write rather than assumed:
+      // what comes back is exactly what a visitor would be told a moment later,
+      // so a laptop can see for itself that its registration took.
+      const view = classifyVisit({
+        sync,
+        liveCopyUrl: record.value.liveCopyUrl,
+        laptopConfirmedAt: record.value.laptopConfirmedAt,
+        now: new Date(confirmedAt),
+      });
+      return { sync, liveCopy: view.liveCopy };
+    });
+
+  const getVisitorView: CloudSyncServiceShape["getVisitorView"] = (actor, input) =>
+    requireMember(actor, input).pipe(
+      Effect.flatMap(() =>
+        repository
+          .getProjectSync(input)
+          .pipe(Effect.mapError(storageFailure("Could not read this project's sync."))),
+      ),
+      Effect.map((record) =>
+        classifyVisit({
+          sync: Option.isNone(record) ? null : toProjectCloudSync(record.value),
+          liveCopyUrl: Option.isNone(record) ? null : record.value.liveCopyUrl,
+          laptopConfirmedAt: Option.isNone(record) ? null : record.value.laptopConfirmedAt,
+          now: new Date(),
+        }),
+      ),
+    );
 
   const getStatus: CloudSyncServiceShape["getStatus"] = (actor, input) =>
     requireMember(actor, input).pipe(
@@ -1070,6 +1129,8 @@ const makeCloudSyncService = Effect.gen(function* () {
     resolveConflict,
     planPass,
     commitPass,
+    registerLiveCopy,
+    getVisitorView,
     requireProjectAccess,
   } satisfies CloudSyncServiceShape;
 });

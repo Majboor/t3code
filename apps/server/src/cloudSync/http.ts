@@ -1,4 +1,4 @@
-import { ProjectId, TenantId, WorkspaceId } from "@t3tools/contracts";
+import { isSafeCloudSyncCopyUrl, ProjectId, TenantId, WorkspaceId } from "@t3tools/contracts";
 import { Effect, Option, Schema } from "effect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -15,6 +15,7 @@ import {
   readBlob,
   writeBlobChunk,
 } from "./blobStore.ts";
+import { cloudSyncHandoffRegistry } from "./liveCopy.ts";
 import { CloudSyncService, type CloudSyncActor } from "./Services/CloudSyncService.ts";
 
 /**
@@ -106,9 +107,22 @@ const CommitBody = Schema.Struct({
   final: Schema.Boolean,
 });
 
+const LiveCopyBody = Schema.Struct({
+  ...ProjectScopeFields,
+  /** Null is a heartbeat with nothing to publish, not a malformed one. */
+  url: Schema.NullOr(Schema.String),
+});
+
+const HandoffBody = Schema.Struct({
+  ...ProjectScopeFields,
+  canonicalUrl: Schema.String.check(Schema.isNonEmpty()),
+});
+
 const decodeNegotiate = Schema.decodeUnknownEffect(NegotiateBody);
 const decodePass = Schema.decodeUnknownEffect(PassBody);
 const decodeCommit = Schema.decodeUnknownEffect(CommitBody);
+const decodeLiveCopy = Schema.decodeUnknownEffect(LiveCopyBody);
+const decodeHandoff = Schema.decodeUnknownEffect(HandoffBody);
 
 function jsonResponse(body: unknown, status: number) {
   return HttpServerResponse.jsonUnsafe(body, { status, headers: SAFETY_HEADERS });
@@ -136,6 +150,9 @@ function statusForCode(code: string): number {
     }
     case "mode-locked": {
       return 409;
+    }
+    case "unusable-url": {
+      return 400;
     }
     default: {
       return 503;
@@ -411,6 +428,120 @@ const commitRoute = Effect.gen(function* () {
 });
 
 /**
+ * `POST /api/cloud-sync/live-copy` — "a live copy of this project is reachable
+ * at <url> as of now", or, with a null url, "I am still here and have nothing to
+ * publish".
+ *
+ * Both shapes matter. Sharing does not wait for a first pass: it starts the
+ * upload and a quick tunnel together, and if the tunnel cannot start — no
+ * `cloudflared`, or the auth gate refusing to publish a server that would hand
+ * visitors an owner session — the sync goes ahead anyway. The heartbeat with no
+ * URL is what lets the cloud keep saying "still uploading" for that laptop
+ * instead of "they closed their laptop".
+ *
+ * The reply carries the sync, so a laptop learns from its own heartbeat that the
+ * first pass completed and it is time to hand over.
+ */
+const liveCopyRoute = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const actor = yield* currentActor;
+  const cloudSync = yield* CloudSyncService;
+
+  const body = yield* decodeLiveCopy(yield* request.json);
+  return jsonResponse(yield* cloudSync.registerLiveCopy(actor, body), 200);
+});
+
+/**
+ * `GET /api/cloud-sync/visit?…` — what to show someone who opened the cloud URL.
+ *
+ * Authenticated, and the gate is not ceremony: this reply can contain a working
+ * address for somebody's laptop, and publishing that would undo the one rule the
+ * whole design rests on — the link that circulates is the cloud URL, never the
+ * tunnel's.
+ */
+const visitRoute = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url)) {
+    return badRequest("This request could not be understood.");
+  }
+  const scope = scopeFromQuery(url.value);
+  if (scope === null) {
+    return badRequest("A tenant, workspace and project are required.");
+  }
+
+  const actor = yield* currentActor;
+  const cloudSync = yield* CloudSyncService;
+  return jsonResponse(yield* cloudSync.getVisitorView(actor, scope), 200);
+});
+
+/**
+ * `POST /api/cloud-sync/handoff` — the laptop, having finished its first pass,
+ * telling *its own server* where this project now lives.
+ *
+ * The mirror image of registering a live copy, and the reason both exist. The
+ * tunnel published this machine, so this machine is the only one that can catch
+ * a visitor still sitting on it. Where it sends them is the cloud URL, which is
+ * the address they were given in the first place.
+ */
+const handoffRegisterRoute = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const actor = yield* currentActor;
+  const cloudSync = yield* CloudSyncService;
+
+  const body = yield* decodeHandoff(yield* request.json);
+  // Membership, not ownership of the tunnel — this is the same gate every other
+  // route here uses, and it is what stops a redirect for someone else's project
+  // being registered by anyone who can reach the port.
+  yield* cloudSync.requireProjectAccess(actor, body);
+
+  if (!isSafeCloudSyncCopyUrl(body.canonicalUrl)) {
+    return badRequest("A canonical address has to be an https URL with no credentials in it.");
+  }
+
+  cloudSyncHandoffRegistry.register(body.projectId, body.canonicalUrl, new Date().toISOString());
+  return jsonResponse({ canonicalUrl: body.canonicalUrl }, 200);
+});
+
+/**
+ * `GET /api/cloud-sync/handoff?…` — "this project has moved; go here."
+ *
+ * Unauthenticated on purpose, because the caller is a visitor who arrived over a
+ * quick tunnel holding share-scoped access at most, and the answer is a URL that
+ * was always meant to be in their hands. It reveals nothing else: reaching this
+ * route requires all three ids, and the address it returns needs its own
+ * credentials to be worth anything.
+ *
+ * A 303 rather than a 301 or a 308. Nothing about this is permanent — it is one
+ * process telling one visitor that the copy it was serving has been superseded —
+ * and a browser that cached it permanently would keep redirecting a laptop that
+ * is sharing something else next week.
+ *
+ * `204` when there is nothing registered, and that is the ordinary answer on the
+ * cloud, where no tunnel ever existed.
+ */
+const handoffRoute = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url)) {
+    return badRequest("This request could not be understood.");
+  }
+  const scope = scopeFromQuery(url.value);
+  if (scope === null) {
+    return badRequest("A tenant, workspace and project are required.");
+  }
+
+  const handoff = cloudSyncHandoffRegistry.get(scope.projectId);
+  if (handoff === null) {
+    return HttpServerResponse.empty({ status: 204, headers: SAFETY_HEADERS });
+  }
+  return HttpServerResponse.redirect(handoff.canonicalUrl, {
+    status: 303,
+    headers: SAFETY_HEADERS,
+  });
+});
+
+/**
  * One place every failure lands, so no route can invent its own.
  *
  * A `CloudSyncError` carries a code the client can branch on and a message a
@@ -472,4 +603,28 @@ export const cloudSyncCommitRouteLayer = HttpRouter.add(
   "POST",
   `${CLOUD_SYNC_ROUTE_PREFIX}/commit`,
   route(commitRoute),
+);
+
+export const cloudSyncLiveCopyRouteLayer = HttpRouter.add(
+  "POST",
+  `${CLOUD_SYNC_ROUTE_PREFIX}/live-copy`,
+  route(liveCopyRoute),
+);
+
+export const cloudSyncVisitRouteLayer = HttpRouter.add(
+  "GET",
+  `${CLOUD_SYNC_ROUTE_PREFIX}/visit`,
+  route(visitRoute),
+);
+
+export const cloudSyncHandoffRegisterRouteLayer = HttpRouter.add(
+  "POST",
+  `${CLOUD_SYNC_ROUTE_PREFIX}/handoff`,
+  route(handoffRegisterRoute),
+);
+
+export const cloudSyncHandoffRouteLayer = HttpRouter.add(
+  "GET",
+  `${CLOUD_SYNC_ROUTE_PREFIX}/handoff`,
+  route(handoffRoute),
 );

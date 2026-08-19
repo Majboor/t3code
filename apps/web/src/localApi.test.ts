@@ -118,6 +118,14 @@ const rpcClientMock = {
     respondToRequest: vi.fn(),
     withdrawRequest: vi.fn(),
   },
+  cloudSync: {
+    getStatus: vi.fn(),
+    start: vi.fn(),
+    pause: vi.fn(),
+    stop: vi.fn(),
+    listConflicts: vi.fn(),
+    resolveConflict: vi.fn(),
+  },
   shareLinks: {
     create: vi.fn(),
     list: vi.fn(),

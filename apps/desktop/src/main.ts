@@ -53,6 +53,11 @@ import {
   writeSavedEnvironmentRegistry,
   writeSavedEnvironmentSecret,
 } from "./clientPersistence.ts";
+import {
+  createHttpLiveShareRegistrar,
+  isUsableLiveShareEndpoint,
+  LiveShareCoordinator,
+} from "./cloudSync/liveShare.ts";
 import { scanProject, summariseScan } from "./cloudSync/scan.ts";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness.ts";
 import { showDesktopConfirmDialog } from "./confirmDialog.ts";
@@ -1771,6 +1776,70 @@ function registerIpcHandlers(): void {
     return summariseScan(await scanProject({ root: rawRoot }));
   });
 
+  // Sharing does not wait for a first pass: starting a sync in the default mode also
+  // publishes this laptop's own copy through the quick tunnel, so a link works while the
+  // cloud copy fills in. The link handed out is still the cloud URL — the tunnel address
+  // never leaves this process except as a registration the cloud may offer and will forget.
+  //
+  // The tunnel is the controller already built above, deliberately: it owns the single
+  // cloudflared child and it is the thing that refuses to publish a server whose auth
+  // policy would hand a visitor an owner session. A second launcher beside it would be a
+  // second way to publish this machine with only one of them checked.
+  //
+  // Nothing here can stop a sync. Every failure below leaves the upload running and says so
+  // in the state it reports, because the live link is an accelerator and not a requirement.
+  const CLOUD_SYNC_LIVE_SHARE_BEGIN_CHANNEL = "desktop:cloud-sync-live-share-begin";
+  const CLOUD_SYNC_LIVE_SHARE_SYNCED_CHANNEL = "desktop:cloud-sync-live-share-synced";
+  const CLOUD_SYNC_LIVE_SHARE_STOP_CHANNEL = "desktop:cloud-sync-live-share-stop";
+  let liveShareCoordinator: LiveShareCoordinator | null = null;
+
+  ipcMain.removeHandler(CLOUD_SYNC_LIVE_SHARE_BEGIN_CHANNEL);
+  ipcMain.handle(CLOUD_SYNC_LIVE_SHARE_BEGIN_CHANNEL, async (_event, rawInput: unknown) => {
+    const input = rawInput as {
+      cloudBaseUrl?: unknown;
+      authorization?: unknown;
+      scope?: { tenantId?: unknown; workspaceId?: unknown; projectId?: unknown };
+    } | null;
+    const tenantId = input?.scope?.tenantId;
+    const workspaceId = input?.scope?.workspaceId;
+    const projectId = input?.scope?.projectId;
+    // The cloud address is checked with the same rule the server applies to a redirect
+    // target, because that is what it becomes: this process will post to it, and the
+    // canonical URL built from it is what a visitor is eventually sent to.
+    if (
+      !isUsableLiveShareEndpoint(input?.cloudBaseUrl) ||
+      typeof tenantId !== "string" ||
+      typeof workspaceId !== "string" ||
+      typeof projectId !== "string"
+    ) {
+      throw new Error("Invalid cloud sync live share payload.");
+    }
+
+    await liveShareCoordinator?.stop();
+    liveShareCoordinator = new LiveShareCoordinator({
+      tunnel: workspaceShareController,
+      registrar: createHttpLiveShareRegistrar({
+        cloudBaseUrl: input.cloudBaseUrl,
+        localBaseUrl: `http://127.0.0.1:${backendPort}`,
+        scope: { tenantId, workspaceId, projectId },
+        authorization: typeof input.authorization === "string" ? input.authorization : null,
+      }),
+    });
+    return liveShareCoordinator.begin(backendPort);
+  });
+
+  ipcMain.removeHandler(CLOUD_SYNC_LIVE_SHARE_SYNCED_CHANNEL);
+  ipcMain.handle(CLOUD_SYNC_LIVE_SHARE_SYNCED_CHANNEL, async () =>
+    liveShareCoordinator === null ? null : liveShareCoordinator.firstPassComplete(),
+  );
+
+  ipcMain.removeHandler(CLOUD_SYNC_LIVE_SHARE_STOP_CHANNEL);
+  ipcMain.handle(CLOUD_SYNC_LIVE_SHARE_STOP_CHANNEL, async () => {
+    const stopped = (await liveShareCoordinator?.stop()) ?? null;
+    liveShareCoordinator = null;
+    return stopped;
+  });
+
   ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
   ipcMain.handle(PICK_FOLDER_CHANNEL, async (_event, rawOptions: unknown) => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -2236,7 +2305,7 @@ app
     // teardown, so it is created here rather than tied to the main window's
     // lifecycle. It no-ops off macOS and needs `screen`, hence after ready.
     //
-    // Both inputs to its read are resolved per call, not captured: the backend
+    // Every input to its read is resolved per call, not captured: the backend
     // URL is empty until the server is up, and the app window comes and goes.
     // Reading them late is what lets the panel start before either exists and
     // start reporting once they do.
@@ -2245,6 +2314,14 @@ app
         baseUrl: () => backendHttpUrl || null,
         host: () => mainWindow?.webContents ?? null,
       }),
+      // What the panel shows follows the page the app is on. The web app runs
+      // on hash history under Electron, so the active route is already in this
+      // window's URL and main can read it without a bridge method — which would
+      // mean a new preload channel and a renderer taught to report itself.
+      readUrl: () => {
+        const contents = mainWindow?.webContents;
+        return contents && !contents.isDestroyed() ? contents.getURL() : null;
+      },
     });
     void bootstrap().catch((error) => {
       if (isBackendReadinessAborted(error) && isQuitting) {

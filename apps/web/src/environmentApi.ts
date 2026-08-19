@@ -1,4 +1,16 @@
 import type {
+  CloudSyncConflictListInput,
+  CloudSyncConflictListResult,
+  CloudSyncConflictResolveInput,
+  CloudSyncConflictResolveResult,
+  CloudSyncPauseInput,
+  CloudSyncPauseResult,
+  CloudSyncStartInput,
+  CloudSyncStartResult,
+  CloudSyncStatusGetInput,
+  CloudSyncStatusResult,
+  CloudSyncStopInput,
+  CloudSyncStopResult,
   EnvironmentId,
   EnvironmentApi,
   ProviderSharingMemberUpdateInput,
@@ -60,6 +72,28 @@ export interface WebEnvironmentApi extends EnvironmentApi {
     withdrawRequest: (
       input: ProviderUsageRequestWithdrawInput,
     ) => Promise<ProviderUsageRequestWithdrawResult>;
+  };
+  cloudSync: {
+    /**
+     * `sync` comes back null for a project nobody has ever shared. That is the
+     * ordinary first answer for most projects, so callers render their "never
+     * shared" state from it rather than catching `not-found`.
+     */
+    getStatus: (input: CloudSyncStatusGetInput) => Promise<CloudSyncStatusResult>;
+    /**
+     * The mode decides which copy is canonical, so it is required and has no
+     * default. Re-starting a running sync under a different mode is refused
+     * with `mode-locked`: that change is `stop` then `start`.
+     */
+    start: (input: CloudSyncStartInput) => Promise<CloudSyncStartResult>;
+    pause: (input: CloudSyncPauseInput) => Promise<CloudSyncPauseResult>;
+    /** Both copies survive and begin diverging; the reply dates the parting. */
+    stop: (input: CloudSyncStopInput) => Promise<CloudSyncStopResult>;
+    listConflicts: (input: CloudSyncConflictListInput) => Promise<CloudSyncConflictListResult>;
+    /** Records that a person dealt with it — there is no side to pick. */
+    resolveConflict: (
+      input: CloudSyncConflictResolveInput,
+    ) => Promise<CloudSyncConflictResolveResult>;
   };
   shareLinks: {
     /**
@@ -207,6 +241,14 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): WebEnvironmentApi 
       listRequests: rpcClient.providerUsage.listRequests,
       respondToRequest: rpcClient.providerUsage.respondToRequest,
       withdrawRequest: rpcClient.providerUsage.withdrawRequest,
+    },
+    cloudSync: {
+      getStatus: rpcClient.cloudSync.getStatus,
+      start: rpcClient.cloudSync.start,
+      pause: rpcClient.cloudSync.pause,
+      stop: rpcClient.cloudSync.stop,
+      listConflicts: rpcClient.cloudSync.listConflicts,
+      resolveConflict: rpcClient.cloudSync.resolveConflict,
     },
     shareLinks: {
       create: rpcClient.shareLinks.create,

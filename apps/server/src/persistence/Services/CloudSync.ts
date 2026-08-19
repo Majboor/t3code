@@ -50,6 +50,19 @@ export interface ProjectCloudSyncRecord {
   readonly activelyChanging: boolean;
   /** Open conflicts only; the resolved ones are not counted. */
   readonly conflictCount: number;
+  /**
+   * Where a live copy of this project is reachable right now, if anywhere.
+   * Advisory, perishable, and never an identity — read it only together with
+   * the timestamp below.
+   */
+  readonly liveCopyUrl: string | null;
+  /**
+   * When the machine holding the local copy last spoke for this sync, with or
+   * without a live copy to publish. Two questions, one clock: whether the
+   * address above can still be offered, and whether the person sharing this
+   * closed their laptop mid-pass.
+   */
+  readonly laptopConfirmedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -157,6 +170,28 @@ export const UpdateCloudSyncProgressInput = Schema.Struct({
   updatedAt: Schema.String,
 });
 export type UpdateCloudSyncProgressInput = typeof UpdateCloudSyncProgressInput.Type;
+
+/**
+ * One heartbeat from the machine holding the local copy.
+ *
+ * `liveCopyUrl` is written outright rather than coalesced, so null really does
+ * clear it — the opposite of the progress fields above and for the opposite
+ * reason. A progress tick must not erase a half-finished pass; an address that
+ * has stopped working must be erasable the moment its owner says so, because
+ * every second it survives is a second a visitor is sent somewhere dead.
+ *
+ * `confirmedAt` is stamped on every call including one carrying no URL. See the
+ * record above: it is the only thing that distinguishes a sync with no tunnel
+ * from a sync whose laptop went away.
+ */
+export const RegisterCloudSyncLiveCopyInput = Schema.Struct({
+  projectId: Schema.String,
+  tenantId: Schema.String,
+  workspaceId: Schema.String,
+  liveCopyUrl: Schema.NullOr(Schema.String),
+  confirmedAt: Schema.String,
+});
+export type RegisterCloudSyncLiveCopyInput = typeof RegisterCloudSyncLiveCopyInput.Type;
 
 /** One base revision on its way in. A tombstone is this with `deletedAt` set. */
 export const CloudSyncBaseFileInput = Schema.Struct({
@@ -319,6 +354,16 @@ export interface CloudSyncRepositoryShape {
    */
   readonly updateProgress: (
     input: UpdateCloudSyncProgressInput,
+  ) => Effect.Effect<Option.Option<ProjectCloudSyncRecord>, PersistenceSqlError>;
+  /**
+   * Records that the laptop is still there, and where its live copy is if it
+   * has one. An UPDATE and never an upsert, for `updateProgress`'s reason: a
+   * heartbeat for a project with no sync row is a machine reporting on
+   * something it never started, and a row invented here would have to invent a
+   * `mode` — the field that decides which copy is canonical.
+   */
+  readonly registerLiveCopy: (
+    input: RegisterCloudSyncLiveCopyInput,
   ) => Effect.Effect<Option.Option<ProjectCloudSyncRecord>, PersistenceSqlError>;
 }
 
