@@ -124,6 +124,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import {
   AuthError,
   type AuthenticatedSession,
+  isMachineOwnerSession,
   resolveAuthenticatedUserId,
   ServerAuth,
 } from "./auth/Services/ServerAuth.ts";
@@ -245,12 +246,19 @@ function normalizeRemoteAddress(value: string | undefined): string {
   return trimmed.startsWith("::ffff:") ? trimmed.slice("::ffff:".length) : trimmed;
 }
 
-function isImplicitLocalOwnerSession(session: AuthenticatedSession): boolean {
-  return session.subject === "loopback-local-owner" || session.subject === "unsafe-no-auth-owner";
-}
-
+/**
+ * An identity an invite can be attached to and still mean something tomorrow.
+ *
+ * The machine owner is deliberately not one. It carries a tenant and a user id
+ * now, but they name a machine rather than a person: an invite redeemed as
+ * `auth:desktop-bootstrap` would be spent, unrecoverable by the person it was
+ * addressed to, and inherited by whoever next opens the app on this computer.
+ */
 function hasDurableInviteIdentity(session: AuthenticatedSession, inviteId: string): boolean {
   void inviteId;
+  if (isMachineOwnerSession(session)) {
+    return false;
+  }
   return Boolean(session.tenantSessionContext || session.userId);
 }
 
@@ -826,6 +834,25 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       // Token reports reach every watcher of a thread, so only the connection
       // that asked for the turn is allowed to attribute them to its own user.
       const turnsStartedHereRef = yield* Ref.make(new Set<string>());
+      const machineOwnerSession = isMachineOwnerSession(session);
+      /**
+       * The tenant this connection is a *guest* of, which is not the same
+       * question as which tenant it belongs to.
+       *
+       * Everything below that meters, caps or isolates was written when the
+       * machine's own owner had no tenant at all, so `tenantSessionContext`
+       * being present was a serviceable stand-in for "somebody else's server".
+       * It stopped being one the moment the owner was given a personal tenant:
+       * left alone, the desktop app would start rationing its own machine —
+       * 120 RPCs a minute instead of 300, two concurrent turns, a 2MB ceiling
+       * on reading its own files — and would route every turn through
+       * provider-account isolation built for tenants sharing a host.
+       *
+       * A machine owner is a guest of nobody, so this is undefined for them.
+       * Use `session.tenantSessionContext` where the question really is "which
+       * tenant does this act belong to" — ownership, membership, attribution.
+       */
+      const hostedTenantSession = machineOwnerSession ? undefined : session.tenantSessionContext;
       const collaborationActor = {
         userId: resolveAuthenticatedUserId(session),
         displayName: resolveCollaborationDisplayName(session),
@@ -851,7 +878,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           ? Effect.void
           : Effect.fail(
               toError(
-                isImplicitLocalOwnerSession(session)
+                machineOwnerSession
                   ? "Open the employee setup link or sign in with the invited account before accepting this invite."
                   : "Sign in with the invited account before accepting this invite.",
               ),
@@ -860,8 +887,12 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         readonly inviteId: string;
       }): Effect.Effect<string, AuthError> =>
         Effect.succeed(inviteAccountSetupUrlPath({ inviteId: input.inviteId }));
+      // Deliberately the hosted tenant and not the session's own: a machine
+      // owner's favorites were filed under the local scope before they had a
+      // tenant, and re-scoping them to a freshly minted tenant id would hide
+      // every star the person had already placed.
       const threadPreferenceScope = {
-        tenantId: session.tenantSessionContext?.tenantId ?? LOCAL_THREAD_PREFERENCE_TENANT_ID,
+        tenantId: hostedTenantSession?.tenantId ?? LOCAL_THREAD_PREFERENCE_TENANT_ID,
         userId: resolveAuthenticatedUserId(session),
       };
       const loadThreadFavoritePreferences = threadPreferences
@@ -1166,7 +1197,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
 
       const checkHostedRateLimit = <E>(toError: (message: string) => E): Effect.Effect<void, E> =>
         Effect.sync(() => {
-          const tenantSession = session.tenantSessionContext;
+          const tenantSession = hostedTenantSession;
           if (!tenantSession) return null;
 
           const now = Date.now();
@@ -1231,13 +1262,13 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         );
 
       const checkRateLimit = <E>(toError: (message: string) => E): Effect.Effect<void, E> =>
-        session.tenantSessionContext ? checkHostedRateLimit(toError) : checkLocalRateLimit(toError);
+        hostedTenantSession ? checkHostedRateLimit(toError) : checkLocalRateLimit(toError);
 
       const ensureHostedFileWriteLimit = <E>(
         input: { readonly contents: string; readonly encoding?: string | undefined },
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        if (!session.tenantSessionContext) {
+        if (!hostedTenantSession) {
           return Effect.void;
         }
         const sizeBytes = fileWriteSizeBytes(input);
@@ -1261,7 +1292,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         input: unknown,
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        if (!session.tenantSessionContext) {
+        if (!hostedTenantSession) {
           return Effect.void;
         }
         const sizeBytes = rpcPayloadSizeBytes(input);
@@ -1284,7 +1315,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         sizeBytes: number,
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        if (!session.tenantSessionContext) {
+        if (!hostedTenantSession) {
           return Effect.void;
         }
         const maximum = DEFAULT_PUBLIC_ACCESS_LIMITS.maxFileReadBytes;
@@ -1306,7 +1337,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         entryCount: number,
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        if (!session.tenantSessionContext) {
+        if (!hostedTenantSession) {
           return Effect.void;
         }
         const maximum = DEFAULT_PUBLIC_ACCESS_LIMITS.maxDirectoryEntries;
@@ -1328,7 +1359,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         diff: string,
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        if (!session.tenantSessionContext) {
+        if (!hostedTenantSession) {
           return Effect.void;
         }
         const sizeBytes = utf8SizeBytes(diff);
@@ -1350,7 +1381,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const ensureHostedRuntimeConcurrencyLimits = <E>(
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        const tenantSession = session.tenantSessionContext;
+        const tenantSession = hostedTenantSession;
         if (!tenantSession) {
           return Effect.void;
         }
@@ -1494,16 +1525,20 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           ),
         );
 
-      // Returns null for unscoped local sessions (implicit loopback owner or
-      // legacy paired clients) and the set of member tenant ids otherwise.
+      // Returns null for unscoped local sessions — the machine's own owner, or
+      // a legacy paired client with no tenant — and the set of member tenant
+      // ids otherwise.
+      //
+      // The owner is unscoped on purpose: every project on this computer is
+      // theirs whether or not it was ever stamped with a tenant, and the app's
+      // own window must not see a different machine than the CLI on loopback
+      // sees. Before the owner had a tenant, both arrived here through the
+      // first branch; they still have to leave through the same door.
       const sessionVisibleTenantIds = (): Effect.Effect<
         ReadonlySet<TenantId> | null,
         OrganizationError
       > => {
-        if (!session.tenantSessionContext) {
-          return Effect.succeed(null);
-        }
-        if (isImplicitLocalOwnerSession(session)) {
+        if (!session.tenantSessionContext || machineOwnerSession) {
           return Effect.succeed(null);
         }
         return actorMemberships().pipe(
@@ -2365,13 +2400,20 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }),
         );
 
+      /**
+       * Narrows the tenancy snapshot to what this actor is a member of.
+       *
+       * There used to be an escape hatch here for a machine owner holding no
+       * tenant, because filtering by memberships they could not have handed
+       * them an empty dashboard. They hold one now, so the hatch is gone and
+       * they are filtered like anybody else — which is the point: the one
+       * tenant that comes back is the one the workspace dashboard then offers
+       * to create workspaces in.
+       */
       const filterOrganizationSnapshotForActor = (
         snapshot: OrganizationListResult,
-      ): Effect.Effect<OrganizationListResult, never> => {
-        if (!session.tenantSessionContext && isImplicitLocalOwnerSession(session)) {
-          return Effect.succeed(snapshot);
-        }
-        return actorMemberships().pipe(
+      ): Effect.Effect<OrganizationListResult, never> =>
+        actorMemberships().pipe(
           Effect.map((memberships) => {
             const organizationIds = new Set(
               memberships
@@ -2413,7 +2455,6 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }),
           Effect.orDie,
         );
-      };
 
       const listOrganizationSnapshotForActor = (): Effect.Effect<
         OrganizationListResult,
@@ -2461,18 +2502,26 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           );
         }
 
-        // The bootstrap tenant is created on demand a few lines below, so nobody
-        // can hold a membership in it yet — and requiring one made a signed-in
-        // person on their own machine hit "does not have workspace.edit" against
-        // a tenant that did not exist. The two conditions have to agree, and the
-        // one that matters is the same either way: a session scoped to some
-        // other tenant may not reach this.
+        /**
+         * The bootstrap tenant is created on demand a few lines below, so
+         * nobody can hold a membership in it yet and requiring one refuses
+         * everybody. It is reached by the only clients left that hold no tenant
+         * at all — a browser paired with a one-time token — for whom the
+         * workspace dashboard, seeing an empty tenant list, synthesises this id.
+         *
+         * The machine's own owner is deliberately not one of them any more.
+         * They have a personal tenant, the dashboard offers that tenant's real
+         * id, and letting them through here as well would mean a session scoped
+         * to one tenant creating a workspace in another — `tenant-local-personal`
+         * is a real tenant with real members wherever the local seed has run,
+         * not a private scratch id. So the two conditions still agree, and they
+         * agree on the guard above rather than around it.
+         */
         const isBootstrappingLocalPersonal =
           !tenantSession && input.tenantId === TenantId.make("tenant-local-personal");
-        const permissionCheck =
-          isBootstrappingLocalPersonal || (!tenantSession && isImplicitLocalOwnerSession(session))
-            ? Effect.void
-            : ensureTenantPermission(input.tenantId, "workspace.edit");
+        const permissionCheck = isBootstrappingLocalPersonal
+          ? Effect.void
+          : ensureTenantPermission(input.tenantId, "workspace.edit");
 
         return permissionCheck.pipe(
           Effect.flatMap(() =>
@@ -2626,7 +2675,14 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         permission: TenantPermission,
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        const tenantSession = session.tenantSessionContext;
+        // Every path on this machine belongs to the person sitting at it. The
+        // rest of this function decides which of several tenants a path answers
+        // to, which is a question a single-owner install does not have.
+        if (machineOwnerSession) {
+          return Effect.void;
+        }
+
+        const tenantSession = hostedTenantSession;
         if (tenantSession) {
           return resolveWorkspaceRootTenantRoles(cwd).pipe(
             Effect.flatMap((owningRoles) => {
@@ -2661,7 +2717,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             const matchingProviderSession = snapshot.providerSessions.find((providerSession) => {
               if (
                 providerSession.endedAt !== null ||
-                providerSession.tenantId !== session.tenantSessionContext?.tenantId ||
+                providerSession.tenantId !== hostedTenantSession?.tenantId ||
                 !isPathInsideRoot(cwd, providerSession.cwd)
               ) {
                 return false;
@@ -2673,7 +2729,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 ? evaluateProviderAccountAccess({
                     account: providerAccount,
                     providerSession,
-                    tenantSession: session.tenantSessionContext,
+                    tenantSession: hostedTenantSession,
                   }).allowed
                 : false;
             });
@@ -2685,12 +2741,18 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
              * isolated from.
              *
              * This gate assumes a hosted deployment where a tenant reaches a
-             * path only through a provider session it owns. A desktop install
-             * never creates one, so a project registered before tenancy — its
-             * ownership still null — fell through to here and was refused
-             * `project.view` against its own owner. The visible symptom was a
-             * send button that did nothing, plus git failing on the same path,
-             * for the only person on the machine.
+             * path only through a provider session it owns. A project
+             * registered before tenancy — its ownership still null — fell
+             * through to here and was refused `project.view` against its own
+             * owner. The visible symptom was a send button that did nothing,
+             * plus git failing on the same path, for the only person on the
+             * machine.
+             *
+             * This allowance is the second line of defence for that, not the
+             * first: a machine owner never reaches this function at all, which
+             * matters because turns on such an install do now create provider
+             * sessions, and the count above stops being zero after the first
+             * one.
              *
              * The permission itself was already checked by the caller; this
              * only declines to add a second gate that cannot be satisfied.
@@ -2707,7 +2769,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         permission: TenantPermission,
         toError: (message: string) => E,
       ): Effect.Effect<void, E> => {
-        if (!session.tenantSessionContext && !session.userId) {
+        if (machineOwnerSession || (!session.tenantSessionContext && !session.userId)) {
           return Effect.void;
         }
 
@@ -3029,7 +3091,11 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const persistHostedProviderConnectionForTurnStart = (
         command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
       ): Effect.Effect<void, OrchestrationDispatchCommandError> => {
-        const tenantSession = session.tenantSessionContext;
+        // Isolation keeps one tenant's provider credentials out of another
+        // tenant's reach. On a machine with a single owner there is no other
+        // tenant, and routing their turns through it would put the provider's
+        // home somewhere their existing login is not.
+        const tenantSession = hostedTenantSession;
         if (!tenantSession) {
           return Effect.void;
         }

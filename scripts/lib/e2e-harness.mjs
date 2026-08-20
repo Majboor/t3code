@@ -315,8 +315,19 @@ export function createHarness({
     // Monaco is fetched at runtime rather than bundled, so the editor arrives a
     // beat after the file is chosen — and its text surface later still. Focus
     // has to land on the rendered lines; the hidden textarea does not take it.
+    //
+    // The first file a browser opens pays for the whole editor over the dev
+    // server, and thirty seconds was not enough for the second and third
+    // browser in this suite: one account whose earlier steps had already
+    // loaded Monaco edited fine while another reported "the editor never
+    // rendered the file" for the same file in the same folder. A second click
+    // covers a row whose selection did not take.
     const lines = page.locator(".monaco-editor .view-lines").first();
-    await lines.waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await lines.waitFor({ state: "visible", timeout: 45_000 }).catch(() => undefined);
+      if (await lines.isVisible().catch(() => false)) break;
+      await clickTreeEntry(page, file);
+    }
     if (!(await lines.isVisible().catch(() => false))) {
       return { ok: false, why: "the editor never rendered the file" };
     }

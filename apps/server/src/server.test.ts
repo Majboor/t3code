@@ -1452,7 +1452,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isTrue(profile.userId.startsWith("auth:"));
       assert.equal(profile.role, "owner");
       assert.equal(profile.sessionMethod, "browser-session-cookie");
-      assert.equal(profile.tenantStatus, "none");
+      // The desktop shell's own subject is a machine owner, and a machine owner
+      // is provisioned a personal tenant on first sight. This used to read
+      // "none" and send the only person on the machine round an onboarding loop
+      // whose exit — create a workspace — needed the tenant they were being
+      // told they did not have.
+      assert.equal(profile.tenantStatus, "active");
       assert.isTrue(profile.sessionId.length > 0);
       assert.isTrue(profile.displayName.length > 0);
 
@@ -1470,9 +1475,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(onboardingResponse.status, 200);
       assert.equal(onboarding.authenticated, true);
-      assert.equal(onboarding.nextStep, "create-workspace");
+      assert.equal(onboarding.nextStep, "paired");
       assert.equal(onboarding.profile.sessionId, profile.sessionId);
-      assert.equal(onboarding.profile.tenantStatus, "none");
+      assert.equal(onboarding.profile.tenantStatus, "active");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -3044,32 +3049,69 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("lets a session with no tenant of its own create the bootstrap workspace", () =>
+  /**
+   * The machine owner used to hold no tenant, so the workspace dashboard —
+   * which synthesises `tenant-local-personal` whenever a session can see no
+   * tenants — sent that id and the server created it on demand. That is not the
+   * shape of the thing any more: the owner is provisioned a personal tenant on
+   * first sight, the dashboard lists it and sends its real id, and the
+   * synthesised id names a tenant they are not a member of.
+   *
+   * So the assertion is no longer "the bootstrap id works for everybody". It is
+   * that the owner creates workspaces in the tenant they were given, and that
+   * asking for somebody else's is refused with the same rule that stops any
+   * other cross-tenant write — the bootstrap id has no special standing for a
+   * session that already has a tenant. `tenant-local-personal` remains reachable
+   * for the clients that genuinely hold none, a browser paired with a one-time
+   * token being the last of them.
+   */
+  it.effect("creates workspaces in the machine owner's own tenant, and nowhere else", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
-      // The dashboard synthesises this tenant id when a session can see no
-      // tenants, and the tenant does not exist until somebody asks for it — so
-      // nobody can hold a membership in it, and requiring one refused
-      // everybody. A UI check cannot reach this: a fresh signup gets its own
-      // personal tenant and the dashboard sends that id instead, so the branch
-      // is never taken there.
       const wsUrl = yield* getWsServerUrl("/ws");
       const result = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.workspacesCreate]({
-            tenantId: TenantId.make("tenant-local-personal"),
-            title: "Bootstrap Workspace",
+          Effect.gen(function* () {
+            const snapshot = yield* client[WS_METHODS.organizationsList]({});
+            const ownTenantId = snapshot.tenants[0]?.id;
+            const created = ownTenantId
+              ? yield* client[WS_METHODS.workspacesCreate]({
+                  tenantId: ownTenantId,
+                  title: "Bootstrap Workspace",
+                }).pipe(Effect.result)
+              : null;
+            const elsewhere = yield* client[WS_METHODS.workspacesCreate]({
+              tenantId: TenantId.make("tenant-local-personal"),
+              title: "Somebody Else's Workspace",
+            }).pipe(Effect.result);
+            return { ownTenantId, created, elsewhere };
           }),
-        ).pipe(Effect.result),
+        ),
       );
 
+      // The dashboard has a real tenant to offer, which is what stops it
+      // synthesising the bootstrap id in the first place.
       assertTrue(
-        result._tag === "Success",
-        result._tag === "Failure" ? JSON.stringify(result.failure) : "",
+        result.ownTenantId !== undefined,
+        "expected the machine owner to have been provisioned a tenant",
       );
       assertTrue(
-        result._tag === "Success" && result.success.workspace.title === "Bootstrap Workspace",
+        result.created?._tag === "Success",
+        result.created?._tag === "Failure" ? JSON.stringify(result.created.failure) : "",
+      );
+      assertTrue(
+        result.created?._tag === "Success" &&
+          result.created.success.workspace.title === "Bootstrap Workspace" &&
+          result.created.success.workspace.tenantId === result.ownTenantId,
+      );
+      assertTrue(
+        result.elsewhere._tag === "Failure",
+        `expected the cross-tenant create to be refused, got ${JSON.stringify(result.elsewhere)}`,
+      );
+      assertInclude(
+        result.elsewhere._tag === "Failure" ? result.elsewhere.failure.message : "",
+        "You can only create workspaces in your active tenant.",
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

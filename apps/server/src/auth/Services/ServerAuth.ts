@@ -49,6 +49,48 @@ export interface AuthenticatedSession {
   readonly tenantSessionContext?: TenantSessionContext;
 }
 
+export const LOOPBACK_OWNER_SUBJECT = "loopback-local-owner";
+export const UNSAFE_NO_AUTH_OWNER_SUBJECT = "unsafe-no-auth-owner";
+export const DESKTOP_BOOTSTRAP_SUBJECT = "desktop-bootstrap";
+
+/**
+ * The subjects that mean "whoever is at this machine", as opposed to somebody
+ * who signed up. They own the install, so they get a personal tenant the same
+ * way a signed-up account does.
+ *
+ * This list lives here rather than beside the code that provisions the tenant
+ * because two places have to agree about it: whoever hands these sessions a
+ * tenant, and everything that has to keep treating them as the owner of the
+ * machine afterwards. When those two lists drifted, the desktop app's own
+ * window became a guest on its own server.
+ */
+const MACHINE_OWNER_SUBJECTS: ReadonlySet<string> = new Set([
+  DESKTOP_BOOTSTRAP_SUBJECT,
+  LOOPBACK_OWNER_SUBJECT,
+  UNSAFE_NO_AUTH_OWNER_SUBJECT,
+]);
+
+/**
+ * Whether this session is the machine's own owner rather than a guest.
+ *
+ * A machine owner carries a personal tenant, because owning the install has to
+ * mean owning something nameable. That tenant is an identity, not a lease on
+ * somebody else's server: the quotas, the provider-account isolation and the
+ * tenant scoping all exist to keep strangers apart on a shared host, and none
+ * of them should switch on because the desktop app finally has a tenant id.
+ *
+ * So anything asking "is this a guest?" must ask it here. Asking
+ * `session.tenantSessionContext === undefined` used to mean the same thing and
+ * no longer does.
+ */
+export function isMachineOwnerSession(session: AuthenticatedSession): boolean {
+  return MACHINE_OWNER_SUBJECTS.has(session.subject);
+}
+
+export function isMachineOwnerSubject(subject: string): boolean {
+  return MACHINE_OWNER_SUBJECTS.has(subject);
+}
+
 /**
  * The one rule for which user a session belongs to.
  *

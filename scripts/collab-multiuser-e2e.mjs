@@ -703,10 +703,14 @@ try {
       cMark?.author === displayNameFor(ACCOUNT_C),
       cMark?.author || whyNoMark(cMark),
     );
+    // A's own file is read back in the same breath, because "A's tree shows no
+    // author for C's file" and "A's tree shows no author for anything" are
+    // different bugs and the first one alone cannot tell them apart.
+    const aMarkFromA = await fileAuthorFor(accountA.page, aFile);
     check(
       "the file mark uses the colour the admin chose",
       Boolean(cMark?.color) && cMark?.color === cColourAfter,
-      `roster ${cColourAfter || "none"}, file mark ${cMark?.color || "none"}`,
+      `roster ${cColourAfter || "none"}, file mark ${cMark?.color || "none"}; the same tree reads A's own file as "${aMarkFromA?.author || whyNoMark(aMarkFromA)}"`,
     );
   }
 

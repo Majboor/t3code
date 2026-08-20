@@ -31,7 +31,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 
 import { AnalyticsStore } from "../analytics/Services/AnalyticsStore.ts";
 import { respondToAuthError } from "../auth/http.ts";
-import { ServerAuth } from "../auth/Services/ServerAuth.ts";
+import { isMachineOwnerSession, ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { CollaborationService } from "../collaboration/Services/CollaborationService.ts";
 import { DeploymentRegistry } from "../deploy/Services/DeploymentRegistry.ts";
 import { DeployService } from "../deploy/Services/DeployService.ts";
@@ -303,7 +303,12 @@ export const desktopActivityRouteLayer = HttpRouter.add(
     // has one from the moment the server starts. Saying so explicitly is what
     // keeps the panel from drawing a signed-out machine as a tenant that spent
     // nothing.
-    const tenantSession = session.tenantSessionContext;
+    //
+    // Holding a *tenant* is not the same either, not any more. The machine's
+    // own owner is given one so that workspaces and packs have somewhere to
+    // live, and reading that as "signed in" would put a spend panel in front of
+    // somebody who has never signed into anything.
+    const tenantSession = isMachineOwnerSession(session) ? undefined : session.tenantSessionContext;
     if (!tenantSession) {
       return HttpServerResponse.jsonUnsafe(SIGNED_OUT satisfies DesktopActivity, { status: 200 });
     }

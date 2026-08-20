@@ -111,9 +111,25 @@ interface SharedCollaborationGovernance {
   readonly listeners: Set<() => void>;
   refCount: number;
   requestSequence: number;
+  /** The load this instance has already retried, so a failure is asked twice, not forever. */
+  retriedSequence: number;
+  /** How many times this instance has waited for an environment client to exist. */
+  attachAttempts: number;
   snapshot: CollaborationGovernanceSnapshot;
   streamAttached: boolean;
   unsubscribeStream: () => void;
+}
+
+/** Long enough for a socket to finish authorising, short enough to beat a reader. */
+const GOVERNANCE_RETRY_DELAY_MS = 1_500;
+/** Thirty seconds of waiting for a client, after which there is not going to be one. */
+const GOVERNANCE_ATTACH_ATTEMPTS = 20;
+/** How often to re-read the workspace when the stream has gone quiet. */
+const GOVERNANCE_POLL_INTERVAL_MS = 30_000;
+
+/** The map key an instance is filed under, so a retry can tell it is still the live one. */
+function governanceKey(entry: { environmentId: EnvironmentId; scope: CollaborationGovernanceScope }): string {
+  return `${entry.environmentId}:${entry.scope.tenantId}:${entry.scope.workspaceId}`;
 }
 
 /**
@@ -188,7 +204,32 @@ function refreshSharedGovernance(entry: SharedCollaborationGovernance): void {
         });
       },
     )
-    .catch(() => undefined)
+    /**
+     * A load that failed is retried, once, a moment later.
+     *
+     * The six calls go out as soon as a workspace is known, which on a fresh
+     * page is while the socket is still being authorised — and a rejection here
+     * used to be swallowed and never asked again. Everything then depended on a
+     * stream event arriving to fill the store, so the state that changed *after*
+     * the load worked and the state that was already there stayed invisible: a
+     * file somebody else had touched before you opened the page carried no
+     * author, for as long as the page stayed open, while a file they touched
+     * while you watched carried one immediately.
+     *
+     * Once, and only when nothing newer is already in flight, so a failing
+     * server is asked twice rather than forever.
+     */
+    .catch(() => {
+      if (sequence !== entry.requestSequence || entry.retriedSequence === sequence) {
+        return;
+      }
+      entry.retriedSequence = sequence;
+      setTimeout(() => {
+        if (sequence === entry.requestSequence) {
+          refreshSharedGovernance(entry);
+        }
+      }, GOVERNANCE_RETRY_DELAY_MS);
+    })
     .finally(() => {
       if (sequence === entry.requestSequence && entry.snapshot.loading) {
         updateSharedGovernance(entry, { loading: false });
@@ -252,9 +293,18 @@ function applyGovernanceEvent(
 }
 
 /**
- * Subscribes and loads, once. The environment may not have a client yet when
- * the first consumer mounts, so a later one gets to try again rather than
- * inheriting an instance that never connected.
+ * Subscribes and loads, once.
+ *
+ * The environment may not have a client yet when the first consumer mounts.
+ * "A later consumer gets to try again" was the whole of the answer, and it is
+ * not one: on a fresh page both consumers — the popover and the tree — mount in
+ * the same tick, so if the client is not there yet neither is anybody left to
+ * try. The instance then has no stream and no load for as long as the page is
+ * open, which is exactly the state where a file somebody touched before you
+ * arrived shows no author while one they touch in front of you shows one.
+ *
+ * So keep asking until there is a client, on the same short beat as the retry
+ * below and capped so a browser with no environment at all stops asking.
  */
 function attachSharedGovernanceStream(entry: SharedCollaborationGovernance): void {
   if (entry.streamAttached) {
@@ -262,14 +312,68 @@ function attachSharedGovernanceStream(entry: SharedCollaborationGovernance): voi
   }
   const api = readEnvironmentApi(entry.environmentId);
   if (!api) {
+    if (entry.attachAttempts < GOVERNANCE_ATTACH_ATTEMPTS) {
+      entry.attachAttempts += 1;
+      setTimeout(() => {
+        if (sharedGovernanceByKey.get(governanceKey(entry)) === entry) {
+          attachSharedGovernanceStream(entry);
+        }
+      }, GOVERNANCE_RETRY_DELAY_MS);
+    }
     return;
   }
   entry.streamAttached = true;
-  entry.unsubscribeStream = api.collaboration.subscribe(
+  const unsubscribe = api.collaboration.subscribe(
     entry.scope,
     (event) => applyGovernanceEvent(entry, event),
     { onResubscribe: () => refreshSharedGovernance(entry) },
   );
+
+  /**
+   * Ask again on a slow beat, because the stream is not a promise.
+   *
+   * Everything here was built to arrive on the collaboration stream, and it
+   * does — until the socket goes. A browser sitting on a project while somebody
+   * else works loses its socket to a 1006 close and the subscription dies with
+   * it; no event ever arrives again, and nothing notices, because a stream that
+   * has stopped looks exactly like a workspace where nothing is happening.
+   *
+   * Measured rather than supposed: one browser watched another create a file
+   * and showed no author for it at all, while a reload of the same page named
+   * the author immediately — and its console carried four SocketCloseError
+   * 1006s. So the mark was right, the fetch was right, and the only broken part
+   * was the assumption that a subscription made once stays made.
+   *
+   * Half a minute is slow enough to be nearly free — six small reads per
+   * workspace, and only while somebody has that workspace open — and quick
+   * enough that a colleague's work is not invisible for the rest of a working
+   * session.
+   *
+   * It does not pause for a hidden tab. A background tab is exactly where the
+   * stream has had the longest to die, and it is what somebody comes back to;
+   * skipping it saves six reads a minute and hands the reader a stale tree at
+   * the moment they look at it.
+   */
+  const poll = setInterval(() => refreshSharedGovernance(entry), GOVERNANCE_POLL_INTERVAL_MS);
+
+  // A tab coming back to the front is the moment somebody is about to read it,
+  // and the cheapest time to be right.
+  const onVisible = () => {
+    if (document.visibilityState === "visible") {
+      refreshSharedGovernance(entry);
+    }
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVisible);
+  }
+
+  entry.unsubscribeStream = () => {
+    clearInterval(poll);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVisible);
+    }
+    unsubscribe();
+  };
   refreshSharedGovernance(entry);
 }
 
@@ -291,6 +395,8 @@ function acquireSharedGovernance(
     listeners: new Set(),
     refCount: 1,
     requestSequence: 0,
+    retriedSequence: -1,
+    attachAttempts: 0,
     snapshot: EMPTY_SNAPSHOT,
     streamAttached: false,
     unsubscribeStream: () => undefined,

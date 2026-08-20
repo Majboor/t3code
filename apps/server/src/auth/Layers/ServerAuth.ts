@@ -44,7 +44,10 @@ import {
   ServerAuth,
   type AuthenticatedSession,
   AuthError,
+  isMachineOwnerSubject,
+  LOOPBACK_OWNER_SUBJECT,
   type ServerAuthShape,
+  UNSAFE_NO_AUTH_OWNER_SUBJECT,
 } from "../Services/ServerAuth.ts";
 import {
   SessionCredentialError,
@@ -66,21 +69,7 @@ type BootstrapExchangeResult = {
   readonly sessionToken: string;
 };
 
-const LOOPBACK_OWNER_SUBJECT = "loopback-local-owner";
-const UNSAFE_NO_AUTH_OWNER_SUBJECT = "unsafe-no-auth-owner";
-const DESKTOP_BOOTSTRAP_SUBJECT = "desktop-bootstrap";
 const LOCAL_USER_SUBJECT_PREFIX = "local-user:";
-
-/**
- * The subjects that mean "whoever is at this machine", as opposed to somebody
- * who signed up. They own the install, so they get a personal tenant the same
- * way a signed-up account does.
- */
-const MACHINE_OWNER_SUBJECTS: ReadonlySet<string> = new Set([
-  DESKTOP_BOOTSTRAP_SUBJECT,
-  LOOPBACK_OWNER_SUBJECT,
-  UNSAFE_NO_AUTH_OWNER_SUBJECT,
-]);
 
 const AVATAR_DATA_URL_PATTERN = /^data:([\w.+-]+\/[\w.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/;
 
@@ -159,7 +148,7 @@ export const makeServerAuth = Effect.gen(function* () {
     if (localUserId) {
       return localUserId;
     }
-    return MACHINE_OWNER_SUBJECTS.has(subject) ? UserId.make(`auth:${subject}`) : undefined;
+    return isMachineOwnerSubject(subject) ? UserId.make(`auth:${subject}`) : undefined;
   };
 
   const uniqueTenantRoles = (
