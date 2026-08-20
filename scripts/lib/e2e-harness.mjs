@@ -322,14 +322,38 @@ export function createHarness({
     // loaded Monaco edited fine while another reported "the editor never
     // rendered the file" for the same file in the same folder. A second click
     // covers a row whose selection did not take.
+    //
+    // A file carrying a change this browser has not reviewed opens in diff
+    // review rather than in the editor — an incoming change is the one thing
+    // you want to read before you type over it — and that view is plain HTML
+    // with an "Edit file contents" button beside it, no Monaco anywhere. It is
+    // the case that made two people editing one file unreproducible: whoever
+    // saved first met a clean file and an editor, and the second person met the
+    // first person's change and a diff. So take the offer when it is made.
     const lines = page.locator(".monaco-editor .view-lines").first();
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      await lines.waitFor({ state: "visible", timeout: 45_000 }).catch(() => undefined);
+    const editContents = page.locator('button[aria-label="Edit file contents"]').first();
+    let sawDiffReview = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // Asked before the long wait, because a diff review is not an editor that
+      // is late — it is an editor that is never coming, and forty-five seconds
+      // of waiting for one is forty-five seconds of the run spent per file.
+      if (await editContents.isVisible().catch(() => false)) {
+        sawDiffReview = true;
+        await editContents.click().catch(() => undefined);
+        await sleep(2_000);
+      }
+      await lines.waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
       if (await lines.isVisible().catch(() => false)) break;
+      if (await editContents.isVisible().catch(() => false)) continue;
       await clickTreeEntry(page, file);
     }
     if (!(await lines.isVisible().catch(() => false))) {
-      return { ok: false, why: "the editor never rendered the file" };
+      return {
+        ok: false,
+        why: sawDiffReview
+          ? "the file opened in diff review and stayed there after Edit"
+          : "the editor never rendered the file",
+      };
     }
     await lines.click();
     await sleep(500);

@@ -223,24 +223,38 @@ function checkLiveTreeUpdate(step, result) {
  * Asking for the whole list and checking it is non-empty passes whenever
  * *anybody* has touched *anything*, which is exactly the assertion that cannot
  * catch a tree attributing a file to the wrong person.
+ *
+ * Read off the explorer row by its own handle, not off the first button whose
+ * label starts with the name. Three lists on this page are drawn from file
+ * names now — the explorer, the "Changes" group above it, and a turn's changed
+ * files in the transcript — and only the explorer draws authorship. Matching by
+ * label found whichever came first in the document, so every file that had also
+ * just been changed was read from a list that has no marks to give and reported
+ * as unattributed. That is what accused the agent of writing files as nobody
+ * while the server had already filed the touch under the person whose turn it
+ * was.
  */
 async function fileAuthorFor(page, fileName) {
   await ensurePanelReady(page);
   return page
-    .locator("button")
+    .locator('[data-testid="workspace-entry"]')
     .evaluateAll((nodes, target) => {
-      const row = nodes.find((node) =>
-        (node.textContent ?? "").trim().replace(/\s+/g, " ").startsWith(target),
-      );
+      const row = nodes.find((node) => node.getAttribute("data-workspace-entry-path") === target);
       // A file the tree has not listed and a file listed without an author are
       // two different failures — one is the tree, one is the attribution — and
       // reporting both as "no mark" sends the reader to the wrong half of the
       // product.
-      if (!row) return { inTree: false, author: "", title: "", color: "" };
+      // The row count travels with the answer, because "this one file is
+      // missing" and "the explorer has painted nothing at all" are different
+      // failures wearing the same words, and only the second one is about the
+      // panel rather than about the file.
+      const listed = nodes.length;
+      if (!row) return { inTree: false, listed, author: "", title: "", color: "" };
       const mark = row.querySelector('[data-testid="workspace-entry-author"]');
-      if (!mark) return { inTree: true, author: "", title: "", color: "" };
+      if (!mark) return { inTree: true, listed, author: "", title: "", color: "" };
       return {
         inTree: true,
+        listed,
         author: mark.getAttribute("data-author") ?? "",
         title: mark.getAttribute("title") ?? "",
         color: getComputedStyle(mark).backgroundColor,
@@ -250,7 +264,12 @@ async function fileAuthorFor(page, fileName) {
 
 /** What a missing mark should say, so a failure names which half went wrong. */
 function whyNoMark(mark) {
-  if (!mark || !mark.inTree) return "the file is not in this browser's tree at all";
+  if (!mark) return "the tree could not be read at all";
+  if (!mark.inTree) {
+    return mark.listed === 0
+      ? "the explorer listed nothing at all, so this says nothing about the file"
+      : `the file is not among the ${mark.listed} rows this browser's tree is showing`;
+  }
   return "the row is there and carries no author";
 }
 
@@ -540,15 +559,16 @@ try {
     check("the tree says whether a person or an agent is working on a file", true);
   }
 
-  // How far the attribution reaches, asked cheaply. Only the workspace panel's
-  // own save and create call `collaboration.files.touch`, so a change arriving
-  // any other way is authorless — the python file from the setup phase is on
-  // disk, in the tree, and belongs to nobody. Same mechanism as an agent write.
+  // How far the attribution reaches, asked cheaply. A touch is claimed by the
+  // browser that saved the file or by the turn that changed it, and the python
+  // file from the setup phase is neither: it is on disk, in the tree, and
+  // belongs to nobody. An agent's write is a different case and is asked about
+  // on its own later, because the server does attribute that one.
   const pythonMark = await fileAuthorFor(accountB.page, pythonFile);
   if (!pythonMark?.author) {
     skip(
       "a file written outside the app carries an author",
-      "authorship is claimed by the browser that saved the file, so anything written by python, by git or by an agent stays unattributed",
+      "authorship is claimed by a browser save or by a turn, so a write from python or from git alone stays unattributed",
     );
   } else {
     check("a file written outside the app carries an author", true, pythonMark.author);

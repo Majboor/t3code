@@ -348,6 +348,14 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
             props.dropTarget && "bg-primary/10 ring-1 ring-primary/35",
           )}
           style={{ paddingLeft: `${paddingLeft}px` }}
+          // The explorer is no longer the only list of file names on the page:
+          // "Changes" sits above it and a turn's changed files sit in the
+          // transcript, both drawn as buttons carrying the same name. Anything
+          // asking about the tree — a person's script or a test — needs to be
+          // able to say *this* list rather than the first name that matches.
+          data-testid="workspace-entry"
+          data-workspace-entry-path={entry.path}
+          data-workspace-entry-kind="directory"
           onClick={() => {
             props.onSelectEntry(entry);
             props.onToggleDirectory(entry.path);
@@ -393,6 +401,9 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
           props.changed && "text-foreground/90",
         )}
         style={{ paddingLeft: `${paddingLeft + 18}px` }}
+        data-testid="workspace-entry"
+        data-workspace-entry-path={entry.path}
+        data-workspace-entry-kind="file"
         onClick={() => {
           props.onSelectEntry(entry);
           props.onOpenFile(entry.path);

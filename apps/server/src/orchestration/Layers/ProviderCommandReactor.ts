@@ -1077,11 +1077,19 @@ const make = Effect.gen(function* () {
     if (cwd === undefined) {
       return;
     }
-    const project = readModel.projects.find(
-      (entry) => entry.ownership !== undefined && entry.workspaceRoot === cwd,
-    );
-    const ownership = project?.ownership;
-    if (!project || !ownership) {
+    // Matched on the path first and asked about ownership second, so the two
+    // reasons to give up stay separate: "no project runs here" and "this
+    // project has no tenant to file a touch against" are different sentences,
+    // and folding them into one lookup makes both look like the same miss.
+    const project = readModel.projects.find((entry) => entry.workspaceRoot === cwd);
+    if (!project) {
+      return;
+    }
+    // A tenant is what a touch is filed under, and a project that predates
+    // tenancy has none to offer — so those stay unattributed rather than being
+    // filed under a guess.
+    const ownership = project.ownership;
+    if (!ownership) {
       return;
     }
 
