@@ -107,7 +107,145 @@ Whichever route you take, say which one it was before you start.
 </deployment_tools>`;
 
 /**
- * The full standing block, in the order the agent should read it: find the
- * recorded knowledge first, then the rule about which tools may act on it.
+ * How to drive a machine that is not this one.
+ *
+ * A pointer, exactly like the packs block above it, and for the same reason
+ * stated there: this says how to *ask*, never what the answer is. The temptation
+ * is to inject the state — the boxes on the account, what is listening on each,
+ * which ports are free — because it looks helpful and it is one query. It is
+ * wrong in three ways and the third is the expensive one. It spends context on
+ * a machine most turns never touch; it is stale the moment it is written, since
+ * a port taken between the injection and the command is a port the agent still
+ * believes is free; and an agent handed a list stops asking, so the *only* view
+ * it ever has is the frozen one. `t3 box services` costs a second and is true
+ * when it answers. Anyone tempted to inject this should read the note on pack
+ * enablement above first: the same argument was made there twice, and both
+ * times the real fault was that discovery could not run.
+ *
+ * The refusal rule is stated here as well as enforced in `decideBoxCommand`,
+ * because an agent that learns the boundary only by hitting it has already
+ * spent a turn trying to kill somebody's database. Enforcement is what makes it
+ * safe; saying it out loud is what makes it not a surprise.
+ *
+ * What is deliberately absent: any suggestion that a box needs a provider
+ * account. It does not and must not. The turn runs here, on the person's own
+ * credential; the box is only ever a machine being driven, and asking someone to
+ * log into Claude on a VPS is the failure this whole shape exists to avoid.
  */
-export const T3_AGENT_INSTRUCTIONS = `${PACK_DISCOVERY_INSTRUCTIONS}\n\n${DEPLOYMENT_ROUTE_INSTRUCTIONS}`;
+export const BOX_COMMAND_INSTRUCTIONS = `<boxes># Machines you drive
+
+Some work does not happen on this machine. A **box** is a separate machine on the same account — a VPS, a server, a spare desktop — that runs and serves things. You reach it for the length of a command and you do not live there: it holds no projects, runs no turns, and never needs a provider account of its own.
+
+**Do not guess what is on a box, and do not remember it between turns.** Ask:
+
+\`\`\`
+t3 box services <box>
+\`\`\`
+
+That is the only current answer. A port that was free earlier in the session may not be free now, and a note in your own context saying otherwise is the commonest way two things end up fighting over 3000.
+
+The verbs:
+
+- \`t3 box run <box> -- <command>\` — run it and wait. You get an exit code and a bounded slice of the output.
+- \`t3 box run <box> --detach -- <command>\` — start something that should outlive this turn. Use this for anything that serves.
+- \`t3 box services <box>\` — what is running, which of it T3 started, and which ports are taken.
+- \`t3 box port claim <box> <port> --purpose "..."\` / \`t3 box port release <box> <port>\` — reserve a port *before* you start something on it, so a turn running alongside you does not take it too.
+- \`t3 box logs <box> <name>\` — captured output of something T3 started.
+- \`t3 box stop <box> <name>\` — stop something T3 started.
+- \`t3 box history <box>\` — what has happened on this box recently.
+
+**Start by reading the history.** \`t3 box history\` is the memory you do not have: what ran, when, by which turn, and how it ended. It tells you which port the app is already on, whether the migration was applied, and what was tried and abandoned — and it works when the box is switched off, which is often exactly when you need it. Running things to find out what state a machine is in is how the same mistake gets made twice on a machine serving real traffic.
+
+**You may only stop what T3 started.** A box runs other people's work: databases, production APIs, jobs nothing here knows about. \`t3 box services\` labels every row with who started it, and anything not marked as ours will refuse to stop. That refusal is correct — treat it as the answer, not as an obstacle. Nothing available to you can tell what depends on an unrecognised process, so the next step is to say what you found and ask the person who owns the machine.
+
+**Output is truncated on purpose.** You get the first and last couple of kilobytes of each stream with a marker naming the gap, because an install log is thousands of lines and none of them are worth your context. The whole thing is kept — \`t3 box output <id>\` fetches it using the id printed with the result. Read the exit code and the tail first; you will usually find you do not need the rest.
+
+Say which box you are working on before you touch it.
+</boxes>`;
+
+/**
+ * That *this* machine also keeps a record, and how to ask it.
+ *
+ * A pointer, not a listing — the same shape as the packs block, and for a
+ * stronger reason than either of the blocks above. Packs go stale slowly; a list
+ * of ports is wrong within seconds of being written, so a turn that thinks for
+ * two minutes before binding would be acting on a snapshot from before it
+ * started. Every question here has to be asked at the moment it is answered,
+ * which means the agent has to run the command rather than read the answer in
+ * its context.
+ *
+ * Deliberately parallel to `BOX_COMMAND_INSTRUCTIONS` in wording, because the
+ * rule really is the same rule and an agent that learned it for boxes should
+ * recognise it here. The distinction the two blocks have to keep clear is only
+ * *which machine*: `t3 box` reaches one on the account, `t3 env` is the one the
+ * turn is running on — the one where the workspace, the repository and the
+ * agent's own shell already are. Nothing else differs, including the refusal.
+ *
+ * The section that earns its place is the second one. Detection is the easy
+ * half; the hard half is that a port match is not an identity, and an agent
+ * shown a list of ports will infer ownership from "I am working on this project
+ * and here is something on the port I expected". `unknown` exists precisely
+ * because most machines cannot attribute a socket to a process, and the whole
+ * value of the word is lost if it reads as a hedged yes. So it is stated as a
+ * prohibition on an action rather than a description of a field: do not stop
+ * what you did not start, and `canManage` is the only thing that says you did.
+ *
+ * Before anyone "improves" this by injecting the current service list into the
+ * turn — that turns a live question into a stale claim, and a stale "port 3000
+ * is free" is worse than no registry at all, because the agent acts on it. Same
+ * mistake as injecting pack text, reached by a different door.
+ */
+export const ENVIRONMENT_REGISTRY_INSTRUCTIONS = `<environment># What is already running on this machine
+
+The machine this turn is running on is not empty. It serves things that have nothing to do with your task — someone's database, a production API, a colleague's dev server — and the workspace keeps a record of which of them T3 started. These commands are about *this* machine; \`t3 box\` is for a machine somewhere else.
+
+**Before you bind a port, ask:**
+
+\`\`\`
+t3 env port check <port>
+\`\`\`
+
+It answers whether the port is free, says what is on it if not, and names one that is. If you are going to start something, take the port first so a turn running alongside you does not take it too:
+
+\`\`\`
+t3 env port claim <port> --purpose "<what you are starting>"
+\`\`\`
+
+A claim lapses on its own, so a crash cannot hold a port for good. Release it with \`t3 env port release <port>\` if you end up not using it.
+
+**To see the whole machine:** \`t3 env services\`. Run it before you conclude anything about what is or is not running. A port list in somebody's notes — or earlier in this conversation — is out of date the moment it is written.
+
+**After you start a long-running process, record it:**
+
+\`\`\`
+t3 env service add --name <name> --port <port> --pid <pid> --command "<command>"
+\`\`\`
+
+Until you do, it is indistinguishable from a stranger's process, and neither you nor anyone else can manage it through the workspace. If you restart it, register the new pid: the old one stops being ours the moment it dies.
+
+## What you may stop
+
+Every row \`t3 env services\` prints says who started it. **Only stop, kill or restart something the workspace says T3 started** — the rows under "Started by T3", the ones whose JSON carries \`"canManage": true\`.
+
+Everything under "Already running here" is off limits, and that includes rows marked \`UNKNOWN\`. \`UNKNOWN\` does not mean "probably mine". It means this machine would not say which process holds that port, which is the ordinary case on hosts where only \`netstat\` is available. Treat it exactly as you would treat somebody else's.
+
+Two things that look like permission and are not:
+
+- **The port is the one you expected.** That is not proof. Your process can die and something else bind the same port a second later; the registry correlates by process id for exactly that reason, and so should you.
+- **Something is in the way and looks stale.** You cannot tell a stale process from a quiet production one from the outside. If a port you need is held by something T3 did not start, take a different port and say what was in the way.
+
+If you genuinely need a port something else holds, say so and ask. Stopping the wrong process here is not an inconvenience — it takes down something this workspace has no record of and cannot bring back.
+</environment>`;
+
+/**
+ * The full standing block, in the order the agent should read it: find the
+ * recorded knowledge first, then the rule about which tools may act on it, then
+ * how to reach a machine that is not this one, then what this one is already
+ * doing.
+ *
+ * The environment block sits last because it is the one that has to be in mind
+ * at the moment of a shell command rather than at the moment of planning. The
+ * three before it decide what the agent does; this one constrains how it touches
+ * the machine while doing it.
+ */
+export const T3_AGENT_INSTRUCTIONS = `${PACK_DISCOVERY_INSTRUCTIONS}\n\n${DEPLOYMENT_ROUTE_INSTRUCTIONS}\n\n${BOX_COMMAND_INSTRUCTIONS}\n\n${ENVIRONMENT_REGISTRY_INSTRUCTIONS}`;

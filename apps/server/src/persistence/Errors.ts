@@ -105,6 +105,7 @@ export type AuthPairingLinkRepositoryError = PersistenceSqlError | PersistenceDe
 export type DeviceEnrollmentRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 export type AccountMachineRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 export type EnvironmentRelayBindingRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+export type BoxCommandJournalRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 export type AuthSessionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 export type TenancyRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 

@@ -106,6 +106,26 @@ import type { AuthControlPlaneShape } from "./auth/Services/AuthControlPlane.ts"
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import { BoxCommandsLive } from "./box/Layers/BoxCommands.ts";
+import { BoxSessionRelayLive } from "./box/Layers/BoxSessionRelay.ts";
+import { BoxCommands, type BoxCommandsShape, type BoxRefused } from "./box/Services/BoxCommands.ts";
+import {
+  boxHistoryJson,
+  boxRefusalJson,
+  boxRunJson,
+  boxServicesJson,
+  formatBoxHistory,
+  formatBoxLogs,
+  formatBoxOutput,
+  formatBoxPort,
+  formatBoxRefusal,
+  formatBoxRun,
+  formatBoxServices,
+  formatBoxStop,
+} from "./box/cliOutput.ts";
+import { BoxCommandJournalRepositoryLive } from "./persistence/Layers/BoxCommandJournal.ts";
+import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
+import { EnvironmentRelayBindingRepositoryLive } from "./persistence/Layers/EnvironmentRelayBindings.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
 import { getAutoBootstrapDefaultModelSelection } from "./serverRuntimeStartup.ts";
@@ -1997,6 +2017,291 @@ const deployCommand = Command.make("deploy").pipe(
   ]),
 );
 
+/**
+ * Who the CLI is acting as when it drives a box.
+ *
+ * The same placeholder the local registry commands use. A box command run from a
+ * shell has no session behind it, and inventing one would put a fake account on
+ * rows whose whole purpose is to say who did what.
+ */
+const CLI_BOX_ACTOR = "cli";
+
+/**
+ * Everything a box verb needs, provided once.
+ *
+ * The journal is reached over the same SQLite file as everything else, and the
+ * box itself over the relay. Those two are deliberately different layers: the
+ * journal answers when the machine is off, which is the case the whole verb set
+ * is built around.
+ */
+const runBoxCommand = Effect.fn("runBoxCommand")(function* (
+  flags: { readonly baseDir: Option.Option<string> },
+  run: (context: { readonly commands: BoxCommandsShape }) => Effect.Effect<string, Error>,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  return yield* Effect.gen(function* () {
+    const commands = yield* BoxCommands;
+    yield* Console.log(yield* run({ commands }));
+  }).pipe(
+    Effect.provideService(References.MinimumLogLevel, "Error" as const),
+    Effect.provide(
+      BoxCommandsLive.pipe(
+        Layer.provide(
+          BoxSessionRelayLive.pipe(
+            Layer.provide(
+              EnvironmentRelayBindingRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
+            ),
+            Layer.provide(
+              AccountMachineRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
+            ),
+          ),
+        ),
+        Layer.provide(
+          BoxCommandJournalRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
+        ),
+        Layer.provide(Layer.succeed(ServerConfig, config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
+      ),
+    ),
+  );
+});
+
+const boxArgument = Argument.string("box").pipe(
+  Argument.withDescription("The box to drive, by the name it keeps across reboots."),
+);
+
+const boxCaller = (environmentId: string) => ({
+  environmentId,
+  userId: CLI_BOX_ACTOR,
+  // A command typed at a shell belongs to no turn, and saying so is more useful
+  // than attributing it to one that does not exist.
+  turnId: null,
+});
+
+/** A refusal is an answer, so it prints and exits non-zero without a stack. */
+const boxAnswer = <A extends { readonly outcome: string }>(
+  report: A | BoxRefused,
+  json: boolean,
+  format: (value: A) => string,
+  toJson: (value: A) => unknown,
+): Effect.Effect<string, Error> =>
+  report.outcome === "refused"
+    ? failWithGuidance(
+        (report as BoxRefused).refusal.headline,
+        json
+          ? JSON.stringify(boxRefusalJson(report as BoxRefused), null, 2)
+          : formatBoxRefusal(report as BoxRefused),
+      )
+    : Effect.succeed(json ? JSON.stringify(toJson(report as A), null, 2) : format(report as A));
+
+const boxRunCommand = Command.make("run", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+  box: boxArgument,
+  detach: Flag.boolean("detach").pipe(
+    Flag.withDescription("Leave it running after this command returns."),
+    Flag.withDefault(false),
+  ),
+  command: Argument.string("command").pipe(
+    Argument.withDescription("The command to run, after `--`."),
+  ),
+}).pipe(
+  Command.withDescription("Run a command on a box and report its exit code."),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands.run({ ...boxCaller(flags.box), command: flags.command, detach: flags.detach }).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxRun, boxRunJson)),
+      ),
+    ),
+  ),
+);
+
+const boxServicesCommand = Command.make("services", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+  box: boxArgument,
+}).pipe(
+  Command.withDescription("List what is running on a box and who started each thing."),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands.services(boxCaller(flags.box)).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.flatMap((report) =>
+          boxAnswer(report, flags.json, formatBoxServices, boxServicesJson),
+        ),
+      ),
+    ),
+  ),
+);
+
+const boxStopCommand = Command.make("stop", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+  box: boxArgument,
+  target: Argument.string("service").pipe(
+    Argument.withDescription("The service name, or a port as `:3000`."),
+  ),
+  // Not a boolean. The value has to name the exact process, which cannot be
+  // produced without having looked at it and goes stale the moment anything
+  // restarts — so an incantation copied from an earlier attempt refuses rather
+  // than killing whatever inherited the number.
+  acknowledgeUnmanaged: Flag.string("i-know-this-is-not-ours").pipe(
+    Flag.withDescription(
+      "Stop a process T3 did not start. Must be given as `pid:<n>` naming that exact process. Ask the machine's owner first; nothing here knows what depends on it.",
+    ),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription("Stop a service on a box."),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands
+        .stop({
+          ...boxCaller(flags.box),
+          target: flags.target,
+          acknowledgedTarget: Option.getOrNull(flags.acknowledgeUnmanaged),
+        })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.flatMap((report) =>
+            boxAnswer(report, flags.json, formatBoxStop, (value) => value),
+          ),
+        ),
+    ),
+  ),
+);
+
+const boxLogsCommand = Command.make("logs", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+  box: boxArgument,
+  target: Argument.string("service").pipe(
+    Argument.withDescription("The service name, or a port as `:3000`."),
+  ),
+}).pipe(
+  Command.withDescription("Read the captured output of something T3 started on a box."),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands.logs({ ...boxCaller(flags.box), target: flags.target }).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxLogs, (value) => value)),
+      ),
+    ),
+  ),
+);
+
+const boxPortClaimCommand = Command.make("claim", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+  box: boxArgument,
+  port: Argument.integer("port").pipe(Argument.withDescription("The port to reserve.")),
+  purpose: Flag.string("purpose").pipe(
+    Flag.withDescription("What it is being held for, in words a stranger can act on."),
+    Flag.withDefault("unstated"),
+  ),
+}).pipe(
+  Command.withDescription("Reserve a port on a box before starting something on it."),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands
+        .claimPort({ ...boxCaller(flags.box), port: flags.port, purpose: flags.purpose })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.flatMap((report) =>
+            boxAnswer(
+              report,
+              flags.json,
+              (value) => formatBoxPort(value, "claim"),
+              (value) => value,
+            ),
+          ),
+        ),
+    ),
+  ),
+);
+
+const boxPortReleaseCommand = Command.make("release", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+  box: boxArgument,
+  port: Argument.integer("port").pipe(Argument.withDescription("The port to release.")),
+}).pipe(
+  Command.withDescription("Give up a port reservation on a box."),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands.releasePort({ ...boxCaller(flags.box), port: flags.port }).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.flatMap((report) =>
+          boxAnswer(
+            report,
+            flags.json,
+            (value) => formatBoxPort(value, "release"),
+            (value) => value,
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+const boxPortCommand = Command.make("port").pipe(
+  Command.withDescription("Reserve and release ports on a box."),
+  Command.withSubcommands([boxPortClaimCommand, boxPortReleaseCommand]),
+);
+
+const boxHistoryCommand = Command.make("history", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+  box: boxArgument,
+  limit: Flag.integer("limit").pipe(
+    Flag.withDescription("How many entries to show."),
+    Flag.withDefault(20),
+  ),
+}).pipe(
+  Command.withDescription("What has happened on a box recently. Works when the box is off."),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands.history({ ...boxCaller(flags.box), limit: flags.limit }).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxHistory, boxHistoryJson)),
+      ),
+    ),
+  ),
+);
+
+const boxOutputCommand = Command.make("output", {
+  baseDir: baseDirFlag,
+  box: boxArgument,
+  entryId: Argument.string("id").pipe(
+    Argument.withDescription("The id printed with a truncated result."),
+  ),
+}).pipe(
+  Command.withDescription("Fetch the full output a truncated result did not carry."),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands.output({ ...boxCaller(flags.box), entryId: flags.entryId }).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.map(formatBoxOutput),
+      ),
+    ),
+  ),
+);
+
+const boxCommand = Command.make("box").pipe(
+  Command.withDescription("Drive a machine that runs and serves things, from wherever you are."),
+  Command.withSubcommands([
+    boxRunCommand,
+    boxServicesCommand,
+    boxStopCommand,
+    boxLogsCommand,
+    boxPortCommand,
+    boxHistoryCommand,
+    boxOutputCommand,
+  ]),
+);
+
 const runServerCommand = (
   flags: CliServerFlags,
   options?: {
@@ -2178,6 +2483,7 @@ export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     serveCommand,
     authCommand,
     projectCommand,
+    boxCommand,
     deployCommand,
     secretCommand,
     analyticsCommand,
