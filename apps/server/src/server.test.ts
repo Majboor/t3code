@@ -128,6 +128,7 @@ import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSha
 import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
 import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
+import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
 import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrollments.ts";
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
 import { CloudSyncRepositoryLive } from "./persistence/Layers/CloudSync.ts";
@@ -382,6 +383,13 @@ const shareLinkServiceTestLayer = ShareLinkServiceLive.pipe(
 // device-enrollment routes talk to the repository directly, because the rules
 // they apply live in `decideEnrollment` and the repository is what replays them.
 const deviceEnrollmentRepositoryTestLayer = DeviceEnrollmentRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
+);
+
+// The other half of the same story: which machines already joined, and which
+// credential each one is holding. `/collect` writes here, so the enrollment
+// routes cannot be stood up without it.
+const accountMachineRepositoryTestLayer = AccountMachineRepositoryLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
 );
 
@@ -799,6 +807,7 @@ const buildAppUnderTest = (options?: {
           providerUsageServiceTestLayer,
           shareLinkServiceTestLayer,
           deviceEnrollmentRepositoryTestLayer,
+          accountMachineRepositoryTestLayer,
           cloudSyncServiceTestLayer,
         ),
       ),

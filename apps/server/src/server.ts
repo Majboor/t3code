@@ -18,7 +18,12 @@ import {
   deviceEnrollmentDenyRouteLayer,
   deviceEnrollmentPreviewRouteLayer,
 } from "./deviceEnrollment/http.ts";
+import {
+  accountMachineRevokeRouteLayer,
+  accountMachinesListRouteLayer,
+} from "./accountMachines/http.ts";
 import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrollments.ts";
+import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
 import {
   cloudSyncBlobDownloadRouteLayer,
   cloudSyncBlobUploadRouteLayer,
@@ -343,6 +348,11 @@ const DeviceEnrollmentRepositoryLayerLive = DeviceEnrollmentRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 
+/** Machines that already joined, and the credential each one is holding. */
+const AccountMachineRepositoryLayerLive = AccountMachineRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 /** The asks that sit on top of sharing: who wants usage, and who answered. */
 const ProviderUsageRequestRepositoryLayerLive = ProviderUsageRequestRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
@@ -377,6 +387,7 @@ const PersistenceServicesLayerLive = Layer.mergeAll(
   ProviderUsageRequestRepositoryLayerLive,
   ShareLinkRepositoryLayerLive,
   DeviceEnrollmentRepositoryLayerLive,
+  AccountMachineRepositoryLayerLive,
   CloudSyncRepositoryLayerLive,
   ThreadPreferenceLayerLive,
   DeployLayerLive,
@@ -528,6 +539,10 @@ export const makeRoutesLayer = Layer.mergeAll(
   deviceEnrollmentApproveRouteLayer,
   deviceEnrollmentDenyRouteLayer,
   deviceEnrollmentCollectRouteLayer,
+  // What came of all that: the machines an account is currently handing
+  // credentials to, and the one button that actually takes one back.
+  accountMachinesListRouteLayer,
+  accountMachineRevokeRouteLayer,
   cloudSyncNegotiateRouteLayer,
   cloudSyncBlobUploadRouteLayer,
   cloudSyncBlobDownloadRouteLayer,

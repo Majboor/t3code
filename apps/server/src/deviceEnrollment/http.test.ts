@@ -7,6 +7,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { AuthError, ServerAuth, type AuthenticatedSession } from "../auth/Services/ServerAuth.ts";
 import { SessionCredentialService } from "../auth/Services/SessionCredentialService.ts";
+import { AccountMachineRepositoryLive } from "../persistence/Layers/AccountMachines.ts";
 import { DeviceEnrollmentRepositoryLive } from "../persistence/Layers/DeviceEnrollments.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { hashDeviceEnrollmentCode } from "../persistence/Services/DeviceEnrollments.ts";
@@ -93,6 +94,10 @@ const buildAppUnderTest = (options: {
       Layer.provide(makeAuthLayer(options.session ?? null)),
       Layer.provide(makeSessionLayer(options.issued ?? [])),
       Layer.provide(DeviceEnrollmentRepositoryLive),
+      // Live, not mocked: `/collect` now files the machine under the approving
+      // account before it answers, and a fake that always succeeds would hide
+      // the fact that a failure there takes the credential back.
+      Layer.provide(AccountMachineRepositoryLive),
     ),
   );
 

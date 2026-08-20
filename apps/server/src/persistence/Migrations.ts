@@ -72,6 +72,7 @@ import Migration0056 from "./Migrations/056_ShareLinkAudience.ts";
 import Migration0057 from "./Migrations/057_DeviceEnrollments.ts";
 import Migration0058 from "./Migrations/058_DeviceEnrollmentApprover.ts";
 import Migration0059 from "./Migrations/059_CollaborationFilePresence.ts";
+import Migration0060 from "./Migrations/060_AccountMachines.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -143,6 +144,7 @@ export const migrationEntries = [
   [57, "DeviceEnrollments", Migration0057],
   [58, "DeviceEnrollmentApprover", Migration0058],
   [59, "CollaborationFilePresence", Migration0059],
+  [60, "AccountMachines", Migration0060],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

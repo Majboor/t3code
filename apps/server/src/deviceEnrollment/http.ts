@@ -6,6 +6,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { resolveAuthenticatedUserId, ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { SessionCredentialService } from "../auth/Services/SessionCredentialService.ts";
 import { deriveAuthClientMetadata } from "../auth/utils.ts";
+import { AccountMachineRepository } from "../persistence/Services/AccountMachines.ts";
 import {
   DeviceEnrollmentRepository,
   hashDeviceEnrollmentCode,
@@ -457,10 +458,13 @@ const collectEnrollmentRoute = Effect.gen(function* () {
 
   const record = applied.record;
   const subject = record.approvedBySubject;
-  if (subject === null) {
+  const ownerUserId = record.approvedByUserId;
+  if (subject === null || ownerUserId === null) {
     // An approval recorded before this server knew how to write down a subject,
     // or a row written by something that skipped it. There is no safe guess
-    // about whose session this should be, so there is no session.
+    // about whose session this should be, so there is no session. The owner is
+    // held to the same standard: a credential nobody can be shown to own is a
+    // credential nobody can revoke.
     yield* Effect.logWarning("device enrollment approved without a session subject");
     return json({ error: "This enrollment is not available." }, 409);
   }
@@ -478,6 +482,41 @@ const collectEnrollmentRoute = Effect.gen(function* () {
       ...(record.deviceLabel ? { label: record.deviceLabel } : {}),
     }),
   });
+
+  /**
+   * The account writes down which machine now holds that credential.
+   *
+   * This is the only instant where the machine, the person and the credential
+   * are all in hand at once — after this the code is spent, the enrollment is
+   * closed, and the token is on somebody's laptop. Left out, the machine has
+   * access nothing can enumerate and nothing can end, which was the state of
+   * the world before this call existed.
+   *
+   * So a failure here takes the credential back rather than shrugging. A
+   * machine that has to start the flow over is a nuisance; a live session that
+   * never reaches its owner's list of machines is the "I lost my laptop" case
+   * with no answer, and that is what this whole feature is for. The enrollment
+   * row is already `collected`, which is the same cost the doc comment above
+   * already accepts for a failure at this point.
+   */
+  const machines = yield* AccountMachineRepository;
+  const registered = yield* machines
+    .register({
+      userId: ownerUserId,
+      authSessionId: issued.sessionId,
+      label: record.deviceLabel,
+      platform: record.devicePlatform,
+      nowIso: DateTime.formatIso(DateTime.toUtc(now)),
+    })
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+
+  if (registered === null) {
+    yield* Effect.logError("device enrollment could not register the collecting machine");
+    // Best effort: if this fails too the session outlives the failure, but it
+    // is at least an ordinary session that `Revoke others` can still reach.
+    yield* sessions.revoke(issued.sessionId).pipe(Effect.catch(() => Effect.succeed(false)));
+    return unavailable;
+  }
 
   return json(
     {

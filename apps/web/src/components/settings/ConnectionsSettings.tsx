@@ -13,6 +13,7 @@ import { AddEnvironmentDialog } from "../environments/AddEnvironmentDialog";
 import { EnvironmentConnectList } from "../environments/EnvironmentConnectList";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
+import { ConnectedMachinesSection } from "./ConnectedMachinesSection";
 import { ProviderAccountsSection } from "./ProviderAccountsSection";
 import {
   SettingsPageContainer,
@@ -1031,6 +1032,11 @@ export function ConnectionsSettings() {
           }
         />
       </SettingsSection>
+
+      {/* Above provider accounts and below environments on purpose: this is
+          about who can reach the account at all, which is the question a person
+          arrives on this page with when something has gone wrong. */}
+      <ConnectedMachinesSection />
 
       <ProviderAccountsSection />
     </SettingsPageContainer>
