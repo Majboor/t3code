@@ -25,4 +25,12 @@ export default defineConfig([
     ...shared,
     entry: ["src/notchPreload.ts"],
   },
+  // Same reasoning as the notch's preload, and one more: this one loads in a
+  // window shown before the person has an account. Sharing a chunk with the app
+  // window's bridge would put settings, secrets and the environment registry
+  // behind a pre-auth surface.
+  {
+    ...shared,
+    entry: ["src/deviceEnrollmentPreload.ts"],
+  },
 ]);

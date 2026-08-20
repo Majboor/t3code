@@ -588,6 +588,18 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     directories: {
       buildResources: "apps/desktop/resources",
     },
+    // `app.setAsDefaultProtocolClient` is enough for Windows and Linux, which
+    // register at runtime. macOS is not: it reads URL schemes out of
+    // `CFBundleURLTypes` in the bundle's Info.plist, and a scheme absent from
+    // there is one Launch Services will never route — the browser's redirect
+    // back to the app silently does nothing on the platform most of this is
+    // developed on. This is the only place that can write it.
+    protocols: [
+      {
+        name: "LogicPacks",
+        schemes: ["logicpacks"],
+      },
+    ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   const publishConfig = resolveGitHubPublishConfig(updateChannel);

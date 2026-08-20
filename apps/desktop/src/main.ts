@@ -84,6 +84,39 @@ import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runti
 import { resolveDesktopAppBranding } from "./appBranding.ts";
 import { createNotchViewReader } from "./notchData.ts";
 import { createNotchPanel } from "./notchWindow.ts";
+import {
+  createEnrollmentClient,
+  resolveDeviceLabel,
+  resolveDevicePlatform,
+  resolveEnrollmentCloudBaseUrl,
+} from "./deviceEnrollment/client.ts";
+import {
+  createDeviceEnrollmentController,
+  type DeviceEnrollmentController,
+} from "./deviceEnrollment/controller.ts";
+import {
+  DESKTOP_DEEP_LINK_SCHEME,
+  findDeepLinkInArgv,
+  parseDesktopDeepLink,
+  resolveProtocolClientRegistration,
+  type DesktopDeepLink,
+} from "./deviceEnrollment/deepLink.ts";
+import {
+  ENROLLMENT_ACTION_CHANNEL,
+  isEnrollmentWindowAction,
+  resolveEnrollmentView,
+  type EnrollmentWindowAction,
+} from "./deviceEnrollment/document.ts";
+import {
+  buildEnrollmentEnvironmentRecord,
+  hasConnectedEnvironment,
+  storeEnrollmentCredential,
+} from "./deviceEnrollment/persist.ts";
+import type { DeviceEnrollmentState } from "./deviceEnrollment/machine.ts";
+import {
+  createEnrollmentWindow,
+  type EnrollmentWindowController,
+} from "./deviceEnrollment/window.ts";
 
 syncShellEnvironment();
 
@@ -1648,6 +1681,18 @@ function registerIpcHandlers(): void {
     } as const;
   });
 
+  // The connect window's only message. The action is validated rather than
+  // trusted: the document is generated in-process, but "main acts only on names
+  // it recognises" is worth holding by check on the one surface that runs
+  // before anybody has signed in to anything.
+  ipcMain.removeAllListeners(ENROLLMENT_ACTION_CHANNEL);
+  ipcMain.on(ENROLLMENT_ACTION_CHANNEL, (_event, rawAction: unknown) => {
+    if (!isEnrollmentWindowAction(rawAction)) {
+      return;
+    }
+    handleDeviceEnrollmentAction(rawAction);
+  });
+
   ipcMain.removeHandler(GET_CLIENT_SETTINGS_CHANNEL);
   ipcMain.handle(GET_CLIENT_SETTINGS_CHANNEL, async () => readClientSettings(CLIENT_SETTINGS_PATH));
 
@@ -2208,12 +2253,302 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * Connecting this machine to an account.
+ *
+ * The old way in was a pairing token someone pasted, which is still here and
+ * still works — this is an additional door, not a replacement. What it replaces
+ * is the *first* five minutes: launch the app, approve it in the browser you
+ * are already signed in to, done.
+ *
+ * The credential never travels through the browser or the URL. The app asks for
+ * a code, the browser approves that code, and the app then collects the
+ * credential itself over HTTPS. That is why polling exists at all — a design
+ * that handed the session back through the deep link would need no poll and
+ * would write a live credential into shell history and browser history on the
+ * way past.
+ * ---------------------------------------------------------------------------
+ */
+
+let deviceEnrollmentController: DeviceEnrollmentController | null = null;
+let deviceEnrollmentWindow: EnrollmentWindowController | null = null;
+/**
+ * A link that arrived before there was anything to hand it to.
+ *
+ * Cold start is the normal case on Windows and Linux: the OS launches the app
+ * *with* the URL in argv, so it exists a long time before `ready`. Dropping it
+ * would mean the approval silently did nothing and the person waits on a screen
+ * that never updates.
+ */
+let pendingDesktopDeepLink: DesktopDeepLink | null = null;
+
+const enrollmentCloudBaseUrl = resolveEnrollmentCloudBaseUrl(process.env);
+const enrollmentDeviceLabel = resolveDeviceLabel(OS.hostname());
+
+/**
+ * A stable id for the environment this machine joins.
+ *
+ * Derived from the cloud URL rather than random, so enrolling a second time
+ * replaces the existing registry entry instead of stacking another one beside
+ * it. A registry with two records for the same account is a list where "which
+ * of these is live" has no answer, and only one of them holds a working token.
+ */
+function resolveEnrollmentFallbackEnvironmentId(baseUrl: string): string {
+  return `enrolled-${Crypto.createHash("sha256").update(baseUrl).digest("hex").slice(0, 24)}`;
+}
+
+function resolveEnrollmentFallbackLabel(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return "LogicPacks account";
+  }
+}
+
+function presentDeviceEnrollmentState(state: DeviceEnrollmentState): void {
+  deviceEnrollmentWindow?.present(resolveEnrollmentView(state, enrollmentDeviceLabel));
+}
+
+/**
+ * Builds the window and the controller together, once.
+ *
+ * They are created lazily rather than at startup because a machine that has
+ * already joined an account should never pay for either — and because the
+ * window must not exist until something is going to be drawn in it.
+ */
+function ensureDeviceEnrollmentSurface(): DeviceEnrollmentController {
+  if (deviceEnrollmentController && deviceEnrollmentWindow) {
+    return deviceEnrollmentController;
+  }
+
+  const controller = createDeviceEnrollmentController({
+    client: createEnrollmentClient({ baseUrl: enrollmentCloudBaseUrl }),
+    deviceLabel: enrollmentDeviceLabel,
+    devicePlatform: resolveDevicePlatform(process.platform),
+    openExternal: (url) => {
+      void shell.openExternal(url);
+    },
+    persist: async (credential) => {
+      const record = buildEnrollmentEnvironmentRecord({
+        credential,
+        fallbackHttpBaseUrl: enrollmentCloudBaseUrl,
+        fallbackLabel: resolveEnrollmentFallbackLabel(enrollmentCloudBaseUrl),
+        fallbackEnvironmentId: resolveEnrollmentFallbackEnvironmentId(enrollmentCloudBaseUrl),
+        createdAt: new Date().toISOString(),
+      });
+      if (!record) {
+        throw new Error("This machine was approved but the account details could not be read.");
+      }
+      storeEnrollmentCredential({
+        registryPath: SAVED_ENVIRONMENT_REGISTRY_PATH,
+        secretStorage: getDesktopSecretStorage(),
+        record,
+        sessionToken: credential.sessionToken,
+      });
+    },
+    onState: presentDeviceEnrollmentState,
+    log: writeDesktopLogHeader,
+  });
+
+  deviceEnrollmentWindow = createEnrollmentWindow({
+    onClosed: () => {
+      // Closing the window stops the polling. Leaving a loop running against a
+      // surface nobody can see would keep asking the server about a code the
+      // person walked away from, and would have nowhere to report the answer.
+      deviceEnrollmentController?.dispose();
+      deviceEnrollmentController = null;
+      deviceEnrollmentWindow = null;
+    },
+  });
+  deviceEnrollmentController = controller;
+  return controller;
+}
+
+function handleDeviceEnrollmentAction(action: EnrollmentWindowAction): void {
+  const controller = deviceEnrollmentController;
+  if (!controller) {
+    return;
+  }
+  switch (action) {
+    case "connect": {
+      controller.start();
+      return;
+    }
+    case "open-browser": {
+      controller.openApprovalPage();
+      return;
+    }
+    case "restart": {
+      controller.restart();
+      return;
+    }
+    case "dismiss": {
+      deviceEnrollmentWindow?.close();
+      controller.dispose();
+      deviceEnrollmentController = null;
+      deviceEnrollmentWindow = null;
+      return;
+    }
+  }
+}
+
+/**
+ * Acts on a `logicpacks://` link.
+ *
+ * A link whose code does not match the run in flight is ignored rather than
+ * acted on. Anything can send this app a URL — a web page, a chat client, a
+ * `.desktop` file someone downloaded — and the only link worth listening to is
+ * one naming the code this process asked for.
+ */
+function handleDesktopDeepLink(link: DesktopDeepLink): void {
+  const controller = deviceEnrollmentController;
+  if (!controller) {
+    // Held rather than dropped, and the reason is timing rather than tidiness.
+    // On a cold start the link routinely arrives before this surface exists:
+    // macOS fires `open-url` within moments of launch, and on Windows and Linux
+    // the URL is already in this process's own argv — both well before the
+    // backend is up and the connect window has been offered. Testing
+    // `app.isReady()` here is not enough, because "ready" happens long before
+    // the controller does.
+    pendingDesktopDeepLink = link;
+    return;
+  }
+  if (!controller.handleApprovalCallback(link.code)) {
+    writeDesktopLogHeader("deep link ignored because its code does not match this machine's");
+    return;
+  }
+  presentDeviceEnrollmentState(controller.getState());
+}
+
+function drainPendingDesktopDeepLink(): void {
+  const link = pendingDesktopDeepLink;
+  if (!link) {
+    return;
+  }
+  pendingDesktopDeepLink = null;
+  handleDesktopDeepLink(link);
+}
+
+/**
+ * Claims `logicpacks://` with the operating system.
+ *
+ * Failure is logged and swallowed. On Linux this writes a `.desktop` entry and
+ * on Windows a registry key, both of which can be refused by a locked-down
+ * machine — and a machine that cannot register a URL handler can still enroll,
+ * because polling does not depend on the link arriving.
+ */
+function registerDesktopDeepLinkScheme(): void {
+  const registration = resolveProtocolClientRegistration({
+    isDefaultApp: Boolean(process.defaultApp),
+    execPath: process.execPath,
+    argv: process.argv,
+  });
+  if (!registration) {
+    writeDesktopLogHeader("deep link scheme not registered: no resolvable app path");
+    return;
+  }
+  try {
+    const claimed = app.setAsDefaultProtocolClient(
+      DESKTOP_DEEP_LINK_SCHEME,
+      registration.execPath,
+      [...registration.args],
+    );
+    writeDesktopLogHeader(
+      `deep link scheme ${DESKTOP_DEEP_LINK_SCHEME}:// registration claimed=${claimed}`,
+    );
+  } catch (error) {
+    writeDesktopLogHeader(
+      `deep link scheme registration failed message=${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+/**
+ * Offers the connect flow on a machine that has not joined an account.
+ *
+ * "No account" is read as "no saved environments", the same question the web
+ * app's readiness gate asks. A liveness check would be wrong here for the
+ * reason it is wrong there: connections are established late, so a machine
+ * that is merely offline would be asked to enroll all over again.
+ */
+function offerDeviceEnrollmentIfUnconfigured(): void {
+  // Nothing in here may take the app down with it. This runs inside
+  // `bootstrap()`'s promise chain, whose rejection handler is
+  // `handleFatalStartupError` — an error box and a quit. Failing to *offer* a
+  // way to connect is a bad first launch; turning it into a refusal to start is
+  // an unusable one, and the manual pairing screen still works either way.
+  try {
+    if (hasConnectedEnvironment(SAVED_ENVIRONMENT_REGISTRY_PATH)) {
+      return;
+    }
+    writeDesktopLogHeader("device enrollment offered: no saved environments");
+    const controller = ensureDeviceEnrollmentSurface();
+    presentDeviceEnrollmentState(controller.getState());
+    drainPendingDesktopDeepLink();
+  } catch (error) {
+    writeDesktopLogHeader(
+      `device enrollment could not be offered message=${formatErrorMessage(error)}`,
+    );
+  }
+}
+
 // Override Electron's userData path before the `ready` event so that
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
 app.setPath("userData", resolveUserDataPath());
 
 configureAppIdentity();
+
+/*
+ * Deep links, and the single-instance lock they depend on.
+ *
+ * These three registrations are top level, not inside `whenReady`, because all
+ * three can fire before the app is ready and two of them only fire once.
+ *
+ * The platforms genuinely differ, and handling only the one you develop on is
+ * how this feature half-ships:
+ *
+ * - **macOS** delivers the URL through `open-url`, to the running process, and
+ *   on a cold start it fires shortly after launch — which is why the handler is
+ *   installed here rather than after `bootstrap()`.
+ * - **Windows and Linux** do not have `open-url` at all. They launch a *second*
+ *   copy of the app with the URL appended to its command line. Without the
+ *   single-instance lock that second copy simply runs, and the link is
+ *   delivered to a brand new process that knows nothing about the enrollment
+ *   waiting in the first one — the click appears to do nothing at all.
+ * - **A cold start on any platform** may carry the link in this process's own
+ *   argv, before any handler could have been attached.
+ */
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  // The lock holder has already been handed our argv by Electron and will act
+  // on it. This copy exists only to deliver that, so it leaves immediately —
+  // and must not run `bootstrap()`, which would race a second backend against
+  // the first one's port and state directory.
+  app.quit();
+} else {
+  app.on("second-instance", (_event, argv) => {
+    const link = findDeepLinkInArgv(argv);
+    if (link) {
+      handleDesktopDeepLink(link);
+    }
+    const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0];
+    if (existingWindow) {
+      revealWindow(existingWindow);
+    }
+  });
+
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    const link = parseDesktopDeepLink(url);
+    if (link) {
+      handleDesktopDeepLink(link);
+    }
+  });
+
+  pendingDesktopDeepLink = findDeepLinkInArgv(process.argv);
+}
 
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
@@ -2297,10 +2632,17 @@ app.on("before-quit", () => {
 app
   .whenReady()
   .then(() => {
+    // A second copy launched only to hand its argv to the lock holder. It has
+    // already done that; starting a backend, a window and an updater here would
+    // be a second app fighting the first for the same port and state directory.
+    if (!hasSingleInstanceLock) {
+      return;
+    }
     writeDesktopLogHeader("app ready");
     configureAppIdentity();
     configureApplicationMenu();
     registerDesktopProtocol();
+    registerDesktopDeepLinkScheme();
     configureAutoUpdater();
     // Bringing the app to the front — reopening it if macOS has left the
     // process running with no window — is what `activate` already means here.
@@ -2363,12 +2705,19 @@ app
       // putting the person in front of it.
       onSignIn: revealOrOpenAppWindow,
     });
-    void bootstrap().catch((error) => {
-      if (isBackendReadinessAborted(error) && isQuitting) {
-        return;
-      }
-      handleFatalStartupError("bootstrap", error);
-    });
+    void bootstrap()
+      .then(() => {
+        // Offered after the workspace window is up, not before. Presenting it
+        // first only to have the app window open on top of it a second later
+        // reads as the connect prompt having been dismissed by itself.
+        offerDeviceEnrollmentIfUnconfigured();
+      })
+      .catch((error) => {
+        if (isBackendReadinessAborted(error) && isQuitting) {
+          return;
+        }
+        handleFatalStartupError("bootstrap", error);
+      });
 
     app.on("activate", revealOrOpenAppWindow);
   })
