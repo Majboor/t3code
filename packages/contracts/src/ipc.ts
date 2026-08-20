@@ -95,6 +95,10 @@ import type {
   CollaborationBranchListResult,
   CollaborationBranchReleaseInput,
   CollaborationBranchReleaseResult,
+  CollaborationFilePresenceListInput,
+  CollaborationFilePresenceMarkInput,
+  CollaborationFilePresenceReleaseInput,
+  CollaborationFilePresenceResult,
   CollaborationFileTouchInput,
   CollaborationFileTouchListInput,
   CollaborationFileTouchResult,
@@ -513,6 +517,16 @@ export interface EnvironmentApi {
     listFileTouches: (
       input: CollaborationFileTouchListInput,
     ) => Promise<CollaborationFileTouchResult>;
+    /** Claims "I have these files open right now", and keeps claiming it. */
+    markFilePresence: (
+      input: CollaborationFilePresenceMarkInput,
+    ) => Promise<CollaborationFilePresenceResult>;
+    releaseFilePresence: (
+      input: CollaborationFilePresenceReleaseInput,
+    ) => Promise<CollaborationFilePresenceResult>;
+    listFilePresence: (
+      input: CollaborationFilePresenceListInput,
+    ) => Promise<CollaborationFilePresenceResult>;
     setActivityVisibility: (
       input: CollaborationActivityVisibilityInput,
     ) => Promise<CollaborationActivityVisibilityResult>;

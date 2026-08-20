@@ -18,6 +18,11 @@ import type {
   CollaborationBranchReleaseInput,
   CollaborationBranchReleaseResult,
   CollaborationError,
+  CollaborationFilePresenceListInput,
+  CollaborationFilePresenceMarkInput,
+  CollaborationFilePresenceReleaseInput,
+  CollaborationFilePresenceResult,
+  CollaborationFilePresence,
   CollaborationFileTouch,
   CollaborationFileTouchInput,
   CollaborationFileTouchListInput,
@@ -216,6 +221,62 @@ export interface CollaborationServiceShape {
     input: CollaborationFileTouchListInput,
   ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;
 
+  /**
+   * Claims, or re-claims, "this person has these files open right now".
+   *
+   * Idempotent by design: a browser calls this on a heartbeat and the row it
+   * writes is keyed on the page rather than the call, so refreshing a claim
+   * moves its deadline and nothing else. The kind is always `person` — it is
+   * decided here from the fact that a session made the call, never taken from
+   * the caller, or a tab could dress itself up as an agent.
+   */
+  readonly markFilePresence: (
+    actor: CollaborationActor,
+    input: CollaborationFilePresenceMarkInput,
+  ) => Effect.Effect<CollaborationFilePresenceResult, CollaborationError>;
+
+  /**
+   * The same claim for a turn, filed by the reactor that runs it.
+   *
+   * An agent has no session and no account, so — exactly as `touchFilesForUser`
+   * does — it borrows the id of whoever asked for the turn, and the name is
+   * resolved here so an agent's mark and its author's roster row never disagree.
+   */
+  readonly markFilePresenceForAgent: (
+    userId: UserId,
+    input: CollaborationFilePresenceMarkInput,
+  ) => Effect.Effect<CollaborationFilePresenceResult, CollaborationError>;
+
+  /** Gives a file up. An empty `paths` gives up everything this source holds. */
+  readonly releaseFilePresence: (
+    actor: CollaborationActor,
+    input: CollaborationFilePresenceReleaseInput,
+  ) => Effect.Effect<CollaborationFilePresenceResult, CollaborationError>;
+
+  readonly releaseFilePresenceForAgent: (
+    userId: UserId,
+    input: CollaborationFilePresenceReleaseInput,
+  ) => Effect.Effect<CollaborationFilePresenceResult, CollaborationError>;
+
+  /** What is live in this workspace. Expired claims are never handed out. */
+  readonly listFilePresence: (
+    input: CollaborationFilePresenceListInput,
+  ) => Effect.Effect<CollaborationFilePresenceResult, CollaborationError>;
+
+  /**
+   * Names the files somebody has open, at the moment a turn is about to start.
+   *
+   * Deliberately says nothing about which files the turn will write: nothing in
+   * the model knows that before the turn runs, and a guess dressed as a
+   * prediction would be worse than naming the real risk. Recording the warning
+   * is all it does — an agent that could not run because a colleague left an
+   * editor open would be a worse product than one that says so out loud.
+   */
+  readonly warnBeforeAgentWrites: (
+    userId: UserId,
+    input: CollaborationFilePresenceListInput,
+  ) => Effect.Effect<{ readonly heldPaths: ReadonlyArray<string> }, CollaborationError>;
+
   readonly listMembers: (
     actor: CollaborationActor,
     input: CollaborationMemberListInput,
@@ -279,6 +340,8 @@ export interface CollaborationState {
   readonly branchClaims: ReadonlyMap<string, CollaborationBranchClaim>;
   /** Keyed by `tenantId:workspaceId:path`. */
   readonly fileTouches: ReadonlyMap<string, CollaborationFileTouch>;
+  /** Keyed by `tenantId:workspaceId:path:userId:kind:sourceId`. Expiring, not accumulating. */
+  readonly filePresence: ReadonlyMap<string, CollaborationFilePresence>;
   /** Keyed by `tenantId:workspaceId:userId`. */
   readonly memberProfiles: ReadonlyMap<string, CollaborationMemberProfileRecord>;
   /** Keyed by `tenantId:workspaceId:userId:threadId`. */

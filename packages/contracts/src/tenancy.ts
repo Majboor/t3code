@@ -607,6 +607,13 @@ export const CollaborationActivityKind = Schema.Literals([
   "invited",
   "accepted-invite",
   "revoked-invite",
+  /**
+   * A turn was allowed to start while somebody had a file open in this
+   * workspace. Recorded rather than enforced: an agent replaces files instead
+   * of merging into them, so this is the last moment the loss is preventable,
+   * and refusing the turn would be a worse answer than saying so out loud.
+   */
+  "agent-may-overwrite",
 ]);
 export type CollaborationActivityKind = typeof CollaborationActivityKind.Type;
 
@@ -995,6 +1002,88 @@ export const CollaborationFileTouchListInput = Schema.Struct({
 export type CollaborationFileTouchListInput = typeof CollaborationFileTouchListInput.Type;
 
 /**
+ * A hand on a keyboard, or a turn running on somebody's behalf.
+ *
+ * A browser may only ever claim `person`: the kind is decided by the server
+ * from how the claim arrived, never taken from the caller, or anybody's tab
+ * could dress itself up as an agent and mute the warning that matters most.
+ */
+export const CollaborationFilePresenceKind = Schema.Literals(["person", "agent"]);
+export type CollaborationFilePresenceKind = typeof CollaborationFilePresenceKind.Type;
+
+/**
+ * What is in a file *now*, as distinct from who last changed it.
+ *
+ * `CollaborationFileTouch` above is history and never expires. This is a live
+ * claim with a deadline: it survives only as long as something keeps refreshing
+ * it, because the browser that made it can be closed without ever saying so,
+ * and a presence that outlives the person is worse than no presence at all.
+ * The rules for reading it live in `@t3tools/shared/filePresence`.
+ */
+export const CollaborationFilePresence = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  /** An agent has no account, so its claim carries whoever asked for the turn. */
+  userId: UserId,
+  displayName: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  kind: CollaborationFilePresenceKind,
+  /**
+   * What holds the claim — one thread for an agent, one browser page for a
+   * person. Two tabs are still one person; two turns are two writers racing.
+   */
+  sourceId: TrimmedNonEmptyString,
+  startedAt: IsoDateTime,
+  /** The last heartbeat. Everything about liveness is measured from here. */
+  refreshedAt: IsoDateTime,
+});
+export type CollaborationFilePresence = typeof CollaborationFilePresence.Type;
+
+export const CollaborationFilePresenceMarkInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  paths: Schema.Array(TrimmedNonEmptyString),
+  /**
+   * The page making the claim. Absent means "this connection", which is the
+   * right default for a browser and the wrong one for anything holding several
+   * claims at once.
+   */
+  sourceId: Schema.optional(TrimmedNonEmptyString),
+});
+export type CollaborationFilePresenceMarkInput = typeof CollaborationFilePresenceMarkInput.Type;
+
+export const CollaborationFilePresenceReleaseInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  /** Empty releases everything this source holds — what a closing page sends. */
+  paths: Schema.Array(TrimmedNonEmptyString),
+  sourceId: Schema.optional(TrimmedNonEmptyString),
+});
+export type CollaborationFilePresenceReleaseInput =
+  typeof CollaborationFilePresenceReleaseInput.Type;
+
+export const CollaborationFilePresenceListInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationFilePresenceListInput = typeof CollaborationFilePresenceListInput.Type;
+
+export const CollaborationFilePresenceResult = Schema.Struct({
+  /** Only what is still live; expired claims are never handed out. */
+  presence: Schema.Array(CollaborationFilePresence),
+});
+export type CollaborationFilePresenceResult = typeof CollaborationFilePresenceResult.Type;
+
+/** Enough to take one row out of a browser's copy without re-reading the lot. */
+export const CollaborationFilePresenceRelease = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  userId: UserId,
+  kind: CollaborationFilePresenceKind,
+  sourceId: TrimmedNonEmptyString,
+});
+export type CollaborationFilePresenceRelease = typeof CollaborationFilePresenceRelease.Type;
+
+/**
  * A person in a shared workspace, assembled from their membership, the last
  * presence they reported and the invite that let them in. Carries everything
  * the UI needs to draw them: a name, initials and a colour.
@@ -1352,6 +1441,19 @@ export const CollaborationStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("files-touched"),
     touches: Schema.Array(CollaborationFileTouch),
+  }),
+  /**
+   * Both halves in one event on purpose. A browser that only heard about
+   * arrivals would keep drawing somebody who closed the file, and would then
+   * need its own reconciliation pass to notice — the departure is the more
+   * important half of a live signal, so it travels with the arrival.
+   */
+  Schema.Struct({
+    type: Schema.Literal("file-presence-changed"),
+    tenantId: TenantId,
+    workspaceId: WorkspaceId,
+    present: Schema.Array(CollaborationFilePresence),
+    released: Schema.Array(CollaborationFilePresenceRelease),
   }),
   Schema.Struct({
     type: Schema.Literal("activity-visibility-changed"),

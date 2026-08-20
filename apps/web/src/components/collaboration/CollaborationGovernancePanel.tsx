@@ -1,4 +1,4 @@
-import { UsersRoundIcon, CheckIcon, GitBranchIcon, XIcon } from "lucide-react";
+import { BotIcon, UsersRoundIcon, CheckIcon, GitBranchIcon, XIcon } from "lucide-react";
 import type {
   EnvironmentId,
   CollaborationApprovalMode,
@@ -9,7 +9,7 @@ import { useState } from "react";
 
 import type { CollaborationGovernance } from "../../hooks/useCollaborationGovernance";
 import { cn } from "../../lib/utils";
-import { findContention } from "./contention.logic";
+import { findWorkspaceContention } from "./contention.logic";
 import { readEnvironmentApi } from "../../environmentApi";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -286,7 +286,12 @@ export function CollaborationGovernancePanel({
   // Recomputed on render rather than memoised on `touches`: the window is
   // relative to now, so a memo would keep saying two people are in a file long
   // after they both left.
-  const contested = findContention(touches, { now: Date.now() });
+  const contested = findWorkspaceContention({
+    touches,
+    presence: governance.filePresence,
+    nowMs: Date.now(),
+    viewerHasOwnBranch: myBranchClaim !== null,
+  });
 
   return (
     <div className="grid gap-3">
@@ -369,30 +374,47 @@ export function CollaborationGovernancePanel({
 
       {contested.length > 0 ? (
         <div className="border-t border-border pt-3" data-testid="collaboration-contention">
-          <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-500">
-            <UsersRoundIcon className="size-3.5" />
-            Two people are in the same file
+          <div
+            className={cn(
+              "mb-1.5 flex items-center gap-1 text-xs font-medium",
+              contested[0]?.severity === "urgent"
+                ? "text-red-600 dark:text-red-500"
+                : "text-amber-600 dark:text-amber-500",
+            )}
+          >
+            {contested[0]?.outcome === "agent-over-person" ? (
+              <BotIcon className="size-3.5" />
+            ) : (
+              <UsersRoundIcon className="size-3.5" />
+            )}
+            {contested[0]?.headline ?? "Two people are in the same file"}
           </div>
-          <div className="grid gap-1">
+          {/*
+            Each file carries its own sentence rather than one shared footnote.
+            The advice genuinely differs — a branch is the answer to two people
+            and no answer at all to an agent about to overwrite an open buffer,
+            since the turn runs in the same worktree either way — so a single
+            line under the list would have to be wrong about one of them.
+          */}
+          <div className="grid gap-1.5">
             {contested.slice(0, 4).map((entry) => (
               <div
-                key={entry.path}
+                key={`${entry.source}:${entry.path}`}
                 className="text-[11px]"
                 data-testid="collaboration-contended-file"
+                data-contention-source={entry.source}
+                data-contention-outcome={entry.outcome}
+                data-contention-severity={entry.severity}
               >
                 <span className="font-mono text-foreground">{entry.path}</span>
                 <span className="text-muted-foreground">
                   {" — "}
-                  {entry.people.map((person) => person.displayName).join(" and ")}
+                  {entry.names.join(" and ")}
                 </span>
+                <p className="text-[10px] leading-4 text-muted-foreground">{entry.suggestion}</p>
               </div>
             ))}
           </div>
-          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
-            {myBranchClaim
-              ? "You are on your own branch, so your edits are not landing on top of theirs."
-              : "Both sets of edits land in the same file, and the last one written wins. Your own branch keeps them apart until somebody merges."}
-          </p>
         </div>
       ) : null}
     </div>

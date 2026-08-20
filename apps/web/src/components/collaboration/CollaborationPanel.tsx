@@ -45,7 +45,7 @@ import {
   type CollaborationSectionId,
 } from "./collaborationPanel.logic";
 import { memberColorForUserId } from "./collaborationRoster.logic";
-import { findContention } from "./contention.logic";
+import { findWorkspaceContention } from "./contention.logic";
 import { ProviderSharingSection } from "./ProviderSharingSection";
 import { ProviderUsageRequestsView } from "./ProviderUsageRequests";
 import { UsageSparkline } from "./usage/UsageBarSeries";
@@ -125,9 +125,21 @@ export function CollaborationPanel({
       approvalMode: governance.settings?.approvalMode ?? null,
       pendingApprovalCount: governance.pendingApprovals.length,
       canDecide: governance.canDecide,
-      // The same window the governance section draws from, so the preview and
+      // The same reckoning the governance section draws from, so the preview and
       // the section it opens can never disagree about who is where.
-      contendedCount: findContention(governance.touches, { now: Date.now() }).length,
+      ...(() => {
+        const contested = findWorkspaceContention({
+          touches: governance.touches,
+          presence: governance.filePresence,
+          nowMs: Date.now(),
+          viewerHasOwnBranch: governance.myBranchClaim !== null,
+        });
+        return {
+          contendedCount: contested.length,
+          agentOverPersonCount: contested.filter((entry) => entry.outcome === "agent-over-person")
+            .length,
+        };
+      })(),
       branchClaims: governance.branchClaims,
       myBranchClaim: governance.myBranchClaim,
     },

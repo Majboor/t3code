@@ -1,6 +1,7 @@
 import type {
   CollaborationApprovalMode,
   CollaborationBranchClaim,
+  CollaborationFilePresence,
   CollaborationFileTouch,
   CollaborationPromptApproval,
   CollaborationStreamEvent,
@@ -49,6 +50,17 @@ export interface CollaborationGovernance {
    * which is exactly what throws away the fact that two people touched one.
    */
   readonly touches: readonly CollaborationFileTouch[];
+  /**
+   * Who and what is in each file *now* — the live counterpart to `touches`,
+   * which is history. Handed out raw and never pre-filtered by liveness: the
+   * answer is a function of the current moment, so every reader re-applies the
+   * deadline as it draws rather than trusting a verdict taken when this last
+   * arrived.
+   */
+  readonly filePresence: readonly CollaborationFilePresence[];
+  /** Claims, and keeps claiming, that this viewer has these files open. */
+  readonly markFilePresence: (paths: readonly string[]) => void;
+  readonly releaseFilePresence: (paths: readonly string[]) => void;
   readonly loading: boolean;
   readonly refresh: () => void;
   readonly setApprovalMode: (mode: CollaborationApprovalMode) => Promise<void>;
@@ -66,6 +78,7 @@ export interface CollaborationGovernance {
 const NO_APPROVALS: readonly CollaborationPromptApproval[] = [];
 const NO_CLAIMS: readonly CollaborationBranchClaim[] = [];
 const NO_TOUCHES: readonly CollaborationFileTouch[] = [];
+const NO_FILE_PRESENCE: readonly CollaborationFilePresence[] = [];
 
 /** Everything the hook reads, kept in one object so a shared store can hand it out. */
 interface CollaborationGovernanceSnapshot {
@@ -79,6 +92,7 @@ interface CollaborationGovernanceSnapshot {
   readonly viewerDisplayName: string;
   readonly viewerUserId: string | null;
   readonly touches: readonly CollaborationFileTouch[];
+  readonly filePresence: readonly CollaborationFilePresence[];
   readonly memberColorByUserId: ReadonlyMap<string, string>;
   readonly loading: boolean;
 }
@@ -96,6 +110,7 @@ const EMPTY_SNAPSHOT: CollaborationGovernanceSnapshot = {
   viewerDisplayName: "collaborator",
   viewerUserId: null,
   touches: NO_TOUCHES,
+  filePresence: NO_FILE_PRESENCE,
   memberColorByUserId: NO_MEMBER_COLORS,
   loading: false,
 };
@@ -118,7 +133,32 @@ interface SharedCollaborationGovernance {
   snapshot: CollaborationGovernanceSnapshot;
   streamAttached: boolean;
   unsubscribeStream: () => void;
+  /** What this page is currently claiming to have open, so a beat can re-claim it. */
+  heldPaths: readonly string[];
+  presenceHeartbeat: ReturnType<typeof setInterval> | null;
 }
+
+/**
+ * This page, as far as presence is concerned.
+ *
+ * One id per page load rather than per user: the same person with the same file
+ * open in two tabs is still one person, and the counting rules fold them back
+ * together — but a tab that goes away must be able to give up its own claims
+ * without taking the other tab's with them.
+ */
+const FILE_PRESENCE_SOURCE_ID = `page:${
+  globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
+}`;
+
+/**
+ * How often a page re-states what it has open.
+ *
+ * Three beats inside the server's deadline, so one dropped request is survivable
+ * and a page that genuinely stops beating is forgotten in well under a minute.
+ * Deliberately cheaper than it looks: only paths this person actually has open
+ * are ever sent, which is usually one.
+ */
+const FILE_PRESENCE_HEARTBEAT_MS = 15_000;
 
 /** Long enough for a socket to finish authorising, short enough to beat a reader. */
 const GOVERNANCE_RETRY_DELAY_MS = 1_500;
@@ -128,7 +168,10 @@ const GOVERNANCE_ATTACH_ATTEMPTS = 20;
 const GOVERNANCE_POLL_INTERVAL_MS = 30_000;
 
 /** The map key an instance is filed under, so a retry can tell it is still the live one. */
-function governanceKey(entry: { environmentId: EnvironmentId; scope: CollaborationGovernanceScope }): string {
+function governanceKey(entry: {
+  environmentId: EnvironmentId;
+  scope: CollaborationGovernanceScope;
+}): string {
   return `${entry.environmentId}:${entry.scope.tenantId}:${entry.scope.workspaceId}`;
 }
 
@@ -174,6 +217,7 @@ function refreshSharedGovernance(entry: SharedCollaborationGovernance): void {
       api.collaboration.listBranchClaims(scope),
       api.collaboration.listFileTouches(scope),
       api.collaboration.listMembers(scope),
+      api.collaboration.listFilePresence(scope),
     ]))()
     .then(
       ([
@@ -183,6 +227,7 @@ function refreshSharedGovernance(entry: SharedCollaborationGovernance): void {
         claimsResult,
         touchesResult,
         membersResult,
+        filePresenceResult,
       ]) => {
         if (sequence !== entry.requestSequence) {
           return;
@@ -197,6 +242,7 @@ function refreshSharedGovernance(entry: SharedCollaborationGovernance): void {
           myBranchClaim: claimsResult.mine,
           viewerDisplayName: claimsResult.viewerDisplayName,
           touches: touchesResult.touches,
+          filePresence: filePresenceResult.presence,
           viewerUserId: membersResult.viewerUserId,
           memberColorByUserId: new Map(
             membersResult.members.map((member) => [member.userId, member.color]),
@@ -283,6 +329,32 @@ function applyGovernanceEvent(
           ...snapshot.touches.filter(
             (entryValue) => !replaced.has(`${entryValue.path}:${entryValue.userId}`),
           ),
+        ],
+      });
+      break;
+    }
+    case "file-presence-changed": {
+      // Arrivals and departures in one pass. A browser that applied only the
+      // arrivals would keep drawing somebody who closed the file until its own
+      // deadline expired them, which is a minute of saying the wrong thing.
+      const gone = new Set(
+        event.released.map(
+          (release) => `${release.path}:${release.userId}:${release.kind}:${release.sourceId}`,
+        ),
+      );
+      const replaced = new Set(
+        event.present.map(
+          (entryValue) =>
+            `${entryValue.path}:${entryValue.userId}:${entryValue.kind}:${entryValue.sourceId}`,
+        ),
+      );
+      updateSharedGovernance(entry, {
+        filePresence: [
+          ...event.present,
+          ...snapshot.filePresence.filter((entryValue) => {
+            const identity = `${entryValue.path}:${entryValue.userId}:${entryValue.kind}:${entryValue.sourceId}`;
+            return !gone.has(identity) && !replaced.has(identity);
+          }),
         ],
       });
       break;
@@ -377,6 +449,69 @@ function attachSharedGovernanceStream(entry: SharedCollaborationGovernance): voi
   refreshSharedGovernance(entry);
 }
 
+/** Sends the claim. Never rejects outward — presence is decoration on a save path. */
+function pushFilePresence(entry: SharedCollaborationGovernance, paths: readonly string[]): void {
+  if (paths.length === 0) {
+    return;
+  }
+  const api = readEnvironmentApi(entry.environmentId);
+  if (!api) {
+    return;
+  }
+  void api.collaboration
+    .markFilePresence({ ...entry.scope, paths, sourceId: FILE_PRESENCE_SOURCE_ID })
+    .catch(() => undefined);
+}
+
+function dropFilePresence(entry: SharedCollaborationGovernance, paths: readonly string[]): void {
+  const api = readEnvironmentApi(entry.environmentId);
+  if (!api) {
+    return;
+  }
+  void api.collaboration
+    .releaseFilePresence({ ...entry.scope, paths, sourceId: FILE_PRESENCE_SOURCE_ID })
+    .catch(() => undefined);
+}
+
+/**
+ * Declares the whole set this page holds, rather than adding to it.
+ *
+ * A "set" rather than an "add" on purpose: closing a file has to be as visible
+ * as opening one, and a caller that could only add would leave every file it
+ * ever opened claimed until the deadline caught up. The difference is computed
+ * here so the caller can simply say what is open now.
+ */
+function setHeldFilePresence(entry: SharedCollaborationGovernance, paths: readonly string[]): void {
+  const next = [...new Set(paths)].toSorted();
+  const previous = entry.heldPaths;
+  if (next.length === previous.length && next.every((path, index) => path === previous[index])) {
+    return;
+  }
+
+  const dropped = previous.filter((path) => !next.includes(path));
+  entry.heldPaths = next;
+  if (dropped.length > 0) {
+    dropFilePresence(entry, dropped);
+  }
+  if (next.length === 0) {
+    if (entry.presenceHeartbeat !== null) {
+      clearInterval(entry.presenceHeartbeat);
+      entry.presenceHeartbeat = null;
+    }
+    return;
+  }
+
+  pushFilePresence(entry, next);
+  if (entry.presenceHeartbeat === null) {
+    // Beats regardless of tab visibility. A background tab still holds the
+    // buffer, and an agent about to overwrite it does not care which window is
+    // in front.
+    entry.presenceHeartbeat = setInterval(() => {
+      pushFilePresence(entry, entry.heldPaths);
+    }, FILE_PRESENCE_HEARTBEAT_MS);
+  }
+}
+
 function acquireSharedGovernance(
   key: string,
   environmentId: EnvironmentId,
@@ -400,6 +535,8 @@ function acquireSharedGovernance(
     snapshot: EMPTY_SNAPSHOT,
     streamAttached: false,
     unsubscribeStream: () => undefined,
+    heldPaths: [],
+    presenceHeartbeat: null,
   };
   sharedGovernanceByKey.set(key, entry);
   attachSharedGovernanceStream(entry);
@@ -415,6 +552,17 @@ function releaseSharedGovernance(key: string): void {
   if (entry.refCount > 0) {
     return;
   }
+  // Say goodbye rather than letting the deadline do it. The browser knows it is
+  // leaving and the server cannot; waiting out the TTL would keep warning
+  // people about a file nobody has open.
+  if (entry.heldPaths.length > 0) {
+    dropFilePresence(entry, entry.heldPaths);
+  }
+  if (entry.presenceHeartbeat !== null) {
+    clearInterval(entry.presenceHeartbeat);
+    entry.presenceHeartbeat = null;
+  }
+  entry.heldPaths = [];
   entry.unsubscribeStream();
   sharedGovernanceByKey.delete(key);
 }
@@ -581,6 +729,31 @@ export function useCollaborationGovernance(input: {
     [key],
   );
 
+  const markFilePresence = useCallback(
+    (paths: readonly string[]) => {
+      const entry = key === null ? undefined : sharedGovernanceByKey.get(key);
+      if (entry) {
+        setHeldFilePresence(entry, paths);
+      }
+    },
+    [key],
+  );
+
+  const releaseFilePresence = useCallback(
+    (paths: readonly string[]) => {
+      const entry = key === null ? undefined : sharedGovernanceByKey.get(key);
+      if (!entry) {
+        return;
+      }
+      const dropping = new Set(paths);
+      setHeldFilePresence(
+        entry,
+        entry.heldPaths.filter((path) => !dropping.has(path)),
+      );
+    },
+    [key],
+  );
+
   return {
     settings: snapshot.settings,
     canManage: snapshot.canManage,
@@ -597,6 +770,9 @@ export function useCollaborationGovernance(input: {
     memberColorByUserId: snapshot.memberColorByUserId,
     /** Unreduced, so contention between two people is still visible in it. */
     touches: snapshot.touches,
+    filePresence: snapshot.filePresence,
+    markFilePresence,
+    releaseFilePresence,
     loading: snapshot.loading,
     refresh,
     setApprovalMode,

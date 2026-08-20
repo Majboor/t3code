@@ -76,6 +76,10 @@
       "types": "./src/tenancy.ts",
       "import": "./src/tenancy.ts"
     },
+    "./filePresence": {
+      "types": "./src/filePresence.ts",
+      "import": "./src/filePresence.ts"
+    },
     "./analyticsStreamTemplates": {
       "types": "./src/analyticsStreamTemplates.ts",
       "import": "./src/analyticsStreamTemplates.ts"

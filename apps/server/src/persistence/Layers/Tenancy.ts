@@ -18,6 +18,7 @@ import {
   CollaborationApprovalId,
   type CollaborationActivity,
   type CollaborationBranchClaim,
+  type CollaborationFilePresence,
   type CollaborationFileTouch,
   type CollaborationPresence,
   type CollaborationPromptApproval,
@@ -265,6 +266,7 @@ const makeTenancyRepository = Effect.gen(function* () {
         viewRows,
         branchRows,
         touchRows,
+        presenceFileRows,
         memberProfileRows,
         memberUsageRows,
       ] = yield* Effect.all([
@@ -277,6 +279,7 @@ const makeTenancyRepository = Effect.gen(function* () {
         sql`SELECT * FROM collaboration_view_preferences`,
         sql`SELECT * FROM collaboration_branch_claims`,
         sql`SELECT * FROM collaboration_file_touches`,
+        sql`SELECT * FROM collaboration_file_presence`,
         sql`SELECT * FROM collaboration_member_profiles`,
         sql`SELECT * FROM collaboration_member_usage`,
       ]).pipe(Effect.mapError(toSqlError("TenancyRepository.loadCollaboration:query")));
@@ -408,6 +411,19 @@ const makeTenancyRepository = Effect.gen(function* () {
             displayName: row.display_name,
             path: row.path,
             touchedAt: row.touched_at,
+          }),
+        ),
+        filePresence: (presenceFileRows as any[]).map(
+          (row): CollaborationFilePresence => ({
+            tenantId: TenantId.make(row.tenant_id),
+            workspaceId: WorkspaceId.make(row.workspace_id),
+            userId: UserId.make(row.user_id),
+            displayName: row.display_name,
+            path: row.path,
+            kind: row.kind === "agent" ? "agent" : "person",
+            sourceId: row.source_id,
+            startedAt: row.started_at,
+            refreshedAt: row.refreshed_at,
           }),
         ),
         memberProfiles: (memberProfileRows as any[]).map(
@@ -675,6 +691,26 @@ const makeTenancyRepository = Effect.gen(function* () {
                   ${usage.lastTotalTokens ?? null}, ${usage.lastInputTokens ?? null},
                   ${usage.lastCachedInputTokens ?? null}, ${usage.lastOutputTokens ?? null},
                   ${usage.lastReasoningOutputTokens ?? null}
+                )
+              `;
+            }
+          }
+          if (snapshot.filePresence) {
+            // Rewritten wholesale like every other collaboration table here.
+            // The set is small by construction — the service only ever keeps
+            // claims that have not expired — so there is nothing to accumulate.
+            yield* sql`DELETE FROM collaboration_file_presence`;
+            for (const presenceRow of snapshot.filePresence) {
+              // Named columns: a later ALTER TABLE appends at the end, and a
+              // positional insert would then start filling the wrong ones.
+              yield* sql`
+                INSERT INTO collaboration_file_presence (
+                  tenant_id, workspace_id, path, user_id, kind, source_id,
+                  display_name, started_at, refreshed_at
+                ) VALUES (
+                  ${presenceRow.tenantId}, ${presenceRow.workspaceId}, ${presenceRow.path},
+                  ${presenceRow.userId}, ${presenceRow.kind}, ${presenceRow.sourceId},
+                  ${presenceRow.displayName}, ${presenceRow.startedAt}, ${presenceRow.refreshedAt}
                 )
               `;
             }

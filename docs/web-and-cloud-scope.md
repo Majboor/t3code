@@ -149,12 +149,59 @@ failed" is the kind of claim that gets repeated:
 The lesson worth keeping: a UI test that identifies elements by their text will start
 reporting product bugs the moment a redesign adds a second list of the same names.
 
-And two that are absent by design rather than broken:
+And one that is absent by design rather than broken:
 
-- Nothing distinguishes *a person* from *an agent* working on a file. The model records that a
-  file was touched, not who or what is touching it now.
 - Authorship is claimed by the browser that saved a file, so a file written outside the app
-  can never carry one.
+  can never carry one. The python file from the setup phase is in the tree, on disk, and
+  belongs to nobody, and the suite still says so rather than inventing an author.
 
-Those last two are the gap behind "see if two people are working on it or an agent is" — it
-needs a presence-per-file concept that does not exist yet. That is a feature, not a fix.
+## Presence per file, added 2026-08-20
+
+The other entry that used to sit above — "nothing distinguishes a person from an agent
+working on a file" — is now built, because the advice genuinely differs. Two people in one
+file is an ordinary collision and the answer is a branch each. An agent writing a file a
+person has open is not a collision: an agent replaces a file rather than merging into it, so
+the open buffer loses, and that one is worth interrupting somebody for.
+
+It is a **second** concept beside the file-touch marks, not an extension of them, because the
+two have opposite lifetimes:
+
+- A **touch** is history. It says who last changed a file, it never expires, and that is
+  right — a mark that vanished would be a worse answer to "who wrote this".
+- **Presence** is a live claim with a deadline. A browser page says which files it has open
+  and re-says it every fifteen seconds; a turn's claim is filed by the reactor that runs it
+  and given up when the turn stops being the session's active one. Anything past its deadline
+  is swept on every read and every write, and the browser applies the same deadline again as
+  it draws. Nothing sweeps on a timer, so there is no window in which a stale claim can be
+  observed — "somebody is editing this" left standing forever would be worse than never
+  having shown it.
+
+The rules live in one pure function, `packages/shared/src/filePresence.ts`, shared by the
+server and the browser rather than written twice. The counting is deliberately asymmetric:
+people are counted per account, so one person with two tabs open is one person, and agents
+are counted per thread, so one person running two turns into one file is two writers racing.
+A person and their *own* agent in one file is still the urgent case — it is the commonest way
+somebody loses unsaved work.
+
+What it changes, in three places:
+
+- **The file row** carries a presence icon distinct from the author dot — a pencil for a
+  person, a bot for a turn, and only the urgent combination animates. The dot means history,
+  the icon means now, and they must not be mistakable for each other at the glance this is
+  for.
+- **The contention section** now gives each file its own sentence instead of one shared
+  footnote, because a branch is the answer to two people and no answer at all to an agent:
+  the turn runs in the same worktree the file is open in either way.
+- **Turn start** records a warning naming the files somebody has open, on the dispatch path,
+  which is the last moment the loss is preventable. It warns and never refuses — a workspace
+  where a colleague's open editor could block everybody's turns would be a worse product.
+
+What it deliberately does **not** claim: which files a turn is about to write. Nothing knows
+that before the turn runs — the file list only exists once a diff does — so the pre-turn
+warning names the real risk (somebody has unsaved work in this workspace) rather than
+dressing a guess up as a prediction.
+
+The e2e suite's probe for this used to look for selectors nothing ever rendered and report
+"no such marker exists". It now reads the real marker, and an empty result skips with the
+accurate reason — that nobody was holding a file at the instant it looked — rather than the
+one that stopped being true.

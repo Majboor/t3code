@@ -99,6 +99,10 @@ import {
   CollaborationBranchReleaseInput,
   CollaborationBranchReleaseResult,
   CollaborationError,
+  CollaborationFilePresenceListInput,
+  CollaborationFilePresenceMarkInput,
+  CollaborationFilePresenceReleaseInput,
+  CollaborationFilePresenceResult,
   CollaborationFileTouchInput,
   CollaborationFileTouchListInput,
   CollaborationFileTouchResult,
@@ -404,6 +408,9 @@ export const WS_METHODS = {
   collaborationBranchRelease: "collaboration.branch.release",
   collaborationFilesTouch: "collaboration.files.touch",
   collaborationFilesTouchList: "collaboration.files.touchList",
+  collaborationFilesPresenceMark: "collaboration.files.presenceMark",
+  collaborationFilesPresenceRelease: "collaboration.files.presenceRelease",
+  collaborationFilesPresenceList: "collaboration.files.presenceList",
   collaborationMembersList: "collaboration.members.list",
   collaborationMembersUpdate: "collaboration.members.update",
   collaborationMembersRemove: "collaboration.members.remove",
@@ -1091,6 +1098,40 @@ export const WsCollaborationFilesTouchListRpc = Rpc.make(WS_METHODS.collaboratio
   error: CollaborationError,
 });
 
+/**
+ * A browser saying which files it currently has open.
+ *
+ * There is no `kind` on the way in and there must never be one: the server
+ * stamps `person` because the claim arrived over somebody's session. An agent's
+ * claim is filed by the reactor that runs the turn and never crosses this wire.
+ */
+export const WsCollaborationFilesPresenceMarkRpc = Rpc.make(
+  WS_METHODS.collaborationFilesPresenceMark,
+  {
+    payload: CollaborationFilePresenceMarkInput,
+    success: CollaborationFilePresenceResult,
+    error: CollaborationError,
+  },
+);
+
+export const WsCollaborationFilesPresenceReleaseRpc = Rpc.make(
+  WS_METHODS.collaborationFilesPresenceRelease,
+  {
+    payload: CollaborationFilePresenceReleaseInput,
+    success: CollaborationFilePresenceResult,
+    error: CollaborationError,
+  },
+);
+
+export const WsCollaborationFilesPresenceListRpc = Rpc.make(
+  WS_METHODS.collaborationFilesPresenceList,
+  {
+    payload: CollaborationFilePresenceListInput,
+    success: CollaborationFilePresenceResult,
+    error: CollaborationError,
+  },
+);
+
 export const WsCollaborationActivityVisibilityRpc = Rpc.make(
   WS_METHODS.collaborationActivityVisibility,
   {
@@ -1531,6 +1572,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsCollaborationBranchReleaseRpc,
   WsCollaborationFilesTouchRpc,
   WsCollaborationFilesTouchListRpc,
+  WsCollaborationFilesPresenceMarkRpc,
+  WsCollaborationFilesPresenceReleaseRpc,
+  WsCollaborationFilesPresenceListRpc,
   WsCollaborationActivityVisibilityRpc,
   WsCollaborationMembersListRpc,
   WsCollaborationMembersUpdateRpc,

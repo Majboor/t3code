@@ -4,6 +4,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { TenantId, ThreadId, UserId, WorkspaceId } from "@t3tools/contracts";
+import { decideFilePresence } from "@t3tools/shared/filePresence";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 
@@ -912,4 +913,160 @@ it.effect("hands out the member colours the web app derives for itself", () =>
       "hsl(251 70% 55%)",
     );
   }),
+);
+
+it.effect("tells a person in a file apart from an agent writing it", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.markFilePresence(member, {
+      ...scope,
+      paths: ["src/app.ts"],
+      sourceId: "page:1",
+    });
+    yield* collaboration.markFilePresenceForAgent(lead.userId, {
+      ...scope,
+      paths: ["src/app.ts"],
+      sourceId: "thread:1",
+    });
+
+    const { presence } = yield* collaboration.listFilePresence(scope);
+    assert.strictEqual(presence.length, 2);
+    assert.deepStrictEqual(presence.map((entry) => entry.kind).toSorted(), ["agent", "person"]);
+
+    const verdict = decideFilePresence({
+      path: "src/app.ts",
+      entries: presence,
+      nowMs: Date.now(),
+    });
+    assert.strictEqual(verdict.outcome, "agent-over-person");
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("keeps a person and their own agent as two claims on one file", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    // The same human, both ways round. Collapsing these would erase the
+    // commonest way somebody loses unsaved work: their own turn rewriting the
+    // buffer they are sitting in.
+    yield* collaboration.markFilePresence(member, {
+      ...scope,
+      paths: ["src/app.ts"],
+      sourceId: "page:1",
+    });
+    yield* collaboration.markFilePresenceForAgent(member.userId, {
+      ...scope,
+      paths: ["src/app.ts"],
+      sourceId: "thread:1",
+    });
+
+    const { presence } = yield* collaboration.listFilePresence(scope);
+    assert.strictEqual(presence.length, 2);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("treats a heartbeat as one claim, not a second body", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    const first = yield* collaboration.markFilePresence(member, {
+      ...scope,
+      paths: ["src/app.ts"],
+      sourceId: "page:1",
+    });
+    const again = yield* collaboration.markFilePresence(member, {
+      ...scope,
+      paths: ["src/app.ts"],
+      sourceId: "page:1",
+    });
+
+    const { presence } = yield* collaboration.listFilePresence(scope);
+    assert.strictEqual(presence.length, 1);
+    // The deadline moves; how long they have been in the file does not.
+    assert.strictEqual(again.presence[0]?.startedAt, first.presence[0]?.startedAt);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("lets a page give up everything it holds without naming the files", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.markFilePresence(member, {
+      ...scope,
+      paths: ["a.ts", "b.ts"],
+      sourceId: "page:1",
+    });
+    yield* collaboration.markFilePresence(lead, {
+      ...scope,
+      paths: ["a.ts"],
+      sourceId: "page:2",
+    });
+
+    yield* collaboration.releaseFilePresence(member, { ...scope, paths: [], sourceId: "page:1" });
+
+    const { presence } = yield* collaboration.listFilePresence(scope);
+    // Only that page's claims went. The other person is still in the file.
+    assert.strictEqual(presence.length, 1);
+    assert.strictEqual(presence[0]?.userId, lead.userId);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("does not hand out a claim from another workspace", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    const otherWorkspace = WorkspaceId.make("workspace-collab-other");
+
+    yield* collaboration.markFilePresence(member, {
+      ...scope,
+      paths: ["src/app.ts"],
+      sourceId: "page:1",
+    });
+
+    const { presence } = yield* collaboration.listFilePresence({
+      tenantId,
+      workspaceId: otherWorkspace,
+    });
+    assert.deepStrictEqual(presence, []);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("names the files somebody has open before a turn starts", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    const quiet = yield* collaboration.warnBeforeAgentWrites(lead.userId, scope);
+    assert.deepStrictEqual(quiet.heldPaths, []);
+
+    yield* collaboration.markFilePresence(member, {
+      ...scope,
+      paths: ["src/app.ts", "src/other.ts"],
+      sourceId: "page:1",
+    });
+
+    const warned = yield* collaboration.warnBeforeAgentWrites(lead.userId, scope);
+    assert.deepStrictEqual(warned.heldPaths, ["src/app.ts", "src/other.ts"]);
+
+    // The warning is a fact in the shared history, not a return value nobody
+    // sees: every browser watching the workspace learns about it.
+    const { activities } = yield* collaboration.listActivity(member, scope);
+    const warning = activities.find((activity) => activity.kind === "agent-may-overwrite");
+    assert.ok(warning);
+    assert.ok(warning.summary.includes("src/app.ts"));
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+it.effect("does not warn about an agent's own claim, only a person's", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.markFilePresenceForAgent(lead.userId, {
+      ...scope,
+      paths: ["src/app.ts"],
+      sourceId: "thread:1",
+    });
+
+    const result = yield* collaboration.warnBeforeAgentWrites(lead.userId, scope);
+    assert.deepStrictEqual(result.heldPaths, []);
+  }).pipe(Effect.provide(makeLayer())),
 );

@@ -236,30 +236,28 @@ function checkLiveTreeUpdate(step, result) {
  */
 async function fileAuthorFor(page, fileName) {
   await ensurePanelReady(page);
-  return page
-    .locator('[data-testid="workspace-entry"]')
-    .evaluateAll((nodes, target) => {
-      const row = nodes.find((node) => node.getAttribute("data-workspace-entry-path") === target);
-      // A file the tree has not listed and a file listed without an author are
-      // two different failures — one is the tree, one is the attribution — and
-      // reporting both as "no mark" sends the reader to the wrong half of the
-      // product.
-      // The row count travels with the answer, because "this one file is
-      // missing" and "the explorer has painted nothing at all" are different
-      // failures wearing the same words, and only the second one is about the
-      // panel rather than about the file.
-      const listed = nodes.length;
-      if (!row) return { inTree: false, listed, author: "", title: "", color: "" };
-      const mark = row.querySelector('[data-testid="workspace-entry-author"]');
-      if (!mark) return { inTree: true, listed, author: "", title: "", color: "" };
-      return {
-        inTree: true,
-        listed,
-        author: mark.getAttribute("data-author") ?? "",
-        title: mark.getAttribute("title") ?? "",
-        color: getComputedStyle(mark).backgroundColor,
-      };
-    }, fileName);
+  return page.locator('[data-testid="workspace-entry"]').evaluateAll((nodes, target) => {
+    const row = nodes.find((node) => node.getAttribute("data-workspace-entry-path") === target);
+    // A file the tree has not listed and a file listed without an author are
+    // two different failures — one is the tree, one is the attribution — and
+    // reporting both as "no mark" sends the reader to the wrong half of the
+    // product.
+    // The row count travels with the answer, because "this one file is
+    // missing" and "the explorer has painted nothing at all" are different
+    // failures wearing the same words, and only the second one is about the
+    // panel rather than about the file.
+    const listed = nodes.length;
+    if (!row) return { inTree: false, listed, author: "", title: "", color: "" };
+    const mark = row.querySelector('[data-testid="workspace-entry-author"]');
+    if (!mark) return { inTree: true, listed, author: "", title: "", color: "" };
+    return {
+      inTree: true,
+      listed,
+      author: mark.getAttribute("data-author") ?? "",
+      title: mark.getAttribute("title") ?? "",
+      color: getComputedStyle(mark).backgroundColor,
+    };
+  }, fileName);
 }
 
 /** What a missing mark should say, so a failure names which half went wrong. */
@@ -357,17 +355,15 @@ async function memberRows(page) {
     await closeCollabPanel(page);
     return [];
   }
-  const rows = await page
-    .locator('[data-testid="collaboration-member-row"]')
-    .evaluateAll((nodes) =>
-      nodes.map((node) => {
-        const avatar = node.querySelector('[data-testid="collaboration-avatar"]');
-        return {
-          text: (node.textContent ?? "").trim().replace(/\s+/g, " "),
-          color: avatar ? getComputedStyle(avatar).backgroundColor : "",
-        };
-      }),
-    );
+  const rows = await page.locator('[data-testid="collaboration-member-row"]').evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const avatar = node.querySelector('[data-testid="collaboration-avatar"]');
+      return {
+        text: (node.textContent ?? "").trim().replace(/\s+/g, " "),
+        color: avatar ? getComputedStyle(avatar).backgroundColor : "",
+      };
+    }),
+  );
   await closeCollabPanel(page);
   return rows;
 }
@@ -500,7 +496,10 @@ try {
   check("B signs up with a fresh login", await signUp(accountB, ACCOUNT_B), ACCOUNT_B);
   await accountB.page.goto(inviteForB, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await sleep(7_000);
-  check("B joins the workspace from the link", (await bodyText(accountB.page)).includes("Invite accepted"));
+  check(
+    "B joins the workspace from the link",
+    (await bodyText(accountB.page)).includes("Invite accepted"),
+  );
   await accountB.page
     .locator('button:has-text("Back to app")')
     .first()
@@ -521,7 +520,10 @@ try {
   // suite looking for it in the wrong room.
   check("A is back in the project", await reachProject(accountA.page));
   const aFile = `from-a-${RUN_ID}.txt`;
-  check("A uses New file", (await ensurePanelReady(accountA.page)) && (await createFileViaUi(accountA.page, aFile)));
+  check(
+    "A uses New file",
+    (await ensurePanelReady(accountA.page)) && (await createFileViaUi(accountA.page, aFile)),
+  );
   check("A's file lands on disk", await waitForFileOnDisk(aFile, FILE_APPEAR_TIMEOUT_MS));
   checkLiveTreeUpdate("B sees A's new file", await waitForFileInTree(accountB.page, aFile));
 
@@ -543,20 +545,35 @@ try {
     markInB?.title ?? "",
   );
 
-  // Asked, not assumed. The touch record carries a user and a time and nothing
-  // else, so if this ever finds a session or an agent the product grew one.
-  const agentMarkers = await accountB.page
-    .locator(
-      '[data-testid="workspace-entry-agent"], [data-workspace-entry-agent], [data-testid="workspace-entry-session"]',
-    )
-    .count();
-  if (agentMarkers === 0) {
+  // Asked, not assumed, and asked of the marker that now exists.
+  //
+  // This used to look for selectors nothing ever rendered and report "no such
+  // marker exists", which was true when it was written and stopped being true.
+  // Presence is a live claim with a deadline, so an empty result here means
+  // nobody was in a file at this instant — not that the product cannot say. The
+  // two are reported differently on purpose.
+  const presenceMarks = await accountB.page
+    .locator('[data-testid="workspace-entry-presence"]')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        kind: node.getAttribute("data-presence-kind") ?? "",
+        names: node.getAttribute("data-presence-names") ?? "",
+        path:
+          node.closest("[data-workspace-entry-path]")?.getAttribute("data-workspace-entry-path") ??
+          "",
+      })),
+    );
+  if (presenceMarks.length === 0) {
     skip(
       "the tree says whether a person or an agent is working on a file",
-      "no such marker exists — a file touch records a user, a path and a time, and nothing about a session or an agent",
+      "the marker exists, and nobody was holding a file in this browser's view at the moment it was read",
     );
   } else {
-    check("the tree says whether a person or an agent is working on a file", true);
+    check(
+      "the tree says whether a person or an agent is working on a file",
+      presenceMarks.every((mark) => mark.kind === "person" || mark.kind === "agent"),
+      presenceMarks.map((mark) => `${mark.path}: ${mark.kind} (${mark.names})`).join(", "),
+    );
   }
 
   // How far the attribution reaches, asked cheaply. A touch is claimed by the
@@ -590,7 +607,10 @@ try {
       .click()
       .catch(() => undefined);
     await sleep(6_000);
-    check("the shared workspace appears for C's existing account", await reachProject(accountC.page));
+    check(
+      "the shared workspace appears for C's existing account",
+      await reachProject(accountC.page),
+    );
     check(
       "C sees the shared files",
       (await visibleFileNames(accountC.page)).includes(pythonFile),
@@ -656,7 +676,11 @@ try {
 
   phase("Colours, and an admin changing one");
   const rosterBefore = await memberRows(accountA.page);
-  check("the roster shows all three people", rosterBefore.length >= 3, `${rosterBefore.length} rows`);
+  check(
+    "the roster shows all three people",
+    rosterBefore.length >= 3,
+    `${rosterBefore.length} rows`,
+  );
   const coloursBefore = rosterBefore.map((row) => row.color).filter(Boolean);
   check(
     "everyone is drawn in their own colour",
@@ -794,9 +818,8 @@ try {
     check("A can start an agent turn", sent);
     const wrote = sent && (await waitForFileOnDisk(agentFile, AGENT_TURN_MS));
     const thread = await bodyText(accountA.page);
-    const providerMissing = /Provider turn start failed|no provider|credentials|not connected/i.test(
-      thread,
-    );
+    const providerMissing =
+      /Provider turn start failed|no provider|credentials|not connected/i.test(thread);
     if (!wrote && providerMissing) {
       skip(
         "an agent's file write is attributed to somebody",
@@ -887,7 +910,11 @@ try {
       .first()
       .innerText()
       .catch(() => "");
-    check("the warning names the file", warning.includes(contested), warning.replace(/\s+/g, " ").slice(0, 90));
+    check(
+      "the warning names the file",
+      warning.includes(contested),
+      warning.replace(/\s+/g, " ").slice(0, 90),
+    );
     await closeCollabPanel(accountB.page);
 
     phase("The admin merges, and the conflict surfaces to them");
@@ -904,7 +931,9 @@ try {
     if (canMerge) {
       await mergeButton.click();
       await sleep(10_000);
-      const conflict = accountA.page.locator('[data-testid="collaboration-merge-conflict"]').first();
+      const conflict = accountA.page
+        .locator('[data-testid="collaboration-merge-conflict"]')
+        .first();
       const reported = (await conflict.count()) > 0;
       const text = reported
         ? await conflict.innerText().catch(() => "")
@@ -977,9 +1006,7 @@ try {
   check(
     "the refusal does not depend on the check that falls open",
     firedGate?.text === "does not have session.prompt",
-    firedGate
-      ? `refused by ${firedGate.gate}`
-      : "nothing on the server refused it at all",
+    firedGate ? `refused by ${firedGate.gate}` : "nothing on the server refused it at all",
   );
   check("B's prompt never reached the agent", !(await waitForFileOnDisk(deniedFile, 10_000)));
 
@@ -987,7 +1014,8 @@ try {
   // The turn check guards `thread.turn.start` alone; the file routes take
   // anyone who can reach the project.
   const smuggledFile = `smuggled-${RUN_ID}.txt`;
-  const createdWhileMuted = (await ensurePanelReady(accountB.page)) && (await createFileViaUi(accountB.page, smuggledFile));
+  const createdWhileMuted =
+    (await ensurePanelReady(accountB.page)) && (await createFileViaUi(accountB.page, smuggledFile));
   // Looked for in every tree this run created, not just the project folder: by
   // now B may be working in their own branch's worktree, and a write that
   // landed there is still a write a read-only member was not supposed to make.
@@ -1005,12 +1033,10 @@ try {
     contents: `overwritten by a read-only member ${RUN_ID}\n`,
   });
   const overwrittenAt = overwrite.ok
-    ? workspaceTrees().find((dir) => {
+    ? (workspaceTrees().find((dir) => {
         const target = path.join(dir, "seed.txt");
-        return (
-          existsSync(target) && readFileSync(target, "utf8").includes("read-only member")
-        );
-      }) ?? null
+        return existsSync(target) && readFileSync(target, "utf8").includes("read-only member");
+      }) ?? null)
     : null;
   check(
     "a read-only member cannot overwrite a shared file either",

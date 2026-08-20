@@ -5,6 +5,8 @@ import {
   InviteId,
   MembershipId,
   type CollaborationBranchClaim,
+  type CollaborationFilePresence,
+  type CollaborationFilePresenceRelease,
   type CollaborationFileTouch,
   type CollaborationMember,
   type CollaborationPresence,
@@ -16,11 +18,18 @@ import {
   type CollaborationViewPreferences,
   type CollaborationWorkspaceSettings,
   type ProviderKind,
+  type TenantId,
   type TenantInvite,
   type TenantMembership,
   type TenantRole,
   type UserId,
+  type WorkspaceId,
 } from "@t3tools/contracts";
+import {
+  isFilePresenceLive,
+  peopleHoldingFiles,
+  type FilePresenceEntry,
+} from "@t3tools/shared/filePresence";
 import { Effect, Layer, PubSub, Ref, Stream } from "effect";
 
 import {
@@ -479,6 +488,59 @@ function appendActivity(
   };
 }
 
+/**
+ * The key a live claim is filed under.
+ *
+ * `kind` and `sourceId` are in it deliberately. Somebody with a file open while
+ * their own turn writes it is two rows, and that pair *is* the warning; keyed
+ * on the person alone the second claim would overwrite the first and the file
+ * would look quietly occupied by one thing.
+ */
+function filePresenceKey(entry: {
+  readonly tenantId: string;
+  readonly workspaceId: string;
+  readonly path: string;
+  readonly userId: string;
+  readonly kind: string;
+  readonly sourceId: string;
+}): string {
+  return [
+    entry.tenantId,
+    entry.workspaceId,
+    entry.path,
+    entry.userId,
+    entry.kind,
+    entry.sourceId,
+  ].join(":");
+}
+
+/** The shape the shared rules read. Nothing tenancy-specific reaches them. */
+function toPresenceEntry(presence: CollaborationFilePresence): FilePresenceEntry {
+  return {
+    path: presence.path,
+    userId: presence.userId,
+    displayName: presence.displayName,
+    kind: presence.kind,
+    sourceId: presence.sourceId,
+    refreshedAt: presence.refreshedAt,
+  };
+}
+
+/** Enough to take one row out of a browser's copy without re-reading the lot. */
+function toRelease(entry: CollaborationFilePresence): CollaborationFilePresenceRelease {
+  return {
+    path: entry.path,
+    userId: entry.userId,
+    kind: entry.kind,
+    sourceId: entry.sourceId,
+  };
+}
+
+/** A browser has no id of its own to offer, so its session stands in. */
+function sourceOf(input: { readonly sourceId?: string | undefined }, fallback: string): string {
+  return input.sourceId ?? fallback;
+}
+
 const makeCollaborationService = Effect.gen(function* () {
   const repository = yield* TenancyRepository;
   const persisted = yield* repository.loadCollaboration().pipe(
@@ -538,6 +600,15 @@ const makeCollaborationService = Effect.gen(function* () {
         entry,
       ]),
     ),
+    filePresence: new Map(
+      // Pruned on the way in, not just on the way out. A server that was down
+      // longer than a claim's deadline must come back to an empty room; loading
+      // the rows and filtering later would leave a window where a restart
+      // resurrected somebody who left hours ago.
+      (persisted.filePresence ?? [])
+        .filter((entry) => isFilePresenceLive(toPresenceEntry(entry), Date.now()))
+        .map((entry) => [filePresenceKey(entry), entry]),
+    ),
     memberProfiles: new Map(
       (persisted.memberProfiles ?? []).map((entry) => [
         scopedKey(entry.tenantId, entry.workspaceId, entry.userId),
@@ -575,6 +646,7 @@ const makeCollaborationService = Effect.gen(function* () {
         viewPreferences: Array.from(state.viewPreferences.values()),
         branchClaims: Array.from(state.branchClaims.values()),
         fileTouches: Array.from(state.fileTouches.values()),
+        filePresence: Array.from(state.filePresence.values()),
         memberProfiles: Array.from(state.memberProfiles.values()),
         memberUsage: Array.from(state.memberUsage.values()),
       }),
@@ -1006,6 +1078,11 @@ const makeCollaborationService = Effect.gen(function* () {
               (touch) =>
                 touch.tenantId === input.tenantId && touch.workspaceId === input.workspaceId,
             );
+          case "file-presence-changed":
+            // Not filtered by thread. A file is a workspace-wide thing and the
+            // whole point is that somebody in a different thread — or in no
+            // thread at all — is the one about to lose work.
+            return event.tenantId === input.tenantId && event.workspaceId === input.workspaceId;
         }
       }),
     );
@@ -2083,6 +2160,321 @@ const makeCollaborationService = Effect.gen(function* () {
       );
     });
 
+  /**
+   * Whoever this id belongs to, named the way the roster names them.
+   *
+   * Shared by the agent-side touch and the agent-side presence so a turn's mark
+   * and a turn's live claim never disagree about the same person's name.
+   */
+  const resolveMemberDisplayName = (
+    state: CollaborationState,
+    input: { readonly tenantId: string; readonly workspaceId: string; readonly userId: string },
+  ): { readonly displayName: string; readonly avatarInitials: string } => {
+    const profile = state.memberProfiles.get(
+      scopedKey(input.tenantId, input.workspaceId, input.userId),
+    );
+    let presence: CollaborationPresence | null = null;
+    for (const entry of state.presence.values()) {
+      if (
+        entry.tenantId !== input.tenantId ||
+        entry.workspaceId !== input.workspaceId ||
+        entry.userId !== input.userId
+      ) {
+        continue;
+      }
+      if (!presence || presence.lastSeenAt < entry.lastSeenAt) {
+        presence = entry;
+      }
+    }
+    const displayName = profile?.displayName ?? presence?.displayName ?? input.userId;
+    return {
+      displayName,
+      avatarInitials: presence?.avatarInitials ?? toAvatarInitials(displayName),
+    };
+  };
+
+  /**
+   * Drops everything past its deadline and says what it dropped.
+   *
+   * Sweeping on every read and every write rather than on a timer is what keeps
+   * this table from becoming the append-only log it must not be: there is no
+   * moment where a stale claim can be observed, because observing is what
+   * clears it. The dropped rows are returned so the same pass that removes them
+   * can tell every browser to stop drawing them.
+   */
+  const pruneFilePresence = (
+    presence: ReadonlyMap<string, CollaborationFilePresence>,
+    nowMs: number,
+  ): {
+    readonly kept: Map<string, CollaborationFilePresence>;
+    readonly expired: ReadonlyArray<CollaborationFilePresence>;
+  } => {
+    const kept = new Map<string, CollaborationFilePresence>();
+    const expired: CollaborationFilePresence[] = [];
+    for (const [key, entry] of presence) {
+      if (isFilePresenceLive(toPresenceEntry(entry), nowMs)) {
+        kept.set(key, entry);
+      } else {
+        expired.push(entry);
+      }
+    }
+    return { kept, expired };
+  };
+
+  /**
+   * The one place a claim is written, for people and for turns alike.
+   *
+   * `kind` is a parameter of this private function and never of anything a
+   * browser can reach: `markFilePresence` always passes `person` and only the
+   * reactor's entry point passes `agent`. A tab that could name its own kind
+   * could silence the warning that exists for it.
+   */
+  const writeFilePresence = (input: {
+    readonly tenantId: TenantId;
+    readonly workspaceId: WorkspaceId;
+    readonly userId: UserId;
+    readonly displayName: string;
+    readonly kind: CollaborationFilePresence["kind"];
+    readonly sourceId: string;
+    readonly paths: ReadonlyArray<string>;
+  }) =>
+    Effect.gen(function* () {
+      const refreshedAt = nowIso();
+      const nowMs = Date.parse(refreshedAt);
+
+      const { present, released } = yield* Ref.modify(stateRef, (state) => {
+        const { kept, expired } = pruneFilePresence(state.filePresence, nowMs);
+        const written: CollaborationFilePresence[] = [];
+        for (const path of input.paths) {
+          const key = filePresenceKey({ ...input, path });
+          const entry: CollaborationFilePresence = {
+            tenantId: input.tenantId,
+            workspaceId: input.workspaceId,
+            userId: input.userId,
+            displayName: input.displayName,
+            path,
+            kind: input.kind,
+            sourceId: input.sourceId,
+            // A heartbeat moves the deadline and nothing else. Keeping the
+            // original start is what lets a reader say how long somebody has
+            // been in a file rather than how recently they said so.
+            startedAt: kept.get(key)?.startedAt ?? refreshedAt,
+            refreshedAt,
+          };
+          kept.set(key, entry);
+          written.push(entry);
+        }
+        return [
+          { present: written as ReadonlyArray<CollaborationFilePresence>, released: expired },
+          { ...state, filePresence: kept },
+        ];
+      });
+
+      if (present.length === 0 && released.length === 0) {
+        return { presence: present };
+      }
+
+      yield* persist;
+      yield* PubSub.publish(events, {
+        type: "file-presence-changed",
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        present,
+        released: released.map(toRelease),
+      });
+      return { presence: present };
+    });
+
+  const dropFilePresence = (input: {
+    readonly tenantId: TenantId;
+    readonly workspaceId: WorkspaceId;
+    readonly userId: UserId;
+    readonly kind: CollaborationFilePresence["kind"];
+    readonly sourceId: string;
+    readonly paths: ReadonlyArray<string>;
+  }) =>
+    Effect.gen(function* () {
+      const nowMs = Date.now();
+      // An empty path list means "everything this source holds", which is what
+      // a page being closed sends: it knows it is going away and not always
+      // which files it still had open.
+      const wanted = input.paths.length === 0 ? null : new Set(input.paths);
+
+      const released = yield* Ref.modify(stateRef, (state) => {
+        const { kept, expired } = pruneFilePresence(state.filePresence, nowMs);
+        const removed: CollaborationFilePresence[] = [...expired];
+        for (const [key, entry] of kept) {
+          if (
+            entry.tenantId !== input.tenantId ||
+            entry.workspaceId !== input.workspaceId ||
+            entry.userId !== input.userId ||
+            entry.kind !== input.kind ||
+            entry.sourceId !== input.sourceId
+          ) {
+            continue;
+          }
+          if (wanted !== null && !wanted.has(entry.path)) {
+            continue;
+          }
+          kept.delete(key);
+          removed.push(entry);
+        }
+        return [
+          removed as ReadonlyArray<CollaborationFilePresence>,
+          { ...state, filePresence: kept },
+        ];
+      });
+
+      if (released.length === 0) {
+        return { presence: [] as ReadonlyArray<CollaborationFilePresence> };
+      }
+
+      yield* persist;
+      yield* PubSub.publish(events, {
+        type: "file-presence-changed",
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        present: [],
+        released: released.map(toRelease),
+      });
+      return { presence: [] as ReadonlyArray<CollaborationFilePresence> };
+    });
+
+  const markFilePresence: CollaborationServiceShape["markFilePresence"] = (actor, input) =>
+    writeFilePresence({
+      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
+      userId: actor.userId,
+      displayName: actor.displayName,
+      kind: "person",
+      sourceId: sourceOf(input, `session:${actor.userId}`),
+      paths: input.paths,
+    });
+
+  const markFilePresenceForAgent: CollaborationServiceShape["markFilePresenceForAgent"] = (
+    userId,
+    input,
+  ) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.get(stateRef);
+      const { displayName } = resolveMemberDisplayName(state, {
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        userId,
+      });
+      return yield* writeFilePresence({
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        userId,
+        displayName,
+        kind: "agent",
+        // A turn is the writer, not the person: two threads run by one person
+        // into one file are two writers racing, and one thread heartbeating
+        // twice is still one.
+        sourceId: sourceOf(input, `user:${userId}`),
+        paths: input.paths,
+      });
+    });
+
+  const releaseFilePresence: CollaborationServiceShape["releaseFilePresence"] = (actor, input) =>
+    dropFilePresence({
+      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
+      userId: actor.userId,
+      kind: "person",
+      sourceId: sourceOf(input, `session:${actor.userId}`),
+      paths: input.paths,
+    });
+
+  const releaseFilePresenceForAgent: CollaborationServiceShape["releaseFilePresenceForAgent"] = (
+    userId,
+    input,
+  ) =>
+    dropFilePresence({
+      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
+      userId,
+      kind: "agent",
+      sourceId: sourceOf(input, `user:${userId}`),
+      paths: input.paths,
+    });
+
+  const listFilePresence: CollaborationServiceShape["listFilePresence"] = (input) =>
+    Effect.gen(function* () {
+      const nowMs = Date.now();
+      const { expired, live } = yield* Ref.modify(stateRef, (state) => {
+        const { kept, expired: dropped } = pruneFilePresence(state.filePresence, nowMs);
+        const inScope = [...kept.values()].filter(
+          (entry) => entry.tenantId === input.tenantId && entry.workspaceId === input.workspaceId,
+        );
+        return [
+          { expired: dropped, live: inScope as ReadonlyArray<CollaborationFilePresence> },
+          { ...state, filePresence: kept },
+        ];
+      });
+
+      // Reading is what sweeps, so a read that swept has to tell everyone —
+      // otherwise the browser that asked is the only one that stops drawing a
+      // person who left.
+      if (expired.length > 0) {
+        yield* persist;
+        yield* PubSub.publish(events, {
+          type: "file-presence-changed",
+          tenantId: input.tenantId,
+          workspaceId: input.workspaceId,
+          present: [],
+          released: expired.map(toRelease),
+        });
+      }
+      return { presence: live };
+    });
+
+  const warnBeforeAgentWrites: CollaborationServiceShape["warnBeforeAgentWrites"] = (
+    userId,
+    input,
+  ) =>
+    Effect.gen(function* () {
+      const nowMs = Date.now();
+      const state = yield* Ref.get(stateRef);
+      const held = peopleHoldingFiles({
+        entries: [...state.filePresence.values()]
+          .filter(
+            (entry) => entry.tenantId === input.tenantId && entry.workspaceId === input.workspaceId,
+          )
+          .map(toPresenceEntry),
+        nowMs,
+      });
+      if (held.length === 0) {
+        return { heldPaths: [] as ReadonlyArray<string> };
+      }
+
+      const heldPaths = [...new Set(held.map((entry) => entry.path))].toSorted();
+      const names = [...new Set(held.map((entry) => entry.displayName))];
+      const { displayName } = resolveMemberDisplayName(state, {
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        userId,
+      });
+      const shown = heldPaths.slice(0, 3).join(", ");
+      const rest = heldPaths.length > 3 ? ` and ${heldPaths.length - 3} more` : "";
+      const activity = {
+        id: newActivityId(),
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        threadId: null,
+        userId,
+        kind: "agent-may-overwrite" as const,
+        hiddenAt: null,
+        summary: `${displayName}'s agent started while ${names.join(" and ")} had ${shown}${rest} open. An agent replaces a file rather than merging into it.`,
+        createdAt: nowIso(),
+      };
+
+      yield* Ref.update(stateRef, (current) => appendActivity(current, activity));
+      yield* persist;
+      yield* PubSub.publish(events, { type: "activity-appended", activity });
+      return { heldPaths };
+    });
+
   const listFileTouches: CollaborationServiceShape["listFileTouches"] = (input) =>
     Ref.get(stateRef).pipe(
       Effect.map((state) => ({
@@ -2118,6 +2510,12 @@ const makeCollaborationService = Effect.gen(function* () {
     touchFiles,
     touchFilesForUser,
     listFileTouches,
+    markFilePresence,
+    markFilePresenceForAgent,
+    releaseFilePresence,
+    releaseFilePresenceForAgent,
+    listFilePresence,
+    warnBeforeAgentWrites,
     listMembers,
     updateMember,
     removeMember,

@@ -1,6 +1,7 @@
 import type {
   CollaborationActivity,
   CollaborationBranchClaim,
+  CollaborationFilePresence,
   CollaborationFileTouch,
   CollaborationPresence,
   CollaborationPromptApproval,
@@ -146,6 +147,13 @@ export interface CollaborationPersistenceSnapshot {
   readonly viewPreferences?: ReadonlyArray<CollaborationViewPreferences>;
   readonly branchClaims?: ReadonlyArray<CollaborationBranchClaim>;
   readonly fileTouches?: ReadonlyArray<CollaborationFileTouch>;
+  /**
+   * Live claims on files, which unlike everything else here are worth writing
+   * only because a restart must not resurrect them: the service prunes by TTL
+   * on load, so a server that was down longer than the deadline comes back with
+   * an empty room rather than a ghost of one.
+   */
+  readonly filePresence?: ReadonlyArray<CollaborationFilePresence>;
   readonly memberProfiles?: ReadonlyArray<CollaborationMemberProfileRecord>;
   readonly memberUsage?: ReadonlyArray<CollaborationMemberUsageRecord>;
 }

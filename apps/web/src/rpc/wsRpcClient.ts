@@ -141,6 +141,11 @@ export interface WsRpcClient {
     readonly releaseBranch: RpcUnaryMethod<typeof WS_METHODS.collaborationBranchRelease>;
     readonly touchFiles: RpcUnaryMethod<typeof WS_METHODS.collaborationFilesTouch>;
     readonly listFileTouches: RpcUnaryMethod<typeof WS_METHODS.collaborationFilesTouchList>;
+    readonly markFilePresence: RpcUnaryMethod<typeof WS_METHODS.collaborationFilesPresenceMark>;
+    readonly releaseFilePresence: RpcUnaryMethod<
+      typeof WS_METHODS.collaborationFilesPresenceRelease
+    >;
+    readonly listFilePresence: RpcUnaryMethod<typeof WS_METHODS.collaborationFilesPresenceList>;
     readonly setActivityVisibility: RpcUnaryMethod<
       typeof WS_METHODS.collaborationActivityVisibility
     >;
@@ -408,6 +413,12 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.collaborationFilesTouch](input)),
       listFileTouches: (input) =>
         transport.request((client) => client[WS_METHODS.collaborationFilesTouchList](input)),
+      markFilePresence: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationFilesPresenceMark](input)),
+      releaseFilePresence: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationFilesPresenceRelease](input)),
+      listFilePresence: (input) =>
+        transport.request((client) => client[WS_METHODS.collaborationFilesPresenceList](input)),
       setActivityVisibility: (input) =>
         transport.request((client) => client[WS_METHODS.collaborationActivityVisibility](input)),
       listMembers: (input) =>

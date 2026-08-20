@@ -3334,6 +3334,42 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         });
 
       /**
+       * Says out loud that a turn is starting on top of somebody's open file.
+       *
+       * This is the last moment the loss is preventable, which is the whole
+       * reason it lives on the dispatch path rather than in a panel: an agent
+       * replaces a file instead of merging into it, so an editor holding
+       * unsaved edits loses them silently the moment the turn writes.
+       *
+       * It records and never refuses. A workspace where a colleague's open
+       * editor could block everybody's turns would be a worse product than one
+       * that warns, and the warning reaches every browser on the collaboration
+       * stream the instant it is written.
+       *
+       * It deliberately does not claim to know which files the turn will write.
+       * Nothing does, before the turn runs — the file list only exists once a
+       * diff does — and a guess presented as a prediction would be worse than
+       * naming the real risk.
+       */
+      const warnTurnStartOverOpenFiles = (
+        command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+      ): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          const ownership = yield* resolveTurnStartOwnership(command);
+          if (!ownership) {
+            return;
+          }
+          const actor = yield* resolveCollaborationActor;
+          yield* collaboration.warnBeforeAgentWrites(actor.userId, {
+            tenantId: ownership.tenantId,
+            workspaceId: ownership.workspaceId,
+          });
+        }).pipe(
+          // A warning that failed must never be the reason a turn did not run.
+          Effect.catchCause(() => Effect.void),
+        );
+
+      /**
        * Attributes a thread's tokens to whoever asked for the turn. Providers
        * report a running total many times over, so the collaboration service
        * keeps the highest figure rather than summing what it is sent, and
@@ -3458,6 +3494,9 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               }),
               Effect.flatMap(() => ensureTurnStartWritable(command)),
               Effect.flatMap(() => ensureTurnStartApproved(command)),
+              // Last, so a turn that was refused never warns about a write it
+              // was never going to make.
+              Effect.tap(() => warnTurnStartOverOpenFiles(command)),
             );
           case "thread.turn.interrupt":
           case "thread.approval.respond":
@@ -4552,6 +4591,46 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             withRateLimit(
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
                 Effect.flatMap(() => collaboration.listFileTouches(input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        /**
+         * "I have these files open." The kind is not on the wire: the server
+         * stamps `person` because this arrived over somebody's session, and an
+         * agent's claim is filed by the reactor and never comes through here.
+         */
+        [WS_METHODS.collaborationFilesPresenceMark]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationFilesPresenceMark,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.markFilePresence(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationFilesPresenceRelease]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationFilesPresenceRelease,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.edit").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.releaseFilePresence(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationFilesPresenceList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationFilesPresenceList,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => collaboration.listFilePresence(input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),

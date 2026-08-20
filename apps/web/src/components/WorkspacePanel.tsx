@@ -14,8 +14,10 @@ import type {
   ProjectReadFileResult,
   TurnId,
 } from "@t3tools/contracts";
+import { decideFilePresence, type FilePresenceVerdict } from "@t3tools/shared/filePresence";
 import { createThreadSelectorByRef } from "~/storeSelectors";
 import {
+  BotIcon,
   ChevronRightIcon,
   FilePlus2Icon,
   FileWarningIcon,
@@ -26,6 +28,7 @@ import {
   HardDriveUploadIcon,
   LoaderCircleIcon,
   RefreshCcwIcon,
+  PencilLineIcon,
   SaveIcon,
   Share2Icon,
   XIcon,
@@ -307,6 +310,73 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(chunks.join(""));
 }
 
+/**
+ * Who or what is in this file at this moment.
+ *
+ * Drawn as an icon, next to but deliberately unlike the author dot: that dot is
+ * a filled circle in somebody's colour and says who last changed the file,
+ * which stays true forever. This says who has it open now, and disappears when
+ * they stop — so it must not be mistakable for the other, or a mark that means
+ * "history" and a mark that means "stop, someone is in here" would look the
+ * same at the glance this is for.
+ *
+ * The agent case wins the icon whenever there is one, because that is the case
+ * where looking away costs somebody their unsaved work.
+ */
+function WorkspaceEntryPresenceMark(props: { presence: FilePresenceVerdict }) {
+  const { presence } = props;
+  const agentPresent = presence.agents.length > 0;
+  const occupants = agentPresent ? presence.agents : presence.people;
+  if (occupants.length === 0) {
+    return null;
+  }
+
+  const names = [...new Set(occupants.map((occupant) => occupant.displayName))].join(", ");
+  const title =
+    presence.headline === ""
+      ? agentPresent
+        ? `${names}'s agent is writing this file`
+        : `${names} has this file open`
+      : `${presence.headline}. ${presence.suggestion}`;
+
+  return (
+    <span
+      className={cn(
+        "ml-1 flex shrink-0 items-center",
+        presence.severity === "urgent"
+          ? "text-amber-600 dark:text-amber-500"
+          : agentPresent
+            ? "text-primary/80"
+            : "text-muted-foreground/70",
+      )}
+      title={title}
+      data-testid="workspace-entry-presence"
+      data-presence-kind={agentPresent ? "agent" : "person"}
+      data-presence-outcome={presence.outcome}
+      data-presence-people={presence.people.length}
+      data-presence-agents={presence.agents.length}
+      data-presence-names={names}
+    >
+      {agentPresent ? (
+        // Only the urgent case animates. A turn quietly writing a file nobody
+        // has open is ordinary work and should not blink at anybody.
+        <BotIcon className={cn("size-3", presence.severity === "urgent" && "animate-pulse")} />
+      ) : (
+        <PencilLineIcon className="size-3" />
+      )}
+    </span>
+  );
+}
+
+/**
+ * How often the tree re-asks whether the people in it are still there.
+ *
+ * Well inside the shortest claim's deadline, so a departure is visible within
+ * seconds of the claim lapsing rather than at whatever moment the next
+ * unrelated render happens to be.
+ */
+const FILE_PRESENCE_REDRAW_MS = 10_000;
+
 const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   depth: number;
   entry: ProjectDirectoryEntry;
@@ -322,6 +392,12 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   author?: { userId: string; displayName: string } | null;
   /** The roster's colour for that person, so a recolour reaches this mark too. */
   authorColorValue?: string | null;
+  /**
+   * What is in this file *now*, if anything. Never the same fact as `author`
+   * above: that one is history and outlives everybody, this one is a live claim
+   * with a deadline and is absent the moment nobody is in the file.
+   */
+  presence?: FilePresenceVerdict | null;
   onToggleDirectory: (directoryPath: string) => void;
   onOpenFile: (relativePath: string) => void;
   /** Absent when this workspace has no tenancy to hand a public link out of. */
@@ -427,6 +503,7 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
             data-author={props.author.displayName}
           />
         ) : null}
+        {props.presence ? <WorkspaceEntryPresenceMark presence={props.presence} /> : null}
         {props.changed || props.status ? (
           <span
             className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums"
@@ -578,6 +655,49 @@ export default function WorkspacePanel({
       ? EMPTY_WORKSPACE_AUTHORS
       : collaborationGovernance.touchesByPath;
   const workspaceAuthorColors = collaborationGovernance.memberColorByUserId;
+  /**
+   * Presence is a claim about *now*, so the tree has to re-decide on a beat and
+   * not only when new presence arrives. A colleague whose browser was closed
+   * sends no goodbye and no further events, so a tree that only redrew on
+   * arrivals would keep them in the file until something unrelated happened —
+   * and "someone is editing this" that never clears is worse than never having
+   * drawn it. The beat only runs while there is something to expire.
+   */
+  const hasFilePresence = collaborationGovernance.filePresence.length > 0;
+  const [filePresenceNow, setFilePresenceNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasFilePresence) {
+      return;
+    }
+    const timer = setInterval(() => setFilePresenceNow(Date.now()), FILE_PRESENCE_REDRAW_MS);
+    return () => clearInterval(timer);
+  }, [hasFilePresence]);
+
+  const viewerUserId = collaborationGovernance.viewerUserId;
+  const hideOthersFiles = collaborationGovernance.preferences?.showOthersFiles === false;
+  const filePresenceEntries = collaborationGovernance.filePresence;
+  const hasOwnBranch = collaborationGovernance.myBranchClaim !== null;
+  const workspacePresenceByPath = useMemo(() => {
+    const byPath = new Map<string, FilePresenceVerdict>();
+    // The same personal filter the author marks obey: turning collaboration off
+    // stops other people being drawn for this viewer, and stops nothing for
+    // anybody else.
+    const entries = hideOthersFiles
+      ? filePresenceEntries.filter((entry) => entry.userId === viewerUserId)
+      : filePresenceEntries;
+    for (const path of new Set(entries.map((entry) => entry.path))) {
+      const verdict = decideFilePresence({
+        path,
+        entries,
+        nowMs: filePresenceNow,
+        viewerHasOwnBranch: hasOwnBranch,
+      });
+      if (verdict.people.length > 0 || verdict.agents.length > 0) {
+        byPath.set(path, verdict);
+      }
+    }
+    return byPath;
+  }, [filePresenceEntries, filePresenceNow, hasOwnBranch, hideOthersFiles, viewerUserId]);
   const workspaceLabel = activeWorkspaceRoot ? basenameOfPath(activeWorkspaceRoot) : "Workspace";
   const workspaceScopeLabel = activeThread?.worktreePath ? "Thread workspace" : "Project workspace";
   const activeRunningTurnId =
@@ -685,6 +805,31 @@ export default function WorkspacePanel({
     kind: "file",
     name: "",
   });
+  /**
+   * Tells the workspace which files this person has open, and keeps telling it.
+   *
+   * Open in the editor is the honest signal for "a person is working on this
+   * file": it is the buffer an agent's rewrite would silently discard, whether
+   * or not it has unsaved edits in it yet. The claim itself is refreshed on a
+   * heartbeat by the governance store, so this only has to say what the set is
+   * whenever it changes.
+   */
+  const markFilePresence = collaborationGovernance.markFilePresence;
+  useEffect(() => {
+    markFilePresence(openTabs);
+  }, [markFilePresence, openTabs]);
+
+  // Closing the panel is leaving the files, even when something else still
+  // holds the governance store open and so nothing else would say so.
+  const markFilePresenceRef = useRef(markFilePresence);
+  markFilePresenceRef.current = markFilePresence;
+  useEffect(
+    () => () => {
+      markFilePresenceRef.current([]);
+    },
+    [],
+  );
+
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const fileStateByPathRef = useRef(fileStateByPath);
   fileStateByPathRef.current = fileStateByPath;
@@ -2741,6 +2886,9 @@ export default function WorkspacePanel({
                   null)
                 : null
             }
+            presence={
+              entry.kind === "file" ? (workspacePresenceByPath.get(entryPath) ?? null) : null
+            }
             onToggleDirectory={toggleDirectory}
             onOpenFile={openFile}
             onCopyShareLink={
@@ -2778,6 +2926,7 @@ export default function WorkspacePanel({
       workingTreeStatusByPath,
       workspaceAuthorByPath,
       workspaceAuthorColors,
+      workspacePresenceByPath,
     ],
   );
 

@@ -187,6 +187,12 @@ export interface CollaborationOverviewGovernance {
   readonly pendingApprovalCount: number;
   readonly canDecide: boolean;
   readonly contendedCount: number;
+  /**
+   * How many of those are an agent writing a file somebody has open. Counted
+   * separately rather than folded into the total because it is a different
+   * sentence with a different urgency, and the preview only has room for one.
+   */
+  readonly agentOverPersonCount: number;
   readonly branchClaims: readonly CollaborationBranchClaim[];
   readonly myBranchClaim: CollaborationBranchClaim | null;
 }
@@ -380,6 +386,21 @@ function approvalsRow(input: CollaborationOverviewInput): CollaborationOverviewR
       summary: `${noun} waiting for ${who}`,
       attention: governance.canDecide,
       badge: pending,
+    });
+  }
+
+  // The agent case first, and never averaged into the other. Two people editing
+  // around each other can wait; a turn about to replace a file somebody has
+  // open is the one worth taking the preview line for.
+  const agentOverPerson = governance.agentOverPersonCount;
+  if (agentOverPerson > 0) {
+    return row("approvals", {
+      ...LIVE,
+      summary:
+        agentOverPerson === 1
+          ? "An agent is writing a file someone has open"
+          : `An agent is writing ${agentOverPerson} files people have open`,
+      attention: true,
     });
   }
 

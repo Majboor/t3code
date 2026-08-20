@@ -1093,12 +1093,14 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // A project can predate workspaces, in which case its own id stands in —
+    // the same substitution the provider-account lookup above makes.
+    const workspaceId = ownership.workspaceId ?? WorkspaceId.make(project.id);
+
     yield* collaborationService.value
       .touchFilesForUser(actingUserId, {
         tenantId: ownership.tenantId,
-        // A project can predate workspaces, in which case its own id stands in —
-        // the same substitution the provider-account lookup above makes.
-        workspaceId: ownership.workspaceId ?? WorkspaceId.make(project.id),
+        workspaceId,
         paths,
       })
       .pipe(
@@ -1110,6 +1112,56 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+
+    /**
+     * Says the agent is *in* these files, not just that it wrote them.
+     *
+     * The mark above is history and keeps the wrong name when a turn sweeps up
+     * somebody else's edit — which is why it deliberately skips paths another
+     * person has claimed. Presence is the opposite question and takes every
+     * path in the diff: the fact worth knowing is that a turn is writing this
+     * file right now, and it is *most* worth knowing precisely where somebody
+     * else already has that file open.
+     *
+     * The thread is the source, so two turns in two threads writing one file
+     * are two writers racing rather than one that heartbeats twice.
+     *
+     * A diff also arrives after the last one, when the turn is over. There is
+     * no "turn finished" domain event to hang a release on, so the read model
+     * is asked instead: a turn that is no longer the session's active one has
+     * stopped writing, and its claim is given up now rather than left to decay.
+     * Without this the explorer would keep saying an agent was in a file for
+     * the whole of the claim's lifetime after it left.
+     */
+    const stillWriting =
+      thread.session?.status === "running" && thread.session.activeTurnId === event.payload.turnId;
+    const presenceInput = {
+      tenantId: ownership.tenantId,
+      workspaceId,
+      sourceId: `thread:${event.payload.threadId}`,
+    };
+    yield* (
+      stillWriting
+        ? collaborationService.value.markFilePresenceForAgent(actingUserId, {
+            ...presenceInput,
+            paths,
+          })
+        : collaborationService.value.releaseFilePresenceForAgent(actingUserId, {
+            ...presenceInput,
+            // Everything this thread still holds, not just this diff's paths: an
+            // earlier diff in the same turn may have claimed files this one does
+            // not mention.
+            paths: [],
+          })
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor could not record a turn's file presence", {
+          threadId: event.payload.threadId,
+          turnId: event.payload.turnId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
