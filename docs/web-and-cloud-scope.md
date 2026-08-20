@@ -114,7 +114,13 @@ bootstrap method, so there is no token that page could ever accept from them.
 
 ## What the multi-user flow actually does, measured
 
-Run `node scripts/collab-multiuser-e2e.mjs` against a dev server. Latest: **64 of 72**.
+Run `node scripts/collab-multiuser-e2e.mjs` against a dev server. Latest: **72 of 72**, with
+three skips (no agent-vs-person marker, python-written files unattributed, no
+conflict-resolve control).
+
+Do not edit the tree while this suite runs. A verification pass scored 61/71 purely because
+vite hot-reloaded the app mid-run; the failures looked like a collapsed branch phase and
+were an artefact of the edit, not a regression.
 
 Working, each verified with three real accounts in separate browser contexts: invite links;
 a second person joining with no shared cookies; a third joining on a session that already has
@@ -124,13 +130,24 @@ admin changing somebody else's colour and everyone seeing it; read-only demotion
 refusing a send server-side; a branch per person; and an admin merging one from the panel —
 including reporting the conflict rather than pretending it merged.
 
-Not working, and worth knowing before promising any of it:
+Two entries previously listed here as broken were **the suite misreading the app**, not the
+app misbehaving. Both are corrected rather than deleted, because "we tested it and it
+failed" is the kind of claim that gets repeated:
 
-- **Two people in one file is never noticed.** `findContention` exists and its unit tests
-  pass, so the gap is upstream of it — nothing feeds it, or nothing renders what it returns.
-  The "keep the edits on separate branches" suggestion therefore never appears either.
-- **An agent's file write is attributed to nobody.** A turn knows its acting user; a touch
-  recorded during that turn does not carry it.
+- **Two people in one file** is noticed, and always was. A file carrying a change this
+  browser has not reviewed opens in **diff review**, not the editor — so the harness, which
+  waited only for Monaco, reported that the editor never rendered. It now takes the
+  "Edit file contents" offer first. That is also why the same file passed for one person
+  and failed for the next: the first met a clean file, the second met an incoming change.
+- **An agent's file write is attributed** correctly. The touch row was in the database
+  during the failing runs, with the acting user on it. Since the workspace redesign three
+  separate lists are drawn from file names — the explorer, "Changes", and a turn's
+  "Changed files" — and only the explorer carries authorship; the suite read whichever
+  matched first. Explorer rows now have a `data-testid="workspace-entry"` handle and the
+  suite reads that.
+
+The lesson worth keeping: a UI test that identifies elements by their text will start
+reporting product bugs the moment a redesign adds a second list of the same names.
 
 And two that are absent by design rather than broken:
 
