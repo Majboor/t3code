@@ -67,10 +67,15 @@ and executes nothing.
 | `/opt/t3-environment/libexec/t3-environment.sh` | a copy of this script, for removal | yes                      |
 | `/var/lib/t3-environment`                       | database, logs, worktrees          | **no — see below**       |
 | `/etc/systemd/system/t3-environment.service`    | the unit                           | yes                      |
+| `/opt/t3-environment/libexec/t3-unit-helper`    | the one thing the agent may `sudo` | yes                      |
+| `/etc/sudoers.d/t3-environment`                 | one line, naming that helper       | yes                      |
+| `/var/lib/t3-environment/apps`                  | where the agent's own services live | **no — under the data dir** |
+| `t3-app-*.service` written by that helper       | the agent's own units              | yes (only its own)       |
 | system user `t3env`                             | uid < 1000, no shell, no password  | yes                      |
 
-Nothing else. No packages are installed, no other unit is touched, and no file
-outside those three paths is written.
+Nothing else. No packages are installed — not by the installer and not by the
+privileged helper — no unit anything else wrote is touched, and no file outside
+those paths is written.
 
 Data lives outside the prefix on purpose. Uninstall removes the prefix outright;
 if the SQLite file and the worktrees lived under it, `--uninstall` would be
@@ -113,6 +118,143 @@ and revoking kills the session, not just the row.
 Omit `--account-url` and the server is installed and running but joins no
 account. Enrollment failures never fail the install; they warn and tell you to
 re-run.
+
+## What the agent may do as root, and what it may not
+
+The agent on a box runs as `t3env`: a system account with no shell, no password
+and no privileges. That is the whole design, and it is why the T3-side refusals
+("that service is not ours to stop") are worth having at all — they describe a
+machine the agent genuinely cannot damage.
+
+Two things it legitimately needs are out of reach of an unprivileged user:
+managing its own services, and having them start at boot. Those, and only those,
+are delegated — through **one** sudoers rule naming **one** root-owned helper:
+
+```
+t3env ALL=(root) NOPASSWD: /opt/t3-environment/libexec/t3-unit-helper
+```
+
+That line is the entire grant. It is worth reading for what it does not say:
+
+- **Not `/bin/systemctl`.** `NOPASSWD: /bin/systemctl` is the tempting version
+  and it is the same thing as giving the agent root — one
+  `systemctl stop days-tracker-api` and somebody's production API is down. The
+  refusals in the T3 code cannot prevent that, because the agent has a shell and
+  can call systemctl itself.
+- **No wildcard.** One absolute path, no `*`, no argument patterns. The helper
+  validates its own arguments; sudoers is not asked to.
+- **No `ALL`, no second entry, no second user.**
+
+### What the helper will do
+
+Seven verbs — `create`, `start`, `stop`, `restart`, `enable`, `disable`,
+`status` — over units named `t3-app-<something>.service` that carry its own
+marker. Everything else is refused, with a reason and an exit code of 3:
+
+```
+$ sudo /opt/t3-environment/libexec/t3-unit-helper stop days-tracker-api
+t3-unit-helper: refused (unit-name-outside-prefix): this helper only manages
+units named t3-app-<something>.service. Everything else on this machine belongs
+to somebody else.
+```
+
+`create` does **not** accept a unit file. It takes a program, its arguments, a
+working directory, a port and a description, and generates the unit from a fixed
+template:
+
+```sh
+t3 box unit create <box> t3-app-web \
+  --exec /var/lib/t3-environment/apps/web/run \
+  --arg --config --arg /var/lib/t3-environment/apps/web/app.json \
+  --port 8080
+```
+
+The generated unit always sets `User=t3env`, `Group=t3env`,
+`NoNewPrivileges=yes` and `ReadWritePaths=/var/lib/t3-environment/apps`. So even
+a permitted unit runs as the same unprivileged account the agent already had —
+the helper's job is to write and manage the unit, never to elevate what runs in
+it.
+
+### What it will not do
+
+| Attempt                                             | What happens                                                       |
+| --------------------------------------------------- | ------------------------------------------------------------------ |
+| `systemctl stop <anything>` as `t3env`              | Refused by systemd — the account has no polkit authorisation       |
+| `sudo systemctl …`                                  | Refused by sudo — not in the rule                                  |
+| `sudo <any other binary>`                           | Refused by sudo — the rule names one path                          |
+| Helper, on a unit outside `t3-app-*`                | `refused (unit-name-outside-prefix)`                               |
+| Helper, on a `t3-app-*` unit it did not write       | `refused (unit-not-ours)` — the marker, not the name, decides      |
+| `t3-app-../other`, `t3-app-x;sh`, `t3-app-Ｘ`       | `refused (unit-name-malformed)` — allowlist, not a prefix test     |
+| `--exec` outside the deploy root                    | `refused (path-outside-deploy-root)`                               |
+| `--exec` through a symlink out of the deploy root   | Same — resolution happens **before** the decision                  |
+| Deploy root replaced with a symlink to `/`          | `refused (deploy-root-unsafe)`                                     |
+| `--arg $'x\nUser=root'`, `--description $'x\n…'`    | `refused (argument-malformed)` / `(description-malformed)`         |
+| Installing a package                                | Not a verb. Out of scope, deliberately — ask the machine's owner   |
+
+Every one of those was exercised against a real systemd container, as `t3env`,
+against a foreign service that was still running afterwards.
+
+### Ports below 1024
+
+Nothing runs as root to bind one. Pass `--port 80` and the generated unit gets:
+
+```
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+```
+
+systemd grants the one capability that binds a low port and drops everything
+else; the process is still `t3env`. Verified in the container: `ss` shows the
+listener on `:80` owned by uid 996. Above 1024 the unit gets an **empty**
+bounding set instead.
+
+### The checks the installer makes before it grants anything
+
+A helper the service user can rewrite is a root shell with extra steps, and the
+sudoers line would look identical. So `install_unit_manager`:
+
+1. Installs the helper `root:root`, mode `0755`.
+2. Verifies the helper **and every directory above it** are root-owned and not
+   group- or other-writable. If any of them is not, it refuses to write the rule
+   and removes any rule left from an earlier run.
+3. Writes the sudoers file to a temporary path, validates it with `visudo -cf`,
+   and only then installs it as `0440 root:root`.
+4. Runs `visudo -c` against the whole configuration afterwards, and removes the
+   file immediately if that fails — a malformed sudoers file locks everybody out
+   of sudo.
+
+`--no-unit-manager` skips all of it and removes the rule if one is present. A
+relocated install (`T3_INSTALL_PREFIX`) also skips it: the helper's paths are
+fixed, so a rule naming them would not describe the machine.
+
+### The audit trail
+
+Every invocation is logged, including refusals, to syslog (`auth.notice`, tag
+`t3-unit-helper`) and to `/var/log/t3-unit-helper.log` — root-owned, mode
+`0600`, deliberately outside the agent's reach, because an audit trail the
+audited party can rewrite is not one:
+
+```
+2026-08-20T22:44:26Z verb=stop unit=t3-app-handwritten.service
+  outcome=refused:unit-not-ours detail=... invoker=t3env invoker_uid=996
+```
+
+On the T3 side the same actions land in `box_command_journal` (migration 064)
+under `unit-create`, `unit-stop` and so on, and a refusal that came back from
+the box is recorded as `helper:<reason>` rather than as a failed command — the
+distinction being that a box declining to touch somebody's service is an answer,
+not a fault. `t3 box history` shows both.
+
+### Where the rules live
+
+`infra/install/t3-unit-helper.sh` is the enforcement, because the agent has a
+shell and can call it directly.
+[`apps/server/src/box/decideUnitCommand.ts`](../../apps/server/src/box/decideUnitCommand.ts)
+is the same rules in TypeScript, so a refusal arrives before a round trip and
+lands in the journal with wording a reader can act on. They cannot import each
+other, so the helper carries a drift-checked constants block and
+`decideUnitCommand.test.ts` asserts the two agree — and then runs the helper
+itself against every bypass in the table above.
 
 ## Refusing to damage a busy box
 
@@ -189,7 +331,15 @@ build. What is set is the subset that costs nothing: `NoNewPrivileges`,
 
 ## Testing it
 
-`shellcheck -s sh infra/install/t3-environment.sh` must pass.
+`shellcheck -s sh infra/install/t3-environment.sh infra/install/t3-unit-helper.sh`
+must pass.
+
+The helper validates its arguments *before* it checks for root, so the whole
+refusal table can be exercised from the test suite on any POSIX machine —
+`decideUnitCommand.test.ts` does exactly that, running `/bin/sh
+infra/install/t3-unit-helper.sh` against each attempt. What still needs a
+container is everything after that line: symlink resolution, unit ownership, the
+sudoers rule, and the OS refusing `systemctl` to the service user.
 
 The full cycle can be exercised in a throwaway systemd container. Do **not** run
 it against a shared host:
@@ -199,10 +349,20 @@ docker run -d --name t3test --privileged --cgroupns=host \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw ubuntu-with-systemd
 
 docker cp t3-environment.sh t3test:/srv/
+# The helper is installed from beside the script when there is one there.
+docker cp t3-unit-helper.sh t3test:/srv/
 # curl understands file://, so a directory of artifacts is enough of a release host
 docker exec t3test sh /srv/t3-environment.sh --base-url file:///srv/artifacts
+
+# Then drive it as the agent does — as the unprivileged service user:
+docker exec t3test runuser -u t3env -- /bin/sh -c \
+  'sudo -n /opt/t3-environment/libexec/t3-unit-helper stop days-tracker-api'
 ```
+
+`T3_INSTALL_PREFIX` relocates the install and, as a consequence, skips the
+sudoers rule: the helper's paths are fixed.
 
 `T3_INSTALL_PREFIX` and `T3_INSTALL_DATA_DIR` relocate the install for tests.
 They are not a supported way to run a real environment: two installs under
-different prefixes would still contend for the one unit name.
+different prefixes would still contend for the one unit name, and neither gets a
+privileged helper.

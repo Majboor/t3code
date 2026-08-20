@@ -31,6 +31,14 @@
 
 import type { EnvironmentService, PortClaim } from "@t3tools/shared/serviceRegistry";
 
+import {
+  canonicaliseUnitName,
+  decideUnitCommand,
+  type UnitPlan,
+  type UnitRefusalReason,
+  type UnitRequest,
+} from "./decideUnitCommand.ts";
+
 // ── how much output a turn is allowed to swallow ─────────────────────────────
 
 /**
@@ -246,7 +254,17 @@ export type BoxRequest =
       readonly acknowledgedTarget: string | null;
     }
   | { readonly verb: "claim-port"; readonly port: number; readonly purpose: string }
-  | { readonly verb: "release-port"; readonly port: number };
+  | { readonly verb: "release-port"; readonly port: number }
+  /**
+   * The one thing on a box that needs privilege the agent does not have:
+   * managing its own systemd units, and having them come back after a reboot.
+   *
+   * A separate verb rather than a flavour of `run`, because it is the only path
+   * that reaches a root-owned helper through sudo. `run` is the agent as
+   * itself; this is the agent asking for the narrow thing it cannot do as
+   * itself, and the two should not be the same sentence anywhere.
+   */
+  | { readonly verb: "unit"; readonly unit: UnitRequest };
 
 /**
  * Everything the rules need to see. Passed in rather than fetched, so the
@@ -287,7 +305,15 @@ export type BoxRefusalReason =
   | "port-out-of-range"
   /** Somebody else holds the reservation being released. */
   | "claim-not-yours"
-  | "claim-not-found";
+  | "claim-not-found"
+  /**
+   * The box refused it. Reached only when this module allowed something the
+   * helper would not — the helper decides again on the machine, from the
+   * machine's own facts, and it is the copy that counts.
+   */
+  | "helper-refused"
+  /** Everything the unit rules refuse, kept distinct rather than flattened. */
+  | UnitRefusalReason;
 
 export interface BoxRefusal {
   readonly reason: BoxRefusalReason;
@@ -319,7 +345,8 @@ export type BoxPlan =
       readonly unmanaged: boolean;
     }
   | { readonly verb: "claim-port"; readonly port: number; readonly purpose: string }
-  | { readonly verb: "release-port"; readonly port: number; readonly claim: PortClaim };
+  | { readonly verb: "release-port"; readonly port: number; readonly claim: PortClaim }
+  | { readonly verb: "unit"; readonly unit: UnitPlan };
 
 export type BoxCommandDecision =
   | { readonly outcome: "allow"; readonly plan: BoxPlan }
@@ -589,6 +616,50 @@ export function decideBoxCommand(input: DecideBoxCommandInput): BoxCommandDecisi
         };
       }
       return { outcome: "allow", plan: { verb: "release-port", port: request.port, claim } };
+    }
+
+    case "unit": {
+      // The registry's verdict comes first, and it is the same refusal `stop`
+      // gives. It rarely fires — unit names and process names are different
+      // namespaces — but when it does, something on this box is both listening
+      // and not ours under exactly the name being addressed, and that is the
+      // moment to stop rather than the moment to prefer the other rule.
+      //
+      // It is deliberately in front of, and not instead of, the unit rules:
+      // this one knows what is running, those know what may be asked, and the
+      // helper on the box knows which units T3 actually wrote. Only the last of
+      // those is a permission — the other two are here to refuse early and say
+      // why in words a reader can act on.
+      const touchesRunning =
+        request.unit.verb === "stop" ||
+        request.unit.verb === "restart" ||
+        request.unit.verb === "disable";
+      if (touchesRunning) {
+        // Both spellings, because the registry records whatever name the thing
+        // was started under and the caller may have typed either. A guard that
+        // only recognised one of them would be absent exactly half the time.
+        const found = [
+          ...findBoxServices(input.services, request.unit.name),
+          ...findBoxServices(input.services, canonicaliseUnitName(request.unit.name)),
+        ];
+        const conflicting = found.find((service) => service.ownership !== "ours");
+        if (conflicting !== undefined) {
+          return { outcome: "refuse", refusal: stopRefusal(conflicting) };
+        }
+      }
+
+      const decision = decideUnitCommand(request.unit);
+      if (decision.outcome === "refuse") {
+        return {
+          outcome: "refuse",
+          refusal: {
+            reason: decision.refusal.reason,
+            headline: decision.refusal.headline,
+            remedy: decision.refusal.remedy,
+          },
+        };
+      }
+      return { outcome: "allow", plan: { verb: "unit", unit: decision.plan } };
     }
   }
 }

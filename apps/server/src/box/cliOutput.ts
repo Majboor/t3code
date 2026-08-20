@@ -23,7 +23,9 @@ import type {
   BoxRunReport,
   BoxServicesReport,
   BoxStopReport,
+  BoxUnitReport,
 } from "./Services/BoxCommands.ts";
+import { UNIT_DEPLOY_ROOT, UNIT_PRIVILEGED_PORT_CEILING } from "./decideUnitCommand.ts";
 
 function renderTable(
   headers: ReadonlyArray<string>,
@@ -169,6 +171,50 @@ export function formatBoxPort(report: BoxPortReport, verb: "claim" | "release"):
   return report.claim === null
     ? `Port ${report.port} could not be reserved — something took it first.\n\nRecorded as ${report.entryId}.`
     : `Port ${report.port} is reserved for you until ${report.claim.expiresAt}: ${report.claim.purpose}.\n\nStart what you reserved it for; the reservation lapses if nothing takes it.`;
+}
+
+/**
+ * What the helper did, and what it did not become.
+ *
+ * The two sentences that are always worth printing are the ones an agent would
+ * otherwise have to infer: that the unit runs as the unprivileged service user,
+ * and — when a low port was asked for — that binding it came from a capability
+ * rather than from anything running as root. Both are the point of the feature,
+ * and neither is visible in `systemctl` output.
+ */
+export function formatBoxUnit(report: BoxUnitReport): string {
+  const failed = report.exitCode !== 0 && report.exitCode !== null;
+  const headline = failed
+    ? `\`${report.verb}\` failed for ${report.name} (exit ${report.exitCode}).`
+    : report.verb === "create"
+      ? `Wrote ${report.name}, running as the box's unprivileged service user.`
+      : `${report.name}: ${report.verb} done.`;
+
+  const capability =
+    report.verb === "create" && report.needsBindCapability && !failed
+      ? `\nIt asked for a port below ${UNIT_PRIVILEGED_PORT_CEILING}, so the unit carries AmbientCapabilities=CAP_NET_BIND_SERVICE. Nothing runs as root to bind it.`
+      : "";
+
+  const body = report.output.text.trim().length === 0 ? "" : `\n\n${report.output.text.trimEnd()}`;
+
+  return `${headline}${capability}${body}\n\nRecorded as ${report.entryId}.`;
+}
+
+export function boxUnitJson(report: BoxUnitReport): unknown {
+  return {
+    outcome: report.outcome,
+    entryId: report.entryId,
+    verb: report.verb,
+    unit: report.name,
+    exitCode: report.exitCode,
+    // Stated in the payload as well as in the prose, because a caller reading
+    // JSON is the one most likely to be automating this and least likely to
+    // have read the prose.
+    runsAs: "the box's unprivileged service user, never root",
+    deployRoot: UNIT_DEPLOY_ROOT,
+    bindCapability: report.needsBindCapability,
+    output: report.output.text,
+  };
 }
 
 function outcomeLabel(entry: BoxCommandEntry): string {

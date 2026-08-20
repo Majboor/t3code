@@ -45,6 +45,17 @@ T3_ENROLL_STATUS_RATE_LIMITED="429"
 T3_ENROLL_POLL_INTERVAL_SECONDS="2"
 T3_ENROLL_RATE_LIMIT_SECONDS="15"
 T3_ENROLL_TTL_SECONDS="600"
+# The narrow privilege grant. The agent runs as $T3_SERVICE_USER and stays
+# unprivileged; these three lines are the whole of what it can do as root, and
+# they are checked against apps/server/src/box/decideUnitCommand.ts by
+# decideUnitCommand.test.ts. See install_unit_manager() for why the rule names
+# the helper and never systemctl.
+T3_UNIT_HELPER_PATH="/opt/t3-environment/libexec/t3-unit-helper"
+T3_SUDOERS_PATH="/etc/sudoers.d/t3-environment"
+T3_DEPLOY_ROOT="/var/lib/t3-environment/apps"
+# The first line of a unit the helper generated. Uninstall removes those and
+# nothing else; a unit named to look like one is left alone.
+T3_APP_UNIT_MARKER="# Managed by t3-unit-helper"
 # Where a published release would live. NOTHING PUBLISHES ONE YET, so this is
 # empty and the script refuses at the download step with a plain explanation
 # rather than fetching a URL somebody invented to make the docs look finished.
@@ -56,6 +67,14 @@ T3_INSTALL_BASE_URL=""
 # Overridable for testing in a throwaway container. Not documented as a
 # supported way to run a real environment: two installs under different
 # prefixes would still contend for the one unit name.
+#
+# The defaults are kept, because the privileged helper is not relocatable: the
+# path in the sudoers rule and the deploy root it confines the agent to are
+# compiled into it, and a helper trusting one directory while the install lives
+# in another is a grant that does not describe the machine. install_unit_manager
+# refuses rather than installing a rule that means something else.
+T3_DEFAULT_PREFIX="$T3_PREFIX"
+T3_DEFAULT_DATA_DIR="$T3_DATA_DIR"
 T3_PREFIX="${T3_INSTALL_PREFIX:-$T3_PREFIX}"
 T3_DATA_DIR="${T3_INSTALL_DATA_DIR:-$T3_DATA_DIR}"
 
@@ -91,6 +110,7 @@ opt_version="$T3_SERVER_VERSION"
 opt_base_url="$T3_INSTALL_BASE_URL"
 opt_account_url=""
 opt_label=""
+opt_unit_manager=1
 
 usage() {
   cat <<EOF
@@ -112,12 +132,19 @@ Options:
   --base-url <url>       Where to fetch the server tarball from.
   --label <text>         How this machine should appear in the approval screen
                          and the account's machine list (default: hostname).
+  --no-unit-manager      Skip the privileged helper and its sudoers rule. The
+                         agent can still run commands; it cannot make anything
+                         survive a reboot, and it cannot manage its own
+                         services. Also removes the rule if one is there.
   -h, --help             Show this.
 
 Installs:
   $T3_PREFIX          runtime + server (removed by --uninstall)
   $T3_DATA_DIR      database, logs, worktrees (KEPT by --uninstall)
   $T3_UNIT_PATH
+  $T3_UNIT_HELPER_PATH        (root-owned; the only thing the agent may sudo)
+  $T3_SUDOERS_PATH        one line, naming that helper and nothing else
+  $T3_DEPLOY_ROOT      where the agent's own services live
   a system user named $T3_SERVICE_USER
 
 Nothing else on the machine is touched. Ports in use, services this script did
@@ -168,6 +195,10 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die "--label needs a value"
       opt_label="$2"
       shift 2
+      ;;
+    --no-unit-manager)
+      opt_unit_manager=0
+      shift
       ;;
     *)
       printf 't3: unknown option "%s" (try --help)\n' "$1" >&2
@@ -330,6 +361,14 @@ print_install_plan() {
   note "user       system account '$T3_SERVICE_USER', no shell, no password"
   note "service    $T3_UNIT_PATH, restart on failure, start at boot"
   note "listen     $opt_host:$opt_port"
+  if [ "$opt_unit_manager" -eq 1 ]; then
+    note "sudo rule  $T3_SUDOERS_PATH: '$T3_SERVICE_USER' may run"
+    note "           $T3_UNIT_HELPER_PATH as root, and nothing else."
+    note "           That helper only manages units it wrote itself, named"
+    note "           t3-app-*.service, which run as '$T3_SERVICE_USER' — never as root."
+  else
+    note "sudo rule  skipped (--no-unit-manager); the agent gets no privilege at all"
+  fi
   if [ -n "$opt_account_url" ]; then
     note "enroll     into the account at $opt_account_url (you approve it in a browser)"
   else
@@ -649,6 +688,255 @@ EOF
   run systemctl daemon-reload
 }
 
+# --- the one privilege the agent gets --------------------------------------
+# The agent on this box runs as $T3_SERVICE_USER with an ordinary shell, and
+# everything above is arranged so that it stays that way. Two things it
+# legitimately needs are out of reach of an unprivileged user: managing its own
+# systemd units, and having them come back after a reboot.
+#
+# The tempting rule is `NOPASSWD: /bin/systemctl`, and it is the same thing as
+# giving the agent root. This box runs other people's production services;
+# `systemctl stop days-tracker-api` is one command, and no amount of politeness
+# in the T3 code prevents it, because the agent has a shell and can call
+# systemctl itself. So the rule names one root-owned helper with a fixed
+# vocabulary, and the operating system enforces the rest.
+#
+# What makes it narrow, in order of what would go wrong without it:
+#
+#   1. The rule names $T3_UNIT_HELPER_PATH — one absolute path, no wildcard, no
+#      systemctl.
+#   2. The helper is root-owned and unwritable by the service user or its
+#      group, and so is every directory above it. A helper the agent can
+#      rewrite is a root shell with extra steps, which is why this is verified
+#      before the rule is installed and the rule is withheld if it fails.
+#   3. The helper never accepts unit-file content. It generates units from a
+#      template with User= pinned to $T3_SERVICE_USER, so even a permitted unit
+#      runs unprivileged.
+#   4. Everything it will act on is named t3-app-*.service and carries its own
+#      marker, so a unit somebody else wrote is refused even under a lookalike
+#      name.
+#
+# Package installation is *not* in scope and is not delegated. Nothing here or
+# in the helper runs a package manager: on a box that is already doing other
+# work, that is somebody's decision to make at their own root shell.
+sudoers_is_ours() {
+  [ -f "$T3_SUDOERS_PATH" ] &&
+    head -n 1 "$T3_SUDOERS_PATH" 2>/dev/null | grep -qxF "$T3_UNIT_MARKER"
+}
+
+# Group- or other-writable, from `stat -c %a`. Read off the last two digits so
+# a mode with a setuid bit in front of it ("4755") is judged on the same three
+# permission digits as one without.
+mode_is_shared_writable() {
+  mode_value="$1"
+  case "$mode_value" in
+    '' | *[!0-7]*) return 0 ;; # unreadable mode: treat as unsafe
+  esac
+  [ "${#mode_value}" -ge 3 ] || return 0
+  mode_tail="${mode_value#"${mode_value%???}"}"
+  mode_group="${mode_tail%?}"
+  mode_group="${mode_group#?}"
+  mode_other="${mode_tail#??}"
+  case "$mode_group" in 2 | 3 | 6 | 7) return 0 ;; esac
+  case "$mode_other" in 2 | 3 | 6 | 7) return 0 ;; esac
+  return 1
+}
+
+# Root-owned and writable by nobody else — for the helper *and* for every
+# directory on the way to it. A writable parent is the same hole as a writable
+# helper: whoever can rename /opt/t3-environment/libexec chooses what runs as
+# root the next time the agent calls sudo.
+path_is_root_only() {
+  path_owner="$(stat -c '%u' "$1" 2>/dev/null || printf 'unknown')"
+  [ "$path_owner" = "0" ] || return 1
+  ! mode_is_shared_writable "$(stat -c '%a' "$1" 2>/dev/null || printf '')"
+}
+
+helper_is_safe() {
+  if [ ! -f "$T3_UNIT_HELPER_PATH" ]; then
+    warn "$T3_UNIT_HELPER_PATH is not there, so there is nothing to grant sudo on."
+    return 1
+  fi
+  if ! path_is_root_only "$T3_UNIT_HELPER_PATH"; then
+    warn "$T3_UNIT_HELPER_PATH is not root-owned, or is writable by somebody other than root."
+    return 1
+  fi
+  helper_dir="$(dirname "$T3_UNIT_HELPER_PATH")"
+  while :; do
+    if ! path_is_root_only "$helper_dir"; then
+      warn "$helper_dir is not root-owned, or is writable by somebody other than root."
+      return 1
+    fi
+    [ "$helper_dir" != "/" ] || break
+    helper_dir="$(dirname "$helper_dir")"
+  done
+  return 0
+}
+
+remove_unit_manager_rule() {
+  if [ ! -f "$T3_SUDOERS_PATH" ]; then
+    return 0
+  fi
+  if sudoers_is_ours; then
+    log "removing the sudoers rule at $T3_SUDOERS_PATH"
+    run rm -f "$T3_SUDOERS_PATH"
+  else
+    warn "$T3_SUDOERS_PATH exists and was not written by this script; leaving it alone"
+  fi
+}
+
+fetch_unit_helper() {
+  fetch_helper_dir="$(dirname -- "$0" 2>/dev/null || printf '.')"
+  mkdir -p "$T3_PREFIX/libexec"
+  if [ -f "$fetch_helper_dir/t3-unit-helper.sh" ]; then
+    install -m 0755 -o root -g root \
+      "$fetch_helper_dir/t3-unit-helper.sh" "$T3_UNIT_HELPER_PATH"
+    return 0
+  fi
+  # Piped into a shell, $0 is the shell, so there is no file beside us to copy.
+  fetch_helper_tmp="$(mktemp)" || return 1
+  if curl -fsSL "${opt_base_url%/}/t3-unit-helper.sh" -o "$fetch_helper_tmp" 2>/dev/null; then
+    install -m 0755 -o root -g root "$fetch_helper_tmp" "$T3_UNIT_HELPER_PATH"
+    rm -f "$fetch_helper_tmp"
+    return 0
+  fi
+  rm -f "$fetch_helper_tmp"
+  return 1
+}
+
+install_unit_manager() {
+  if [ "$opt_unit_manager" -eq 0 ]; then
+    log "skipping the privileged helper (--no-unit-manager)"
+    note "The agent can run commands and start processes; nothing it starts survives a reboot."
+    remove_unit_manager_rule
+    return 0
+  fi
+
+  # A relocated install and a helper that trusts the default paths do not
+  # describe the same machine, and the sudoers rule would name a path that is
+  # not the helper that was installed.
+  if [ "$T3_PREFIX" != "$T3_DEFAULT_PREFIX" ] || [ "$T3_DATA_DIR" != "$T3_DEFAULT_DATA_DIR" ]; then
+    warn "the install was relocated, so no sudoers rule was written."
+    note "The helper's own paths are fixed at $T3_DEFAULT_PREFIX and $T3_DEFAULT_DATA_DIR."
+    return 0
+  fi
+
+  if ! command -v sudo >/dev/null 2>&1; then
+    warn "'sudo' is not installed, so the agent cannot be granted anything. Skipping."
+    note "This script does not install system packages on a machine it does not own."
+    return 0
+  fi
+  if ! command -v visudo >/dev/null 2>&1; then
+    warn "'visudo' is not installed, so a sudoers file could not be validated before installing it."
+    note "Refusing to write one unchecked: a malformed sudoers file locks everybody out of sudo."
+    return 0
+  fi
+
+  log "installing the privileged helper and its one sudoers rule"
+
+  if [ "$opt_dry_run" -eq 1 ]; then
+    note "would install $T3_UNIT_HELPER_PATH, root-owned, mode 0755"
+    note "would create $T3_DEPLOY_ROOT owned by $T3_SERVICE_USER"
+    note "would check the helper and its parents are root-owned and not group-writable"
+    note "would validate a sudoers file with 'visudo -c' and install it as 0440 at $T3_SUDOERS_PATH"
+    note "would grant: $T3_SERVICE_USER may run $T3_UNIT_HELPER_PATH as root, and nothing else"
+    return 0
+  fi
+
+  # Where the agent's own services live, and the only place the helper will
+  # point a unit at. Owned by the service user because the agent puts its
+  # builds there; 0700 because they are somebody's code.
+  mkdir -p "$T3_DEPLOY_ROOT"
+  chown "$T3_SERVICE_USER:$T3_SERVICE_USER" "$T3_DEPLOY_ROOT"
+  chmod 0700 "$T3_DEPLOY_ROOT"
+
+  if ! fetch_unit_helper; then
+    warn "could not install $T3_UNIT_HELPER_PATH, so no privileged helper and no sudoers rule."
+    note "Place t3-unit-helper.sh beside this script, or serve it from --base-url, and re-run."
+    remove_unit_manager_rule
+    return 0
+  fi
+
+  # The check that has to come before the grant. A helper the service user can
+  # rewrite turns this rule into "the agent may run anything as root", and the
+  # rule would look exactly the same in the file.
+  if ! helper_is_safe; then
+    warn "refusing to install the sudoers rule: $T3_UNIT_HELPER_PATH is not safely owned."
+    note "A helper the service user can modify would make that rule a root shell."
+    remove_unit_manager_rule
+    return 0
+  fi
+
+  install_sudoers_tmp="$(mktemp)" || die "could not create a temporary file"
+  chmod 0440 "$install_sudoers_tmp"
+  cat >"$install_sudoers_tmp" <<EOF
+$T3_UNIT_MARKER
+# The one privileged thing the T3 agent may do on this machine.
+#
+# It names a single root-owned helper and never systemctl: a NOPASSWD rule on
+# systemctl would let the agent stop anything running here, including services
+# that have nothing to do with T3. The helper has a closed vocabulary of seven
+# verbs, acts only on units it wrote itself (t3-app-*.service), generates those
+# units from a fixed template, and pins User= to $T3_SERVICE_USER — so nothing it
+# starts runs as root either.
+#
+# Written by t3-environment.sh. Removed by --uninstall or --no-unit-manager.
+$T3_SERVICE_USER ALL=(root) NOPASSWD: $T3_UNIT_HELPER_PATH
+EOF
+
+  if ! visudo -cf "$install_sudoers_tmp" >/dev/null 2>&1; then
+    rm -f "$install_sudoers_tmp"
+    warn "the sudoers rule this script generated did not pass 'visudo -c'; it was not installed."
+    note "Nothing was changed in /etc/sudoers.d. The agent simply has no privilege."
+    return 0
+  fi
+
+  install -m 0440 -o root -g root "$install_sudoers_tmp" "$T3_SUDOERS_PATH"
+  rm -f "$install_sudoers_tmp"
+
+  # Checked again against the *whole* configuration once installed. A file that
+  # is valid alone can still break sudo in combination, and a broken sudoers is
+  # a machine nobody can administer — so it is removed immediately rather than
+  # left for somebody to discover at the worst moment.
+  if ! visudo -c >/dev/null 2>&1; then
+    rm -f "$T3_SUDOERS_PATH"
+    warn "installing the rule made 'visudo -c' fail, so it was removed again immediately."
+    note "sudo on this machine is exactly as it was. The agent has no privilege."
+    return 0
+  fi
+
+  log "granted: $T3_SERVICE_USER may run $T3_UNIT_HELPER_PATH as root, and nothing else"
+}
+
+# The units the helper wrote, on the way out.
+#
+# Uninstall removes what installing created, and these were created through it:
+# leaving them behind means units enabled at boot, running as a user this is
+# about to delete, that nothing left on the machine can manage — the helper and
+# the sudo rule are going with the prefix. The deployed code itself stays, in
+# the data directory, like everything else somebody might still want.
+#
+# Gated on the helper's marker and not on the name. A `t3-app-anything.service`
+# that this machine's owner wrote by hand is not ours, and this is one of the
+# two or three places where getting that distinction wrong stops a service
+# nobody meant to stop.
+remove_app_units() {
+  [ -d /etc/systemd/system ] || return 0
+
+  for remove_app_unit in /etc/systemd/system/t3-app-*.service; do
+    # An unmatched glob comes back as the pattern itself.
+    [ -f "$remove_app_unit" ] || continue
+    if ! head -n 1 "$remove_app_unit" 2>/dev/null | grep -qxF "$T3_APP_UNIT_MARKER"; then
+      warn "$remove_app_unit was not written by the T3 helper; leaving it alone"
+      continue
+    fi
+    remove_app_unit_name="${remove_app_unit##*/}"
+    log "stopping and removing $remove_app_unit_name"
+    run systemctl disable --now "$remove_app_unit_name" || true
+    run rm -f "$remove_app_unit"
+  done
+}
+
 # --- enrollment ------------------------------------------------------------
 # The flow in apps/server/src/deviceEnrollment/http.ts, unchanged and not
 # extended: create, print the approve link, poll collect. No second mechanism,
@@ -839,6 +1127,7 @@ do_install() {
   install_server
   install_uninstaller
   write_unit
+  install_unit_manager
   start_service
   enroll
 
@@ -848,6 +1137,10 @@ do_install() {
     return 0
   fi
   log "done."
+  if [ "$opt_unit_manager" -eq 1 ] && [ -f "$T3_SUDOERS_PATH" ]; then
+    note "services   the agent manages its own units with 't3 box unit ...'; they live in"
+    note "           $T3_DEPLOY_ROOT and run as $T3_SERVICE_USER"
+  fi
   note "status     systemctl status $T3_UNIT_NAME"
   note "logs       journalctl -u $T3_UNIT_NAME -f"
   note "remove     sudo $T3_SELF_COPY --uninstall"
@@ -864,10 +1157,15 @@ do_uninstall() {
   log "uninstall plan"
   note "stop and disable  $T3_UNIT_NAME (only if this script wrote it)"
   note "remove            $T3_UNIT_PATH"
+  note "remove            $T3_SUDOERS_PATH and $T3_UNIT_HELPER_PATH"
+  note "stop and remove   any t3-app-*.service the helper wrote (nothing else)"
   note "remove            $T3_PREFIX"
   note "remove            system user $T3_SERVICE_USER"
-  note "KEEP              $T3_DATA_DIR — your database, logs and worktrees"
+  note "KEEP              $T3_DATA_DIR — your database, logs, worktrees and deployed apps"
   printf '\n' >&2
+
+  remove_app_units
+  remove_unit_manager_rule
 
   if [ -f "$T3_UNIT_PATH" ]; then
     if unit_is_ours; then

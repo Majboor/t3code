@@ -16,6 +16,12 @@ import {
   type BoxRequest,
 } from "../decideBoxCommand.ts";
 import {
+  parseHelperRefusal,
+  unitHelperCommandLine,
+  UNIT_EXIT_REFUSED,
+  type UnitRequest,
+} from "../decideUnitCommand.ts";
+import {
   BoxCommandError,
   BoxCommands,
   type BoxCaller,
@@ -34,6 +40,16 @@ import { BoxSession, type BoxSessionError } from "../Services/BoxSession.ts";
  * which is not a timeout at all.
  */
 const FOREGROUND_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * How long the privileged helper gets.
+ *
+ * Far shorter than a command's budget, because everything it does is a
+ * `systemctl` call and a file write. A helper invocation that has not returned
+ * in half a minute is not a slow build; it is a machine in trouble, and holding
+ * a sudo call open against it helps nobody.
+ */
+const HELPER_TIMEOUT_MS = 30_000;
 
 function toCommandError(error: BoxSessionError): BoxCommandError {
   return new BoxCommandError({ code: error.code, message: error.message });
@@ -132,7 +148,17 @@ const makeBoxCommands = Effect.gen(function* () {
       const needsInspection =
         facts.reachable &&
         !facts.revoked &&
-        (request.verb === "stop" || request.verb === "logs" || request.verb === "release-port");
+        (request.verb === "stop" ||
+          request.verb === "logs" ||
+          request.verb === "release-port" ||
+          // A unit verb that ends something asks the registry first, so the
+          // not-ours refusal stays in front of the helper. Creating, enabling
+          // or asking after a unit changes nothing that is running, and an
+          // inspection for those would be a round trip that decides nothing.
+          (request.verb === "unit" &&
+            (request.unit.verb === "stop" ||
+              request.unit.verb === "restart" ||
+              request.unit.verb === "disable")));
 
       const inspection = needsInspection
         ? yield* session
@@ -457,6 +483,143 @@ const makeBoxCommands = Effect.gen(function* () {
    * wanted. The revocation check still applies: a machine cut off from the
    * account stops answering questions about itself.
    */
+  /**
+   * The one verb that leaves the agent's own privileges behind.
+   *
+   * Two decisions happen and both are kept. This one refuses before a round
+   * trip and journals the refusal with a reason a reader can act on; the helper
+   * on the box refuses again from facts only it has — whether the unit exists,
+   * whether T3 wrote it, where a symlink actually points — and that one is the
+   * boundary. The agent has a shell on that machine and can call the helper
+   * itself, so a refusal here is a courtesy and a refusal there is a rule.
+   *
+   * A helper refusal comes back as a refusal and not as a failed command. It is
+   * the same distinction the rest of this file makes: `exit 3` in an audit
+   * table reads as "something broke", and what actually happened is that a box
+   * declined to stop somebody else's service.
+   */
+  const unit: BoxCommandsShape["unit"] = (input) =>
+    Effect.gen(function* () {
+      const request: UnitRequest = (
+        input.verb === "create"
+          ? {
+              verb: "create",
+              name: input.name,
+              create: input.create ?? {
+                exec: "",
+                args: [],
+                workingDirectory: null,
+                port: null,
+                description: null,
+              },
+            }
+          : { verb: input.verb, name: input.name }
+      ) as UnitRequest;
+
+      const journalVerb = `unit-${input.verb}`;
+      const { decision } = yield* decide(input, { verb: "unit", unit: request });
+      if (decision.outcome === "refuse") {
+        return yield* refuse(input, journalVerb, input.name, decision.refusal);
+      }
+      if (decision.plan.verb !== "unit") {
+        return yield* new BoxCommandError({
+          code: "protocol",
+          message: "The unit rules returned another verb.",
+        });
+      }
+      const plan = decision.plan.unit;
+
+      // Assembled from the plan and never from the caller's strings. Every
+      // token in it has been through an allowlist that excludes every character
+      // a shell treats as anything, which is what makes putting it on a command
+      // line safe at all.
+      const command = unitHelperCommandLine(plan);
+
+      const startedAt = yield* nowIso;
+      const result = yield* session
+        .exec({
+          environmentId: input.environmentId,
+          userId: input.userId,
+          request: { command, detach: false, timeoutMs: HELPER_TIMEOUT_MS },
+        })
+        .pipe(Effect.mapError(toCommandError));
+      const finishedAt = yield* nowIso;
+
+      const helperReason =
+        result.exitCode === UNIT_EXIT_REFUSED ? parseHelperRefusal(result.stderr) : null;
+
+      if (helperReason !== null) {
+        const entry = yield* write({
+          entryId: Crypto.randomUUID(),
+          environmentId: input.environmentId,
+          userId: input.userId,
+          turnId: input.turnId,
+          verb: journalVerb,
+          command,
+          serviceId: null,
+          outcome: "refused",
+          // Marked as the box's own refusal rather than this module's. The two
+          // are answers to the same question from different vantage points, and
+          // a history that could not tell them apart would hide the fact that
+          // something got as far as the machine.
+          refusalReason: `helper:${helperReason}`,
+          exitCode: result.exitCode,
+          signal: null,
+          pid: null,
+          unmanaged: false,
+          stdout: forJournal(result.stdout).text,
+          stderr: forJournal(result.stderr).text,
+          outputBytes: 0,
+          startedAt,
+          finishedAt,
+        });
+        return {
+          outcome: "refused",
+          entryId: entry.entryId,
+          refusal: {
+            reason: "helper-refused" as const,
+            headline: `The box refused this: ${helperReason}.`,
+            remedy: result.stderr.trim().length === 0 ? "" : result.stderr.trim(),
+          },
+        } as const;
+      }
+
+      const storedOut = forJournal(result.stdout);
+      const storedErr = forJournal(result.stderr);
+      const entry = yield* write({
+        entryId: Crypto.randomUUID(),
+        environmentId: input.environmentId,
+        userId: input.userId,
+        turnId: input.turnId,
+        verb: journalVerb,
+        command,
+        serviceId: null,
+        outcome: result.exitCode === 0 && !result.timedOut ? "ok" : "failed",
+        refusalReason: null,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        pid: null,
+        unmanaged: false,
+        stdout: storedOut.text,
+        stderr: storedErr.text,
+        outputBytes: storedOut.totalBytes + storedErr.totalBytes,
+        startedAt,
+        finishedAt,
+      });
+
+      return {
+        outcome: "unit",
+        entryId: entry.entryId,
+        verb: plan.verb,
+        name: plan.name,
+        exitCode: result.exitCode,
+        output: boundCommandOutput(
+          [result.stdout, result.stderr].filter((stream) => stream.trim().length > 0).join("\n"),
+        ),
+        needsBindCapability: plan.needsBindCapability,
+      } as const;
+    });
+
   const history: BoxCommandsShape["history"] = (input) =>
     Effect.gen(function* () {
       const facts = yield* session
@@ -520,6 +683,7 @@ const makeBoxCommands = Effect.gen(function* () {
     logs,
     claimPort,
     releasePort,
+    unit,
     history,
     output,
   } satisfies BoxCommandsShape;

@@ -129,10 +129,17 @@ import { BoxCommandsLive } from "./box/Layers/BoxCommands.ts";
 import { BoxSessionRelayLive } from "./box/Layers/BoxSessionRelay.ts";
 import { BoxCommands, type BoxCommandsShape, type BoxRefused } from "./box/Services/BoxCommands.ts";
 import {
+  UNIT_DEPLOY_ROOT,
+  UNIT_PREFIX,
+  UNIT_PRIVILEGED_PORT_CEILING,
+  UNIT_SUFFIX,
+} from "./box/decideUnitCommand.ts";
+import {
   boxHistoryJson,
   boxRefusalJson,
   boxRunJson,
   boxServicesJson,
+  boxUnitJson,
   formatBoxHistory,
   formatBoxLogs,
   formatBoxOutput,
@@ -141,6 +148,7 @@ import {
   formatBoxRun,
   formatBoxServices,
   formatBoxStop,
+  formatBoxUnit,
 } from "./box/cliOutput.ts";
 import { BoxCommandJournalRepositoryLive } from "./persistence/Layers/BoxCommandJournal.ts";
 import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
@@ -2507,6 +2515,123 @@ const boxOutputCommand = Command.make("output", {
   ),
 );
 
+/**
+ * The verbs that reach the box's privileged helper.
+ *
+ * Deliberately a separate subcommand group rather than options on `run`. `t3
+ * box run` is the agent acting as its own unprivileged user, which is almost
+ * everything; this is the narrow set it cannot do as itself, and keeping the
+ * two apart is what makes "what did this need root for" answerable by reading
+ * the command rather than by reading the implementation.
+ *
+ * `create` is the only one that takes anything beyond a name, and what it takes
+ * is not unit-file content — it is a program, its arguments, a directory, a
+ * port and a description, each of which the helper checks again before it
+ * generates a unit from its own template.
+ */
+const boxUnitNameArgument = Argument.string("unit").pipe(
+  Argument.withDescription(
+    `The unit, named \`${UNIT_PREFIX}<something>\`. The \`${UNIT_SUFFIX}\` suffix is optional.`,
+  ),
+);
+
+const boxUnitLifecycleCommand = (
+  verb: "start" | "stop" | "restart" | "enable" | "disable" | "status",
+  description: string,
+) =>
+  Command.make(verb, {
+    baseDir: baseDirFlag,
+    json: jsonFlag,
+    box: boxArgument,
+    unit: boxUnitNameArgument,
+  }).pipe(
+    Command.withDescription(description),
+    Command.withHandler((flags) =>
+      runBoxCommand(flags, ({ commands }) =>
+        commands.unit({ ...boxCaller(flags.box), verb, name: flags.unit, create: null }).pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxUnit, boxUnitJson)),
+        ),
+      ),
+    ),
+  );
+
+const boxUnitCreateCommand = Command.make("create", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+  box: boxArgument,
+  unit: boxUnitNameArgument,
+  exec: Flag.string("exec").pipe(
+    Flag.withDescription(
+      `The program to run, as an absolute path inside ${UNIT_DEPLOY_ROOT}. Symlinks are resolved before it is accepted.`,
+    ),
+  ),
+  arg: Flag.string("arg").pipe(
+    Flag.withDescription(
+      "One argument for it. Repeatable. No whitespace and no newlines: anything wordier belongs in a config file next to the program.",
+    ),
+    // `atLeast(0)` is how this cli spells a repeatable flag; the ceiling on how
+    // many is a worded refusal from the rules rather than a parse error here.
+    Flag.atLeast(0),
+  ),
+  workingDir: Flag.string("working-dir").pipe(
+    Flag.withDescription(
+      `Where to run it, inside ${UNIT_DEPLOY_ROOT}. Defaults to the directory holding the program.`,
+    ),
+    Flag.optional,
+  ),
+  port: Flag.integer("port").pipe(
+    Flag.withDescription(
+      `Sets PORT= in the unit. Below ${UNIT_PRIVILEGED_PORT_CEILING} the unit is granted CAP_NET_BIND_SERVICE instead of running as root.`,
+    ),
+    Flag.optional,
+  ),
+  description: Flag.string("description").pipe(
+    Flag.withDescription("One line, for `systemctl status`."),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription(
+    "Write a systemd unit for something the agent deployed, running as the box's unprivileged service user.",
+  ),
+  Command.withHandler((flags) =>
+    runBoxCommand(flags, ({ commands }) =>
+      commands
+        .unit({
+          ...boxCaller(flags.box),
+          verb: "create",
+          name: flags.unit,
+          create: {
+            exec: flags.exec,
+            args: flags.arg,
+            workingDirectory: Option.getOrNull(flags.workingDir),
+            port: Option.getOrNull(flags.port),
+            description: Option.getOrNull(flags.description),
+          },
+        })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxUnit, boxUnitJson)),
+        ),
+    ),
+  ),
+);
+
+const boxUnitCommand = Command.make("unit").pipe(
+  Command.withDescription(
+    "Manage the services the agent runs on a box, and only those. Everything else on the machine is somebody else's.",
+  ),
+  Command.withSubcommands([
+    boxUnitCreateCommand,
+    boxUnitLifecycleCommand("start", "Start a unit the agent owns."),
+    boxUnitLifecycleCommand("stop", "Stop a unit the agent owns."),
+    boxUnitLifecycleCommand("restart", "Restart a unit the agent owns."),
+    boxUnitLifecycleCommand("enable", "Have a unit the agent owns come back after a reboot."),
+    boxUnitLifecycleCommand("disable", "Stop a unit the agent owns from starting at boot."),
+    boxUnitLifecycleCommand("status", "What systemd says about a unit the agent owns."),
+  ]),
+);
+
 const boxCommand = Command.make("box").pipe(
   Command.withDescription("Drive a machine that runs and serves things, from wherever you are."),
   Command.withSubcommands([
@@ -2515,6 +2640,7 @@ const boxCommand = Command.make("box").pipe(
     boxStopCommand,
     boxLogsCommand,
     boxPortCommand,
+    boxUnitCommand,
     boxHistoryCommand,
     boxOutputCommand,
   ]),

@@ -153,10 +153,13 @@ The verbs:
 - \`t3 box logs <box> <name>\` — captured output of something T3 started.
 - \`t3 box stop <box> <name>\` — stop something T3 started.
 - \`t3 box history <box>\` — what has happened on this box recently.
+- \`t3 box unit create|start|stop|restart|enable|disable|status <box> <unit>\` — make something you deployed survive a reboot, as a systemd unit named \`t3-app-<something>\`.
 
 **Start by reading the history.** \`t3 box history\` is the memory you do not have: what ran, when, by which turn, and how it ended. It tells you which port the app is already on, whether the migration was applied, and what was tried and abandoned — and it works when the box is switched off, which is often exactly when you need it. Running things to find out what state a machine is in is how the same mistake gets made twice on a machine serving real traffic.
 
 **You may only stop what T3 started.** A box runs other people's work: databases, production APIs, jobs nothing here knows about. \`t3 box services\` labels every row with who started it, and anything not marked as ours will refuse to stop. That refusal is correct — treat it as the answer, not as an obstacle. Nothing available to you can tell what depends on an unrecognised process, so the next step is to say what you found and ask the person who owns the machine.
+
+**You have no root on a box, and \`sudo\` will not get you any.** Exactly one privileged thing is delegated: \`t3 box unit …\` reaches a small root-owned helper that manages units *it* wrote, named \`t3-app-*\`, living under the box's deploy root, and running as the box's unprivileged service user. It refuses every other unit name, refuses a program outside the deploy root, and takes no unit-file content from you. If something needs a package installed, a firewall changed, or another service touched, that is not a thing to work around — say what is needed and ask the person who owns the machine. To serve on a port below 1024, pass \`--port\` to \`t3 box unit create\`: the unit is granted the one capability that binds it, and nothing runs as root.
 
 **Output is truncated on purpose.** You get the first and last couple of kilobytes of each stream with a marker naming the gap, because an install log is thousands of lines and none of them are worth your context. The whole thing is kept — \`t3 box output <id>\` fetches it using the id printed with the result. Read the exit code and the tail first; you will usually find you do not need the rest.
 

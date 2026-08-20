@@ -17,6 +17,7 @@ import type { EnvironmentService, PortClaim } from "@t3tools/shared/serviceRegis
 
 import type { BoxCommandEntry } from "../../persistence/Services/BoxCommandJournal.ts";
 import type { BoundedOutput, BoxRefusal } from "../decideBoxCommand.ts";
+import type { UnitCreateFields, UnitVerb } from "../decideUnitCommand.ts";
 
 /**
  * A refusal that reached the rules and stopped there.
@@ -85,6 +86,32 @@ export interface BoxPortReport {
   readonly held: boolean;
 }
 
+/**
+ * What the privileged helper did, or would not do.
+ *
+ * Carries the same shape as everything else here — an exit code, bounded
+ * output, a journal id — because from the caller's side this is one more thing
+ * that happened on the box. What makes it different is invisible in the type
+ * and worth saying out loud: this is the only verb whose work is done by a
+ * root-owned binary rather than by the agent's own user, and the only one whose
+ * refusals can come back from the machine rather than from the rules here.
+ */
+export interface BoxUnitReport {
+  readonly outcome: "unit";
+  readonly entryId: string;
+  readonly verb: UnitVerb;
+  /** The canonical name, as it was decided and as it was dispatched. */
+  readonly name: string;
+  readonly exitCode: number | null;
+  readonly output: BoundedOutput;
+  /**
+   * Whether the unit was granted CAP_NET_BIND_SERVICE because it asked for a
+   * port below 1024. Surfaced so the CLI can say it: a capability nobody
+   * mentions is a capability nobody reviews.
+   */
+  readonly needsBindCapability: boolean;
+}
+
 export interface BoxHistoryReport {
   readonly outcome: "history";
   readonly entries: ReadonlyArray<BoxCommandEntry>;
@@ -132,6 +159,21 @@ export interface BoxCommandsShape {
   readonly releasePort: (
     input: BoxCaller & { readonly port: number },
   ) => Effect.Effect<BoxPortReport | BoxRefused, BoxCommandError>;
+  /**
+   * Manage a systemd unit the agent owns, through the box's privileged helper.
+   *
+   * Everything about which units those are is decided twice — here, so the
+   * refusal is fast and worded, and again by the helper on the machine, which
+   * is the copy that enforces it. See `decideUnitCommand`.
+   */
+  readonly unit: (
+    input: BoxCaller & {
+      readonly verb: UnitVerb;
+      readonly name: string;
+      /** Only for `create`; null for every other verb. */
+      readonly create: UnitCreateFields | null;
+    },
+  ) => Effect.Effect<BoxUnitReport | BoxRefused, BoxCommandError>;
   /** What happened here recently. The one verb that works on a box that is off. */
   readonly history: (
     input: BoxCaller & { readonly limit: number },

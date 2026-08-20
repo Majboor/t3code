@@ -515,3 +515,141 @@ it.effect("lists what is running without writing a journal entry for looking", (
     }),
   );
 });
+
+/**
+ * The privileged verb, and the thing that makes it different from every other
+ * one: what reaches the machine is a call to one root-owned helper, not a
+ * systemctl invocation, and the box gets to refuse it again after we have.
+ */
+it.effect("reaches the box's helper by absolute path, and never systemctl", () => {
+  const box = makeFakeBox({
+    exec: { exitCode: 0, stdout: "/etc/systemd/system/t3-app-web.service\n" },
+  });
+  return run(
+    box,
+    Effect.gen(function* () {
+      const commands = yield* BoxCommands;
+      const journal = yield* BoxCommandJournalRepository;
+      const report = yield* commands.unit({
+        ...caller("box-unit"),
+        verb: "create",
+        name: "t3-app-web",
+        create: {
+          exec: "/var/lib/t3-environment/apps/web/run",
+          args: ["--port=80"],
+          workingDirectory: null,
+          port: 80,
+          description: "the web app",
+        },
+      });
+
+      if (report.outcome !== "unit") return assert.fail("expected a unit report");
+      assert.equal(report.name, "t3-app-web.service");
+      // A low port is a capability on the unit, never a uid on the process.
+      assert.isTrue(report.needsBindCapability);
+
+      const dispatched = box.executed[0] ?? "";
+      assert.include(dispatched, "/opt/t3-environment/libexec/t3-unit-helper");
+      assert.notInclude(dispatched, "systemctl");
+      assert.include(dispatched, "'create' 't3-app-web.service'");
+
+      // Journalled like everything else the agent did to this box, under a verb
+      // that says it went through the helper.
+      const recent = yield* journal.listRecent({ environmentId: "box-unit", limit: 10 });
+      assert.equal(recent.length, 1);
+      assert.equal(recent[0]!.verb, "unit-create");
+      assert.equal(recent[0]!.outcome, "ok");
+    }),
+  );
+});
+
+it.effect("records the box's own refusal as a refusal, not as a failed command", () => {
+  // Exit 3 and a parseable reason is the helper saying no — most importantly,
+  // saying no to a unit T3 did not write. A journal that filed this as `exit 3`
+  // would bury the only row that says an agent tried.
+  const box = makeFakeBox({
+    exec: {
+      exitCode: 3,
+      stderr:
+        "t3-unit-helper: refused (unit-not-ours): /etc/systemd/system/t3-app-web.service exists and was not written by this helper.\n",
+    },
+  });
+  return run(
+    box,
+    Effect.gen(function* () {
+      const commands = yield* BoxCommands;
+      const journal = yield* BoxCommandJournalRepository;
+      const report = yield* commands.unit({
+        ...caller("box-unit-refused"),
+        verb: "stop",
+        name: "t3-app-web",
+        create: null,
+      });
+
+      if (report.outcome !== "refused") return assert.fail("expected a refusal");
+      assert.equal(report.refusal.reason, "helper-refused");
+      assert.include(report.refusal.headline, "unit-not-ours");
+
+      const recent = yield* journal.listRecent({
+        environmentId: "box-unit-refused",
+        limit: 10,
+      });
+      assert.equal(recent[0]!.outcome, "refused");
+      assert.equal(recent[0]!.refusalReason, "helper:unit-not-ours");
+    }),
+  );
+});
+
+it.effect("refuses a unit outside the prefix without dispatching anything", () => {
+  const box = makeFakeBox();
+  return run(
+    box,
+    Effect.gen(function* () {
+      const commands = yield* BoxCommands;
+      const journal = yield* BoxCommandJournalRepository;
+      const report = yield* commands.unit({
+        ...caller("box-unit-foreign"),
+        verb: "stop",
+        name: "days-tracker-api",
+        create: null,
+      });
+
+      if (report.outcome !== "refused") return assert.fail("expected a refusal");
+      assert.equal(report.refusal.reason, "unit-name-outside-prefix");
+      // The point of deciding here as well as on the box: nothing was sent.
+      assert.deepEqual(box.executed, []);
+
+      const recent = yield* journal.listRecent({
+        environmentId: "box-unit-foreign",
+        limit: 10,
+      });
+      assert.equal(recent[0]!.verb, "unit-stop");
+      assert.equal(recent[0]!.refusalReason, "unit-name-outside-prefix");
+    }),
+  );
+});
+
+it.effect("keeps the not-ours refusal in front of the helper", () => {
+  // A listening process nothing here started, under exactly the name being
+  // addressed. The registry's verdict answers first, and it answers the same
+  // way it does for `t3 box stop`.
+  const box = makeFakeBox({
+    services: [{ ...theirs, name: "t3-app-web.service", port: 5432 }],
+  });
+  return run(
+    box,
+    Effect.gen(function* () {
+      const commands = yield* BoxCommands;
+      const report = yield* commands.unit({
+        ...caller("box-unit-notours"),
+        verb: "stop",
+        name: "t3-app-web",
+        create: null,
+      });
+
+      if (report.outcome !== "refused") return assert.fail("expected a refusal");
+      assert.equal(report.refusal.reason, "service-not-ours");
+      assert.deepEqual(box.executed, []);
+    }),
+  );
+});

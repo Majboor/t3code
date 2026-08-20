@@ -567,3 +567,73 @@ describe("boundCommandOutput", () => {
     expect(boundCommandOutput("\udc00x").totalBytes).toBe(4);
   });
 });
+
+/** A unit request, with `create` given a body that is beside the point here. */
+const unit = (
+  verb: "create" | "start" | "stop" | "restart" | "enable" | "disable" | "status",
+  name: string,
+): BoxRequest =>
+  verb === "create"
+    ? {
+        verb: "unit",
+        unit: {
+          verb,
+          name,
+          create: {
+            exec: "/var/lib/t3-environment/apps/web/run",
+            args: [],
+            workingDirectory: null,
+            port: null,
+            description: null,
+          },
+        },
+      }
+    : { verb: "unit", unit: { verb, name } };
+
+describe("unit verbs", () => {
+  it("is subject to the same two guards as everything else", () => {
+    // Privilege does not get its own door. A revoked machine refuses the
+    // privileged verb first, for the same reason it refuses the others.
+    expect(refusedWith(decide(unit("stop", "t3-app-web"), { box: box({ revoked: true }) }))).toBe(
+      "machine-revoked",
+    );
+    expect(
+      refusedWith(decide(unit("start", "t3-app-web"), { box: box({ reachable: false }) })),
+    ).toBe("box-unreachable");
+  });
+
+  it("allows a well-formed request and carries the canonical name", () => {
+    const decision = decide(unit("restart", "t3-app-web"));
+    if (decision.outcome !== "allow") throw new Error("expected an allow");
+    if (decision.plan.verb !== "unit") throw new Error("expected a unit plan");
+    expect(decision.plan.unit.name).toBe("t3-app-web.service");
+  });
+
+  it("refuses a unit outside the range the helper manages", () => {
+    expect(refusedWith(decide(unit("stop", "days-tracker-api")))).toBe("unit-name-outside-prefix");
+    expect(refusedWith(decide(unit("stop", "t3-app-../other")))).toBe("unit-name-malformed");
+  });
+
+  /**
+   * The registry's verdict is in front of the helper, not instead of it. This
+   * is the case where a process nothing here started is listening under exactly
+   * the name being addressed — rare, and precisely when guessing is worst.
+   */
+  it("keeps the not-ours refusal in front of the privileged path", () => {
+    const foreign = strangers({ name: "t3-app-web.service" });
+    expect(refusedWith(decide(unit("stop", "t3-app-web"), { services: [foreign] }))).toBe(
+      "service-not-ours",
+    );
+    expect(refusedWith(decide(unit("disable", "t3-app-web"), { services: [foreign] }))).toBe(
+      "service-not-ours",
+    );
+  });
+
+  it("does not apply that guard to verbs that end nothing", () => {
+    // `status` and `enable` change nothing that is currently running, and a
+    // refusal there would only stop the agent finding out what it is looking at.
+    const foreign = strangers({ name: "t3-app-web.service" });
+    expect(decide(unit("status", "t3-app-web"), { services: [foreign] }).outcome).toBe("allow");
+    expect(decide(unit("create", "t3-app-web"), { services: [foreign] }).outcome).toBe("allow");
+  });
+});
