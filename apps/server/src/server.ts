@@ -12,6 +12,14 @@ import {
   shareLinkRedeemRouteLayer,
 } from "./shareLinks/http.ts";
 import {
+  deviceEnrollmentApproveRouteLayer,
+  deviceEnrollmentCollectRouteLayer,
+  deviceEnrollmentCreateRouteLayer,
+  deviceEnrollmentDenyRouteLayer,
+  deviceEnrollmentPreviewRouteLayer,
+} from "./deviceEnrollment/http.ts";
+import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrollments.ts";
+import {
   cloudSyncBlobDownloadRouteLayer,
   cloudSyncBlobUploadRouteLayer,
   cloudSyncCommitRouteLayer,
@@ -330,6 +338,11 @@ const ShareLinkRepositoryLayerLive = ShareLinkRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 
+/** Machines waiting to join an account: written before anyone owns them. */
+const DeviceEnrollmentRepositoryLayerLive = DeviceEnrollmentRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 /** The asks that sit on top of sharing: who wants usage, and who answered. */
 const ProviderUsageRequestRepositoryLayerLive = ProviderUsageRequestRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
@@ -363,6 +376,7 @@ const PersistenceServicesLayerLive = Layer.mergeAll(
   ProviderSharingRepositoryLayerLive,
   ProviderUsageRequestRepositoryLayerLive,
   ShareLinkRepositoryLayerLive,
+  DeviceEnrollmentRepositoryLayerLive,
   CloudSyncRepositoryLayerLive,
   ThreadPreferenceLayerLive,
   DeployLayerLive,
@@ -506,6 +520,14 @@ export const makeRoutesLayer = Layer.mergeAll(
   // only one that reads a session.
   shareLinkPreviewRouteLayer,
   shareLinkClaimRouteLayer,
+  // Enrolling a machine. Four of the five are unauthenticated because the
+  // machine has no account yet; `approve` requires a browser session and is the
+  // only thing standing between a code and a credential.
+  deviceEnrollmentCreateRouteLayer,
+  deviceEnrollmentPreviewRouteLayer,
+  deviceEnrollmentApproveRouteLayer,
+  deviceEnrollmentDenyRouteLayer,
+  deviceEnrollmentCollectRouteLayer,
   cloudSyncNegotiateRouteLayer,
   cloudSyncBlobUploadRouteLayer,
   cloudSyncBlobDownloadRouteLayer,

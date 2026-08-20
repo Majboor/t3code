@@ -128,6 +128,7 @@ import { ProviderSharingServiceLive } from "./providerSharing/Layers/ProviderSha
 import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
 import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
+import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrollments.ts";
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
 import { CloudSyncRepositoryLive } from "./persistence/Layers/CloudSync.ts";
 import { CloudSyncServiceLive } from "./cloudSync/Layers/CloudSyncService.ts";
@@ -375,6 +376,13 @@ const shareLinkServiceTestLayer = ShareLinkServiceLive.pipe(
   Layer.provide(ShareLinkRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
   Layer.provide(collaborationTestLayer),
   Layer.provide(ProjectionProjectRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+);
+
+// Machines waiting to join an account. No service in front of it: the
+// device-enrollment routes talk to the repository directly, because the rules
+// they apply live in `decideEnrollment` and the repository is what replays them.
+const deviceEnrollmentRepositoryTestLayer = DeviceEnrollmentRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
 );
 
 const providerUsageServiceTestLayer = ProviderUsageServiceLive.pipe(
@@ -790,6 +798,7 @@ const buildAppUnderTest = (options?: {
           providerSharingServiceTestLayer,
           providerUsageServiceTestLayer,
           shareLinkServiceTestLayer,
+          deviceEnrollmentRepositoryTestLayer,
           cloudSyncServiceTestLayer,
         ),
       ),
