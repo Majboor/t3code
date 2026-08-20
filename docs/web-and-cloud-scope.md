@@ -38,6 +38,45 @@ The VPS keeps two jobs:
 It is explicitly **not** where everyone's workspace lives. A workspace lives on the machine of
 the person working in it.
 
+## Prod pairs; beta keeps the hosting
+
+Decided 2026-08-20, on finding that the deployed app does the opposite of the section
+above. It is an ordinary server with a login on it, so signing up gives you a workspace
+whose `workspace_root` is a path on the VPS — measured, not inferred: the one project on
+prod is rooted at `/var/lib/t3code`. Nothing in the code expressed the intent, so nothing
+enforced it.
+
+The split:
+
+- **beta** keeps today's behaviour — sign up, and the workspace runs on our box. It stays
+  because it works and people can use it now, not because it is the destination.
+- **prod** becomes the pairing shell: it holds accounts, environments, share links and
+  packs, and the projects live on the machine in front of you.
+
+`workspaceSource` is how a server says which one it is — `this-server` or
+`paired-environment` — and the browser stops assuming that a session implies a workspace.
+The field is optional and its absence means `this-server`, so every server built before it
+existed keeps behaving exactly as it does now.
+
+**The refusal is enforced at the orchestration engine's dispatch, not at the websocket.**
+The socket is not the only way in: the CLI dispatches straight into the engine, and server
+startup can auto-create a project from its working directory. A rule only the socket knows
+about is one `t3 project add` away from being untrue.
+
+**The readiness gate counts saved environments, not live connections.** Connections are
+established after the shell mounts, so a liveness test reads zero on every cold load and
+would eject someone whose laptop is merely asleep. Whether an environment is reachable is
+the workspace's job to display.
+
+What this does **not** yet do, so nobody promises it:
+
+- Neither name resolves. `logicpacks.io` is on Cloudflare nameservers, but the box has no
+  `cert.pem`, so named tunnels cannot be minted unattended and both instances are still
+  reachable only through disposable `trycloudflare.com` URLs.
+- The deployed build predates all of this — and the rename — by four days.
+- A `paired-environment` server refuses to create projects, but nothing yet *moves* the
+  existing hosted workspaces to beta. That is a data migration, not a flag.
+
 ## Sharing stays one click, and is not pairing
 
 Upstream hands out a pairing URL and a token. We do not, for the thing a person sends to a
