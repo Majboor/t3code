@@ -59,6 +59,7 @@ import {
   staticAndDevRouteLayer,
   browserApiCorsLayer,
 } from "./http.ts";
+import { installScriptRouteLayer } from "./install/http.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import { OpenLive } from "./open.ts";
@@ -601,6 +602,11 @@ export const makeRoutesLayer = Layer.mergeAll(
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
   serverEnvironmentRouteLayer,
+  // Before the static catch-all, for the same reason `/s/*` is: `/install.sh`
+  // is a file this server hands out, not a path the web bundle has heard of.
+  // Unauthenticated, because the caller is a bare `curl` on a machine with no
+  // account — the same premise the enrollment routes start from.
+  installScriptRouteLayer,
   staticAndDevRouteLayer,
   websocketRpcRouteLayer,
 ).pipe(Layer.provide(browserApiCorsLayer));

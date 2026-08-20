@@ -5,6 +5,7 @@ import { useCallback } from "react";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { useStore } from "~/store";
+import { EnvironmentInstallSection } from "../devices/EnvironmentInstallSection";
 import { SurfaceHeading, SurfaceSection, SurfaceShell } from "../SurfaceShell";
 import { Button } from "../ui/button";
 import { AddEnvironmentForm } from "./AddEnvironmentForm";
@@ -24,11 +25,14 @@ export type EnvironmentsSurfaceVariant = "page" | "standalone";
  * about what happens next, then the list and the form); the mechanics are
  * ours, since our environments are reached directly rather than via a relay.
  *
- * Two ways in, on purpose. "Connect a machine" leads to the download, which is
- * the answer for somebody who has nothing yet and would not know what a pairing
- * token is. Underneath it, the form that takes a pairing link stays exactly
- * where it was: a developer who already ran the server on a box and has its
- * link in the clipboard does not want to be sent through an installer.
+ * Three ways in, on purpose, and they are not ranked by how advanced you are —
+ * they are ranked by what the machine on the other end is. "Connect a machine"
+ * leads to the download, which is the answer for a laptop belonging to somebody
+ * who would not know what a pairing token is. The install line below it is the
+ * answer for a VPS, which has no desktop to put an app on and an SSH prompt
+ * already open. And the form that takes a pairing link stays exactly where it
+ * was: a developer who already ran the server on a box and has its link in the
+ * clipboard does not want to be sent through either.
  */
 export function EnvironmentsSurface({
   variant = "page",
@@ -102,6 +106,8 @@ export function EnvironmentsSurface({
             </Button>
           </div>
         </SurfaceSection>
+
+        <EnvironmentInstallSection />
 
         <SurfaceSection
           title="Add an environment by hand"

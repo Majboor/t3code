@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { APP_BASE_NAME, APP_VERSION } from "~/branding";
 import { SurfaceHeading, SurfaceSection, SurfaceShell, type SurfaceVariant } from "../SurfaceShell";
 import { Button } from "../ui/button";
+import { EnvironmentInstallSection } from "./EnvironmentInstallSection";
 import {
   desktopArtifactFileName,
   describeDesktopDownloadAvailability,
@@ -29,6 +30,11 @@ import {
  * The unsigned-binary warning is on the page rather than in a support doc for
  * the reason it exists: a person who meets Gatekeeper or SmartScreen with no
  * warning concludes the app is broken, and the download was wasted.
+ *
+ * The page has two audiences and only ever addressed one. A server has no
+ * desktop to install an app onto, so `EnvironmentInstallSection` sits under the
+ * buttons with the line you paste at an SSH prompt instead — the same
+ * destination by the only route that machine has.
  */
 export function DesktopDownloadSurface({
   variant = "page",
@@ -92,6 +98,14 @@ export function DesktopDownloadSurface({
             </div>
           </SurfaceSection>
         ) : null}
+
+        {/*
+          Directly under the download buttons rather than in a footnote, because
+          for one of the two audiences this page has it is the *only* answer:
+          a VPS cannot be handed a .dmg. It is also, while the artifacts above
+          remain unpublished, the only thing on this page that works today.
+        */}
+        <EnvironmentInstallSection />
 
         <SurfaceSection
           title="Your computer will warn you the first time"

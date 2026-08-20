@@ -6,9 +6,37 @@ already doing other work — which is the normal case, not the exception.
 
 ## The line
 
-**Not published yet.** No job builds a server tarball and no job uploads one
-anywhere, so there is no URL to `curl`. The script refuses at the download step
-rather than guessing at a host:
+```sh
+curl -fsSL https://your-t3-server/install.sh | sh
+```
+
+The host is not a release CDN and never needs to be. **Every T3 server serves
+this script**, from `GET /install.sh` — see
+[`apps/server/src/install/http.ts`](../../apps/server/src/install/http.ts) — so
+the address is simply whichever server you are already signed in to. If you can
+reach the app, you can reach its installer, and the URL is in front of you on
+`/environments` and `/download` with a copy button.
+
+**The origin is baked into what comes back.** The route substitutes the address
+the request arrived on into the script it serves, so `--account-url` already
+defaults to the hub that handed you the line. A box installed this way enrolls
+into the right account with nothing typed, and the commonest way to point a
+machine at the wrong hub — retyping the address — stops existing. Fetch the file
+any other way and the value is empty, exactly as before.
+
+That substitution is the one place a request header reaches a file people pipe
+to `sh`, so it is narrow on purpose: the `Host` header is used only if it parses
+as a plain `scheme://host[:port]` and nothing else. A quote, a newline, a `$(…)`
+or a path is dropped rather than escaped, and the script is served unmodified —
+costing somebody one flag rather than their machine. `install/http.test.ts`
+writes each of those onto a socket by hand, because `fetch` refuses to send them
+and so proves nothing.
+
+### What is still unpublished
+
+The **script** is published. The **server tarball it downloads is not** — no job
+builds one and no job uploads one anywhere — so a real run gets as far as the
+download step and stops:
 
 ```
 t3: ERROR: there is no published release to install.
@@ -18,24 +46,47 @@ t3: ERROR: there is no published release to install.
     Nothing was installed.
 ```
 
-When there is a release host, exactly two things change: the
-`ENVIRONMENT_INSTALL_BASE_URL` constant in
-[`scripts/lib/environment-install.ts`](../../scripts/lib/environment-install.ts)
-and the `T3_INSTALL_BASE_URL` line in the script. Then the line is:
+Until that changes, pass artifacts you host yourself. Note there is no
+`--account-url` below: the line came from the hub, so the hub is already known.
 
 ```sh
-curl -fsSL https://<host>/install.sh | sh
-```
-
-Until then, copy `t3-environment.sh` to the machine and point it at artifacts
-you host yourself:
-
-```sh
-sudo sh t3-environment.sh \
+curl -fsSL https://your-t3-server/install.sh | sh -s -- \
   --base-url https://your-host/artifacts \
-  --account-url https://your-t3-server \
   --port 3773
 ```
+
+Two lines turn the download on: the `ENVIRONMENT_INSTALL_BASE_URL` constant in
+[`scripts/lib/environment-install.ts`](../../scripts/lib/environment-install.ts)
+and the `T3_INSTALL_BASE_URL` line in the script.
+
+The desktop app artifacts are a separate matter and are also still unpublished —
+see `DESKTOP_DOWNLOAD_BASE_URL` in
+[`apps/web/src/components/devices/desktopDownload.logic.ts`](../../apps/web/src/components/devices/desktopDownload.logic.ts).
+Nothing here changes that.
+
+A server running from a tarball has no copy of this script beside it, so its own
+`/install.sh` answers `503` with a shell comment saying where the file lives
+rather than pretending the route is missing.
+
+### The seam
+
+The served file is rewritten in exactly one place: a single assignment to
+`T3_HUB_URL`, in its own fenced comment block just under the drift-checked
+constants. The server looks for that line literally and serves the file
+untouched unless it finds precisely one copy, so it must not be reflowed,
+requoted or duplicated — including in prose, which is why the block above it
+describes the line without quoting it.
+
+The emitted form is:
+
+```sh
+T3_HUB_URL="${T3_HUB_URL:-https://your-t3-server}"
+```
+
+`${…:-}` means an environment variable still wins, so
+`T3_HUB_URL=https://other sh install.sh` overrides a baked-in hub. `T3_HUB_URL`
+is also the name to export to the installed server and the value any `--hub`
+flag should default to.
 
 ## Look before you run
 
@@ -115,9 +166,12 @@ owned by `t3env`. The machine also appears in your account's connected-machines
 list, where it can be revoked — that is `POST /api/devices/machines/:id/revoke`,
 and revoking kills the session, not just the row.
 
-Omit `--account-url` and the server is installed and running but joins no
-account. Enrollment failures never fail the install; they warn and tell you to
-re-run.
+`--account-url` defaults to the hub the script was served from, so pasting the
+line from `/environments` needs no value for it — see [The seam](#the-seam).
+Pass it explicitly to override that, or run a copy of the script from disk,
+where there is no hub and the default is empty. With neither, the server is
+installed and running but joins no account. Enrollment failures never fail the
+install; they warn and tell you to re-run.
 
 ## What the agent may do as root, and what it may not
 

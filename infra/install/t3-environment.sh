@@ -64,6 +64,31 @@ T3_APP_UNIT_MARKER="# Managed by t3-unit-helper"
 T3_INSTALL_BASE_URL=""
 # --- end drift-checked constants ---
 
+# --- hub origin, substituted at serve time ---------------------------------
+# THE SEAM. `apps/server/src/install/http.ts` serves this file from
+# `GET /install.sh` and rewrites the single line below, substituting the origin
+# the request arrived on — derived from the `Host` header and `x-forwarded-proto`
+# and refused outright unless it is a plain scheme://host[:port]. So a box
+# installed with `curl -fsSL https://your-hub/install.sh | sh` already knows
+# which hub to join and needs no flag at all in the ordinary case.
+#
+# Fetched any other way — a copy of the repo, a file on a USB stick — the line
+# stays exactly as written here and the value is empty, which is the behaviour
+# that shipped before this existed: you name the hub yourself.
+#
+# The exact text of that one assignment is load-bearing: the server looks for it
+# literally and serves the file untouched unless it finds precisely one copy — a
+# rule that only works if this comment does not quote it, which is why it does
+# not. Do not reflow, requote or duplicate the line. `install/http.test.ts`
+# asserts against the real file, so a change here fails there rather than
+# silently turning the substitution off.
+#
+# An environment variable still wins: `T3_HUB_URL=https://other sh install.sh`
+# overrides a baked-in hub, because `${T3_HUB_URL:-…}` prefers what is already
+# set. That is also the name the unit exports to the installed server, and the
+# value the forthcoming `--hub` flag defaults to.
+T3_HUB_URL="${T3_HUB_URL:-}"
+
 # Overridable for testing in a throwaway container. Not documented as a
 # supported way to run a real environment: two installs under different
 # prefixes would still contend for the one unit name.
@@ -108,7 +133,11 @@ opt_port="$T3_DEFAULT_PORT"
 opt_host="127.0.0.1"
 opt_version="$T3_SERVER_VERSION"
 opt_base_url="$T3_INSTALL_BASE_URL"
-opt_account_url=""
+# Defaulted to the hub that served this script, so the ordinary case — pasting
+# the line a hub showed you — enrolls into that hub with nothing typed. Empty
+# when the script came from anywhere else, which is the old behaviour exactly.
+# `--account-url` still wins, because it is parsed after this.
+opt_account_url="$T3_HUB_URL"
 opt_label=""
 opt_unit_manager=1
 
@@ -125,7 +154,9 @@ Options:
   --uninstall            Remove the unit, the user and the prefix. Keeps data.
   --account-url <url>    The T3 server you are signed in to. Enrolls this
                          machine into that account; prints a link to approve.
-                         Omitted, the server is installed but joins no account.
+                         Defaults to the hub that served this script, so a line
+                         copied from /install.sh needs no value here. Omitted
+                         with no hub, the server joins no account.
   --host <address>       Interface to bind (default 127.0.0.1).
   --port <number>        Port to bind (default $T3_DEFAULT_PORT).
   --version <version>    Server version to install (default $T3_SERVER_VERSION).
