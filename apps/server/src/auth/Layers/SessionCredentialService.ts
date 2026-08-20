@@ -9,6 +9,7 @@ import { Clock, DateTime, Duration, Effect, Layer, PubSub, Ref, Schema, Stream }
 import { Option } from "effect";
 
 import { ServerConfig } from "../../config.ts";
+import { dropRelayConnectionsForAuthSession } from "../../environmentRelay/registry.ts";
 import { AuthSessionRepositoryLive } from "../../persistence/Layers/AuthSessions.ts";
 import { AuthSessionRepository } from "../../persistence/Services/AuthSessions.ts";
 import { ServerSecretStore } from "../Services/ServerSecretStore.ts";
@@ -482,6 +483,42 @@ export const makeSessionCredentialService = Effect.gen(function* () {
       );
     }).pipe(Effect.mapError(toSessionCredentialError("Failed to list active sessions.")));
 
+  /**
+   * Cuts any environment this credential was holding open from the outside.
+   *
+   * An environment that dials *out* to reach the browser is authenticated
+   * exactly once, when its socket upgrades, and then holds that socket for as
+   * long as the machine stays up — days, across sleeps and network changes.
+   * Nothing on that path ever looks at the credential again, so revocation has
+   * to reach in and end it; otherwise `Disconnect` would leave a revoked laptop
+   * serving a person's workspace for as long as it felt like, which is the
+   * precise failure `account_machines` was built to stop telling lies about.
+   *
+   * It lives here rather than in the machines route because this is the one
+   * place every way of ending a credential passes through — a person pressing
+   * Disconnect, "revoke other clients", an expiry sweep. A hook on one route
+   * would be a second revocation path that only covers one of them.
+   *
+   * Synchronous and in-process by nature: it closes sockets this process owns.
+   * A hub running more than one process would need the same call driven by
+   * whatever already carries `emitRemoved` between them, and until then a
+   * revoked machine connected to a *different* process keeps its socket until
+   * that process next fails to verify it — noted here because it is the one
+   * gap, not because it is acceptable.
+   */
+  const dropOutboundEnvironmentConnections = (sessionId: AuthSessionId) =>
+    Effect.sync(() =>
+      dropRelayConnectionsForAuthSession(sessionId, "This machine was disconnected."),
+    ).pipe(
+      Effect.flatMap((dropped) =>
+        dropped.length === 0
+          ? Effect.void
+          : Effect.logInfo("Dropped outbound environment connections for a revoked session.").pipe(
+              Effect.annotateLogs({ sessionId, environments: dropped }),
+            ),
+      ),
+    );
+
   const revoke: SessionCredentialServiceShape["revoke"] = (sessionId) =>
     Effect.gen(function* () {
       const revokedAt = yield* DateTime.now;
@@ -495,6 +532,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
           next.delete(sessionId);
           return next;
         });
+        yield* dropOutboundEnvironmentConnections(sessionId);
         yield* emitRemoved(sessionId);
       }
       return revoked;
@@ -515,6 +553,11 @@ export const makeSessionCredentialService = Effect.gen(function* () {
           }
           return next;
         });
+        yield* Effect.forEach(
+          revokedSessionIds,
+          (revokedSessionId) => dropOutboundEnvironmentConnections(revokedSessionId),
+          { discard: true },
+        );
         yield* Effect.forEach(
           revokedSessionIds,
           (revokedSessionId) => emitRemoved(revokedSessionId),

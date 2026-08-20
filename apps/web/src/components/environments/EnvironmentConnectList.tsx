@@ -3,6 +3,7 @@ import { CheckIcon, CopyIcon, Loader2Icon, MonitorSmartphoneIcon } from "lucide-
 import { useCallback, useMemo, useState } from "react";
 
 import {
+  describeEnvironmentTransport,
   reconnectSavedEnvironment,
   removeSavedEnvironment,
   useSavedEnvironmentRegistryStore,
@@ -139,6 +140,22 @@ function EnvironmentRow({
             {isActive ? (
               <span className="rounded-full border border-border/70 px-1.5 py-px text-[10px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                 In use
+              </span>
+            ) : null}
+            {/*
+              Shown only for a relayed connection, and only once one exists.
+              A direct connection is the ordinary case and labelling it would be
+              noise on every row; a relayed one has a third machine in its path,
+              which is the answer to "why is this slower than yesterday" and is
+              unanswerable if the app never says which way it went.
+            */}
+            {runtime?.transport === "relayed" ? (
+              <span
+                className="rounded-full border border-border/70 px-1.5 py-px text-[10px] font-medium tracking-[0.08em] text-muted-foreground uppercase"
+                title={describeEnvironmentTransport("relayed").detail}
+                data-testid="environment-transport"
+              >
+                {describeEnvironmentTransport("relayed").label}
               </span>
             ) : null}
           </div>

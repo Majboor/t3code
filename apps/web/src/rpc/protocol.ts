@@ -1,4 +1,6 @@
 import { WsRpcGroup } from "@t3tools/contracts";
+
+import { isRelayAttachWsUrl } from "~/environments/runtime/relayTransport";
 import { Duration, Effect, Layer, Schedule } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
@@ -41,6 +43,15 @@ function resolveWsRpcSocketUrl(rawUrl: string): string {
   const resolved = new URL(rawUrl);
   if (resolved.protocol !== "ws:" && resolved.protocol !== "wss:") {
     throw new Error(`Unsupported websocket transport URL protocol: ${resolved.protocol}`);
+  }
+
+  // A relayed environment is reached on the hub, at a path that names which
+  // environment to route to, so forcing it onto `/ws` would point every relayed
+  // connection at the hub's own RPC server instead. Every other URL is still
+  // normalised, which is what stops a saved record with a stale path from
+  // quietly failing to connect.
+  if (isRelayAttachWsUrl(resolved.toString())) {
+    return resolved.toString();
   }
 
   resolved.pathname = "/ws";

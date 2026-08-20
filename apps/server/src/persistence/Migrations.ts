@@ -73,6 +73,7 @@ import Migration0057 from "./Migrations/057_DeviceEnrollments.ts";
 import Migration0058 from "./Migrations/058_DeviceEnrollmentApprover.ts";
 import Migration0059 from "./Migrations/059_CollaborationFilePresence.ts";
 import Migration0060 from "./Migrations/060_AccountMachines.ts";
+import Migration0061 from "./Migrations/061_EnvironmentRelayBindings.ts";
 import Migration0062 from "./Migrations/062_MachineRole.ts";
 
 /**
@@ -146,6 +147,7 @@ export const migrationEntries = [
   [58, "DeviceEnrollmentApprover", Migration0058],
   [59, "CollaborationFilePresence", Migration0059],
   [60, "AccountMachines", Migration0060],
+  [61, "EnvironmentRelayBindings", Migration0061],
   [62, "MachineRole", Migration0062],
 ] as const;
 

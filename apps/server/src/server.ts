@@ -24,6 +24,12 @@ import {
 } from "./accountMachines/http.ts";
 import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrollments.ts";
 import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
+import { EnvironmentRelayBindingRepositoryLive } from "./persistence/Layers/EnvironmentRelayBindings.ts";
+import {
+  environmentRelayAttachRouteLayer,
+  environmentRelayDialRouteLayer,
+  environmentRelayLinksRouteLayer,
+} from "./environmentRelay/http.ts";
 import {
   cloudSyncBlobDownloadRouteLayer,
   cloudSyncBlobUploadRouteLayer,
@@ -353,6 +359,15 @@ const AccountMachineRepositoryLayerLive = AccountMachineRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 
+/**
+ * Which account and machine an outbound environment's name belongs to. Only the
+ * name is durable; whether the connection is live is decided in memory, because
+ * a socket cannot outlive the process holding it.
+ */
+const EnvironmentRelayBindingRepositoryLayerLive = EnvironmentRelayBindingRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 /** The asks that sit on top of sharing: who wants usage, and who answered. */
 const ProviderUsageRequestRepositoryLayerLive = ProviderUsageRequestRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
@@ -388,6 +403,7 @@ const PersistenceServicesLayerLive = Layer.mergeAll(
   ShareLinkRepositoryLayerLive,
   DeviceEnrollmentRepositoryLayerLive,
   AccountMachineRepositoryLayerLive,
+  EnvironmentRelayBindingRepositoryLayerLive,
   CloudSyncRepositoryLayerLive,
   ThreadPreferenceLayerLive,
   DeployLayerLive,
@@ -543,6 +559,11 @@ export const makeRoutesLayer = Layer.mergeAll(
   // credentials to, and the one button that actually takes one back.
   accountMachinesListRouteLayer,
   accountMachineRevokeRouteLayer,
+  // And the way one of those machines reaches the browser without a public URL
+  // of its own: it dials the hub, and the browser rides back down that pipe.
+  environmentRelayDialRouteLayer,
+  environmentRelayLinksRouteLayer,
+  environmentRelayAttachRouteLayer,
   cloudSyncNegotiateRouteLayer,
   cloudSyncBlobUploadRouteLayer,
   cloudSyncBlobDownloadRouteLayer,

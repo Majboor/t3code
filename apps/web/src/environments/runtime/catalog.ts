@@ -9,6 +9,7 @@ import type {
 import { create } from "zustand";
 
 import { ensureLocalApi } from "../../localApi";
+import type { EnvironmentTransport } from "./relayTransport";
 import { getPrimaryKnownEnvironment } from "../primary";
 
 export interface SavedEnvironmentRecord {
@@ -18,6 +19,14 @@ export interface SavedEnvironmentRecord {
   readonly httpBaseUrl: string;
   readonly createdAt: string;
   readonly lastConnectedAt: string | null;
+  /**
+   * The hub this environment dials out to, when it does.
+   *
+   * Absent on every environment saved before outbound connections existed, and
+   * on every environment that has an address of its own and does not need one.
+   * See `relayTransport.ts` for which of the two is chosen when both are here.
+   */
+  readonly relay?: { readonly hubHttpBaseUrl: string } | null;
 }
 
 interface SavedEnvironmentRegistryState {
@@ -44,6 +53,10 @@ function toPersistedSavedEnvironmentRecord(
     wsBaseUrl: record.wsBaseUrl,
     createdAt: record.createdAt,
     lastConnectedAt: record.lastConnectedAt,
+    // Omitted rather than written as null when there is no relay, so a record
+    // round-tripped through persistence is byte-identical to one that predates
+    // the field.
+    ...(record.relay ? { relay: record.relay } : {}),
   };
 }
 
@@ -250,6 +263,15 @@ export type SavedEnvironmentAuthState = "authenticated" | "requires-auth" | "unk
 export interface SavedEnvironmentRuntimeState {
   readonly connectionState: SavedEnvironmentConnectionState;
   readonly authState: SavedEnvironmentAuthState;
+  /**
+   * Which way this connection is actually going, once one has been attempted.
+   *
+   * Null before the first attempt. Shown to people because the two transports
+   * behave differently enough to be worth naming — a relayed connection has a
+   * third machine in its path, and "why is this slower than yesterday" has an
+   * answer only if the app is willing to say which one it picked.
+   */
+  readonly transport: EnvironmentTransport | null;
   readonly lastError: string | null;
   readonly lastErrorAt: string | null;
   readonly role: AuthSessionRole | null;
@@ -273,6 +295,7 @@ interface SavedEnvironmentRuntimeStoreState {
 const DEFAULT_SAVED_ENVIRONMENT_RUNTIME_STATE: SavedEnvironmentRuntimeState = Object.freeze({
   connectionState: "disconnected",
   authState: "unknown",
+  transport: null,
   lastError: null,
   lastErrorAt: null,
   role: null,

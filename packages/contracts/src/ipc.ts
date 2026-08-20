@@ -269,6 +269,17 @@ export interface PersistedSavedEnvironmentRecord {
   httpBaseUrl: string;
   createdAt: string;
   lastConnectedAt: string | null;
+  /**
+   * Where to reach this environment when it has no address of its own.
+   *
+   * Optional, and absent for every environment saved before outbound
+   * connections existed — those are reached at `httpBaseUrl` exactly as they
+   * always have been, and the whole point of the field being optional is that
+   * nothing about them changes. Present, it names the hub the environment dials
+   * out to; the browser then rides back down that connection instead of dialling
+   * in, which is what removes the need for a public URL.
+   */
+  relay?: { hubHttpBaseUrl: string } | null;
 }
 
 export type DesktopServerExposureMode = "local-only" | "network-accessible";

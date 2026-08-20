@@ -129,6 +129,7 @@ import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/Provide
 import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
 import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
+import { EnvironmentRelayBindingRepositoryLive } from "./persistence/Layers/EnvironmentRelayBindings.ts";
 import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrollments.ts";
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
 import { CloudSyncRepositoryLive } from "./persistence/Layers/CloudSync.ts";
@@ -390,6 +391,12 @@ const deviceEnrollmentRepositoryTestLayer = DeviceEnrollmentRepositoryLive.pipe(
 // credential each one is holding. `/collect` writes here, so the enrollment
 // routes cannot be stood up without it.
 const accountMachineRepositoryTestLayer = AccountMachineRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
+);
+
+// Which account and machine an outbound environment's name belongs to. The
+// relay routes read it on every dial, so they cannot be stood up without it.
+const environmentRelayBindingTestLayer = EnvironmentRelayBindingRepositoryLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
 );
 
@@ -808,6 +815,7 @@ const buildAppUnderTest = (options?: {
           shareLinkServiceTestLayer,
           deviceEnrollmentRepositoryTestLayer,
           accountMachineRepositoryTestLayer,
+          environmentRelayBindingTestLayer,
           cloudSyncServiceTestLayer,
         ),
       ),

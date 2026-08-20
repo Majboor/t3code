@@ -27,3 +27,12 @@ export {
   startEnvironmentConnectionService,
   subscribeEnvironmentConnections,
 } from "./service";
+
+export {
+  chooseEnvironmentTransport,
+  describeEnvironmentTransport,
+  isRelayAttachWsUrl,
+  relayAttachWsBaseUrl,
+  type DirectReachability,
+  type EnvironmentTransport,
+} from "./relayTransport";

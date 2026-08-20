@@ -40,6 +40,11 @@ import {
 } from "../remote/api";
 import { resolveRemotePairingTarget } from "../remote/target";
 import {
+  chooseEnvironmentTransport,
+  relayAttachWsBaseUrl,
+  type DirectReachability,
+} from "./relayTransport";
+import {
   getSavedEnvironmentRecord,
   hasSavedEnvironmentRegistryHydrated,
   listSavedEnvironmentRecords,
@@ -675,6 +680,76 @@ function createPrimaryEnvironmentClient(
   );
 }
 
+/**
+ * Which way to reach this environment, decided fresh on every socket.
+ *
+ * Re-decided rather than captured once because reconnection is exactly when the
+ * answer changes: the laptop that was on the same LAN this morning is on a
+ * train now. `chooseEnvironmentTransport` owns the rule; this owns only the
+ * probe it needs and the bookkeeping afterwards.
+ *
+ * An environment with no relay never reaches the probe at all, so nothing about
+ * the direct path — which is every environment that exists today — gains a
+ * request or a failure mode it did not have.
+ */
+async function resolveSavedEnvironmentSocketUrl(
+  record: SavedEnvironmentRecord,
+  bearerToken: string,
+): Promise<string> {
+  const relay = record.relay ? { ...record.relay, environmentId: record.environmentId } : null;
+  const direct = { httpBaseUrl: record.httpBaseUrl, wsBaseUrl: record.wsBaseUrl };
+
+  const chosen = chooseEnvironmentTransport({
+    direct,
+    relay,
+    directReachability:
+      relay === null
+        ? // Nothing to fall back to, so nothing is learned by asking. The probe
+          // would only add a round trip in front of every connection this app
+          // has ever made.
+          "unknown"
+        : await probeDirectEnvironment(record.httpBaseUrl),
+  });
+
+  if (chosen.outcome === "unreachable") {
+    throw new Error(`Saved environment ${record.label} has no address and no relay.`);
+  }
+
+  useSavedEnvironmentRuntimeStore.getState().patch(record.environmentId, {
+    transport: chosen.transport,
+  });
+
+  return resolveRemoteWebSocketConnectionUrl({
+    wsBaseUrl:
+      chosen.transport === "relayed" && relay !== null
+        ? relayAttachWsBaseUrl(relay)
+        : record.wsBaseUrl,
+    // A relayed connection authenticates to the hub, so its websocket token has
+    // to be minted there. Minting it against an address that does not answer is
+    // how a fallback ends up failing for the reason it was meant to route around.
+    httpBaseUrl:
+      chosen.transport === "relayed" && relay !== null ? relay.hubHttpBaseUrl : record.httpBaseUrl,
+    bearerToken,
+  });
+}
+
+/**
+ * Whether the environment answers on its own address, right now.
+ *
+ * Deliberately cheap and deliberately unauthenticated: `/.well-known/t3/environment`
+ * is the one endpoint that exists to say "something is here", and the question
+ * being asked is only whether a direct socket is worth attempting. A failure is
+ * "unreachable" and never an error — falling back is the entire point.
+ */
+async function probeDirectEnvironment(httpBaseUrl: string): Promise<DirectReachability> {
+  try {
+    await fetchRemoteEnvironmentDescriptor({ httpBaseUrl });
+    return "reachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
 function createSavedEnvironmentClient(
   record: SavedEnvironmentRecord,
   bearerToken: string,
@@ -682,32 +757,24 @@ function createSavedEnvironmentClient(
   useSavedEnvironmentRuntimeStore.getState().ensure(record.environmentId);
 
   return createWsRpcClient(
-    new WsTransport(
-      () =>
-        resolveRemoteWebSocketConnectionUrl({
-          wsBaseUrl: record.wsBaseUrl,
-          httpBaseUrl: record.httpBaseUrl,
-          bearerToken,
-        }),
-      {
-        onAttempt: () => {
-          setRuntimeConnecting(record.environmentId);
-        },
-        onOpen: () => {
-          setRuntimeConnected(record.environmentId);
-        },
-        onError: (message: string) => {
-          useSavedEnvironmentRuntimeStore.getState().patch(record.environmentId, {
-            connectionState: "error",
-            lastError: message,
-            lastErrorAt: isoNow(),
-          });
-        },
-        onClose: (details: { readonly code: number; readonly reason: string }) => {
-          setRuntimeDisconnected(record.environmentId, details.reason);
-        },
+    new WsTransport(() => resolveSavedEnvironmentSocketUrl(record, bearerToken), {
+      onAttempt: () => {
+        setRuntimeConnecting(record.environmentId);
       },
-    ),
+      onOpen: () => {
+        setRuntimeConnected(record.environmentId);
+      },
+      onError: (message: string) => {
+        useSavedEnvironmentRuntimeStore.getState().patch(record.environmentId, {
+          connectionState: "error",
+          lastError: message,
+          lastErrorAt: isoNow(),
+        });
+      },
+      onClose: (details: { readonly code: number; readonly reason: string }) => {
+        setRuntimeDisconnected(record.environmentId, details.reason);
+      },
+    }),
   );
 }
 
