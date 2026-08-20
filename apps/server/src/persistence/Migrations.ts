@@ -69,6 +69,7 @@ import Migration0053 from "./Migrations/053_ShareLinks.ts";
 import Migration0054 from "./Migrations/054_CloudSync.ts";
 import Migration0055 from "./Migrations/055_CloudSyncLiveCopy.ts";
 import Migration0056 from "./Migrations/056_ShareLinkAudience.ts";
+import Migration0057 from "./Migrations/057_DeviceEnrollments.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -137,6 +138,7 @@ export const migrationEntries = [
   [54, "CloudSync", Migration0054],
   [55, "CloudSyncLiveCopy", Migration0055],
   [56, "ShareLinkAudience", Migration0056],
+  [57, "DeviceEnrollments", Migration0057],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
