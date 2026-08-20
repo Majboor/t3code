@@ -199,6 +199,10 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): WebEnvironmentApi 
     deploys: {
       listDeployments: rpcClient.deploys.listDeployments,
     },
+    environment: {
+      listServices: rpcClient.environment.listServices,
+      checkPort: rpcClient.environment.checkPort,
+    },
     packs: {
       publish: rpcClient.packs.publish,
       recordVersion: rpcClient.packs.recordVersion,

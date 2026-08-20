@@ -166,6 +166,10 @@ export interface WsRpcClient {
   readonly deploys: {
     readonly listDeployments: RpcUnaryMethod<typeof WS_METHODS.deployListDeployments>;
   };
+  readonly environment: {
+    readonly listServices: RpcUnaryMethod<typeof WS_METHODS.environmentServicesList>;
+    readonly checkPort: RpcUnaryMethod<typeof WS_METHODS.environmentPortsCheck>;
+  };
   readonly packs: {
     readonly publish: RpcUnaryMethod<typeof WS_METHODS.packsPublish>;
     readonly recordVersion: RpcUnaryMethod<typeof WS_METHODS.packsRecordVersion>;
@@ -452,6 +456,12 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
     deploys: {
       listDeployments: (input) =>
         transport.request((client) => client[WS_METHODS.deployListDeployments](input)),
+    },
+    environment: {
+      listServices: (input) =>
+        transport.request((client) => client[WS_METHODS.environmentServicesList](input)),
+      checkPort: (input) =>
+        transport.request((client) => client[WS_METHODS.environmentPortsCheck](input)),
     },
     packs: {
       publish: (input) => transport.request((client) => client[WS_METHODS.packsPublish](input)),

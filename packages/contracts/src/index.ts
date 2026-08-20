@@ -23,5 +23,6 @@ export * from "./tenancy.ts";
 export * from "./analytics.ts";
 export * from "./packEnablement.ts";
 export * from "./deploy.ts";
+export * from "./serviceRegistry.ts";
 export * from "./pack.ts";
 export * from "./rpc.ts";

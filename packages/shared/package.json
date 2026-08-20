@@ -80,6 +80,10 @@
       "types": "./src/filePresence.ts",
       "import": "./src/filePresence.ts"
     },
+    "./serviceRegistry": {
+      "types": "./src/serviceRegistry.ts",
+      "import": "./src/serviceRegistry.ts"
+    },
     "./analyticsStreamTemplates": {
       "types": "./src/analyticsStreamTemplates.ts",
       "import": "./src/analyticsStreamTemplates.ts"

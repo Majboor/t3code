@@ -12,9 +12,12 @@ import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serve
 import {
   AuthSessionId,
   CommandId,
+  type EnvironmentId,
   OrchestrationReadModel,
+  PortNumber,
   ProjectId,
   DeployTargetId,
+  UserId,
   WorkspaceSource,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
@@ -84,6 +87,22 @@ import {
   parseAnalyticsProperties,
 } from "./analytics/cliOutput.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
+import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment.ts";
+import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+import { ServiceRegistryLive } from "./environment/Layers/ServiceRegistry.ts";
+import {
+  ServiceRegistry,
+  type ServiceRegistryShape,
+} from "./environment/Services/ServiceRegistry.ts";
+import { EnvironmentServiceRepositoryLive } from "./persistence/Layers/EnvironmentServices.ts";
+import {
+  formatPortCheck,
+  formatPortClaimed,
+  formatPortRefused,
+  formatServiceList,
+  formatServiceRegistered,
+  serviceJson,
+} from "./environment/cliOutput.ts";
 import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
 import { AnalyticsStore, type AnalyticsStoreShape } from "./analytics/Services/AnalyticsStore.ts";
@@ -2018,6 +2037,205 @@ const deployCommand = Command.make("deploy").pipe(
 );
 
 /**
+ * The account a CLI-taken reservation belongs to.
+ *
+ * The CLI has no session — it opens the same database the server does, on a
+ * machine whose shell the caller already has. So there is nothing here to
+ * authenticate, and pretending otherwise by inventing a per-invocation id would
+ * be worse than one honest name: every `t3 env port claim` would hold a port
+ * that no later invocation could release, and the registry would fill with
+ * reservations belonging to nobody.
+ */
+const CLI_REGISTRY_ACTOR = UserId.make("cli");
+
+const runEnvironmentCommand = Effect.fn("runEnvironmentCommand")(function* (
+  flags: { readonly baseDir: Option.Option<string> },
+  run: (context: {
+    readonly registry: ServiceRegistryShape;
+    readonly environmentId: EnvironmentId;
+  }) => Effect.Effect<string, Error>,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  return yield* Effect.gen(function* () {
+    const registry = yield* ServiceRegistry;
+    const environment = yield* ServerEnvironment;
+    const environmentId = yield* environment.getEnvironmentId;
+    yield* Console.log(yield* run({ registry, environmentId }));
+  }).pipe(
+    Effect.provideService(References.MinimumLogLevel, "Error" as const),
+    Effect.provide(
+      Layer.mergeAll(
+        ServiceRegistryLive.pipe(
+          Layer.provide(
+            EnvironmentServiceRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
+          ),
+        ),
+        ServerEnvironmentLive,
+      ).pipe(
+        Layer.provide(Layer.succeed(ServerConfig, config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
+      ),
+    ),
+  );
+});
+
+const envServicesCommand = Command.make("services", {
+  baseDir: baseDirFlag,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("List what is running on this machine and who started it."),
+  Command.withHandler((flags) =>
+    runEnvironmentCommand(flags, ({ registry, environmentId }) =>
+      registry.list({ environmentId }).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.map((result) =>
+          flags.json
+            ? JSON.stringify({
+                services: result.services.map(serviceJson),
+                claims: result.claims,
+                probe: result.probe,
+                observedAt: result.observedAt,
+              })
+            : formatServiceList(result),
+        ),
+      ),
+    ),
+  ),
+);
+
+const envPortCheckCommand = Command.make("check", {
+  baseDir: baseDirFlag,
+  port: Argument.integer("port").pipe(Argument.withDescription("The port to ask about.")),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Ask whether a port is free before binding it."),
+  Command.withHandler((flags) =>
+    runEnvironmentCommand(flags, ({ registry, environmentId }) =>
+      registry.checkPort({ environmentId, port: flags.port, asking: CLI_REGISTRY_ACTOR }).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.map((result) =>
+          flags.json ? JSON.stringify(result) : formatPortCheck(flags.port, result),
+        ),
+      ),
+    ),
+  ),
+);
+
+const envPortClaimCommand = Command.make("claim", {
+  baseDir: baseDirFlag,
+  port: Argument.integer("port").pipe(Argument.withDescription("The port to reserve.")),
+  purpose: Flag.string("purpose").pipe(
+    Flag.withDescription("What the port is being held for, in words a stranger can act on."),
+  ),
+  holdMinutes: Flag.integer("hold-minutes").pipe(
+    Flag.withDescription("How long the reservation should stand. Defaults to ten minutes."),
+    Flag.optional,
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Reserve a port before starting something on it."),
+  Command.withHandler((flags) =>
+    runEnvironmentCommand(flags, ({ registry, environmentId }) =>
+      registry
+        .claimPort({
+          environmentId,
+          asking: CLI_REGISTRY_ACTOR,
+          port: PortNumber.make(flags.port),
+          purpose: flags.purpose,
+          ...(Option.isSome(flags.holdMinutes) ? { holdMs: flags.holdMinutes.value * 60_000 } : {}),
+        })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.flatMap((result) =>
+            flags.json
+              ? Effect.succeed(JSON.stringify(result))
+              : result.claim === null
+                ? // A refusal exits non-zero so a script does not read "port
+                  // taken" as "port reserved" and carry on to bind it.
+                  failWithGuidance(
+                    `Port ${flags.port} is not available.`,
+                    formatPortRefused({ verdict: result.verdict, suggestion: null }),
+                  )
+                : Effect.succeed(formatPortClaimed(result.claim)),
+          ),
+        ),
+    ),
+  ),
+);
+
+const envPortReleaseCommand = Command.make("release", {
+  baseDir: baseDirFlag,
+  port: Argument.integer("port").pipe(Argument.withDescription("The port to release.")),
+}).pipe(
+  Command.withDescription("Give back a port reservation."),
+  Command.withHandler((flags) =>
+    runEnvironmentCommand(flags, ({ registry, environmentId }) =>
+      registry
+        .releasePort({
+          environmentId,
+          asking: CLI_REGISTRY_ACTOR,
+          port: PortNumber.make(flags.port),
+        })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.map((result) =>
+            result.released
+              ? `Released ${flags.port}.`
+              : `Nothing of yours was holding ${flags.port}.`,
+          ),
+        ),
+    ),
+  ),
+);
+
+const envPortCommand = Command.make("port").pipe(
+  Command.withDescription("Check, reserve and release ports on this machine."),
+  Command.withSubcommands([envPortCheckCommand, envPortClaimCommand, envPortReleaseCommand]),
+);
+
+const envServiceAddCommand = Command.make("add", {
+  baseDir: baseDirFlag,
+  name: Flag.string("name").pipe(Flag.withDescription("What to call the service.")),
+  port: Flag.integer("port").pipe(Flag.withDescription("The port it serves on.")),
+  pid: Flag.integer("pid").pipe(
+    Flag.withDescription("The process id. Required: a port alone never proves ownership."),
+  ),
+  command: Flag.string("command").pipe(Flag.withDescription("The command that started it.")),
+}).pipe(
+  Command.withDescription("Record that T3 started a service, so it may later manage it."),
+  Command.withHandler((flags) =>
+    runEnvironmentCommand(flags, ({ registry, environmentId }) =>
+      registry
+        .register({
+          environmentId,
+          asking: CLI_REGISTRY_ACTOR,
+          name: flags.name,
+          port: PortNumber.make(flags.port),
+          pid: flags.pid,
+          command: flags.command,
+        })
+        .pipe(
+          Effect.mapError((error) => new Error(error.message)),
+          Effect.map(() =>
+            formatServiceRegistered({ name: flags.name, port: flags.port, pid: flags.pid }),
+          ),
+        ),
+    ),
+  ),
+);
+
+const envServiceCommand = Command.make("service").pipe(
+  Command.withDescription("Record the services T3 starts on this machine."),
+  Command.withSubcommands([envServiceAddCommand]),
+);
+
+const envCommand = Command.make("env").pipe(
+  Command.withDescription("See what is running on this machine, and claim ports before binding."),
+  Command.withSubcommands([envServicesCommand, envPortCommand, envServiceCommand]),
+);
+
+/**
  * Who the CLI is acting as when it drives a box.
  *
  * The same placeholder the local registry commands use. A box command run from a
@@ -2483,6 +2701,7 @@ export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     serveCommand,
     authCommand,
     projectCommand,
+    envCommand,
     boxCommand,
     deployCommand,
     secretCommand,

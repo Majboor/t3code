@@ -1,11 +1,20 @@
-import { CircleCheckIcon, CircleDashedIcon, PowerIcon } from "lucide-react";
+import { CircleCheckIcon, CircleDashedIcon, PowerIcon, ShieldQuestionMarkIcon } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
 import { scopeProjectRef } from "@t3tools/client-runtime";
-import type { ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, EnvironmentService, ProjectId } from "@t3tools/contracts";
 
 import { describeLoad, orderDeployments, summariseLoad, totalEvents } from "./deploymentLoad.logic";
+import {
+  describeExposure,
+  describeOwnership,
+  describeProbe,
+  describeSince,
+  describeState,
+  groupServices,
+  liveClaims,
+} from "./environmentServices.logic";
 import { describeReadiness, orderForAttention } from "./infra.logic";
 import { resolveInfraScope } from "./infraScope.logic";
 import { describeAddress } from "../analytics/deploymentLinks.logic";
@@ -192,6 +201,8 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
 
   return (
     <Shell>
+      <EnvironmentServicesSection environmentId={environmentId} />
+
       <section className="grid gap-2" data-testid="infra-deployments">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
           Deployments
@@ -344,5 +355,186 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
         </section>
       )}
     </Shell>
+  );
+}
+
+/**
+ * What is running on the machine, and which of it T3 may touch.
+ *
+ * Two lists rather than one table sorted by port, because they are two different
+ * kinds of fact and the page must not let them read as one. The first is what
+ * this app started and can therefore account for. The second is everything else
+ * the machine is doing — somebody's database, a production API, a colleague's
+ * dev server — and its whole job is to be visible without inviting action.
+ *
+ * `ownershipReason` is printed rather than summarised. Anybody about to stop
+ * something needs the evidence, and "unknown" with no reason beside it is an
+ * invitation to guess, which is the failure this exists to prevent.
+ */
+function EnvironmentServicesSection({ environmentId }: { environmentId: EnvironmentId | null }) {
+  const running = useQuery({
+    enabled: environmentId !== null,
+    queryKey: ["infra", "services", environmentId],
+    queryFn: async () => {
+      const api = environmentId === null ? undefined : readEnvironmentApi(environmentId);
+      if (!api) throw new Error("This window is not connected to an environment.");
+      return api.environment.listServices({});
+    },
+    // What is listening changes without anybody navigating, and a stale answer
+    // here is the one that gets a port taken twice.
+    refetchInterval: 15_000,
+  });
+
+  if (running.isLoading) {
+    return (
+      <section className="grid gap-2" data-testid="infra-services">
+        <SectionHeading>Running here</SectionHeading>
+        <Spinner />
+      </section>
+    );
+  }
+
+  if (running.error || !running.data) {
+    return (
+      <section className="grid gap-2" data-testid="infra-services">
+        <SectionHeading>Running here</SectionHeading>
+        <Card className="p-4 text-sm" data-testid="infra-services-error">
+          {running.error instanceof Error
+            ? running.error.message
+            : "Could not read what is running on this machine."}
+        </Card>
+      </section>
+    );
+  }
+
+  // Re-applied at draw time rather than trusted from the response: a page left
+  // open would otherwise keep showing a reservation that lapsed while it sat there.
+  const nowMs = Date.now();
+  const { ours, others } = groupServices(running.data.services);
+  const claims = liveClaims(running.data.claims, nowMs);
+
+  return (
+    <section className="grid gap-2" data-testid="infra-services">
+      <SectionHeading>Running here</SectionHeading>
+      <p className="-mt-1 text-[11px] text-muted-foreground" data-testid="infra-services-probe">
+        {describeProbe(running.data.probe)}
+      </p>
+
+      {ours.length === 0 && others.length === 0 ? (
+        <Card className="p-4" data-testid="infra-services-empty">
+          <CardTitle className="text-sm">Nothing observed on this machine</CardTitle>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            Nothing is listening, or nothing here could see it. The line above says which.
+          </p>
+        </Card>
+      ) : null}
+
+      {ours.length > 0 ? (
+        <div className="grid gap-2" data-testid="infra-services-ours">
+          <p className="text-[11px] text-muted-foreground">Started by T3</p>
+          {ours.map((service) => (
+            <ServiceCard
+              key={`${service.managedId ?? service.port}`}
+              service={service}
+              nowMs={nowMs}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {others.length > 0 ? (
+        <div className="grid gap-2" data-testid="infra-services-others">
+          <p className="text-[11px] text-muted-foreground">
+            Already on this machine — not T3&rsquo;s to stop
+          </p>
+          {others.map((service) => (
+            <ServiceCard
+              key={`${service.port}:${service.pid ?? "?"}`}
+              service={service}
+              nowMs={nowMs}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {claims.length > 0 ? (
+        <div className="grid gap-2" data-testid="infra-services-claims">
+          <p className="text-[11px] text-muted-foreground">Reserved, nothing listening yet</p>
+          {claims.map((claim) => (
+            <Card
+              key={claim.port}
+              className="p-3 text-xs"
+              data-testid="infra-service-claim"
+              data-port={String(claim.port)}
+            >
+              <span className="font-medium text-foreground">{claim.port}</span>
+              <span className="ml-1.5 text-muted-foreground">
+                held by {claim.claimedBy} for {claim.purpose}
+              </span>
+            </Card>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+      {children}
+    </h2>
+  );
+}
+
+function ServiceCard({ service, nowMs }: { service: EnvironmentService; nowMs: number }) {
+  const age = describeSince(service.since, nowMs);
+  const exposure = describeExposure(service.address);
+
+  return (
+    <Card
+      className="p-4"
+      data-testid="infra-service"
+      data-port={String(service.port)}
+      data-ownership={service.ownership}
+      data-state={service.state}
+      data-can-manage={String(service.canManage)}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <span className="text-sm font-medium text-foreground">
+            {service.name ?? `port ${service.port}`}
+          </span>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {describeState(service)}
+            {exposure === null ? null : ` · ${exposure}`}
+            {service.pid === null ? null : ` · pid ${service.pid}`}
+            {age === null ? null : ` · ${age}`}
+          </p>
+        </div>
+        <span className="text-[11px] text-muted-foreground" data-testid="infra-service-ownership">
+          {describeOwnership(service)}
+        </span>
+      </div>
+
+      <div className="mt-2 flex items-start gap-1.5 text-xs">
+        {service.ownership === "ours" ? (
+          <CircleCheckIcon className="mt-px size-3.5 shrink-0 text-emerald-500" />
+        ) : (
+          <ShieldQuestionMarkIcon className="mt-px size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        {/* The evidence, verbatim. Anybody deciding whether to stop this needs
+            to see why the verdict is what it is. */}
+        <span className="text-muted-foreground" data-testid="infra-service-reason">
+          {service.ownershipReason}
+        </span>
+      </div>
+
+      {service.command === null ? null : (
+        <p className="mt-1.5 truncate text-[11px] text-muted-foreground">
+          <code className="text-foreground">{service.command}</code>
+        </p>
+      )}
+    </Card>
   );
 }

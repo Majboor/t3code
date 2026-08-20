@@ -25,6 +25,7 @@ import {
 import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrollments.ts";
 import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
 import { EnvironmentRelayBindingRepositoryLive } from "./persistence/Layers/EnvironmentRelayBindings.ts";
+import { EnvironmentServiceRepositoryLive } from "./persistence/Layers/EnvironmentServices.ts";
 import {
   environmentRelayAttachRouteLayer,
   environmentRelayDialRouteLayer,
@@ -145,6 +146,7 @@ import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageSe
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
+import { ServiceRegistryLive } from "./environment/Layers/ServiceRegistry.ts";
 import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
 import { PackEnablementServiceLive } from "./packEnablement/Layers/PackEnablementService.ts";
@@ -387,6 +389,17 @@ const DeploymentRegistryLayerLive = DeploymentRegistryLive.pipe(
   Layer.provide(AnalyticsRepositoryLayerLive),
 );
 
+/**
+ * What is running on this machine, and which ports are spoken for.
+ *
+ * Sits beside the deploy layers rather than inside them because it answers a
+ * question that has nothing to do with projects: a machine's ports are shared by
+ * everything on it, including the production services T3 never deployed.
+ */
+const ServiceRegistryLayerLive = ServiceRegistryLive.pipe(
+  Layer.provide(EnvironmentServiceRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+);
+
 // Deploying now reaches both: it mints the ingest key a deployment carries, and
 // records what that deploy put live.
 const DeployLayerLive = DeployServiceLive.pipe(
@@ -409,6 +422,7 @@ const PersistenceServicesLayerLive = Layer.mergeAll(
   DeployLayerLive,
   AnalyticsLayerLive,
   DeploymentRegistryLayerLive,
+  ServiceRegistryLayerLive,
 );
 
 const TenantRuntimeLifecycleOwnerLayerLive = TenantRuntimeLifecycleOwnerLive.pipe(

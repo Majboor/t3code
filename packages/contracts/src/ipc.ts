@@ -13,6 +13,12 @@ import type {
 } from "./analytics.ts";
 import type { DeploymentListInput, DeploymentListResult } from "./deploy.ts";
 import type {
+  PortCheckInput,
+  PortCheckResult,
+  ServiceRegistryListInput,
+  ServiceRegistryListResult,
+} from "./serviceRegistry.ts";
+import type {
   GitAbortMergeInput,
   GitAbortMergeResult,
   GitCheckoutInput,
@@ -570,6 +576,18 @@ export interface EnvironmentApi {
    */
   deploys: {
     listDeployments: (input: DeploymentListInput) => Promise<DeploymentListResult>;
+  };
+  /**
+   * What is running on the machine this window is connected to.
+   *
+   * Reading only. Registering a service is something the process that spawned it
+   * does — it is the only thing that knows the pid — and a browser has no pid to
+   * offer. Releasing is on the CLI for the same reason: it is part of stopping
+   * something, not part of looking at it.
+   */
+  environment: {
+    listServices: (input: ServiceRegistryListInput) => Promise<ServiceRegistryListResult>;
+    checkPort: (input: PortCheckInput) => Promise<PortCheckResult>;
   };
   packs: {
     publish: (input: PackPublishInput) => Promise<PackPublishResult>;

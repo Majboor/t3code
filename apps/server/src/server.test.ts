@@ -116,6 +116,8 @@ import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
+import { makeServiceRegistryLive } from "./environment/Layers/ServiceRegistry.ts";
+import { EnvironmentServiceRepositoryLive } from "./persistence/Layers/EnvironmentServices.ts";
 import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
 import { PackEnablementServiceLive } from "./packEnablement/Layers/PackEnablementService.ts";
@@ -426,6 +428,21 @@ const deployTestLayer = DeployServiceLive.pipe(
 const analyticsTestLayer = AnalyticsStoreLive.pipe(
   Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
 );
+
+/**
+ * The registry over a machine that is deliberately quiet.
+ *
+ * The real probe reads whatever the machine running the suite happens to be
+ * serving, which would make every assertion about ports depend on the developer's
+ * open editors. `isAlive` answers false so no start record survives a read here:
+ * these tests are about the RPC surface, and the registry's own behaviour is
+ * covered against a described machine in environment/Layers/ServiceRegistry.test.ts.
+ */
+const serviceRegistryTestLayer = makeServiceRegistryLive({
+  listeners: () =>
+    Promise.resolve({ tool: "none", listeners: [], processAttribution: false, limitation: "" }),
+  isAlive: () => false,
+}).pipe(Layer.provide(EnvironmentServiceRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))));
 
 const packEnablementTestLayer = PackEnablementServiceLive.pipe(
   Layer.provide(PackEnablementRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
@@ -805,7 +822,9 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(Layer.mergeAll(threadPreferenceTestLayer, providerSharingTestLayer)),
       Layer.provideMerge(deployTestLayer),
       Layer.provideMerge(analyticsTestLayer),
-      Layer.provideMerge(deploymentRegistryTestLayer),
+      // Merged rather than piped: `pipe` takes twenty arguments and this chain
+      // is at the limit, so anything new joins an existing entry.
+      Layer.provideMerge(Layer.mergeAll(deploymentRegistryTestLayer, serviceRegistryTestLayer)),
       Layer.provideMerge(packEnablementTestLayer),
       Layer.provideMerge(
         Layer.mergeAll(

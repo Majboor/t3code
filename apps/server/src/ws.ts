@@ -20,7 +20,9 @@ import {
   CommandId,
   AnalyticsError,
   DeployError,
+  type EnvironmentId,
   PackEnablementError,
+  ServiceRegistryError,
   type DeployTargetId,
   type ProjectId,
   EventId,
@@ -122,6 +124,7 @@ import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePat
 import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptRunner.ts";
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+import { ServiceRegistry } from "./environment/Services/ServiceRegistry.ts";
 import {
   AuthError,
   type AuthenticatedSession,
@@ -826,6 +829,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const deployService = yield* DeployService;
       const analyticsStore = yield* AnalyticsStore;
       const deploymentRegistry = yield* DeploymentRegistry;
+      const serviceRegistry = yield* ServiceRegistry;
       const packEnablement = yield* PackEnablementService;
       const threadPreferences = yield* ProjectionThreadPreferenceRepository;
       const rateLimitRef = yield* Ref.make({
@@ -2870,6 +2874,42 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               (message) => new DeployError({ code: "forbidden", message }),
             );
           }),
+        );
+
+      /**
+       * The account a registry write is attributed to.
+       *
+       * Taken from the session and never from a payload, because two of the
+       * registry's rules turn on it: only the holder may release a port claim,
+       * and a service is recorded as started *for* somebody. An agent has no
+       * account of its own and always arrives carrying the id of whoever asked
+       * for the turn, which is the same attribution the file-touch marks use.
+       */
+      const serviceRegistryActor = resolveAuthenticatedUserId(session);
+
+      /**
+       * Which machine a registry call is about.
+       *
+       * This connection is attached to exactly one, and its sockets are the only
+       * ones anything here can see. An id naming a different environment is
+       * refused rather than quietly answered about this one: a caller told
+       * ":5432 is free" about the wrong machine would bind into a collision and
+       * have been told the truth about somewhere else.
+       */
+      const resolveServiceRegistryEnvironment = (
+        requested: EnvironmentId | undefined,
+      ): Effect.Effect<EnvironmentId, ServiceRegistryError> =>
+        serverEnvironment.getEnvironmentId.pipe(
+          Effect.flatMap((environmentId) =>
+            requested === undefined || requested === environmentId
+              ? Effect.succeed(environmentId)
+              : Effect.fail(
+                  new ServiceRegistryError({
+                    code: "forbidden",
+                    message: `This connection is attached to ${environmentId} and cannot report what is running on ${requested}.`,
+                  }),
+                ),
+          ),
         );
 
       const resolveDeployTargetProject = (
@@ -5337,6 +5377,109 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               (message) => new DeployError({ code: "forbidden", message }),
             ),
             { "rpc.aggregate": "deploy" },
+          ),
+        [WS_METHODS.environmentServicesList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.environmentServicesList,
+            withRateLimit(
+              // The environment id in the payload is a filter and not an
+              // instruction. This connection is attached to one machine, and
+              // reporting another's ports would be reporting sockets nothing
+              // here can see.
+              resolveServiceRegistryEnvironment(input.environmentId).pipe(
+                Effect.flatMap((environmentId) => serviceRegistry.list({ environmentId })),
+              ),
+              (message) => new ServiceRegistryError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "environment" },
+          ),
+        [WS_METHODS.environmentServicesRegister]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.environmentServicesRegister,
+            withRateLimit(
+              resolveServiceRegistryEnvironment(undefined).pipe(
+                Effect.flatMap((environmentId) =>
+                  serviceRegistry.register({
+                    ...input,
+                    environmentId,
+                    asking: serviceRegistryActor,
+                  }),
+                ),
+              ),
+              (message) => new ServiceRegistryError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "environment" },
+          ),
+        [WS_METHODS.environmentServicesRelease]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.environmentServicesRelease,
+            withRateLimit(
+              resolveServiceRegistryEnvironment(undefined).pipe(
+                Effect.flatMap((environmentId) =>
+                  serviceRegistry.release({
+                    environmentId,
+                    serviceId: input.serviceId,
+                    asking: serviceRegistryActor,
+                  }),
+                ),
+              ),
+              (message) => new ServiceRegistryError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "environment" },
+          ),
+        [WS_METHODS.environmentPortsCheck]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.environmentPortsCheck,
+            withRateLimit(
+              resolveServiceRegistryEnvironment(undefined).pipe(
+                Effect.flatMap((environmentId) =>
+                  serviceRegistry.checkPort({
+                    environmentId,
+                    port: input.port,
+                    asking: serviceRegistryActor,
+                  }),
+                ),
+              ),
+              (message) => new ServiceRegistryError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "environment" },
+          ),
+        [WS_METHODS.environmentPortsClaim]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.environmentPortsClaim,
+            withRateLimit(
+              resolveServiceRegistryEnvironment(undefined).pipe(
+                Effect.flatMap((environmentId) =>
+                  // The holder is the session and never the payload. A claim
+                  // that could name its own owner is a claim one connection
+                  // could take on another's behalf, and then release.
+                  serviceRegistry.claimPort({
+                    ...input,
+                    environmentId,
+                    asking: serviceRegistryActor,
+                  }),
+                ),
+              ),
+              (message) => new ServiceRegistryError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "environment" },
+          ),
+        [WS_METHODS.environmentPortsRelease]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.environmentPortsRelease,
+            withRateLimit(
+              resolveServiceRegistryEnvironment(undefined).pipe(
+                Effect.flatMap((environmentId) =>
+                  serviceRegistry.releasePort({
+                    environmentId,
+                    port: input.port,
+                    asking: serviceRegistryActor,
+                  }),
+                ),
+              ),
+              (message) => new ServiceRegistryError({ code: "forbidden", message }),
+            ),
+            { "rpc.aggregate": "environment" },
           ),
         [WS_METHODS.organizationEmployeesInvite]: (input) =>
           observeRpcEffect(

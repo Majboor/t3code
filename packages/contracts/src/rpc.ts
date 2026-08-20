@@ -64,6 +64,20 @@ import {
   DeployRunResult,
 } from "./deploy.ts";
 import {
+  PortCheckInput,
+  PortCheckResult,
+  PortClaimInput,
+  PortClaimResult,
+  PortReleaseInput,
+  PortReleaseResult,
+  ServiceRegisterInput,
+  ServiceRegistryError,
+  ServiceRegistryListInput,
+  ServiceRegistryListResult,
+  ServiceReleaseInput,
+  ServiceReleaseResult,
+} from "./serviceRegistry.ts";
+import {
   PackDisableInput,
   PackEnableInput,
   PackEnableResult,
@@ -439,6 +453,15 @@ export const WS_METHODS = {
   deployRegisterDeployment: "deploy.deployments.register",
   deployUpdateDeployment: "deploy.deployments.update",
   deployArchiveDeployment: "deploy.deployments.archive",
+
+  // What is running on this machine, and who may touch it.
+  environmentServicesList: "environment.services.list",
+  environmentServicesRegister: "environment.services.register",
+  environmentServicesRelease: "environment.services.release",
+  environmentPortsCheck: "environment.ports.check",
+  environmentPortsClaim: "environment.ports.claim",
+  environmentPortsRelease: "environment.ports.release",
+
   analyticsListStreams: "analytics.streams.list",
   analyticsDeclareStream: "analytics.streams.declare",
   analyticsQuery: "analytics.query",
@@ -845,6 +868,51 @@ export const WsDeployUpdateDeploymentRpc = Rpc.make(WS_METHODS.deployUpdateDeplo
 export const WsDeployArchiveDeploymentRpc = Rpc.make(WS_METHODS.deployArchiveDeployment, {
   payload: DeploymentArchiveInput,
   error: DeployError,
+});
+
+/**
+ * Reading is unrestricted to any signed-in session and writing is not.
+ *
+ * Listing is what stops an agent taking a port somebody is on, so making it
+ * awkward to reach makes the collision more likely, not less. The three writes
+ * are scoped to the caller instead: a reservation may only be released by the
+ * account that took it, and a service record may only be released by the
+ * environment that wrote it.
+ */
+export const WsEnvironmentServicesListRpc = Rpc.make(WS_METHODS.environmentServicesList, {
+  payload: ServiceRegistryListInput,
+  success: ServiceRegistryListResult,
+  error: ServiceRegistryError,
+});
+
+export const WsEnvironmentServicesRegisterRpc = Rpc.make(WS_METHODS.environmentServicesRegister, {
+  payload: ServiceRegisterInput,
+  success: ServiceRegistryListResult,
+  error: ServiceRegistryError,
+});
+
+export const WsEnvironmentServicesReleaseRpc = Rpc.make(WS_METHODS.environmentServicesRelease, {
+  payload: ServiceReleaseInput,
+  success: ServiceReleaseResult,
+  error: ServiceRegistryError,
+});
+
+export const WsEnvironmentPortsCheckRpc = Rpc.make(WS_METHODS.environmentPortsCheck, {
+  payload: PortCheckInput,
+  success: PortCheckResult,
+  error: ServiceRegistryError,
+});
+
+export const WsEnvironmentPortsClaimRpc = Rpc.make(WS_METHODS.environmentPortsClaim, {
+  payload: PortClaimInput,
+  success: PortClaimResult,
+  error: ServiceRegistryError,
+});
+
+export const WsEnvironmentPortsReleaseRpc = Rpc.make(WS_METHODS.environmentPortsRelease, {
+  payload: PortReleaseInput,
+  success: PortReleaseResult,
+  error: ServiceRegistryError,
 });
 
 export const WsGitMergeBranchRpc = Rpc.make(WS_METHODS.gitMergeBranch, {
@@ -1536,6 +1604,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeployRegisterDeploymentRpc,
   WsDeployUpdateDeploymentRpc,
   WsDeployArchiveDeploymentRpc,
+  WsEnvironmentServicesListRpc,
+  WsEnvironmentServicesRegisterRpc,
+  WsEnvironmentServicesReleaseRpc,
+  WsEnvironmentPortsCheckRpc,
+  WsEnvironmentPortsClaimRpc,
+  WsEnvironmentPortsReleaseRpc,
   WsAnalyticsListStreamsRpc,
   WsAnalyticsDeclareStreamRpc,
   WsAnalyticsQueryRpc,
