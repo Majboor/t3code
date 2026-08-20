@@ -14,7 +14,9 @@ import type {
   AuthUserProfile,
   AuthWebSocketTokenResult,
   SupabasePublicAuthConfig,
+  WorkspaceSource,
 } from "@t3tools/contracts";
+import { resolveWorkspaceSource } from "@t3tools/contracts";
 
 import {
   getPairingTokenFromUrl,
@@ -55,7 +57,17 @@ export interface ServerClientSessionRecord {
 }
 
 export type ServerAuthGateState =
-  | { status: "authenticated"; tenantStatus?: AuthSessionState["tenantStatus"] }
+  | {
+      status: "authenticated";
+      tenantStatus?: AuthSessionState["tenantStatus"];
+      /**
+       * Carried past the sign-in boundary because the shell still needs it
+       * afterwards. The `requires-auth` variant exposes the whole descriptor,
+       * but "does this server host projects" is a question you only get to ask
+       * once you are already in — so it has to survive the transition.
+       */
+      workspaceSource?: WorkspaceSource;
+    }
   | {
       status: "requires-auth";
       auth: AuthSessionState["auth"];
@@ -116,6 +128,7 @@ function authenticatedGateStateFromSession(session: AuthSessionState): ServerAut
   return {
     status: "authenticated",
     ...(session.tenantStatus ? { tenantStatus: session.tenantStatus } : {}),
+    workspaceSource: resolveWorkspaceSource(session.auth),
   };
 }
 

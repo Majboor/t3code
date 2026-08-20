@@ -19,6 +19,7 @@ const SESSION_COOKIE_NAME = "t3_session";
 const LOOPBACK_WEB_SERVER: ServerAuthPolicyConfig = {
   mode: "web",
   host: "127.0.0.1",
+  workspaceSource: "this-server",
   unsafeNoAuth: false,
   basicAuthUsername: undefined,
   basicAuthPassword: undefined,

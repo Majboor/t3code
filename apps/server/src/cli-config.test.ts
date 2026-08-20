@@ -26,6 +26,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     supabaseJwtAudience: undefined,
     supabaseServiceRoleSecretName: undefined,
     localPasswordAuth: false,
+    workspaceSource: "this-server",
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: Record<string, unknown>) {
@@ -236,6 +237,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         supabaseJwtAudience: "authenticated",
         supabaseServiceRoleSecretName: "supabase/service-role",
         localPasswordAuth: false,
+        workspaceSource: "this-server",
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: false,
       });

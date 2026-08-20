@@ -22,6 +22,7 @@ export type ServerAuthPolicyConfig = Pick<
   | "basicAuthUsername"
   | "basicAuthPassword"
   | "publishedBeyondLoopback"
+  | "workspaceSource"
 >;
 
 export const isBasicAuthEnabled = (config: ServerAuthPolicyConfig): boolean =>
@@ -106,6 +107,7 @@ export const makeServerAuthPolicy = Effect.gen(function* () {
       mode: config.mode,
       port: config.port,
     }),
+    workspaceSource: config.workspaceSource,
     ...(supabasePublicConfig ? { supabase: supabasePublicConfig } : {}),
     ...(localPasswordConfig ? { localPassword: localPasswordConfig } : {}),
   };

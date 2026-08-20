@@ -100,20 +100,58 @@ export type LocalPasswordAuthConfig = typeof LocalPasswordAuthConfig.Type;
  *   once pairing is complete
  * - `sessionCookieName`: cookie name clients should expect when
  *   `browser-session-cookie` is in use
+ * - `workspaceSource`: where the work actually happens once you are signed in
  *
  * This descriptor is intentionally capability-oriented. It lets clients choose
  * the right UX without embedding server-specific auth logic or assuming a
  * single access method.
  */
+/**
+ * Where a signed-in person's work runs.
+ *
+ * Signing in and having somewhere to work are two different things, and until
+ * now they were the same thing by accident: every server hosted its own
+ * projects, so a session implied a workspace. A server can instead exist to hold
+ * accounts, environments, share links and packs while the projects live on the
+ * machine in front of you — and a browser cannot tell those apart from the auth
+ * posture, because both sign you in the same way.
+ *
+ * - `this-server`: projects live on the machine serving this page. A session is
+ *   enough to start working.
+ * - `paired-environment`: this server hosts no projects. A session gets you an
+ *   account; work needs an environment of your own connected to it.
+ */
+export const WorkspaceSource = Schema.Literals(["this-server", "paired-environment"]);
+export type WorkspaceSource = typeof WorkspaceSource.Type;
+
 export const ServerAuthDescriptor = Schema.Struct({
   policy: ServerAuthPolicy,
   bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
   sessionMethods: Schema.Array(ServerAuthSessionMethod),
   sessionCookieName: TrimmedNonEmptyString,
+  /**
+   * Optional so that a server built before this field existed still parses. Its
+   * absence means `this-server`, which is what every such server does.
+   */
+  workspaceSource: Schema.optionalKey(WorkspaceSource),
   supabase: Schema.optionalKey(SupabasePublicAuthConfig),
   localPassword: Schema.optionalKey(LocalPasswordAuthConfig),
 });
 export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;
+
+/**
+ * The single place that reads a descriptor's workspace source.
+ *
+ * Callers must not check `descriptor.workspaceSource` themselves: the field is
+ * optional, and a `=== "paired-environment"` test spread across the codebase
+ * quietly does the right thing while an `!== "this-server"` test quietly does
+ * the wrong one against any server that predates the field.
+ */
+export function resolveWorkspaceSource(
+  descriptor: Pick<ServerAuthDescriptor, "workspaceSource"> | undefined,
+): WorkspaceSource {
+  return descriptor?.workspaceSource ?? "this-server";
+}
 
 export const AuthBootstrapInput = Schema.Struct({
   credential: TrimmedNonEmptyString,

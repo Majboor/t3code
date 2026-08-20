@@ -579,6 +579,7 @@ const buildAppUnderTest = (options?: {
       supabaseJwtAudience: undefined,
       supabaseServiceRoleSecretName: undefined,
       localPasswordAuth: false,
+      workspaceSource: "this-server",
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       ...options?.config,

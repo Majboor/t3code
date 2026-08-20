@@ -8,6 +8,8 @@
  */
 import { Effect, FileSystem, Layer, LogLevel, Path, Schema, Context } from "effect";
 
+import type { WorkspaceSource } from "@t3tools/contracts";
+
 export const DEFAULT_PORT = 3773;
 
 export const RuntimeMode = Schema.Literals(["web", "desktop"]);
@@ -84,6 +86,11 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly supabaseJwtAudience: string | undefined;
   readonly supabaseServiceRoleSecretName: string | undefined;
   readonly localPasswordAuth: boolean;
+  /**
+   * Whether this server hosts the projects people work in, or exists to hold
+   * their accounts while the projects live on their own machines.
+   */
+  readonly workspaceSource: WorkspaceSource;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
 }
@@ -192,6 +199,7 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           supabaseJwtAudience: undefined,
           supabaseServiceRoleSecretName: undefined,
           localPasswordAuth: false,
+          workspaceSource: "this-server",
           staticDir: undefined,
           devUrl,
           noBrowser: false,

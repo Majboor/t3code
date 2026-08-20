@@ -775,6 +775,7 @@ describe("resolveInitialServerAuthGateState", () => {
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
       tenantStatus: "pending-membership",
+      workspaceSource: "this-server",
     });
     expect(readSupabaseBrowserAccessToken()).toBe("confirmed-access-token");
     expect(readSupabaseBrowserRefreshToken()).toBe("confirmed-refresh-token");
@@ -907,6 +908,7 @@ describe("resolveInitialServerAuthGateState", () => {
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
       tenantStatus: "active",
+      workspaceSource: "this-server",
     });
     expect(sessionChanges).toEqual([{ reason: "restored", tokenPresent: true }]);
     unsubscribe();
@@ -978,6 +980,7 @@ describe("resolveInitialServerAuthGateState", () => {
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
       tenantStatus: "active",
+      workspaceSource: "this-server",
     });
     expect(readSupabaseBrowserAccessToken()).toBe("refreshed-supabase-access-token");
     expect(readSupabaseBrowserRefreshToken()).toBe("refreshed-supabase-refresh-token");
@@ -1243,6 +1246,7 @@ describe("resolveInitialServerAuthGateState", () => {
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
       tenantStatus: "active",
+      workspaceSource: "this-server",
     });
     // The credential is spent, so it must not survive in the address bar for a
     // reload or a bookmark to fail on later.
@@ -1356,6 +1360,7 @@ describe("resolveInitialServerAuthGateState", () => {
     await expect(submitServerAuthCredential("retry-token")).resolves.toBeUndefined();
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
+      workspaceSource: "this-server",
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -1425,6 +1430,7 @@ describe("resolveInitialServerAuthGateState", () => {
 
     await expect(gateStatePromise).resolves.toEqual({
       status: "authenticated",
+      workspaceSource: "this-server",
     });
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls[2]?.[0]).toBe("http://localhost:3773/api/auth/session");
@@ -1464,9 +1470,11 @@ describe("resolveInitialServerAuthGateState", () => {
 
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
+      workspaceSource: "this-server",
     });
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
+      workspaceSource: "this-server",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

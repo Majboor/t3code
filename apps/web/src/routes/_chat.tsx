@@ -13,6 +13,10 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { resolvePrivateRouteRedirect } from "~/authRouting";
+import {
+  listSavedEnvironmentRecords,
+  waitForSavedEnvironmentRegistryHydration,
+} from "~/environments/runtime";
 import { useSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "~/rpc/serverState";
 
@@ -109,7 +113,25 @@ function ChatRouteLayout() {
 
 export const Route = createFileRoute("/_chat")({
   beforeLoad: async ({ context }) => {
-    const redirectTo = resolvePrivateRouteRedirect({ authGateState: context.authGateState });
+    // The gate is "has this person told us about a machine", not "is a machine
+    // answering this instant". Connections are established asynchronously after
+    // the shell mounts, so a liveness test here reads zero on every cold load
+    // and would bounce someone who has a perfectly good environment. Whether it
+    // is currently reachable is the workspace's business to display, and it
+    // already does; a closed laptop is an ordinary state, not a reason to be
+    // thrown out of the app.
+    //
+    // Hydration is awaited because the registry is persisted: before it lands
+    // the count is zero for a reason that has nothing to do with the answer.
+    await waitForSavedEnvironmentRegistryHydration();
+    const redirectTo = resolvePrivateRouteRedirect({
+      authGateState: context.authGateState,
+      ...(context.authGateState.status === "authenticated" &&
+      context.authGateState.workspaceSource !== undefined
+        ? { workspaceSource: context.authGateState.workspaceSource }
+        : {}),
+      savedEnvironmentCount: listSavedEnvironmentRecords().length,
+    });
     if (redirectTo) {
       throw redirect({ to: redirectTo, replace: true });
     }

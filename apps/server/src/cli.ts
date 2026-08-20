@@ -15,6 +15,7 @@ import {
   OrchestrationReadModel,
   ProjectId,
   DeployTargetId,
+  WorkspaceSource,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
 import {
@@ -263,6 +264,15 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   localPasswordAuth: Config.boolean("T3CODE_LOCAL_PASSWORD_AUTH").pipe(Config.withDefault(false)),
+  /**
+   * Not `Config.withDefault` on a parsed literal: a typo like `paired` or
+   * `paired-environments` would fall back to `this-server` and quietly host
+   * everyone's projects on a server started specifically not to. A server whose
+   * role is misspelled should refuse to start.
+   */
+  workspaceSource: Config.schema(WorkspaceSource, "T3CODE_WORKSPACE_SOURCE").pipe(
+    Config.withDefault("this-server" as const),
+  ),
   bootstrapFd: Config.int("T3CODE_BOOTSTRAP_FD").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -487,6 +497,7 @@ export const resolveServerConfig = (
         bootstrap?.supabaseServiceRoleSecretName?.trim() ||
         undefined,
       localPasswordAuth: env.localPasswordAuth,
+      workspaceSource: env.workspaceSource,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
     };

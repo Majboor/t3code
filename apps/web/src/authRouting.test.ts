@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveAuthGateRedirect, resolvePrivateRouteRedirect } from "./authRouting";
+import {
+  resolveAuthGateRedirect,
+  resolvePrivateRouteRedirect,
+  resolveWorkspaceReadiness,
+} from "./authRouting";
 
 describe("resolveAuthGateRedirect", () => {
   it("sends first-time authenticated Supabase users without membership to invite onboarding", () => {
@@ -134,5 +138,73 @@ describe("resolvePrivateRouteRedirect", () => {
         },
       }),
     ).toBe("/pair");
+  });
+});
+
+describe("resolveWorkspaceReadiness", () => {
+  it("treats a session as enough on a server that hosts its own projects", () => {
+    expect(
+      resolveWorkspaceReadiness({
+        workspaceSource: "this-server",
+        authenticated: true,
+        savedEnvironmentCount: 0,
+      }),
+    ).toBe("ready");
+  });
+
+  it("wants an environment before the workspace when the server hosts none", () => {
+    expect(
+      resolveWorkspaceReadiness({
+        workspaceSource: "paired-environment",
+        authenticated: true,
+        savedEnvironmentCount: 0,
+      }),
+    ).toBe("needs-environment");
+  });
+
+  it("lets a saved environment stand in for the projects the server does not have", () => {
+    expect(
+      resolveWorkspaceReadiness({
+        workspaceSource: "paired-environment",
+        authenticated: true,
+        savedEnvironmentCount: 1,
+      }),
+    ).toBe("ready");
+  });
+
+  it("asks for the session first, so nobody is told to connect a machine they cannot name yet", () => {
+    expect(
+      resolveWorkspaceReadiness({
+        workspaceSource: "paired-environment",
+        authenticated: false,
+        savedEnvironmentCount: 3,
+      }),
+    ).toBe("needs-session");
+  });
+});
+
+describe("resolvePrivateRouteRedirect on a paired-environment server", () => {
+  it("sends an authenticated visitor with no machine to the environments list", () => {
+    expect(
+      resolvePrivateRouteRedirect({
+        authGateState: { status: "authenticated" },
+        workspaceSource: "paired-environment",
+        savedEnvironmentCount: 0,
+      }),
+    ).toBe("/environments");
+  });
+
+  it("lets them through once a machine is connected", () => {
+    expect(
+      resolvePrivateRouteRedirect({
+        authGateState: { status: "authenticated" },
+        workspaceSource: "paired-environment",
+        savedEnvironmentCount: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("leaves hosting servers exactly as they were when the caller says nothing", () => {
+    expect(resolvePrivateRouteRedirect({ authGateState: { status: "authenticated" } })).toBeNull();
   });
 });
