@@ -31,6 +31,7 @@ const machineColumns = `
   auth_session_id AS "authSessionId",
   label AS "label",
   platform AS "platform",
+  role AS "role",
   first_seen_at AS "firstSeenAt",
   last_seen_at AS "lastSeenAt",
   revoked_at AS "revokedAt"
@@ -42,6 +43,7 @@ const InsertAccountMachineRow = Schema.Struct({
   authSessionId: Schema.String,
   label: Schema.NullOr(Schema.String),
   platform: Schema.NullOr(Schema.String),
+  role: Schema.NullOr(Schema.String),
   nowIso: Schema.String,
 });
 
@@ -49,6 +51,14 @@ const ReviveAccountMachineRow = Schema.Struct({
   machineId: Schema.String,
   authSessionId: Schema.String,
   platform: Schema.NullOr(Schema.String),
+  /**
+   * Overwritten rather than preserved, because a revival is a fresh approval:
+   * the person just answered "what is this machine for" again, in a browser,
+   * about this reconnection. Keeping the old answer would mean a box someone
+   * has repurposed from laptop to deploy target could never stop being asked
+   * for a provider account without being connected under a different name.
+   */
+  role: Schema.NullOr(Schema.String),
   nowIso: Schema.String,
 });
 
@@ -87,6 +97,7 @@ const makeAccountMachineRepository = Effect.gen(function* () {
           auth_session_id,
           label,
           platform,
+          role,
           first_seen_at,
           last_seen_at,
           revoked_at
@@ -97,6 +108,7 @@ const makeAccountMachineRepository = Effect.gen(function* () {
           ${input.authSessionId},
           ${input.label},
           ${input.platform},
+          ${input.role},
           ${input.nowIso},
           ${input.nowIso},
           NULL
@@ -129,6 +141,7 @@ const makeAccountMachineRepository = Effect.gen(function* () {
         UPDATE account_machines
         SET auth_session_id = ${input.authSessionId},
             platform = ${input.platform},
+            role = ${input.role},
             last_seen_at = ${input.nowIso},
             revoked_at = NULL
         WHERE machine_id = ${input.machineId}
@@ -220,6 +233,7 @@ const makeAccountMachineRepository = Effect.gen(function* () {
                 machineId: revivable.value.machineId,
                 authSessionId: input.authSessionId,
                 platform: input.platform,
+                role: input.role,
                 nowIso: input.nowIso,
               });
               if (Option.isSome(revived)) {
@@ -234,6 +248,7 @@ const makeAccountMachineRepository = Effect.gen(function* () {
             authSessionId: input.authSessionId,
             label: input.label,
             platform: input.platform,
+            role: input.role,
             nowIso: input.nowIso,
           });
           // `RETURNING` on an INSERT that ran without error always yields the

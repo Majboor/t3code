@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeAccountMachine,
   describeDisconnectConfirmation,
+  describeMachineRole,
   formatMachineLastSeen,
   parseAccountMachines,
   sortAccountMachines,
@@ -13,6 +14,7 @@ const machine = (overrides: Partial<AccountMachine> = {}): AccountMachine => ({
   machineId: "machine-1",
   label: "Ana's MacBook",
   platform: "macos",
+  role: "workspace-host",
   firstSeenAt: "2026-08-01T10:00:00.000Z",
   lastSeenAt: "2026-08-16T10:00:00.000Z",
   current: false,
@@ -85,6 +87,29 @@ describe("parseAccountMachines", () => {
     // browser they are sitting in. Neither is acceptable, so only `true` counts.
     expect(parsed[0]?.current).toBe(false);
   });
+
+  it("calls a machine a workspace unless the server clearly said runner", () => {
+    const parsed = parseAccountMachines({
+      machines: [
+        // A reply from a server built before roles existed.
+        { machineId: "old", firstSeenAt: "a", lastSeenAt: "b" },
+        { machineId: "null", role: null, firstSeenAt: "a", lastSeenAt: "b" },
+        // A role from a server built after this one.
+        { machineId: "future", role: "quantum-toaster", firstSeenAt: "a", lastSeenAt: "b" },
+        { machineId: "runner", role: "runner", firstSeenAt: "a", lastSeenAt: "b" },
+      ],
+    });
+
+    // Only the explicit answer gets the exemption. Everything else lands on the
+    // role that is asked for a provider account, which is what every machine on
+    // this list was before the field existed.
+    expect(parsed.map((entry) => entry.role)).toEqual([
+      "workspace-host",
+      "workspace-host",
+      "workspace-host",
+      "runner",
+    ]);
+  });
 });
 
 describe("sortAccountMachines", () => {
@@ -127,7 +152,7 @@ describe("describeDisconnectConfirmation", () => {
   it("names the machine and spells out what cannot be undone", () => {
     const confirmation = describeDisconnectConfirmation(machine());
 
-    expect(confirmation.title).toBe("Disconnect Ana's MacBook?");
+    expect(confirmation.title).toBe("Disconnect Ana's MacBook (workspace)?");
     expect(confirmation.description).toContain("immediately");
     // The two facts that decide whether somebody presses it: nothing is
     // deleted, and getting back in means approving the machine again.
@@ -138,7 +163,33 @@ describe("describeDisconnectConfirmation", () => {
   it("still asks a real question about a machine with no name", () => {
     const confirmation = describeDisconnectConfirmation(machine({ label: null }));
 
-    expect(confirmation.title).toBe("Disconnect an unnamed machine?");
+    expect(confirmation.title).toBe("Disconnect an unnamed machine (workspace)?");
     expect(confirmation.description.startsWith("An unnamed machine")).toBe(true);
+  });
+
+  it("tells the truth about a runner, which is a different truth", () => {
+    const confirmation = describeDisconnectConfirmation(
+      machine({ label: "The deploy box", role: "runner" }),
+    );
+
+    // Two machines on this list can share a name and a platform and still be a
+    // laptop and a deploy box, so the role is in the title where it gets read.
+    expect(confirmation.title).toBe("Disconnect The deploy box (runner)?");
+    // And the consequence genuinely differs: nothing on a laptop stops, while a
+    // runner keeps serving something nobody here can reach any more. Promising
+    // "nothing is deleted" here would be answering the wrong worry.
+    expect(confirmation.description).toContain("keeps running");
+    expect(confirmation.description).not.toContain("Nothing on the machine is deleted");
+  });
+});
+
+describe("describeMachineRole", () => {
+  it("names both roles in words a person did not have to learn", () => {
+    expect(describeMachineRole("workspace-host").badge).toBe("Workspace");
+    expect(describeMachineRole("runner").badge).toBe("Runner");
+  });
+
+  it("says what a runner does not do, which is the whole reason it exists", () => {
+    expect(describeMachineRole("runner").detail).toMatch(/no turn executes here/i);
   });
 });

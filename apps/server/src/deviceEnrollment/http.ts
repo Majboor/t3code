@@ -1,3 +1,4 @@
+import { resolveMachineRole, type MachineRole } from "@t3tools/contracts";
 import { DateTime, Effect, Option } from "effect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -218,6 +219,26 @@ function optionalString(body: unknown, key: string): string | null {
 }
 
 /**
+ * What the approver said the machine is for, if they said anything.
+ *
+ * Read from the approve body rather than from the enrolling machine's own
+ * request on purpose. The machine cannot be trusted to say what it is — the
+ * whole flow exists because a request to join is not evidence of anything — and
+ * more to the point, the person clicking approve is the one who knows whether
+ * the box on the other end is their laptop or a deploy target.
+ *
+ * An unrecognised value is `null` and not a refusal. `null` means "not
+ * answered", which `resolveMachineRole` reads as a workspace host — the role
+ * that gets asked for a provider account. So a garbled field costs somebody a
+ * prompt they did not need, never an exemption they did not ask for, and a
+ * client written against a later vocabulary still gets its machine connected.
+ */
+function optionalMachineRole(body: unknown): MachineRole | null {
+  const raw = optionalString(body, "role");
+  return raw === "runner" || raw === "workspace-host" ? raw : null;
+}
+
+/**
  * `POST /api/devices/enrollments`
  *
  * Unauthenticated by necessity: the caller is a machine with no account, which
@@ -359,6 +380,13 @@ const decideEnrollmentRoute = (action: "approve" | "deny") =>
     const enrollments = yield* DeviceEnrollmentRepository;
     const now = yield* DateTime.now;
     const approverUserId = resolveAuthenticatedUserId(session);
+    /**
+     * Only approve reads a body, and only for the machine's role. A denial
+     * decides nothing about a machine that is not joining, and reading a body
+     * on that path would be an unauthenticated-shaped parse on a route whose
+     * entire job is to say no.
+     */
+    const machineRole = action === "approve" ? optionalMachineRole(yield* optionalJsonBody) : null;
     const applied = yield* enrollments.applyTransition({
       code,
       action:
@@ -373,6 +401,9 @@ const decideEnrollmentRoute = (action: "approve" | "deny") =>
             // role, so it can never end up with more than the approver had.
             approvedBySubject: session.subject,
             approvedByRole: session.role,
+            // See migration 062. Omitted when the browser did not answer, so
+            // the column stays NULL and "not asked" remains readable as itself.
+            ...(machineRole === null ? {} : { machineRole }),
           }
         : {}),
     });
@@ -384,7 +415,19 @@ const decideEnrollmentRoute = (action: "approve" | "deny") =>
       return json({ error: rejectionMessage(applied.reason), reason: applied.reason }, 409);
     }
 
-    return json({ status: applied.record.status }, 200);
+    // Echoed back resolved rather than raw, so the page that just approved
+    // shows the role the machine will actually be filed under — including when
+    // the browser sent nothing, or sent a role this server does not know.
+    // Absent on a denial, where there is no machine for a role to describe.
+    return json(
+      {
+        status: applied.record.status,
+        ...(action === "approve"
+          ? { machineRole: resolveMachineRole({ role: applied.record.machineRole }) }
+          : {}),
+      },
+      200,
+    );
   }).pipe(
     Effect.catch(() => Effect.succeed(unavailable)),
     Effect.catchDefect(() => Effect.succeed(unavailable)),
@@ -506,6 +549,11 @@ const collectEnrollmentRoute = Effect.gen(function* () {
       authSessionId: issued.sessionId,
       label: record.deviceLabel,
       platform: record.devicePlatform,
+      // Copied across rather than joined back to, like `label` and `platform`:
+      // the enrollment is a spent credential's audit trail, the machine list is
+      // what somebody reads a year later. Left raw — `resolveMachineRole` is
+      // the only thing that interprets it, and it does so on the way out.
+      role: record.machineRole,
       nowIso: DateTime.formatIso(DateTime.toUtc(now)),
     })
     .pipe(Effect.catch(() => Effect.succeed(null)));
@@ -522,6 +570,18 @@ const collectEnrollmentRoute = Effect.gen(function* () {
     {
       authenticated: true,
       role: issued.role,
+      /**
+       * What this machine was connected *as*, so the process that just took a
+       * credential knows whether to walk its user into provider setup. It is
+       * the only chance it gets: the code is spent, this reply is the last
+       * thing the enrollment flow says, and a runner that has to ask the server
+       * later is a runner that will show a Claude login in the meantime.
+       *
+       * Deliberately named apart from `role` above, which is the session's
+       * authorisation role — "owner" or "client" — and answers a different
+       * question about a different thing.
+       */
+      machineRole: resolveMachineRole(registered),
       sessionMethod: "bearer-session-token",
       expiresAt: DateTime.formatIso(DateTime.toUtc(issued.expiresAt)),
       sessionToken: issued.token,

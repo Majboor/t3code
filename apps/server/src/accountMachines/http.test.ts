@@ -139,6 +139,10 @@ const signIn = (subject: string) =>
 interface ConnectedMachine {
   readonly machineToken: string;
   readonly machineId: string;
+  /** What the approve reply said the machine would be filed as. */
+  readonly approvedRole: unknown;
+  /** What the collect reply told the machine itself it is. */
+  readonly collectedRole: unknown;
 }
 
 /**
@@ -149,6 +153,8 @@ const connectMachine = (input: {
   readonly approverToken: string;
   readonly label?: string;
   readonly platform?: string;
+  /** What the approving person says the machine is for. Omitted means unasked. */
+  readonly role?: string;
 }) =>
   Effect.gen(function* () {
     const created = yield* call({
@@ -166,6 +172,7 @@ const connectMachine = (input: {
       method: "POST",
       path: `/api/devices/enrollments/${code}/approve`,
       token: input.approverToken,
+      ...(input.role === undefined ? {} : { body: { role: input.role } }),
     });
     assert.equal(approved.status, 200);
 
@@ -190,6 +197,8 @@ const connectMachine = (input: {
     return {
       machineToken,
       machineId: self!["machineId"] as string,
+      approvedRole: approved.body["machineRole"],
+      collectedRole: collected.body["machineRole"],
     } satisfies ConnectedMachine;
   });
 
@@ -419,5 +428,125 @@ it.live("gives a machine that reconnects its old row back, and never a live one"
     });
     const machines = listed.body["machines"] as ReadonlyArray<Record<string, unknown>>;
     assert.equal(machines.length, 2);
+  }).pipe(Effect.provide(testEnvironment)),
+);
+
+/**
+ * The role, carried the whole way: a browser answers at approve, a different
+ * request collects minutes later, and a third one lists the result.
+ *
+ * Worth an end-to-end test rather than a unit one because the answer crosses
+ * two tables and three requests, and every link in that chain is a place the
+ * answer could be dropped — which would not fail loudly. It would just quietly
+ * put a deploy box back on the list of machines that get asked to log into
+ * Claude, which is the exact bug this is here to prevent.
+ */
+it.live("files a machine under the role the person approving it chose", () =>
+  Effect.gen(function* () {
+    yield* buildAppUnderTest;
+    const approverToken = yield* signIn(PERSON_SUBJECT);
+
+    const runner = yield* connectMachine({
+      approverToken,
+      label: "The deploy box",
+      platform: "linux",
+      role: "runner",
+    });
+    // Told to the browser that approved, and to the machine that collected.
+    // Both need it: one draws the next screen, the other decides whether to
+    // walk its own user into a provider login.
+    assert.equal(runner.approvedRole, "runner");
+    assert.equal(runner.collectedRole, "runner");
+
+    const workspace = yield* connectMachine({
+      approverToken,
+      label: "Ana's MacBook",
+      platform: "macos",
+      role: "workspace-host",
+    });
+    assert.equal(workspace.collectedRole, "workspace-host");
+
+    const listed = yield* call({
+      method: "GET",
+      path: "/api/devices/machines",
+      token: approverToken,
+    });
+    const machines = listed.body["machines"] as ReadonlyArray<Record<string, unknown>>;
+    const byId = new Map(machines.map((machine) => [machine["machineId"], machine]));
+    assert.equal(byId.get(runner.machineId)?.["role"], "runner");
+    assert.equal(byId.get(workspace.machineId)?.["role"], "workspace-host");
+  }).pipe(Effect.provide(testEnvironment)),
+);
+
+it.live("calls a machine a workspace host when nobody said otherwise", () =>
+  Effect.gen(function* () {
+    yield* buildAppUnderTest;
+    const approverToken = yield* signIn(PERSON_SUBJECT);
+
+    // No role in the approve body at all — the shape every client sent before
+    // this field existed, and the one a desktop build from last week still
+    // sends. It must keep behaving exactly as it did.
+    const unasked = yield* connectMachine({ approverToken, label: "An older client" });
+    assert.equal(unasked.collectedRole, "workspace-host");
+
+    // And a role this build has never heard of resolves the same way, towards
+    // the role that asks for a provider account rather than the one that skips.
+    const strange = yield* connectMachine({
+      approverToken,
+      label: "A client from the future",
+      role: "quantum-toaster",
+    });
+    assert.equal(strange.collectedRole, "workspace-host");
+
+    const listed = yield* call({
+      method: "GET",
+      path: "/api/devices/machines",
+      token: approverToken,
+    });
+    const machines = listed.body["machines"] as ReadonlyArray<Record<string, unknown>>;
+    for (const machine of machines) {
+      assert.equal(machine["role"], "workspace-host");
+    }
+  }).pipe(Effect.provide(testEnvironment)),
+);
+
+it.live("lets a machine that comes back be something else than it was", () =>
+  Effect.gen(function* () {
+    yield* buildAppUnderTest;
+    const approverToken = yield* signIn(PERSON_SUBJECT);
+
+    const first = yield* connectMachine({
+      approverToken,
+      label: "The spare mini",
+      platform: "macos",
+      role: "workspace-host",
+    });
+    yield* call({
+      method: "POST",
+      path: `/api/devices/machines/${first.machineId}/revoke`,
+      token: approverToken,
+    });
+
+    // Same machine, repurposed. Reviving its row must take the new answer: a
+    // box that has become a deploy target should stop being asked for a
+    // provider account, and being unable to change that without inventing a
+    // new name for the machine would be a trap.
+    const second = yield* connectMachine({
+      approverToken,
+      label: "The spare mini",
+      platform: "macos",
+      role: "runner",
+    });
+    assert.equal(second.machineId, first.machineId);
+    assert.equal(second.collectedRole, "runner");
+
+    const listed = yield* call({
+      method: "GET",
+      path: "/api/devices/machines",
+      token: approverToken,
+    });
+    const machines = listed.body["machines"] as ReadonlyArray<Record<string, unknown>>;
+    assert.equal(machines.length, 1);
+    assert.equal(machines[0]?.["role"], "runner");
   }).pipe(Effect.provide(testEnvironment)),
 );

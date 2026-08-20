@@ -77,6 +77,63 @@ What this does **not** yet do, so nobody promises it:
 - A `paired-environment` server refuses to create projects, but nothing yet *moves* the
   existing hosted workspaces to beta. That is a data migration, not a flag.
 
+## A machine can be a runner instead of a workspace, added 2026-08-21
+
+`workspaceSource` says what a *server* is for. Nothing said what a **machine** was for, and
+two very different things were both showing up as "a machine you connected":
+
+- A **workspace host** — where the agent works. It holds projects, and because per-user
+  provider credentials are enforced with no fallback, it is useless until the person has
+  connected a Claude or Codex account of their own.
+- A **runner** — a box the agent *drives*. It runs and serves things, holds ports, and no
+  turn ever executes on it.
+
+Every connected machine looked like the first kind, so connecting a deploy target led to the
+same place a new laptop does: connect a provider account before you can do anything. That is
+the friction this removes. A runner is never asked, and it is asked *because of what it is*
+rather than because of what its owner happens to have connected already — so somebody who has
+never touched Claude gets the same silence on a deploy box as somebody with two subscriptions.
+
+What a runner deliberately **cannot** do: it is not a place work happens. It holds no
+projects you are expected to open, and it is not offered as somewhere to start a turn. What it
+**can** still do is everything its credential could always do — the role is a statement of
+purpose, not a permission boundary, and it must never become one. `decideProviderAccount` is
+untouched: a turn dispatched from anywhere still resolves a real per-user credential or is
+refused. This changes what the product *asks* for, never what a session may reach.
+
+**The role is chosen by the person approving, not claimed by the machine.** A request to join
+is not evidence of anything — that is why the approval screen exists at all — and the person
+clicking Connect is the one who knows whether the box on the other end is their laptop or
+their deploy target. It travels with the approval, is stored on the enrollment row, and is
+copied onto the machine at collect. There is nowhere else to keep it: the code is spent
+immediately afterwards, and the approve request and the collect request are made minutes apart
+by two different parties.
+
+**The absence is interpreted in exactly one place**, `resolveMachineRole`, the same discipline
+`resolveWorkspaceSource` established. It resolves `runner` and nothing else to `runner`, so
+an absent column, a `null`, and a role invented by a later build all land on `workspace-host`.
+The asymmetry is the point: `workspace-host` is what every machine connected before this
+existed genuinely is, *and* it is the role that gets asked for a provider account. A value
+this build cannot read must never be able to talk the app out of asking.
+
+A machine that reconnects takes the new answer rather than its old one, because a revival is a
+fresh approval — a box repurposed from laptop to deploy target has to be able to stop being
+asked without being given a new name.
+
+What this does **not** do, so nobody promises it:
+
+- **The role cannot be changed from Settings.** It is shown there, on every row, and changing
+  it means disconnecting the machine and connecting it again. That is a real gap and not a
+  hard one to close; it is left out because the moment that matters is the approval, and a
+  second place to set a role is a second place for the two to disagree.
+- **Nothing consumes the role on the machine's own side yet.** `/collect` returns
+  `machineRole` so the process that just took a credential knows not to walk its user into
+  provider setup, and that is the seam — but the desktop client does not read it yet, so
+  today the exemption is visible on the browser that approved and in Settings.
+- **A runner is not yet refused a turn**, and deliberately so. The no-fallback rule already
+  refuses anything without a credential behind it, and adding a second refusal keyed on the
+  role would be a permission check wearing a label's clothes.
+
 ## Sharing stays one click, and is not pairing
 
 Upstream hands out a pairing URL and a token. We do not, for the thing a person sends to a

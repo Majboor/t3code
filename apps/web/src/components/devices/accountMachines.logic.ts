@@ -1,3 +1,5 @@
+import { resolveMachineRole, type MachineRole } from "@t3tools/contracts";
+
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { describeDevicePlatform, describeMachineLabel } from "./deviceEnrollment.logic";
 
@@ -18,6 +20,13 @@ export interface AccountMachine {
   readonly machineId: string;
   readonly label: string | null;
   readonly platform: string | null;
+  /**
+   * Whether the agent works on this machine or merely drives it. Never
+   * nullable here even though the column is: `resolveMachineRole` has already
+   * been applied, on the server and again on the way in, so the component
+   * never has an absence to interpret.
+   */
+  readonly role: MachineRole;
   readonly firstSeenAt: string;
   readonly lastSeenAt: string;
   /** Whether this is the machine reading the page. Never offered a Disconnect. */
@@ -57,10 +66,38 @@ export function parseAccountMachine(raw: unknown): AccountMachine | null {
     machineId,
     label: readString(source, "label"),
     platform: readString(source, "platform"),
+    // Resolved rather than read. The server already applies the same rule, and
+    // applying it again costs nothing and means a reply from an older server —
+    // which has no role field at all — draws a page rather than an empty badge.
+    role: resolveMachineRole({ role: readString(source, "role") }),
     firstSeenAt,
     lastSeenAt,
     current: source["current"] === true,
   };
+}
+
+/**
+ * The word for a role, and the sentence behind it.
+ *
+ * `badge` is what sits on the row and has to be readable at a glance next to a
+ * Disconnect button; `detail` is what appears where somebody has stopped to
+ * read. Neither is the raw role: "workspace-host" is a wire value, and a person
+ * scanning their machines should not have to learn our vocabulary to tell their
+ * laptop from their deploy box.
+ */
+export function describeMachineRole(role: MachineRole): {
+  readonly badge: string;
+  readonly detail: string;
+} {
+  return role === "runner"
+    ? {
+        badge: "Runner",
+        detail: "Runs and serves what it is told to. No turn executes here.",
+      }
+    : {
+        badge: "Workspace",
+        detail: "Projects live here and the agent works here.",
+      };
 }
 
 /**
@@ -145,10 +182,21 @@ export function describeDisconnectConfirmation(machine: AccountMachine): {
   readonly description: string;
 } {
   const name = describeMachineLabel(machine.label);
+  const role = describeMachineRole(machine.role);
+  /**
+   * The role is in the title, not only the body, because the title is the part
+   * people actually read. Two machines on this list can share a name and a
+   * platform and still be a laptop and a deploy box, and only one of those is
+   * recoverable by walking over to it.
+   */
   return {
-    title: `Disconnect ${name}?`,
+    title: `Disconnect ${name} (${role.badge.toLowerCase()})?`,
     description: `${
       name.charAt(0).toUpperCase() + name.slice(1)
-    } loses access to this account immediately — its next request is refused, wherever it is. Nothing on the machine is deleted. To use it again, connect it from the machine and approve it here.`,
+    } loses access to this account immediately — its next request is refused, wherever it is. ${
+      machine.role === "runner"
+        ? "Whatever it is running keeps running; nothing here will be able to reach it, restart it or stop it."
+        : "Nothing on the machine is deleted."
+    } To use it again, connect it from the machine and approve it here.`,
   };
 }

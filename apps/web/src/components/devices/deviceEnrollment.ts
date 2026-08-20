@@ -1,3 +1,5 @@
+import { resolveMachineRole, type MachineRole } from "@t3tools/contracts";
+
 import { resolvePrimaryEnvironmentHttpUrl } from "../../environments/primary";
 import { parseEnrollmentPreview, type EnrollmentPreview } from "./deviceEnrollment.logic";
 
@@ -110,10 +112,17 @@ export async function fetchDeviceEnrollmentPreview(code: string): Promise<Enroll
   return preview;
 }
 
-async function decide(code: string, suffix: "/approve" | "/deny"): Promise<void> {
+async function decide(
+  code: string,
+  suffix: "/approve" | "/deny",
+  body?: unknown,
+): Promise<Record<string, unknown>> {
   const response = await fetch(enrollmentUrl(code, suffix), {
     credentials: "include",
     method: "POST",
+    ...(body === undefined
+      ? {}
+      : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
   }).catch(() => {
     throw new DeviceEnrollmentError(
       "failed",
@@ -129,6 +138,8 @@ async function decide(code: string, suffix: "/approve" | "/deny"): Promise<void>
         : "Could not turn that request down.",
     );
   }
+  const parsed: unknown = await response.json().catch(() => null);
+  return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
 }
 
 /**
@@ -138,12 +149,66 @@ async function decide(code: string, suffix: "/approve" | "/deny"): Promise<void>
  * here, which is what stops a code from being usable by anyone who merely holds
  * it: holding it gets you this page, and nothing else.
  */
-export function approveDeviceEnrollment(code: string): Promise<void> {
-  return decide(code, "/approve");
+export async function approveDeviceEnrollment(
+  code: string,
+  role: MachineRole,
+): Promise<MachineRole> {
+  /**
+   * The role travels with the approval and nowhere else. It is the only moment
+   * a person who knows what the box is for is present to say so — the machine
+   * itself cannot be asked, because a request to join is not evidence of
+   * anything, and afterwards the code is spent.
+   *
+   * The reply is re-resolved rather than trusted: a server built before this
+   * field returns no role at all, and the page must draw the answer that server
+   * will actually act on, not the one this browser sent.
+   */
+  const reply = await decide(code, "/approve", { role });
+  return resolveMachineRole({
+    role: typeof reply["machineRole"] === "string" ? reply["machineRole"] : null,
+  });
 }
 
-export function denyDeviceEnrollment(code: string): Promise<void> {
-  return decide(code, "/deny");
+export async function denyDeviceEnrollment(code: string): Promise<void> {
+  await decide(code, "/deny");
+}
+
+/**
+ * Whether the person approving already has a provider account of their own.
+ *
+ * Only ever used to decide whether the screen after "Machine connected" says
+ * anything about connecting one. It is not a permission check and must never
+ * become one: what a turn is allowed to run on is settled on the server, per
+ * turn, and nothing here loosens that.
+ *
+ * Anything short of a clear yes answers `false`, which prompts. A server that
+ * does not serve this route, a network that drops, a reply this build cannot
+ * read — none of those are evidence that somebody has an account, and the cost
+ * of being wrong is one redundant sentence rather than a person who never finds
+ * out why their first turn was refused.
+ */
+export async function fetchProviderAccountConnected(): Promise<boolean> {
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/provider-auth/connections"), {
+    credentials: "include",
+    method: "GET",
+  }).catch(() => null);
+  if (response === null || !response.ok) {
+    return false;
+  }
+  const parsed: unknown = await response.json().catch(() => null);
+  const connections =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { connections?: unknown }).connections
+      : null;
+  return (
+    Array.isArray(connections) &&
+    connections.some(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        (entry as { connected?: unknown }).connected === true,
+    )
+  );
 }
 
 /** The code out of the address bar, and null when there is nothing to read. */

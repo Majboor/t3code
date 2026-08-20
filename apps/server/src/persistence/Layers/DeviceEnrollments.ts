@@ -46,6 +46,7 @@ const enrollmentColumns = `
   approved_by_user_id AS "approvedByUserId",
   approved_by_subject AS "approvedBySubject",
   approved_by_role AS "approvedByRole",
+  machine_role AS "machineRole",
   collected_at AS "collectedAt",
   device_label AS "deviceLabel",
   device_platform AS "devicePlatform",
@@ -79,6 +80,7 @@ const ApplyDeviceEnrollmentRow = Schema.Struct({
   approvedByUserId: Schema.NullOr(Schema.String),
   approvedBySubject: Schema.NullOr(Schema.String),
   approvedByRole: Schema.NullOr(Schema.String),
+  machineRole: Schema.NullOr(Schema.String),
   collectedAt: Schema.NullOr(Schema.String),
 });
 
@@ -119,6 +121,7 @@ const makeDeviceEnrollmentRepository = Effect.gen(function* () {
           approved_by_user_id,
           approved_by_subject,
           approved_by_role,
+          machine_role,
           collected_at,
           device_label,
           device_platform,
@@ -129,6 +132,7 @@ const makeDeviceEnrollmentRepository = Effect.gen(function* () {
           'pending',
           ${input.createdAt},
           ${input.expiresAtMs},
+          NULL,
           NULL,
           NULL,
           NULL,
@@ -163,6 +167,7 @@ const makeDeviceEnrollmentRepository = Effect.gen(function* () {
             approved_by_user_id = ${input.approvedByUserId},
             approved_by_subject = ${input.approvedBySubject},
             approved_by_role = ${input.approvedByRole},
+            machine_role = ${input.machineRole},
             collected_at = ${input.collectedAt}
         WHERE code_hash = ${input.codeHash}
           AND status = ${input.expectedStatus}
@@ -279,6 +284,15 @@ const makeDeviceEnrollmentRepository = Effect.gen(function* () {
                 : next.approvedByUserId === null
                   ? null
                   : row.approvedByRole,
+            // Cleared by a denial alongside the approver, for the same reason:
+            // the role is half of what a collection would replay, and a denied
+            // row must not carry either half forward.
+            machineRole:
+              next.status === "approved"
+                ? (input.machineRole ?? null)
+                : next.approvedByUserId === null
+                  ? null
+                  : row.machineRole,
             collectedAt: next.status === "collected" ? input.nowIso : row.collectedAt,
           });
 

@@ -9,6 +9,7 @@ import {
 import {
   describeAccountMachine,
   describeDisconnectConfirmation,
+  describeMachineRole,
   formatMachineLastSeen,
   sortAccountMachines,
   type AccountMachine,
@@ -41,6 +42,11 @@ import { SettingsSection, useRelativeTimeTick } from "./settingsLayout";
  * undoable from the other side: the machine has to be approved again from
  * scratch. A one-click version of that in a list of near-identical rows is a
  * trap, and the row a person is most likely to misclick is their own.
+ *
+ * Every row carries its role for the same reason. "My laptop" and "my deploy
+ * box" are the two things on this list somebody most needs to tell apart before
+ * pressing Disconnect, and until the badge existed they were the two rows most
+ * likely to look identical — same account, same platform, similar name.
  */
 
 const ITEM_ROW_CLASSNAME = "border-t border-border/60 px-4 py-4 first:border-t-0 sm:px-5";
@@ -60,6 +66,7 @@ const ConnectedMachineRow = memo(function ConnectedMachineRow({
   onRequestDisconnect,
 }: ConnectedMachineRowProps) {
   const described = describeAccountMachine(machine);
+  const role = describeMachineRole(machine.role);
   const lastSeen = formatMachineLastSeen(machine.lastSeenAt);
 
   return (
@@ -68,6 +75,17 @@ const ConnectedMachineRow = memo(function ConnectedMachineRow({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
             <h3 className="truncate text-sm font-medium text-foreground">{described.title}</h3>
+            {/* Always drawn, for both roles. A badge that appeared only on
+                runners would make its absence carry meaning, and absence on
+                this page already means "an older server said nothing" — which
+                is a different thing from "this is a workspace". */}
+            <span
+              className="shrink-0 rounded-md border border-border/50 bg-muted/50 px-1 py-0.5 text-[10px] text-muted-foreground/80"
+              title={role.detail}
+              data-testid="machine-role"
+            >
+              {role.badge}
+            </span>
             {machine.current ? (
               <span className="rounded-md border border-border/50 bg-muted/50 px-1 py-0.5 text-[10px] text-muted-foreground/80">
                 This device
@@ -75,7 +93,7 @@ const ConnectedMachineRow = memo(function ConnectedMachineRow({
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
-            {[described.detail, lastSeen].join(" · ")}
+            {[role.detail, described.detail, lastSeen].join(" · ")}
           </p>
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">

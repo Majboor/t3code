@@ -153,6 +153,123 @@ export function resolveWorkspaceSource(
   return descriptor?.workspaceSource ?? "this-server";
 }
 
+/**
+ * What a machine connected to an account is *for*.
+ *
+ * `workspaceSource` above answers this question about a server. This answers it
+ * about the machines an account has handed a credential to, and the two were
+ * being conflated the same way: a connected machine was a connected machine,
+ * whether it was the laptop somebody works on or a box that only ever runs
+ * things. They want opposite treatment, and the difference is not cosmetic.
+ *
+ * - `workspace-host`: the agent works here. It holds projects, and because
+ *   per-user provider credentials are enforced with no fallback, it is useless
+ *   until the person has connected a Claude or Codex account.
+ * - `runner`: the agent *drives* this box. It runs and serves things and holds
+ *   ports, and no turn ever executes on it. Asking it for a provider account
+ *   would be asking somebody to log into Claude again in order to connect a
+ *   deploy target, which is exactly the friction this distinction removes.
+ *
+ * The role says nothing about what a credential can reach. It is a statement of
+ * purpose used to decide what to *ask* for, never a permission boundary — a
+ * runner's session is an ordinary session and `decideProviderAccount` still
+ * refuses a turn that has no credential behind it.
+ */
+export const MachineRole = Schema.Literals(["workspace-host", "runner"]);
+export type MachineRole = typeof MachineRole.Type;
+
+/**
+ * The single place that reads a machine's role.
+ *
+ * Callers must not test the field themselves, for the same reason they must not
+ * test `workspaceSource`, and for one more: this value arrives from a nullable
+ * database column and from JSON written by servers of other versions, so "not a
+ * runner" and "some string this build has never heard of" both have to land
+ * somewhere deliberate.
+ *
+ * They land on `workspace-host`, and the asymmetry is the point. Every machine
+ * connected before this column existed is a workspace host, so absence has to
+ * mean that or the feature rewrites history. And `runner` is the answer that
+ * *skips* a prompt: a value this build cannot read must never be able to talk
+ * the app out of asking for a provider account, so anything unrecognised falls
+ * back to the role that asks. Written as `=== "runner"` rather than
+ * `!== "workspace-host"` so that stays true when a third role is added.
+ */
+export function resolveMachineRole(
+  machine: { readonly role?: string | null | undefined } | null | undefined,
+): MachineRole {
+  return machine?.role === "runner" ? "runner" : "workspace-host";
+}
+
+/**
+ * What a workspace host is told once it is connected.
+ *
+ * Turns run on the person's own credential and nothing falls back to the box's
+ * CLI login, so a workspace host with no provider account is a machine that
+ * will refuse the first thing anybody asks it to do. Saying so at connect time
+ * costs a sentence; not saying it costs a failed turn and a refusal message
+ * read as a bug.
+ */
+export const WORKSPACE_HOST_PROVIDER_SETUP_PROMPT =
+  "Turns run on your own Claude or Codex account. Connect one in Settings → Connections before you start work here.";
+
+/**
+ * What a runner is told instead, and why it is worth saying out loud.
+ *
+ * Silence would be ambiguous — a person who has just been asked for a provider
+ * account on every other machine reads a missing prompt as a page that failed
+ * to load. Naming the exemption turns it into the feature it is.
+ */
+export const RUNNER_PROVIDER_SETUP_EXEMPTION =
+  "This machine only runs and serves what it is told to. No turn executes here, so it needs no Claude or Codex account of its own.";
+
+/**
+ * Whether a newly connected machine should lead a person into provider setup.
+ *
+ * The one statement of the rule, kept pure and kept here rather than in either
+ * app, because the server decides it for a machine collecting a credential and
+ * the browser decides it for the person who just approved one — and two copies
+ * of "does a runner get asked" is exactly how a deploy box ends up demanding a
+ * Claude login on one surface and not the other.
+ *
+ * It takes the machine, not the role, on purpose: a caller cannot reach an
+ * answer without going through `resolveMachineRole`, which is the only thing
+ * allowed to decide what an absent or unrecognised role means.
+ *
+ * This governs what the product *asks* for. It grants nothing and excuses
+ * nothing: a turn dispatched from any machine still resolves a real per-user
+ * credential or is refused, and that rule is enforced somewhere else entirely.
+ */
+export type ProviderSetupPrompt =
+  | { readonly ask: true; readonly reason: "no-account-connected"; readonly message: string }
+  | { readonly ask: false; readonly reason: "runner"; readonly message: string }
+  | { readonly ask: false; readonly reason: "already-connected"; readonly message: null };
+
+export function decideProviderSetupPrompt(input: {
+  readonly machine: { readonly role?: string | null | undefined } | null | undefined;
+  /** Whether the person connecting already has a provider account of their own. */
+  readonly providerAccountConnected: boolean;
+}): ProviderSetupPrompt {
+  /**
+   * The role is checked before the credential, and the order carries the whole
+   * point of the distinction. A runner is exempt because of what it is, not
+   * because of what its owner happens to have connected — so somebody who has
+   * never touched Claude gets the same answer on a deploy box as somebody with
+   * two subscriptions, and connecting a runner never turns into a login.
+   */
+  if (resolveMachineRole(input.machine) === "runner") {
+    return { ask: false, reason: "runner", message: RUNNER_PROVIDER_SETUP_EXEMPTION };
+  }
+  if (input.providerAccountConnected) {
+    return { ask: false, reason: "already-connected", message: null };
+  }
+  return {
+    ask: true,
+    reason: "no-account-connected",
+    message: WORKSPACE_HOST_PROVIDER_SETUP_PROMPT,
+  };
+}
+
 export const AuthBootstrapInput = Schema.Struct({
   credential: TrimmedNonEmptyString,
 });

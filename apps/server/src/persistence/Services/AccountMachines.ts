@@ -25,6 +25,14 @@ export const AccountMachineRecord = Schema.Struct({
   authSessionId: Schema.String,
   label: Schema.NullOr(Schema.String),
   platform: Schema.NullOr(Schema.String),
+  /**
+   * What this machine is for — see migration 062. Kept as a plain string and
+   * never as the `MachineRole` union, so that a row written by a binary which
+   * knows a third role still loads on the one screen an account uses to cut a
+   * machine off. `resolveMachineRole` is the only thing allowed to interpret
+   * it, and `null` — every row that predates the column — means workspace host.
+   */
+  role: Schema.NullOr(Schema.String),
   firstSeenAt: Schema.String,
   lastSeenAt: Schema.String,
   revokedAt: Schema.NullOr(Schema.String),
@@ -44,6 +52,8 @@ export const RegisterAccountMachineInput = Schema.Struct({
   authSessionId: Schema.String,
   label: Schema.NullOr(Schema.String),
   platform: Schema.NullOr(Schema.String),
+  /** Carried over from the enrollment the approver answered on. */
+  role: Schema.NullOr(Schema.String),
   nowIso: Schema.String,
 });
 export type RegisterAccountMachineInput = typeof RegisterAccountMachineInput.Type;

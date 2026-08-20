@@ -1,4 +1,4 @@
-import { AuthSessionId } from "@t3tools/contracts";
+import { AuthSessionId, resolveMachineRole } from "@t3tools/contracts";
 import { DateTime, Effect, Option } from "effect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -79,12 +79,23 @@ const machineIdFromRoute = HttpRouter.params.pipe(
  * a row of identical-looking machines, one of which is the browser reading the
  * page, and the first thing a person does with a Disconnect button is lock
  * themselves out with it.
+ *
+ * `role` is the same argument made once more. A laptop and a deploy box are not
+ * interchangeable and the consequences of cutting off the wrong one are not
+ * comparable, but until this field they looked identical on this page.
  */
 function toMachineView(machine: AccountMachineRecord, currentSessionId: string) {
   return {
     machineId: machine.machineId,
     label: machine.label,
     platform: machine.platform,
+    /**
+     * Resolved here rather than passed through, so the browser is never handed
+     * a `null` to interpret. The rule about what an absent role means lives in
+     * exactly one function and this is where it is applied on the way out —
+     * every client, of every version, then sees a role it can render.
+     */
+    role: resolveMachineRole(machine),
     firstSeenAt: machine.firstSeenAt,
     lastSeenAt: machine.lastSeenAt,
     current: machine.authSessionId === currentSessionId,

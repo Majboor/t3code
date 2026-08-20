@@ -6,7 +6,10 @@ import {
   ShieldQuestionMarkIcon,
   XCircleIcon,
 } from "lucide-react";
+import { decideProviderSetupPrompt, type MachineRole } from "@t3tools/contracts";
 import { useCallback, useEffect, useState } from "react";
+
+import { cn } from "~/lib/utils";
 
 import { APP_DISPLAY_NAME } from "../../branding";
 import type { ServerAuthGateState } from "../../environments/primary";
@@ -17,6 +20,7 @@ import {
   denyDeviceEnrollment,
   DeviceEnrollmentError,
   fetchDeviceEnrollmentPreview,
+  fetchProviderAccountConnected,
 } from "./deviceEnrollment";
 import {
   describeDevicePlatform,
@@ -24,6 +28,7 @@ import {
   describeMachineLabel,
   describeRequestedIp,
   formatEnrollmentTimeLeft,
+  MACHINE_ROLE_CHOICES,
   readEnrollmentOutcome,
   type EnrollmentPreview,
 } from "./deviceEnrollment.logic";
@@ -63,10 +68,27 @@ export function DeviceConnectRoute({
       }
   >({ status: "loading" });
   const [decision, setDecision] = useState<
-    | { readonly status: "idle" | "approving" | "denying" | "approved" | "denied" }
+    | { readonly status: "idle" | "approving" | "denying" | "denied" }
+    | { readonly status: "approved"; readonly machineRole: MachineRole }
     | { readonly status: "refused"; readonly message: string }
     | { readonly status: "signed-out"; readonly message: string }
   >({ status: "idle" });
+  /**
+   * What this machine is for, answered before Connect rather than after.
+   *
+   * Defaulted to the workspace host because that is what almost every machine
+   * is, and because it is the answer that leads somewhere — a person who does
+   * not read the choice ends up on the path that asks for a provider account,
+   * which is the recoverable mistake. Defaulting to `runner` would silently
+   * skip the one prompt a new workspace actually needs.
+   */
+  const [machineRole, setMachineRole] = useState<MachineRole>("workspace-host");
+  /**
+   * Looked up so the screen after Connect does not tell somebody to go and
+   * connect an account they connected months ago. Unknown counts as "no": see
+   * `fetchProviderAccountConnected`.
+   */
+  const [providerAccountConnected, setProviderAccountConnected] = useState(false);
   // Re-rendered once a second only while somebody is deciding, so the deadline
   // on screen is the deadline, not the one that applied when the page loaded.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -97,6 +119,29 @@ export function DeviceConnectRoute({
     void load();
   }, [authenticated, load]);
 
+  /**
+   * Asked once, in the background, and never blocking the decision.
+   *
+   * Nothing on this page waits for it: the answer only changes a sentence on
+   * the screen *after* Connect, and a person must never be kept from approving
+   * their own machine because a provider lookup is slow or the route is not
+   * served here at all.
+   */
+  useEffect(() => {
+    if (!authenticated) {
+      return;
+    }
+    let cancelled = false;
+    void fetchProviderAccountConnected().then((connected) => {
+      if (!cancelled) {
+        setProviderAccountConnected(connected);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated]);
+
   const outcome =
     preview.status === "ready"
       ? readEnrollmentOutcome(preview.preview, nowMs)
@@ -121,8 +166,18 @@ export function DeviceConnectRoute({
       }
       setDecision({ status: intent === "approve" ? "approving" : "denying" });
       try {
-        await (intent === "approve" ? approveDeviceEnrollment(code) : denyDeviceEnrollment(code));
-        setDecision({ status: intent === "approve" ? "approved" : "denied" });
+        if (intent === "deny") {
+          await denyDeviceEnrollment(code);
+          setDecision({ status: "denied" });
+          return;
+        }
+        // The server's answer, not this page's: a server that predates roles
+        // files the machine as a workspace host whatever this browser sent, and
+        // the screen must describe what actually happened.
+        setDecision({
+          status: "approved",
+          machineRole: await approveDeviceEnrollment(code, machineRole),
+        });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "That did not go through.";
         if (error instanceof DeviceEnrollmentError && error.kind === "signed-out") {
@@ -135,7 +190,7 @@ export function DeviceConnectRoute({
         await load();
       }
     },
-    [code, load],
+    [code, load, machineRole],
   );
 
   if (code === null) {
@@ -182,6 +237,15 @@ export function DeviceConnectRoute({
             It picks up its session on its own — give it a moment to appear in your machines, and
             keep the app open on it meanwhile.
           </p>
+          {/* The one place a connected machine leads somebody into provider
+              setup, and therefore the one place a runner has to be exempt.
+              What to say is decided by a shared pure function rather than by
+              this branch, so the server and this screen cannot disagree about
+              whether a deploy box gets asked to log into Claude. */}
+          <ProviderSetupNote
+            machineRole={decision.machineRole}
+            connected={providerAccountConnected}
+          />
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
             You can cut it off again at any time under Settings → Connections.
           </p>
@@ -317,6 +381,44 @@ export function DeviceConnectRoute({
         </div>
       ) : null}
 
+      {/* Asked before Connect, not after. The role decides whether the next
+          screen walks this person into a provider login, and there is no later
+          moment to ask: the code is spent the instant the machine collects. */}
+      {advice.canApprove ? (
+        <fieldset className="mt-4" data-testid="device-connect-role">
+          <legend className="text-xs text-muted-foreground">What is this machine for?</legend>
+          <div className="mt-2 space-y-2">
+            {MACHINE_ROLE_CHOICES.map((choice) => (
+              <label
+                className={cn(
+                  "flex cursor-pointer gap-2 rounded-lg border px-3 py-2 text-left",
+                  machineRole === choice.role
+                    ? "border-foreground/40 bg-muted/50"
+                    : "border-border bg-background/40",
+                )}
+                key={choice.role}
+              >
+                <input
+                  checked={machineRole === choice.role}
+                  className="mt-1 shrink-0"
+                  disabled={deciding}
+                  name="machine-role"
+                  onChange={() => setMachineRole(choice.role)}
+                  type="radio"
+                  value={choice.role}
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-foreground">{choice.title}</span>
+                  <span className="block text-xs leading-relaxed text-muted-foreground">
+                    {choice.detail}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
+
       {advice.canApprove || advice.canDeny ? (
         <div className="mt-5 flex flex-wrap gap-2">
           {advice.canApprove ? (
@@ -367,6 +469,38 @@ function ConnectShell({ children }: { readonly children: React.ReactNode }) {
         {children}
       </section>
     </div>
+  );
+}
+
+/**
+ * What the machine still needs, if anything, once it is connected.
+ *
+ * A runner's sentence is deliberately drawn in the same slot as the workspace
+ * host's prompt rather than left out. Somebody who has connected a laptop
+ * before expects to be told about a provider account here; silence would read
+ * as a screen that failed to finish, and the exemption is the feature.
+ */
+function ProviderSetupNote({
+  machineRole,
+  connected,
+}: {
+  readonly machineRole: MachineRole;
+  readonly connected: boolean;
+}) {
+  const prompt = decideProviderSetupPrompt({
+    machine: { role: machineRole },
+    providerAccountConnected: connected,
+  });
+  if (prompt.message === null) {
+    return null;
+  }
+  return (
+    <p
+      className="mt-3 text-sm leading-relaxed text-muted-foreground"
+      data-testid={prompt.ask ? "device-connect-provider-prompt" : "device-connect-provider-exempt"}
+    >
+      {prompt.message}
+    </p>
   );
 }
 

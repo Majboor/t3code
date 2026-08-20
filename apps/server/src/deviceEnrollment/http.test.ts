@@ -140,8 +140,12 @@ const createEnrollment = (body?: unknown) =>
 
 const preview = (code: string) => call({ method: "GET", path: `/api/devices/enrollments/${code}` });
 
-const approve = (code: string) =>
-  call({ method: "POST", path: `/api/devices/enrollments/${code}/approve` });
+const approve = (code: string, body?: unknown) =>
+  call({
+    method: "POST",
+    path: `/api/devices/enrollments/${code}/approve`,
+    ...(body === undefined ? {} : { body }),
+  });
 
 const deny = (code: string) =>
   call({ method: "POST", path: `/api/devices/enrollments/${code}/deny` });
@@ -309,7 +313,11 @@ it.live("keeps a denial denied: nothing collects against a machine somebody refu
     const created = yield* createEnrollment({ deviceLabel: "Not my laptop" });
     const code = created.body.code as string;
 
-    assert.equal((yield* deny(code)).status, 200);
+    const denied = yield* deny(code);
+    assert.equal(denied.status, 200);
+    // No role on a denial: there is no machine for one to describe, and a role
+    // on this reply would invite a page to draw "connected as …" over a refusal.
+    assert.isUndefined(denied.body["machineRole"]);
     assert.equal((yield* preview(code)).body.status, "denied");
 
     // A second attempt must not reopen the question, or the refusal meant

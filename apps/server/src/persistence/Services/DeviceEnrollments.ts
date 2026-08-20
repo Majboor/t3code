@@ -81,6 +81,14 @@ export const DeviceEnrollmentRecord = Schema.Struct({
   /** The approver's session subject; see migration 058 for why both are kept. */
   approvedBySubject: Schema.NullOr(Schema.String),
   approvedByRole: Schema.NullOr(Schema.String),
+  /**
+   * What the approver said this machine is *for* — see migration 062. A plain
+   * string and not the `MachineRole` union, for the reason `status` above is
+   * one: a row written by a binary that knows a third role must still load
+   * here. `resolveMachineRole` narrows it, and narrows anything it does not
+   * recognise to the role that asks for a provider account.
+   */
+  machineRole: Schema.NullOr(Schema.String),
   collectedAt: Schema.NullOr(Schema.String),
   deviceLabel: Schema.NullOr(Schema.String),
   devicePlatform: Schema.NullOr(Schema.String),
@@ -138,6 +146,14 @@ export interface ApplyDeviceEnrollmentTransitionInput {
   readonly approvedByUserId?: string;
   readonly approvedBySubject?: string;
   readonly approvedByRole?: string;
+  /**
+   * What the machine is for, as the approver answered it. Approve only, and
+   * omitted means the question was not answered — which is `workspace-host`,
+   * because that is what every machine connected before the question existed
+   * is. The column is left `NULL` rather than filled in with that default, so
+   * "not asked" stays distinguishable from "asked, and they chose the host".
+   */
+  readonly machineRole?: string;
 }
 
 /**

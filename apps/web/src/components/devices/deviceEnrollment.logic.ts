@@ -1,3 +1,5 @@
+import type { MachineRole } from "@t3tools/contracts";
+
 import { formatExpiresInLabel } from "~/timestampFormat";
 
 /**
@@ -178,6 +180,38 @@ export function describeRequestedIp(ip: string | null | undefined): string {
   const trimmed = ip?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : "Address not recorded";
 }
+
+/**
+ * The question the approval screen asks alongside "is this my machine?", and
+ * the two answers, worded so that neither reads as the safe default.
+ *
+ * Written as a description of *what happens on it* rather than of what it is
+ * called, because "workspace host" and "runner" are our words and a person
+ * approving a box has no reason to know them. What they do know is whether they
+ * are going to sit down and work on the thing.
+ *
+ * The order is fixed and the workspace host is first: it is what almost every
+ * machine is, and putting the exception first would invite mis-clicks in the
+ * direction that skips a prompt somebody needed.
+ */
+export const MACHINE_ROLE_CHOICES = [
+  {
+    role: "workspace-host",
+    title: "I work on this machine",
+    detail:
+      "Projects live here and the agent runs here. It uses your own Claude or Codex account, so connect one if you have not.",
+  },
+  {
+    role: "runner",
+    title: "This machine only runs things",
+    detail:
+      "A server, a deploy box, something holding ports. The agent drives it from elsewhere and never works on it, so it needs no provider account.",
+  },
+] as const satisfies ReadonlyArray<{
+  readonly role: MachineRole;
+  readonly title: string;
+  readonly detail: string;
+}>;
 
 /**
  * How long the request has left, from epoch millis rather than an ISO string.
