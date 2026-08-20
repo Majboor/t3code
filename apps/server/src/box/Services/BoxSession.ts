@@ -103,12 +103,26 @@ export interface BoxSessionShape {
     input: BoxTarget & { readonly request: BoxExecRequest },
   ) => Effect.Effect<BoxExecOutcome, BoxSessionError>;
   /**
-   * Ends a process by pid. Whether it *may* be ended is decided above, by
-   * `decideBoxCommand`, and this must not second-guess it — two places deciding
-   * would be two places to get it wrong, and the wrong one holds a kill switch.
+   * Ends a process by pid.
+   *
+   * `decideBoxCommand` has already decided this, and this call does not
+   * re-decide it *here*. What it does do is carry enough for the box to decide
+   * it again over there, which is a different thing: the caller-side rule runs
+   * inside the process that is asking, and the box is reached over a relay by
+   * whatever happens to be on the other end of it. So the acknowledgement
+   * travels rather than being consumed, and the machine that owns the process
+   * applies the rule from its own registry — see `decideBoxSignal`.
+   *
+   * Answers whether the signal was sent. A box that refuses fails the call with
+   * `refused`, which is an answer and not a fault.
    */
   readonly signal: (
-    input: BoxTarget & { readonly pid: number; readonly signal: "SIGTERM" | "SIGKILL" },
+    input: BoxTarget & {
+      readonly pid: number;
+      readonly signal: "SIGTERM" | "SIGKILL";
+      /** `pid:<n>` when a person deliberately named it; null is the normal case. */
+      readonly acknowledgedTarget: string | null;
+    },
   ) => Effect.Effect<boolean, BoxSessionError>;
   /** The captured output of something T3 started, by the registry's service id. */
   readonly readServiceLog: (

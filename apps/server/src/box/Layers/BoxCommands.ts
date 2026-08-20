@@ -304,15 +304,67 @@ const makeBoxCommands = Effect.gen(function* () {
       const plan = decision.plan;
 
       const startedAt = yield* nowIso;
-      const signalled = yield* session
+      /**
+       * The box gets the last word, and it is journalled as its word.
+       *
+       * A refusal that came back over the relay is not this module's decision —
+       * this module already allowed it — so recording it as a failed stop would
+       * hide the only interesting fact about the row: something reached the
+       * machine and the machine declined. The same shape `unit` uses for the
+       * privileged helper, for the same reason.
+       */
+      const answer = yield* session
         .signal({
           environmentId: input.environmentId,
           userId: input.userId,
           pid: plan.pid,
           signal: "SIGTERM",
+          // Carried rather than consumed: the box applies the override rule
+          // itself, against a service list it derived from its own machine.
+          acknowledgedTarget: input.acknowledgedTarget,
         })
-        .pipe(Effect.mapError(toCommandError));
+        .pipe(
+          Effect.map((signalled) => ({ signalled, refusal: null as string | null })),
+          Effect.catch((error) =>
+            error.code === "refused"
+              ? Effect.succeed({ signalled: false, refusal: error.message })
+              : Effect.fail(toCommandError(error)),
+          ),
+        );
       const finishedAt = yield* nowIso;
+
+      if (answer.refusal !== null) {
+        const refused = yield* write({
+          entryId: Crypto.randomUUID(),
+          environmentId: input.environmentId,
+          userId: input.userId,
+          turnId: input.turnId,
+          verb: "stop",
+          command: input.target,
+          serviceId: plan.service.managedId,
+          outcome: "refused",
+          refusalReason: "box-refused",
+          exitCode: null,
+          signal: null,
+          pid: plan.pid,
+          unmanaged: plan.unmanaged,
+          stdout: null,
+          stderr: null,
+          outputBytes: 0,
+          startedAt,
+          finishedAt,
+        });
+        return {
+          outcome: "refused",
+          entryId: refused.entryId,
+          refusal: {
+            reason: "box-refused" as const,
+            headline: `The box refused to stop ${input.target}.`,
+            remedy: answer.refusal,
+          },
+        } as const;
+      }
+      const signalled = answer.signalled;
 
       const entry = yield* write({
         entryId: Crypto.randomUUID(),

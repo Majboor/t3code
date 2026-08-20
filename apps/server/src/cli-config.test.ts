@@ -52,6 +52,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.none(),
           noBrowser: Option.none(),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.none(),
           logWebSocketEvents: Option.none(),
@@ -121,6 +122,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.some(new URL("http://127.0.0.1:4173")),
           noBrowser: Option.some(true),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.some(true),
           logWebSocketEvents: Option.some(true),
@@ -190,6 +192,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.none(),
           noBrowser: Option.none(),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.none(),
           logWebSocketEvents: Option.none(),
@@ -265,6 +268,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.some(new URL("http://127.0.0.1:4173")),
           noBrowser: Option.some(false),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.some(false),
           logWebSocketEvents: Option.some(false),
@@ -342,6 +346,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.none(),
           noBrowser: Option.none(),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.none(),
           logWebSocketEvents: Option.none(),
@@ -408,6 +413,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.some(new URL("http://127.0.0.1:5173")),
           noBrowser: Option.none(),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.none(),
           logWebSocketEvents: Option.none(),
@@ -465,6 +471,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.some(new URL("http://127.0.0.1:4173")),
           noBrowser: Option.none(),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.none(),
           logWebSocketEvents: Option.none(),
@@ -543,6 +550,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.none(),
           noBrowser: Option.none(),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.none(),
           logWebSocketEvents: Option.none(),
@@ -603,6 +611,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           devUrl: Option.none(),
           noBrowser: Option.none(),
           unsafeNoAuth: Option.none(),
+          hub: Option.none(),
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.none(),
           logWebSocketEvents: Option.none(),
@@ -650,6 +659,102 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
       });
+    }),
+  );
+  const noServerFlags = {
+    mode: Option.none(),
+    port: Option.some(3773),
+    host: Option.none(),
+    baseDir: Option.none(),
+    cwd: Option.none(),
+    devUrl: Option.none(),
+    noBrowser: Option.none(),
+    unsafeNoAuth: Option.none(),
+    hub: Option.none(),
+    bootstrapFd: Option.none(),
+    autoBootstrapProjectFromCwd: Option.none(),
+    logWebSocketEvents: Option.none(),
+  } as const;
+
+  /**
+   * The default that has to stay a default. A server with no hub configured
+   * opens no outbound connection at all, so "did I leave this set" must be
+   * answerable from the resolved config rather than from watching the network.
+   */
+  it.effect("leaves the hub unset when neither the flag nor the environment names one", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveServerConfig(noServerFlags, Option.none()).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.hubUrl).toBeUndefined();
+    }),
+  );
+
+  it.effect("prefers the --hub flag over T3CODE_HUB_URL", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveServerConfig(
+        { ...noServerFlags, hub: Option.some(new URL("https://typed.example")) },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { T3CODE_HUB_URL: "https://installed.example" } }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.hubUrl?.toString()).toBe("https://typed.example/");
+    }),
+  );
+
+  /** An installed box arrives with its hub baked into the unit file, not typed. */
+  it.effect("takes the hub from the environment when no flag was given", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveServerConfig(noServerFlags, Option.none()).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { T3CODE_HUB_URL: "http://127.0.0.1:4000" } }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.hubUrl?.toString()).toBe("http://127.0.0.1:4000/");
+    }),
+  );
+
+  /**
+   * The same reasoning `workspaceSource` records for refusing a default on a
+   * misspelled literal: a hub that does not parse should stop the server, not
+   * produce one that boots and is silently never reachable.
+   */
+  it.effect("refuses to start on a hub address that is not a URL", () =>
+    Effect.gen(function* () {
+      const outcome = yield* resolveServerConfig(noServerFlags, Option.none()).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { T3CODE_HUB_URL: "not a url at all" } }),
+            ),
+            NetService.layer,
+          ),
+        ),
+        Effect.map(() => "started" as const),
+        Effect.catch(() => Effect.succeed("refused" as const)),
+      );
+
+      assert.strictEqual(outcome, "refused");
     }),
   );
 });

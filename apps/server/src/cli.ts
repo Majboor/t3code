@@ -210,6 +210,29 @@ const devUrlFlag = Flag.string("dev-url").pipe(
   Flag.withDescription("Dev web URL to proxy/redirect to (equivalent to VITE_DEV_SERVER_URL)."),
   Flag.optional,
 );
+/**
+ * The one switch that turns a server into a box.
+ *
+ * A flag as well as an environment variable, unlike `workspaceSource`, because
+ * the two are configured by different parties: an installed box has this baked
+ * into its unit file by whatever installed it, and a person standing one up by
+ * hand types it once on a command line. Both spellings resolve to the same
+ * field, with the flag winning, which is the precedence every other option here
+ * uses — the thing you just typed beats the thing the machine remembers.
+ *
+ * Parsed as a URL at the door rather than carried as a string. A typo in a
+ * scheme decides whether the outbound socket is `ws:` or `wss:`, and a server
+ * told to dial somewhere unparseable should refuse to start rather than
+ * silently never connect: an absent hub is a supported configuration, so a
+ * broken one would be indistinguishable from it for as long as nobody looked.
+ */
+const hubFlag = Flag.string("hub").pipe(
+  Flag.withSchema(Schema.URLFromString),
+  Flag.withDescription(
+    "Dial this hub and hold the connection open, so this machine can be driven as a box without a public address of its own (equivalent to T3CODE_HUB_URL).",
+  ),
+  Flag.optional,
+);
 const noBrowserFlag = Flag.boolean("no-browser").pipe(
   Flag.withDescription("Disable automatic browser opening."),
   Flag.optional,
@@ -320,6 +343,15 @@ const EnvServerConfig = Config.all({
   workspaceSource: Config.schema(WorkspaceSource, "T3CODE_WORKSPACE_SOURCE").pipe(
     Config.withDefault("this-server" as const),
   ),
+  /**
+   * Where an installed box finds its hub.
+   *
+   * `Config.url` and not `Config.string` for the same reason `--hub` parses one:
+   * a value that does not resolve to a URL stops the server here, with the name
+   * of the variable, instead of producing a machine that boots happily and is
+   * never reachable. Absent is the default and means "do not dial anything".
+   */
+  hubUrl: Config.url("T3CODE_HUB_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   bootstrapFd: Config.int("T3CODE_BOOTSTRAP_FD").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -341,6 +373,7 @@ interface CliServerFlags {
   readonly baseDir: Option.Option<string>;
   readonly cwd: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
+  readonly hub: Option.Option<URL>;
   readonly noBrowser: Option.Option<boolean>;
   readonly unsafeNoAuth: Option.Option<boolean>;
   readonly bootstrapFd: Option.Option<number>;
@@ -388,6 +421,7 @@ export const resolveServerConfig = (
       baseDir: flags.baseDir ?? Option.none(),
       cwd: flags.cwd ?? Option.none(),
       devUrl: flags.devUrl ?? Option.none(),
+      hub: flags.hub ?? Option.none(),
       noBrowser: flags.noBrowser ?? Option.none(),
       unsafeNoAuth: flags.unsafeNoAuth ?? Option.none(),
       bootstrapFd: flags.bootstrapFd ?? Option.none(),
@@ -498,6 +532,16 @@ export const resolveServerConfig = (
       ),
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
+    /**
+     * Flag over environment, and nothing below that.
+     *
+     * Deliberately not read from the bootstrap envelope: that channel is the
+     * desktop app handing its own server a set of secrets, and a desktop
+     * install is the one thing that is definitely not a box.
+     */
+    const hubUrl = Option.getOrUndefined(
+      resolveOptionPrecedence(normalizedFlags.hub, Option.fromUndefinedOr(env.hubUrl)),
+    );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
     const config: ServerConfigShape = {
@@ -545,6 +589,7 @@ export const resolveServerConfig = (
         undefined,
       localPasswordAuth: env.localPasswordAuth,
       workspaceSource: env.workspaceSource,
+      hubUrl,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
     };
@@ -564,6 +609,7 @@ const resolveCliAuthConfig = (
       baseDir: flags.baseDir,
       cwd: Option.none(),
       devUrl: flags.devUrl ?? Option.none(),
+      hub: Option.none(),
       noBrowser: Option.none(),
       unsafeNoAuth: Option.none(),
       bootstrapFd: Option.none(),
@@ -974,6 +1020,7 @@ const sharedServerCommandFlags = {
     Argument.optional,
   ),
   devUrl: devUrlFlag,
+  hub: hubFlag,
   noBrowser: noBrowserFlag,
   unsafeNoAuth: unsafeNoAuthFlag,
   bootstrapFd: bootstrapFdFlag,

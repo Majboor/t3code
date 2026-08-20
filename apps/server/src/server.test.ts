@@ -442,7 +442,9 @@ const serviceRegistryTestLayer = makeServiceRegistryLive({
   listeners: () =>
     Promise.resolve({ tool: "none", listeners: [], processAttribution: false, limitation: "" }),
   isAlive: () => false,
-}).pipe(Layer.provide(EnvironmentServiceRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))));
+}).pipe(
+  Layer.provide(EnvironmentServiceRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+);
 
 const packEnablementTestLayer = PackEnablementServiceLive.pipe(
   Layer.provide(PackEnablementRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
@@ -620,6 +622,7 @@ const buildAppUnderTest = (options?: {
       supabaseServiceRoleSecretName: undefined,
       localPasswordAuth: false,
       workspaceSource: "this-server",
+      hubUrl: undefined,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       ...options?.config,

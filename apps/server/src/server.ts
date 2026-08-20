@@ -148,6 +148,7 @@ import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
 import { ServiceRegistryLive } from "./environment/Layers/ServiceRegistry.ts";
+import { BoxRelayDialerLive } from "./box/Layers/BoxRelayDialer.ts";
 import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
 import { PackEnablementServiceLive } from "./packEnablement/Layers/PackEnablementService.ts";
@@ -534,6 +535,21 @@ const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
+/**
+ * The other direction: this machine dialling out, instead of being dialled.
+ *
+ * Built unconditionally and does nothing unless `--hub` / `T3CODE_HUB_URL` is
+ * set, which is what makes "no hub configured" mean *exactly today's server* —
+ * no outbound socket, no fiber, no behaviour to reason about. The two repository
+ * layers are provided here rather than pulled into the runtime dependencies
+ * because nothing else in the server asks for them at this level, and widening
+ * that set to serve one optional feature would make every server carry it.
+ */
+const BoxRelayDialerLayerLive = BoxRelayDialerLive.pipe(
+  Layer.provide(ServerSecretStoreLive),
+  Layer.provide(EnvironmentServiceRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+);
+
 export const makeRoutesLayer = Layer.mergeAll(
   basicAuthMiddlewareLayer,
   authBearerBootstrapRouteLayer,
@@ -652,6 +668,7 @@ export const makeServerLayer = Layer.unwrap(
       }),
       httpListeningLayer,
       runtimeStateLayer,
+      BoxRelayDialerLayerLive,
     );
 
     return serverApplicationLayer.pipe(

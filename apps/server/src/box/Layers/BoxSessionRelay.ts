@@ -12,10 +12,10 @@
  * keep straight for no gain — and a mis-correlated reply here would deliver one
  * command's output as another's, which on a `stop` is unthinkable.
  *
- * **The box side of this protocol is not in this commit.** The transport landed
- * (`environmentRelay/registry.ts`), and these are the calls defined against it;
- * until a box answers `box/1` requests, every verb reports the box as speaking a
- * protocol it does not know, which is the honest failure rather than a hang.
+ * The wire format itself lives in `boxProtocol.ts`, which the box's responder
+ * reads too. The two ends are separately deployed machines talking through a hub
+ * that cannot see into the payload, so the only thing keeping them in step is
+ * that the envelope has exactly one definition.
  *
  * @module Box
  */
@@ -30,6 +30,7 @@ import {
 } from "../../environmentRelay/registry.ts";
 import { AccountMachineRepository } from "../../persistence/Services/AccountMachines.ts";
 import { EnvironmentRelayBindingRepository } from "../../persistence/Services/EnvironmentRelayBindings.ts";
+import { encodeBoxRequest, type BoxRpcMethod } from "../boxProtocol.ts";
 import type { BoxFacts } from "../decideBoxCommand.ts";
 import {
   BoxSession,
@@ -40,33 +41,8 @@ import {
   type BoxTarget,
 } from "../Services/BoxSession.ts";
 
-/**
- * Bumped when a request changes meaning, never when one is added.
- *
- * Sent on every request rather than negotiated once, because the box is a
- * separately deployed machine that updates when its owner feels like it: the two
- * ends will routinely disagree, and a per-request version lets an old box refuse
- * one call rather than the whole session.
- */
-const BOX_PROTOCOL = "box/1";
-
 /** How long to wait for a reply before deciding nothing is coming. */
 const REPLY_TIMEOUT_MS = 15 * 60_000;
-
-type BoxRpcMethod = "inspect" | "exec" | "signal" | "readServiceLog" | "claimPort" | "releasePort";
-
-/**
- * One call, and its answer.
- *
- * The request carries its own timeout so the box can enforce it too. A deadline
- * held only by the caller stops the caller waiting and leaves the process
- * running on a machine nobody is watching, which is the worse half of a timeout.
- */
-interface BoxRpcRequest {
-  readonly protocol: string;
-  readonly method: BoxRpcMethod;
-  readonly params: Record<string, unknown>;
-}
 
 /**
  * Sends one request down a fresh channel and resolves on the first reply.
@@ -158,8 +134,7 @@ const call = (
     }
 
     channel = opened.channel;
-    const request: BoxRpcRequest = { protocol: BOX_PROTOCOL, method, params };
-    channel.send(JSON.stringify(request));
+    channel.send(encodeBoxRequest({ method, actorUserId: target.userId, params }));
 
     return Effect.sync(() => {
       settled = true;
@@ -286,7 +261,16 @@ const makeBoxSessionRelay = Effect.gen(function* () {
     );
 
   const signal: BoxSessionShape["signal"] = (input) =>
-    call(input, "signal", { pid: input.pid, signal: input.signal }, 30_000).pipe(
+    call(
+      input,
+      "signal",
+      {
+        pid: input.pid,
+        signal: input.signal,
+        acknowledgedTarget: input.acknowledgedTarget,
+      },
+      30_000,
+    ).pipe(
       Effect.map(
         (result) => (result as { readonly signalled?: boolean } | null)?.signalled === true,
       ),

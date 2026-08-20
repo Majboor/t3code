@@ -312,6 +312,17 @@ export type BoxRefusalReason =
    * machine's own facts, and it is the copy that counts.
    */
   | "helper-refused"
+  /**
+   * The box itself refused it, from its own registry rather than from ours.
+   *
+   * Distinct from `service-not-ours` on purpose, and the distinction is the
+   * interesting one in an audit table: this module decided from a service list
+   * the box sent it, and the box then decided again from a list it derived
+   * itself. A row with this reason means something got as far as the machine
+   * and the machine said no — which is either drift between the two views, or a
+   * caller that skipped the check here. Both are worth being able to find.
+   */
+  | "box-refused"
   /** Everything the unit rules refuse, kept distinct rather than flattened. */
   | UnitRefusalReason;
 

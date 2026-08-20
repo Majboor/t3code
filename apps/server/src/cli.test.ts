@@ -85,6 +85,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       supabaseServiceRoleSecretName: undefined,
       localPasswordAuth: false,
       workspaceSource: "this-server",
+      hubUrl: undefined,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
     } satisfies ServerConfigShape;

@@ -91,6 +91,23 @@ export interface ServerConfigShape extends ServerDerivedPaths {
    * their accounts while the projects live on their own machines.
    */
   readonly workspaceSource: WorkspaceSource;
+  /**
+   * The hub this machine dials out to, if it dials out at all.
+   *
+   * Its absence is the entire default: with no hub configured nothing about
+   * this server changes, no outbound connection is opened, and a machine
+   * reached directly stays reached directly. Set, it makes this process a
+   * **box** — a machine an agent drives from somewhere else, holding open one
+   * connection it established itself so that it needs no public URL, no tunnel
+   * and no hostname that can go stale.
+   *
+   * A URL and not a hostname, because the scheme decides the socket: `https:`
+   * dials `wss:` and `http:` dials `ws:`, and a bare hostname would leave that
+   * to a guess made in a different file. An installed box arrives with this
+   * already baked in by whatever installed it, which is why it is ordinary
+   * configuration here rather than something enrollment writes.
+   */
+  readonly hubUrl: URL | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
 }
@@ -200,6 +217,7 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           supabaseServiceRoleSecretName: undefined,
           localPasswordAuth: false,
           workspaceSource: "this-server",
+          hubUrl: undefined,
           staticDir: undefined,
           devUrl,
           noBrowser: false,

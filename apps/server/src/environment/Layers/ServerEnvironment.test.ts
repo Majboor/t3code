@@ -48,6 +48,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     supabaseServiceRoleSecretName: undefined,
     localPasswordAuth: false,
     workspaceSource: "this-server",
+    hubUrl: undefined,
   } satisfies ServerConfigShape;
 });
 
