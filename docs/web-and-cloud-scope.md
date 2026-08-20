@@ -72,3 +72,33 @@ bootstrap method, so there is no token that page could ever accept from them.
   connectivity architecture, not a component.
 - **The mobile app.** 682 files built against upstream's auth, contracts and navigation.
   Porting it is a project with its own plan, not a wave in someone else's.
+
+## What the multi-user flow actually does, measured
+
+Run `node scripts/collab-multiuser-e2e.mjs` against a dev server. Latest: **64 of 72**.
+
+Working, each verified with three real accounts in separate browser contexts: invite links;
+a second person joining with no shared cookies; a third joining on a session that already has
+an account; a file written into the folder by python being picked up; per-file author marks
+that name the author rather than the viewer; three people each drawn in their own colour; an
+admin changing somebody else's colour and everyone seeing it; read-only demotion actually
+refusing a send server-side; a branch per person; and an admin merging one from the panel —
+including reporting the conflict rather than pretending it merged.
+
+Not working, and worth knowing before promising any of it:
+
+- **Two people in one file is never noticed.** `findContention` exists and its unit tests
+  pass, so the gap is upstream of it — nothing feeds it, or nothing renders what it returns.
+  The "keep the edits on separate branches" suggestion therefore never appears either.
+- **An agent's file write is attributed to nobody.** A turn knows its acting user; a touch
+  recorded during that turn does not carry it.
+
+And two that are absent by design rather than broken:
+
+- Nothing distinguishes *a person* from *an agent* working on a file. The model records that a
+  file was touched, not who or what is touching it now.
+- Authorship is claimed by the browser that saved a file, so a file written outside the app
+  can never carry one.
+
+Those last two are the gap behind "see if two people are working on it or an agent is" — it
+needs a presence-per-file concept that does not exist yet. That is a feature, not a fix.
