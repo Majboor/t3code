@@ -37,6 +37,15 @@ const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(value);
 
+/**
+ * The engine reads server config to decide whether this server hosts projects
+ * at all, so every runtime built here has to supply it — including the ones
+ * that only exist to exercise a failing projection.
+ */
+const TestServerConfig = ServerConfig.layerTest(process.cwd(), {
+  prefix: "t3-orchestration-engine-test-",
+}).pipe(Layer.provideMerge(NodeServices.layer));
+
 async function createOrchestrationSystem() {
   const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "t3-orchestration-engine-test-",
@@ -169,6 +178,7 @@ describe("OrchestrationEngine", () => {
       Layer.provide(Layer.succeed(OrchestrationEventStore, failOnHistoricalReplayStore)),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
+      Layer.provideMerge(TestServerConfig),
     );
 
     const runtime = ManagedRuntime.make(layer);
@@ -638,6 +648,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfig),
         Layer.provideMerge(ServerConfigLayer),
         Layer.provideMerge(NodeServices.layer),
       ),
@@ -735,6 +746,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfig),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -879,6 +891,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfig),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));

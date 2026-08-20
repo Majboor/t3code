@@ -35,6 +35,8 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
   type OrchestrationDispatchError,
 } from "../Errors.ts";
+import { ServerConfig } from "../../config.ts";
+import { decideProjectHostingRefusal } from "../../workspaceHosting.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
@@ -72,6 +74,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
 
 const makeOrchestrationEngine = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const serverConfig = yield* ServerConfig;
   const eventStore = yield* OrchestrationEventStore;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
@@ -286,6 +289,22 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
+      // Enforced at the queue rather than at the socket because the socket is
+      // not the only way in: the CLI dispatches straight into the engine, and a
+      // rule that only the websocket knows about is one `t3 project add` away
+      // from being untrue. Every path to a durable event passes through here.
+      const hostingRefusal = decideProjectHostingRefusal({
+        workspaceSource: serverConfig.workspaceSource,
+        command,
+      });
+      if (hostingRefusal !== null) {
+        return yield* Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: hostingRefusal,
+          }),
+        );
+      }
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
       yield* Queue.offer(commandQueue, { command, result, startedAtMs: Date.now() });
       return yield* Deferred.await(result);

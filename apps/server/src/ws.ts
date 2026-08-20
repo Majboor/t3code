@@ -96,6 +96,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { ServerConfig } from "./config.ts";
+import { decideProjectHostingRefusal } from "./workspaceHosting.ts";
 import { GitCore } from "./git/Services/GitCore.ts";
 import { GitManager } from "./git/Services/GitManager.ts";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster.ts";
@@ -1040,6 +1041,33 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             });
           }),
         );
+      };
+
+      /**
+       * Refuses to create a project on a server that exists to hold accounts.
+       *
+       * Without this the `paired-environment` setting is decorative: the web
+       * app stops *offering* to make a project here, but the command still
+       * works, so anything speaking the protocol directly — the CLI, an old
+       * build of the browser app, a reconnecting tab that cached the old
+       * capability — quietly puts someone's project on the shared box. The
+       * setting has to be enforced where the work would actually be done.
+       */
+      const refuseHostingWhenPairedEnvironment = (
+        // Runs before normalization, so this sees the client's command shape
+        // rather than the normalized one. Only the discriminant is read, and
+        // narrowing to that keeps the two shapes from having to agree.
+        command: {
+          readonly type: string;
+        },
+      ): Effect.Effect<void, OrchestrationDispatchCommandError> => {
+        const refusal = decideProjectHostingRefusal({
+          workspaceSource: config.workspaceSource,
+          command,
+        });
+        return refusal === null
+          ? Effect.void
+          : Effect.fail(new OrchestrationDispatchCommandError({ message: refusal }));
       };
 
       const attachProjectOwnership = (
@@ -3855,6 +3883,10 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 command,
                 (message) => new OrchestrationDispatchCommandError({ message }),
               );
+              // Before normalization, which creates the workspace directory
+              // when asked: refusing afterwards would leave a folder behind on
+              // a server that just said it does not host projects.
+              yield* refuseHostingWhenPairedEnvironment(command);
               const normalizedCommand = attachMessageAuthor(
                 yield* normalizeDispatchCommand(command),
               );
