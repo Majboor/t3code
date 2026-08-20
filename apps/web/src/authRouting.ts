@@ -7,6 +7,13 @@ const DEFAULT_AUTH_ENTRY_PATH = "/pair";
 const ENVIRONMENTS_ENTRY_PATH = "/environments";
 
 /**
+ * The routes a person without a workspace is allowed to stay on, because each
+ * one is a way of acquiring something they do not have yet and each carries a
+ * token or code in its URL that a redirect would discard.
+ */
+const MEMBERSHIP_EXEMPT_PATHS: ReadonlySet<string> = new Set(["/invite", "/share", "/connect"]);
+
+/**
  * What a person still needs before the workspace can be shown to them.
  *
  * Signing in and having somewhere to work used to be one condition, because
@@ -57,7 +64,12 @@ export function resolveAuthGateRedirect(input: {
   // yet, and acquiring one is precisely what the page they are on does. Bouncing
   // them to `/invite` would drop the share token and land them on "invite link
   // is missing" — a dead end at the last step of the flow that was working.
-  return input.pathname === "/invite" || input.pathname === "/share" ? null : "/invite";
+  //
+  // `/connect` is exempt for the same reason a third time. Somebody who has
+  // just made an account so they can approve their own laptop has no membership
+  // either, and the code that says which laptop is in the URL — the one thing a
+  // redirect throws away.
+  return MEMBERSHIP_EXEMPT_PATHS.has(input.pathname) ? null : "/invite";
 }
 
 export function resolvePrivateRouteRedirect(input: {

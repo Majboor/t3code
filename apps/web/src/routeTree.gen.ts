@@ -14,6 +14,8 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as InviteRouteImport } from './routes/invite'
 import { Route as EnvironmentsRouteImport } from './routes/environments'
+import { Route as DownloadRouteImport } from './routes/download'
+import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsOrganizationRouteImport } from './routes/settings.organization'
@@ -51,6 +53,16 @@ const InviteRoute = InviteRouteImport.update({
 const EnvironmentsRoute = EnvironmentsRouteImport.update({
   id: '/environments',
   path: '/environments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DownloadRoute = DownloadRouteImport.update({
+  id: '/download',
+  path: '/download',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnectRoute = ConnectRouteImport.update({
+  id: '/connect',
+  path: '/connect',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatRoute = ChatRouteImport.update({
@@ -122,6 +134,8 @@ const ChatProjectEnvironmentIdProjectIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
+  '/connect': typeof ConnectRoute
+  '/download': typeof DownloadRoute
   '/environments': typeof EnvironmentsRoute
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
@@ -140,6 +154,8 @@ export interface FileRoutesByFullPath {
   '/project/$environmentId/$projectId': typeof ChatProjectEnvironmentIdProjectIdRoute
 }
 export interface FileRoutesByTo {
+  '/connect': typeof ConnectRoute
+  '/download': typeof DownloadRoute
   '/environments': typeof EnvironmentsRoute
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
@@ -161,6 +177,8 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
+  '/connect': typeof ConnectRoute
+  '/download': typeof DownloadRoute
   '/environments': typeof EnvironmentsRoute
   '/invite': typeof InviteRoute
   '/pair': typeof PairRoute
@@ -183,6 +201,8 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/connect'
+    | '/download'
     | '/environments'
     | '/invite'
     | '/pair'
@@ -201,6 +221,8 @@ export interface FileRouteTypes {
     | '/project/$environmentId/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/connect'
+    | '/download'
     | '/environments'
     | '/invite'
     | '/pair'
@@ -221,6 +243,8 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_chat'
+    | '/connect'
+    | '/download'
     | '/environments'
     | '/invite'
     | '/pair'
@@ -242,6 +266,8 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
+  ConnectRoute: typeof ConnectRoute
+  DownloadRoute: typeof DownloadRoute
   EnvironmentsRoute: typeof EnvironmentsRoute
   InviteRoute: typeof InviteRoute
   PairRoute: typeof PairRoute
@@ -284,6 +310,20 @@ declare module '@tanstack/react-router' {
       path: '/environments'
       fullPath: '/environments'
       preLoaderRoute: typeof EnvironmentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/download': {
+      id: '/download'
+      path: '/download'
+      fullPath: '/download'
+      preLoaderRoute: typeof DownloadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connect': {
+      id: '/connect'
+      path: '/connect'
+      fullPath: '/connect'
+      preLoaderRoute: typeof ConnectRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat': {
@@ -425,6 +465,8 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
+  ConnectRoute: ConnectRoute,
+  DownloadRoute: DownloadRoute,
   EnvironmentsRoute: EnvironmentsRoute,
   InviteRoute: InviteRoute,
   PairRoute: PairRoute,

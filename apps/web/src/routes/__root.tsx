@@ -51,6 +51,13 @@ import {
   updatePrimaryEnvironmentDescriptor,
 } from "../environments/primary";
 
+const SELF_CONTAINED_ROUTE_PATHS: ReadonlySet<string> = new Set([
+  "/pair",
+  "/invite",
+  "/share",
+  "/connect",
+]);
+
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
 }>()({
@@ -90,11 +97,16 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  // The three routes that draw their own surface for somebody who is not inside
-  // yet. `/share` is here for the same reason as `/invite`: wrapping it in the
+  // The routes that draw their own surface for somebody who is not inside yet.
+  // `/share` is here for the same reason as `/invite`: wrapping it in the
   // authenticated shell would mean a share recipient has to already be a member
   // to reach the page whose entire job is making them one.
-  if (pathname === "/pair" || pathname === "/invite" || pathname === "/share") {
+  //
+  // `/connect` is here for a sharper version of it. The shell waits on an
+  // environment connection, and the person on that page has no environment —
+  // approving the machine that becomes one is what they are there to do. Behind
+  // the shell, the approval would be gated on the thing it produces.
+  if (SELF_CONTAINED_ROUTE_PATHS.has(pathname)) {
     return <Outlet />;
   }
 
