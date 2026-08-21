@@ -185,10 +185,15 @@ export function bakeHubOrigin(script: string, origin: string | null): string {
  * From a checkout the file is at `infra/install/` relative to the repository
  * root, and this module may be running from `apps/server/src/install/` (source)
  * or from `apps/server/dist/` (bundled), so the root is found by walking up
- * rather than by counting `..` segments and hoping. The bundled sibling is
- * checked first for the layout an installed environment would have: the tarball
- * does not carry the installer today, which is why this can return null and why
- * the route has an honest answer for that.
+ * rather than by counting `..` segments and hoping.
+ *
+ * The bundled sibling is checked first, and it is the layout that matters: an
+ * installed server has no repository above it to walk up into, so before
+ * `tsdown.config.ts` copied the script into `dist/install/` this route answered
+ * 503 on exactly the machines the one-liner exists for. The null branch stays
+ * anyway — a `dist` assembled by hand, or a future build that drops the copy,
+ * is a thing that can happen, and it should produce a sentence rather than a
+ * stack trace.
  *
  * Nothing here is derived from the request. There is one filename and it is a
  * constant, so there is no path for a caller to traverse.
@@ -235,9 +240,10 @@ const SCRIPT_HEADERS: Readonly<Record<string, string>> = {
 };
 
 /**
- * The answer when the file is not on this machine — a server running from a
- * tarball that does not carry the installer. A 404 would suggest the feature
- * does not exist; this says which one of the two it is, in a shell comment,
+ * The answer when the file is not on this machine — a `dist` that was assembled
+ * without it, or a source tree cut off from its repository root. A 404 would
+ * suggest the feature does not exist; this says which one of the two it is, in a
+ * shell comment,
  * because whatever reads it is a pipe into `sh` and a bare sentence there is a
  * command not found.
  */
