@@ -149,6 +149,10 @@ import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
 import { ServiceRegistryLive } from "./environment/Layers/ServiceRegistry.ts";
 import { BoxRelayDialerLive } from "./box/Layers/BoxRelayDialer.ts";
+import { BoxCommandsLive } from "./box/Layers/BoxCommands.ts";
+import { BoxSessionRelayLive } from "./box/Layers/BoxSessionRelay.ts";
+import { boxCommandsRouteLayer } from "./box/http.ts";
+import { BoxCommandJournalRepositoryLive } from "./persistence/Layers/BoxCommandJournal.ts";
 import { DeploymentRepositoryLive } from "./persistence/Layers/Deployments.ts";
 import { AnalyticsStoreLive } from "./analytics/Layers/AnalyticsStore.ts";
 import { PackEnablementServiceLive } from "./packEnablement/Layers/PackEnablementService.ts";
@@ -372,6 +376,15 @@ const EnvironmentRelayBindingRepositoryLayerLive = EnvironmentRelayBindingReposi
   Layer.provide(PersistenceLayerLive),
 );
 
+/**
+ * What ran on a box, when, by which turn, and how it ended — refusals included,
+ * since a refusal that left no row is the one thing that cannot explain why an
+ * override was there the second time.
+ */
+const BoxCommandJournalRepositoryLayerLive = BoxCommandJournalRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 /** The asks that sit on top of sharing: who wants usage, and who answered. */
 const ProviderUsageRequestRepositoryLayerLive = ProviderUsageRequestRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
@@ -545,6 +558,21 @@ const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
  * because nothing else in the server asks for them at this level, and widening
  * that set to serve one optional feature would make every server carry it.
  */
+/**
+ * The verbs, for a caller that is not this process.
+ *
+ * Built here rather than left as a requirement of the route, because it is
+ * assembled from a repository set the routes already carry plus one seam —
+ * `BoxSessionRelay` — that nothing else in the server asks for. The layer is the
+ * same one `t3 box` used to build for itself; what changed is where it runs.
+ * Relay connections live in this process's memory, so this is the only process
+ * that can dispatch to a box, and a route is how everywhere else asks it to.
+ */
+const BoxCommandsLayerLive = BoxCommandsLive.pipe(
+  Layer.provide(BoxSessionRelayLive),
+  Layer.provide(BoxCommandJournalRepositoryLayerLive),
+);
+
 const BoxRelayDialerLayerLive = BoxRelayDialerLive.pipe(
   Layer.provide(ServerSecretStoreLive),
   Layer.provide(EnvironmentServiceRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
@@ -595,6 +623,10 @@ export const makeRoutesLayer = Layer.mergeAll(
   environmentRelayDialRouteLayer,
   environmentRelayLinksRouteLayer,
   environmentRelayAttachRouteLayer,
+  // And the way a person or an agent drives one of those machines from a shell
+  // that is not this process. Transport only: every rule about what a box will
+  // do is still `decideBoxCommand`'s here and `decideBoxSignal`'s on the box.
+  boxCommandsRouteLayer,
   cloudSyncNegotiateRouteLayer,
   cloudSyncBlobUploadRouteLayer,
   cloudSyncBlobDownloadRouteLayer,
@@ -665,7 +697,7 @@ export const makeServerLayer = Layer.unwrap(
     const serverApplicationLayer = Layer.mergeAll(
       HttpRouter.serve(makeRoutesLayer, {
         disableLogger: !config.logWebSocketEvents,
-      }),
+      }).pipe(Layer.provide(BoxCommandsLayerLive)),
       httpListeningLayer,
       runtimeStateLayer,
       BoxRelayDialerLayerLive,

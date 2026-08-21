@@ -131,6 +131,9 @@ import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/Provide
 import { ProviderUsageServiceLive } from "./providerUsage/Layers/ProviderUsageService.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
 import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
+import { BoxCommandJournalRepositoryLive } from "./persistence/Layers/BoxCommandJournal.ts";
+import { BoxCommandsLive } from "./box/Layers/BoxCommands.ts";
+import { BoxSessionRelayLive } from "./box/Layers/BoxSessionRelay.ts";
 import { EnvironmentRelayBindingRepositoryLive } from "./persistence/Layers/EnvironmentRelayBindings.ts";
 import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrollments.ts";
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
@@ -446,6 +449,24 @@ const serviceRegistryTestLayer = makeServiceRegistryLive({
   Layer.provide(EnvironmentServiceRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
 );
 
+/**
+ * The box verbs, standing up over the same in-memory database as everything
+ * else here.
+ *
+ * The real thing rather than a mock, because there is nothing to fake: with no
+ * relay connection registered in this process, `BoxSessionRelay` reports every
+ * environment as unreachable and the rules refuse in words — which is exactly
+ * what the route should be answering in a suite that never dials a box. What is
+ * under test here is that the route exists, requires a session and scopes itself
+ * to the caller's account; what a connected box does is `box-relay-e2e`'s.
+ */
+const boxCommandsTestLayer = BoxCommandsLive.pipe(
+  Layer.provide(BoxSessionRelayLive),
+  Layer.provide(BoxCommandJournalRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(accountMachineRepositoryTestLayer),
+  Layer.provide(environmentRelayBindingTestLayer),
+);
+
 const packEnablementTestLayer = PackEnablementServiceLive.pipe(
   Layer.provide(PackEnablementRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
   Layer.provide(packRegistryTestLayer),
@@ -683,6 +704,7 @@ const buildAppUnderTest = (options?: {
       disableListenLog: true,
       disableLogger: true,
     }).pipe(
+      Layer.provide(boxCommandsTestLayer),
       Layer.provide(
         Layer.mock(Keybindings)({
           loadConfigState: Effect.succeed({

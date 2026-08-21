@@ -125,9 +125,9 @@ import type { AuthControlPlaneShape } from "./auth/Services/AuthControlPlane.ts"
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
-import { BoxCommandsLive } from "./box/Layers/BoxCommands.ts";
-import { BoxSessionRelayLive } from "./box/Layers/BoxSessionRelay.ts";
-import { BoxCommands, type BoxCommandsShape, type BoxRefused } from "./box/Services/BoxCommands.ts";
+import { HUB_SESSION_TOKEN_SECRET } from "./box/Layers/BoxRelayDialer.ts";
+import { makeBoxHubCommands, type BoxHubCommandsShape } from "./box/hubClient.ts";
+import { type BoxRefused } from "./box/Services/BoxCommands.ts";
 import {
   UNIT_DEPLOY_ROOT,
   UNIT_PREFIX,
@@ -150,9 +150,6 @@ import {
   formatBoxStop,
   formatBoxUnit,
 } from "./box/cliOutput.ts";
-import { BoxCommandJournalRepositoryLive } from "./persistence/Layers/BoxCommandJournal.ts";
-import { AccountMachineRepositoryLive } from "./persistence/Layers/AccountMachines.ts";
-import { EnvironmentRelayBindingRepositoryLive } from "./persistence/Layers/EnvironmentRelayBindings.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
 import { getAutoBootstrapDefaultModelSelection } from "./serverRuntimeStartup.ts";
@@ -2291,48 +2288,114 @@ const envCommand = Command.make("env").pipe(
 );
 
 /**
- * Who the CLI is acting as when it drives a box.
+ * Where `t3 box` sends a verb.
  *
- * The same placeholder the local registry commands use. A box command run from a
- * shell has no session behind it, and inventing one would put a fake account on
- * rows whose whole purpose is to say who did what.
+ * A box is reached over a relay connection it opened itself, and that connection
+ * lives in the memory of the hub process it dialled into — deliberately, because
+ * a socket cannot outlive the process holding it. So this command cannot dispatch
+ * anything on its own: it asks the hub to, over `/api/boxes/:id/commands`.
+ *
+ * Three ways to say where the hub is, in the order a person means them. The flag
+ * is what you just typed; `T3CODE_HUB_URL` is the address an installed box or a
+ * configured shell already carries, and it is the *same* variable the box itself
+ * dials — one machine, one hub, one name for it. Failing both, the server this
+ * base directory is running is the hub, and its origin is already written down
+ * by the running process, so the ordinary case on a laptop needs no address at
+ * all.
  */
-const CLI_BOX_ACTOR = "cli";
+const boxHubFlag = Flag.string("hub").pipe(
+  Flag.withSchema(Schema.URLFromString),
+  Flag.withDescription(
+    "The hub this box is connected to (equivalent to T3CODE_HUB_URL). Defaults to the server running from this base directory.",
+  ),
+  Flag.optional,
+);
+
+const resolveBoxHubUrl = Effect.fn("resolveBoxHubUrl")(function* (
+  flag: Option.Option<URL>,
+  config: ServerConfigShape,
+) {
+  if (Option.isSome(flag)) return flag.value;
+  if (config.hubUrl !== undefined) return config.hubUrl;
+
+  const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  if (Option.isSome(runtimeState)) return new URL(runtimeState.value.origin);
+
+  return yield* Effect.fail(
+    new Error(
+      "No hub to ask. A box is driven through the hub it is connected to, and there is no server running here. Start one, or name it with --hub / T3CODE_HUB_URL.",
+    ),
+  );
+});
 
 /**
- * Everything a box verb needs, provided once.
+ * The credential this shell drives a box with.
  *
- * The journal is reached over the same SQLite file as everything else, and the
- * box itself over the relay. Those two are deliberately different layers: the
- * journal answers when the machine is off, which is the case the whole verb set
- * is built around.
+ * There is no way around having one, and that is the fix rather than a cost of
+ * it. Every box verb is scoped to whose box it is, and until now the CLI
+ * answered that with the literal string `"cli"` — an actor no binding is ever
+ * owned by, so `facts()` reported every box as revoked and every verb refused
+ * before it reached a machine. The identity now comes from a real session, which
+ * the hub reads off the request and the CLI never names.
+ *
+ * Two places to keep it, both of them ones that already exist. The environment
+ * variable is for a one-off or a CI step, where a credential should live for the
+ * length of one command. The secret store is for a machine that does this
+ * regularly, and is the same store and the same name a box uses for its own hub
+ * credential: `t3 secret set hub-session-token` already puts things there with
+ * the right permissions, and `t3 secret list` already answers "is this shell
+ * configured".
+ */
+const BOX_HUB_TOKEN_ENV = "T3CODE_HUB_TOKEN";
+
+const resolveBoxHubToken = Effect.fn("resolveBoxHubToken")(function* () {
+  const fromEnvironment = yield* Config.string(BOX_HUB_TOKEN_ENV).pipe(Config.option);
+  if (Option.isSome(fromEnvironment) && fromEnvironment.value.trim().length > 0) {
+    return fromEnvironment.value.trim();
+  }
+
+  const store = yield* ServerSecretStore;
+  const stored = yield* store
+    .get(HUB_SESSION_TOKEN_SECRET)
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  const token = stored === null ? "" : new TextDecoder().decode(stored).trim();
+  if (token.length > 0) return token;
+
+  return yield* Effect.fail(
+    new Error(
+      `No credential to drive a box with. A box belongs to an account, so reaching one takes a session for that account: set ${BOX_HUB_TOKEN_ENV}, or store one with \`t3 auth session issue --token-only | t3 secret set ${HUB_SESSION_TOKEN_SECRET}\`.`,
+    ),
+  );
+});
+
+/**
+ * Everything a box verb needs, resolved once.
+ *
+ * What used to be here built `BoxCommands` in this process and drove the relay
+ * directly, which worked only inside the hub — everywhere else it found an empty
+ * connection registry and correctly reported that no box was connected under
+ * that name. The verbs, the rules, the journal and the wording are all unchanged;
+ * they simply run in the process that can actually reach the machine.
  */
 const runBoxCommand = Effect.fn("runBoxCommand")(function* (
-  flags: { readonly baseDir: Option.Option<string> },
-  run: (context: { readonly commands: BoxCommandsShape }) => Effect.Effect<string, Error>,
+  flags: {
+    readonly baseDir: Option.Option<string>;
+    readonly hub: Option.Option<URL>;
+    readonly box: string;
+  },
+  run: (commands: BoxHubCommandsShape) => Effect.Effect<string, Error>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
   return yield* Effect.gen(function* () {
-    const commands = yield* BoxCommands;
-    yield* Console.log(yield* run({ commands }));
+    const hubUrl = yield* resolveBoxHubUrl(flags.hub, config);
+    const token = yield* resolveBoxHubToken();
+    const commands = yield* makeBoxHubCommands({ hubUrl, token, environmentId: flags.box });
+    yield* Console.log(yield* run(commands));
   }).pipe(
     Effect.provideService(References.MinimumLogLevel, "Error" as const),
     Effect.provide(
-      BoxCommandsLive.pipe(
-        Layer.provide(
-          BoxSessionRelayLive.pipe(
-            Layer.provide(
-              EnvironmentRelayBindingRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
-            ),
-            Layer.provide(
-              AccountMachineRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
-            ),
-          ),
-        ),
-        Layer.provide(
-          BoxCommandJournalRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
-        ),
+      Layer.mergeAll(FetchHttpClient.layer, ServerSecretStoreLive).pipe(
         Layer.provide(Layer.succeed(ServerConfig, config)),
         Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
       ),
@@ -2343,14 +2406,6 @@ const runBoxCommand = Effect.fn("runBoxCommand")(function* (
 const boxArgument = Argument.string("box").pipe(
   Argument.withDescription("The box to drive, by the name it keeps across reboots."),
 );
-
-const boxCaller = (environmentId: string) => ({
-  environmentId,
-  userId: CLI_BOX_ACTOR,
-  // A command typed at a shell belongs to no turn, and saying so is more useful
-  // than attributing it to one that does not exist.
-  turnId: null,
-});
 
 /** A refusal is an answer, so it prints and exits non-zero without a stack. */
 const boxAnswer = <A extends { readonly outcome: string }>(
@@ -2372,6 +2427,7 @@ const boxRunCommand = Command.make("run", {
   baseDir: baseDirFlag,
   json: jsonFlag,
   box: boxArgument,
+  hub: boxHubFlag,
   detach: Flag.boolean("detach").pipe(
     Flag.withDescription("Leave it running after this command returns."),
     Flag.withDefault(false),
@@ -2382,8 +2438,8 @@ const boxRunCommand = Command.make("run", {
 }).pipe(
   Command.withDescription("Run a command on a box and report its exit code."),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
-      commands.run({ ...boxCaller(flags.box), command: flags.command, detach: flags.detach }).pipe(
+    runBoxCommand(flags, (commands) =>
+      commands.run({ command: flags.command, detach: flags.detach }).pipe(
         Effect.mapError((error) => new Error(error.message)),
         Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxRun, boxRunJson)),
       ),
@@ -2395,11 +2451,12 @@ const boxServicesCommand = Command.make("services", {
   baseDir: baseDirFlag,
   json: jsonFlag,
   box: boxArgument,
+  hub: boxHubFlag,
 }).pipe(
   Command.withDescription("List what is running on a box and who started each thing."),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
-      commands.services(boxCaller(flags.box)).pipe(
+    runBoxCommand(flags, (commands) =>
+      commands.services().pipe(
         Effect.mapError((error) => new Error(error.message)),
         Effect.flatMap((report) =>
           boxAnswer(report, flags.json, formatBoxServices, boxServicesJson),
@@ -2413,6 +2470,7 @@ const boxStopCommand = Command.make("stop", {
   baseDir: baseDirFlag,
   json: jsonFlag,
   box: boxArgument,
+  hub: boxHubFlag,
   target: Argument.string("service").pipe(
     Argument.withDescription("The service name, or a port as `:3000`."),
   ),
@@ -2429,10 +2487,9 @@ const boxStopCommand = Command.make("stop", {
 }).pipe(
   Command.withDescription("Stop a service on a box."),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
+    runBoxCommand(flags, (commands) =>
       commands
         .stop({
-          ...boxCaller(flags.box),
           target: flags.target,
           acknowledgedTarget: Option.getOrNull(flags.acknowledgeUnmanaged),
         })
@@ -2450,14 +2507,15 @@ const boxLogsCommand = Command.make("logs", {
   baseDir: baseDirFlag,
   json: jsonFlag,
   box: boxArgument,
+  hub: boxHubFlag,
   target: Argument.string("service").pipe(
     Argument.withDescription("The service name, or a port as `:3000`."),
   ),
 }).pipe(
   Command.withDescription("Read the captured output of something T3 started on a box."),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
-      commands.logs({ ...boxCaller(flags.box), target: flags.target }).pipe(
+    runBoxCommand(flags, (commands) =>
+      commands.logs({ target: flags.target }).pipe(
         Effect.mapError((error) => new Error(error.message)),
         Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxLogs, (value) => value)),
       ),
@@ -2469,6 +2527,7 @@ const boxPortClaimCommand = Command.make("claim", {
   baseDir: baseDirFlag,
   json: jsonFlag,
   box: boxArgument,
+  hub: boxHubFlag,
   port: Argument.integer("port").pipe(Argument.withDescription("The port to reserve.")),
   purpose: Flag.string("purpose").pipe(
     Flag.withDescription("What it is being held for, in words a stranger can act on."),
@@ -2477,20 +2536,18 @@ const boxPortClaimCommand = Command.make("claim", {
 }).pipe(
   Command.withDescription("Reserve a port on a box before starting something on it."),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
-      commands
-        .claimPort({ ...boxCaller(flags.box), port: flags.port, purpose: flags.purpose })
-        .pipe(
-          Effect.mapError((error) => new Error(error.message)),
-          Effect.flatMap((report) =>
-            boxAnswer(
-              report,
-              flags.json,
-              (value) => formatBoxPort(value, "claim"),
-              (value) => value,
-            ),
+    runBoxCommand(flags, (commands) =>
+      commands.claimPort({ port: flags.port, purpose: flags.purpose }).pipe(
+        Effect.mapError((error) => new Error(error.message)),
+        Effect.flatMap((report) =>
+          boxAnswer(
+            report,
+            flags.json,
+            (value) => formatBoxPort(value, "claim"),
+            (value) => value,
           ),
         ),
+      ),
     ),
   ),
 );
@@ -2499,12 +2556,13 @@ const boxPortReleaseCommand = Command.make("release", {
   baseDir: baseDirFlag,
   json: jsonFlag,
   box: boxArgument,
+  hub: boxHubFlag,
   port: Argument.integer("port").pipe(Argument.withDescription("The port to release.")),
 }).pipe(
   Command.withDescription("Give up a port reservation on a box."),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
-      commands.releasePort({ ...boxCaller(flags.box), port: flags.port }).pipe(
+    runBoxCommand(flags, (commands) =>
+      commands.releasePort({ port: flags.port }).pipe(
         Effect.mapError((error) => new Error(error.message)),
         Effect.flatMap((report) =>
           boxAnswer(
@@ -2528,6 +2586,7 @@ const boxHistoryCommand = Command.make("history", {
   baseDir: baseDirFlag,
   json: jsonFlag,
   box: boxArgument,
+  hub: boxHubFlag,
   limit: Flag.integer("limit").pipe(
     Flag.withDescription("How many entries to show."),
     Flag.withDefault(20),
@@ -2535,8 +2594,8 @@ const boxHistoryCommand = Command.make("history", {
 }).pipe(
   Command.withDescription("What has happened on a box recently. Works when the box is off."),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
-      commands.history({ ...boxCaller(flags.box), limit: flags.limit }).pipe(
+    runBoxCommand(flags, (commands) =>
+      commands.history({ limit: flags.limit }).pipe(
         Effect.mapError((error) => new Error(error.message)),
         Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxHistory, boxHistoryJson)),
       ),
@@ -2547,14 +2606,15 @@ const boxHistoryCommand = Command.make("history", {
 const boxOutputCommand = Command.make("output", {
   baseDir: baseDirFlag,
   box: boxArgument,
+  hub: boxHubFlag,
   entryId: Argument.string("id").pipe(
     Argument.withDescription("The id printed with a truncated result."),
   ),
 }).pipe(
   Command.withDescription("Fetch the full output a truncated result did not carry."),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
-      commands.output({ ...boxCaller(flags.box), entryId: flags.entryId }).pipe(
+    runBoxCommand(flags, (commands) =>
+      commands.output({ entryId: flags.entryId }).pipe(
         Effect.mapError((error) => new Error(error.message)),
         Effect.map(formatBoxOutput),
       ),
@@ -2590,12 +2650,13 @@ const boxUnitLifecycleCommand = (
     baseDir: baseDirFlag,
     json: jsonFlag,
     box: boxArgument,
+    hub: boxHubFlag,
     unit: boxUnitNameArgument,
   }).pipe(
     Command.withDescription(description),
     Command.withHandler((flags) =>
-      runBoxCommand(flags, ({ commands }) =>
-        commands.unit({ ...boxCaller(flags.box), verb, name: flags.unit, create: null }).pipe(
+      runBoxCommand(flags, (commands) =>
+        commands.unit({ verb, name: flags.unit, create: null }).pipe(
           Effect.mapError((error) => new Error(error.message)),
           Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxUnit, boxUnitJson)),
         ),
@@ -2607,6 +2668,7 @@ const boxUnitCreateCommand = Command.make("create", {
   baseDir: baseDirFlag,
   json: jsonFlag,
   box: boxArgument,
+  hub: boxHubFlag,
   unit: boxUnitNameArgument,
   exec: Flag.string("exec").pipe(
     Flag.withDescription(
@@ -2642,10 +2704,9 @@ const boxUnitCreateCommand = Command.make("create", {
     "Write a systemd unit for something the agent deployed, running as the box's unprivileged service user.",
   ),
   Command.withHandler((flags) =>
-    runBoxCommand(flags, ({ commands }) =>
+    runBoxCommand(flags, (commands) =>
       commands
         .unit({
-          ...boxCaller(flags.box),
           verb: "create",
           name: flags.unit,
           create: {
