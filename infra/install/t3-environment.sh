@@ -317,6 +317,13 @@ detect_platform() {
 # the caller has to answer a second question after "is this port taken": is the
 # thing holding it *our own service*, which an upgrade must tolerate. Only the
 # pid settles that — see conflictIsOwnService() in the TypeScript module.
+#
+# This awk is not merely compared against that module by eye. environment-install.test.ts
+# lifts this function out of this file and RUNS it, with a stub `ss` on PATH, over
+# the same fixtures findPortConflict() is tested with, and fails if the two
+# disagree about whether a port collides or about which pid holds it. So keep the
+# shape it depends on: the name at the start of a line, the body closed by a `}`
+# at the start of a line, and no `}` in column one anywhere between them.
 find_port_conflict() {
   command -v ss >/dev/null 2>&1 || return 0
   ss -lntpH 2>/dev/null | awk -v want_port="$1" -v want_host="$2" '

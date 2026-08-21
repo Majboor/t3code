@@ -14,9 +14,19 @@
  * directly: the `ss` line whose *source* port happens to look like ours, the
  * version that gained a fourth segment, the enrollment that expired one second
  * before the poll. `infra/install/t3-environment.sh` mirrors them, and the
- * constants the two share are drift-checked by this module's tests — see
- * `readInstallerShellConstants`. That check is the only thing standing between
- * "the script and the spec agree" and "they agreed once".
+ * mirror is drift-checked by this module's tests in two ways: the constants the
+ * two share are compared as text (`readInstallerShellConstants`), and the port
+ * conflict rule — the one piece of judgement the script re-implements in awk
+ * rather than merely parameterising — is *executed* against the same fixtures
+ * this module is (`readInstallerShellFunction`). Those checks are the only thing
+ * standing between "the script and the spec agree" and "they agreed once".
+ *
+ * The reading of `ss -lntpH` is shared with the runtime probe in
+ * `apps/server/src/environment/listenerProbe.ts` through
+ * `@t3tools/shared/ssOutput`, because both run that identical command and the
+ * traps in its output belong to `ss` rather than to either caller. The shell's
+ * copy is the one that cannot be shared — it runs on a bare VPS before any
+ * runtime exists — and it is the one the executing drift check exists for.
  *
  * Nothing here touches the network or the filesystem. Every function takes the
  * machine's answers as arguments so the interesting cases are reachable from a
@@ -24,6 +34,7 @@
  *
  * @module EnvironmentInstall
  */
+import { parseSsRows, ssRowPid, ssRowProcessName } from "@t3tools/shared/ssOutput";
 
 /**
  * Everything the installer is allowed to create, in one place.
@@ -314,45 +325,35 @@ export interface ListeningSocket {
 /**
  * Read `ss -lntpH` output into sockets.
  *
- * Written against the real thing rather than a tidy imagining of it, because
- * the trap here is specific and quiet: every row carries a *peer* column as
- * well as a local one, and the peer column on a listening socket is
- * `0.0.0.0:*` — which contains a colon, contains digits, and will happily match
- * a naive port grep. A conflict check that fires on the peer column reports a
- * collision on every box that has any listener at all.
+ * The row splitting is `@t3tools/shared/ssOutput`, shared with the runtime probe
+ * in `apps/server/src/environment/listenerProbe.ts`, because that probe runs the
+ * identical command with the identical flags and the trap in this output is
+ * specific, quiet, and the same for both: every row carries a *peer* column as
+ * well as a local one, and the peer column on a listening socket is `0.0.0.0:*`
+ * — which contains a colon, contains digits, and will happily match a naive port
+ * grep. A conflict check that fires on the peer column reports a collision on
+ * every box that has any listener at all.
  *
- * So the local address is taken positionally, as the fourth field, and nothing
- * else on the line is allowed to contribute a port.
+ * What is *not* shared is the address, and deliberately. The probe folds `[::]`
+ * into `0.0.0.0` for a reader who only wants to know whether a thing is exposed;
+ * here the address is kept as `ss` printed it, because the rule below is
+ * `bind(2)`'s and because the awk in `infra/install/t3-environment.sh` — the
+ * copy that actually runs, on a machine with no runtime to import anything —
+ * prints it that way too.
  */
 export function parseListeningSockets(ssOutput: string): ReadonlyArray<ListeningSocket> {
   const sockets: Array<ListeningSocket> = [];
 
-  for (const rawLine of ssOutput.split("\n")) {
-    const line = rawLine.trim();
-    if (line.length === 0) {
-      continue;
-    }
-    const fields = line.split(/\s+/);
-    // A header row survives `-H` on some builds; it has no numeric columns
-    // where the queue depths belong, which is the cheapest way to spot it.
-    if (fields[0] === "State" || fields[0] === "Netid") {
-      continue;
-    }
-    // ss -lntpH: State Recv-Q Send-Q Local:Port Peer:Port [users:(...)]
-    const local = fields[3];
-    if (local === undefined) {
-      continue;
-    }
-    const split = splitHostPort(local);
+  for (const row of parseSsRows(ssOutput)) {
+    const split = splitHostPort(row.local);
     if (split === null) {
       continue;
     }
-    const users = fields.slice(5).join(" ");
     sockets.push({
       address: split.address,
       port: split.port,
-      process: describeSocketUser(users),
-      pid: socketUserPid(users),
+      process: describeSocketUser(row.users),
+      pid: ssRowPid(row.users),
     });
   }
 
@@ -383,21 +384,21 @@ function splitHostPort(value: string): { readonly address: string; readonly port
   return { address, port };
 }
 
-/** `users:(("apache2",pid=812,fd=4))` -> `apache2 (pid 812)`. */
+/**
+ * `users:(("apache2",pid=812,fd=4))` -> `apache2 (pid 812)`.
+ *
+ * Both halves are required. A name with no pid is not something to render as
+ * `apache2 (pid null)`, and it is not something the caller may act on either:
+ * only the pid can settle whether the holder is our own service, so a holder
+ * with no pid is described as nothing at all.
+ */
 function describeSocketUser(users: string): string | null {
-  const match = /"([^"]+)",pid=(\d+)/.exec(users);
-  if (match === null) {
+  const name = ssRowProcessName(users);
+  const pid = ssRowPid(users);
+  if (name === null || pid === null) {
     return null;
   }
-  return `${match[1]} (pid ${match[2]})`;
-}
-
-function socketUserPid(users: string): number | null {
-  const match = /pid=(\d+)/.exec(users);
-  if (match === null || match[1] === undefined) {
-    return null;
-  }
-  return Number.parseInt(match[1], 10);
+  return `${name} (pid ${pid})`;
 }
 
 const WILDCARD_ADDRESSES: ReadonlySet<string> = new Set(["0.0.0.0", "::", "*", ""]);
@@ -691,4 +692,37 @@ export function readInstallerShellConstants(script: string): ReadonlyMap<string,
     }
   }
   return constants;
+}
+
+/**
+ * One shell function lifted out of the installer, so a test can run it.
+ *
+ * The constants block above is compared as text, which is all a constant needs.
+ * A *rule* cannot be compared that way: `find_port_conflict` is an awk program,
+ * it is the copy that actually executes on somebody's VPS, and reading it beside
+ * `findPortConflict` and nodding is exactly the check that has never once caught
+ * a divergence. So the test executes it instead, against the same fixtures the
+ * TypeScript is held to, with a stub `ss` on `PATH`.
+ *
+ * Cut out rather than sourced because the script runs `do_install` when it is
+ * loaded, and sourcing an installer to test it is emphatically not a trade worth
+ * making. The extraction is deliberately literal — a function opens with
+ * `name() {` at the start of a line and closes with `}` at the start of a line,
+ * which is true of this file and is the same bargain the constants block makes:
+ * the script stays plain enough to read as text.
+ *
+ * Returns null when there is no such function, so a rename fails the test that
+ * needs it rather than silently checking nothing.
+ */
+export function readInstallerShellFunction(script: string, name: string): string | null {
+  const opening = `\n${name}() {\n`;
+  const start = script.indexOf(opening);
+  if (start === -1) {
+    return null;
+  }
+  const end = script.indexOf("\n}\n", start + opening.length);
+  if (end === -1) {
+    return null;
+  }
+  return script.slice(start + 1, end + 3);
 }

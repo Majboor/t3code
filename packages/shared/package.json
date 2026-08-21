@@ -84,6 +84,10 @@
       "types": "./src/serviceRegistry.ts",
       "import": "./src/serviceRegistry.ts"
     },
+    "./ssOutput": {
+      "types": "./src/ssOutput.ts",
+      "import": "./src/ssOutput.ts"
+    },
     "./analyticsStreamTemplates": {
       "types": "./src/analyticsStreamTemplates.ts",
       "import": "./src/analyticsStreamTemplates.ts"

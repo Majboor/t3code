@@ -21,12 +21,20 @@
  * part that cannot be tested on a developer's laptop without depending on what
  * that laptop happens to have installed and be serving.
  */
+import type { ListenerProbeTool } from "@t3tools/contracts";
 import type { ObservedListener } from "@t3tools/shared/serviceRegistry";
+import { parseSsRows, ssRowPid, ssRowProcessName } from "@t3tools/shared/ssOutput";
 
 import { runProcess } from "../processRunner.ts";
 
-/** Which tool answered, and therefore how much the answer is worth. */
-export type ListenerProbeTool = "lsof" | "ss" | "netstat" | "none";
+/**
+ * Which tool answered, and therefore how much the answer is worth.
+ *
+ * Taken from the contract rather than restated, because this value is sent to
+ * the browser inside `ServiceRegistryListResult` and a second spelling of the
+ * same four options is a second thing to keep in step.
+ */
+export type { ListenerProbeTool };
 
 export interface ListenerProbeResult {
   readonly tool: ListenerProbeTool;
@@ -128,11 +136,16 @@ export function parseLsofListeners(stdout: string): ReadonlyArray<ObservedListen
   return listeners;
 }
 
-const SS_PROCESS = /pid=(\d+)/;
-const SS_NAME = /\(\("([^"]+)"/;
-
 /**
  * `ss -lntpH`: `LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=812,fd=6))`
+ *
+ * The splitting is `@t3tools/shared/ssOutput` and not local, because the
+ * installer's port-collision rule reads the very same command with the very same
+ * flags and the traps in this output — chiefly the peer column, which is
+ * `0.0.0.0:*` on every listening row and will match any careless search for
+ * something port-shaped — are identical for both. What stays here is the part
+ * that is ours rather than `ss`'s: an `ObservedListener` normalises the wildcard
+ * spellings, because the reconciler ranks addresses by exposure.
  *
  * The process column is absent entirely when `ss` runs without privilege, which
  * is the normal case for a server not running as root. That produces a null pid
@@ -141,32 +154,16 @@ const SS_NAME = /\(\("([^"]+)"/;
 export function parseSsListeners(stdout: string): ReadonlyArray<ObservedListener> {
   const listeners: ObservedListener[] = [];
 
-  for (const line of stdout.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    // `-H` suppresses the header, but not on older builds.
-    if (trimmed.startsWith("State") || trimmed.startsWith("Netid")) continue;
-
-    const columns = trimmed.split(/\s+/);
-    const state = columns.find((column) => column === "LISTEN" || column === "UNCONN");
-    if (state === undefined) continue;
-
-    const stateIndex = columns.indexOf(state);
-    const local = columns[stateIndex + 3];
-    if (local === undefined) continue;
-
-    const split = splitAddressPort(local);
+  for (const row of parseSsRows(stdout)) {
+    const split = splitAddressPort(row.local);
     if (!split) continue;
-
-    const pidMatch = SS_PROCESS.exec(trimmed);
-    const nameMatch = SS_NAME.exec(trimmed);
 
     listeners.push({
       port: split.port,
       address: split.address,
-      protocol: state === "UNCONN" ? "udp" : "tcp",
-      pid: pidMatch ? Number(pidMatch[1]) : null,
-      processName: nameMatch ? (nameMatch[1] ?? null) : null,
+      protocol: row.state === "UNCONN" ? "udp" : "tcp",
+      pid: ssRowPid(row.users),
+      processName: ssRowProcessName(row.users),
     });
   }
 

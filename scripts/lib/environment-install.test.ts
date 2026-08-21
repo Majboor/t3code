@@ -1,5 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -25,6 +27,7 @@ import {
   parseListeningSockets,
   planInstallAction,
   readInstallerShellConstants,
+  readInstallerShellFunction,
   resolveEnvironmentServerTarballUrl,
 } from "./environment-install.ts";
 
@@ -591,5 +594,193 @@ describe("the installer script agrees with this module", () => {
 
   it("never removes the data directory", () => {
     assert.notMatch(script, /rm -rf "\$T3_DATA_DIR"/);
+  });
+});
+
+/**
+ * The awk in the script, run for real, against the same fixtures the module is.
+ *
+ * The constants above are compared as text, which is all a constant needs. The
+ * port conflict rule is not a constant: it is the one piece of judgement the
+ * script re-implements rather than parameterises, it is written in awk, and it
+ * is the copy that actually executes on somebody's VPS. Reading it beside
+ * `findPortConflict` and nodding is the check that has never caught anything.
+ *
+ * So this runs it. `find_port_conflict` is lifted out of the script — the whole
+ * file cannot be sourced, because loading it runs `do_install` — and executed
+ * with a stub `ss` on `PATH` that prints a fixture. Both sides then answer the
+ * same question about the same output, and the answers have to match.
+ *
+ * The comparison is of the substance and not the spelling: whether there is a
+ * conflict at all, which pid holds it, and which address and port. The awk
+ * strips an `::ffff:` prefix before printing while the module strips it only
+ * when comparing, so the addresses are normalised here before they are held to
+ * each other. That is a difference in what gets shown to a person, and this test
+ * is about what gets decided.
+ */
+/** `::ffff:127.0.0.1` and `127.0.0.1` are one address wearing two hats. */
+const comparableAddress = (value: string) => value.replace(/^::ffff:/i, "").toLowerCase();
+
+describe("the installer's port check agrees with findPortConflict when it is run", () => {
+  const script = fs.readFileSync(INSTALLER_PATH, "utf8");
+  const shellFunction = readInstallerShellFunction(script, "find_port_conflict");
+
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "t3-installer-drift-"));
+  const binDirectory = path.join(workspace, "bin");
+  const fixturePath = path.join(workspace, "ss-output.txt");
+  fs.mkdirSync(binDirectory, { recursive: true });
+  // A stub `ss` rather than the machine's own: the fixtures are the interesting
+  // rows, and whatever this laptop happens to be serving is not a test.
+  fs.writeFileSync(path.join(binDirectory, "ss"), '#!/bin/sh\ncat "$T3_TEST_SS_OUTPUT"\n');
+  fs.chmodSync(path.join(binDirectory, "ss"), 0o755);
+
+  const runShellCheck = (input: {
+    readonly ssOutput: string;
+    readonly port: number;
+    readonly host: string;
+    /** Whether the stub `ss` is reachable. Absent is a real state on a real box. */
+    readonly ssInstalled?: boolean;
+  }): string => {
+    assert.isNotNull(shellFunction, "find_port_conflict was not found in the installer");
+    fs.writeFileSync(fixturePath, `${input.ssOutput}\n`);
+    // The port and host arrive as positional arguments rather than as text
+    // interpolated into the program, so this harness cannot accidentally test a
+    // shell it wrote itself.
+    return (
+      childProcess
+        .execFileSync(
+          "/bin/sh",
+          [
+            "-c",
+            `${shellFunction}\nfind_port_conflict "$1" "$2"`,
+            "sh",
+            String(input.port),
+            input.host,
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              PATH:
+                input.ssInstalled === false ? workspace : `${binDirectory}:${process.env["PATH"]}`,
+              T3_TEST_SS_OUTPUT: fixturePath,
+            },
+          },
+        )
+        // Trailing only. An unattributed socket is printed with an *empty* pid
+        // field, so the line legitimately begins with a tab and trimming both
+        // ends would silently turn "no holder" into "no answer".
+        .trimEnd()
+    );
+  };
+
+  const assertAgrees = (input: {
+    readonly ssOutput: string;
+    readonly port: number;
+    readonly host: string;
+  }) => {
+    const conflict = findPortConflict({
+      port: input.port,
+      host: input.host,
+      listeners: parseListeningSockets(input.ssOutput),
+    });
+    const shellAnswer = runShellCheck(input);
+
+    if (conflict === null) {
+      assert.strictEqual(shellAnswer, "", "the shell found a conflict the module did not");
+      return;
+    }
+
+    assert.notStrictEqual(shellAnswer, "", "the module found a conflict the shell did not");
+    const [pidField = "", description = ""] = shellAnswer.split("\t");
+    assert.strictEqual(
+      pidField,
+      conflict.pid === null ? "" : String(conflict.pid),
+      "the two disagree about which pid holds the port",
+    );
+
+    const socket = description.split(" ")[0] ?? "";
+    const separator = socket.lastIndexOf(":");
+    assert.strictEqual(socket.slice(separator + 1), String(conflict.port));
+    assert.strictEqual(
+      comparableAddress(socket.slice(0, separator)),
+      comparableAddress(conflict.address),
+      "the two disagree about which address holds the port",
+    );
+  };
+
+  const SS_OUTPUT = [
+    'LISTEN 0      4096   127.0.0.1:3773       0.0.0.0:*    users:(("bun",pid=1042,fd=21))',
+    'LISTEN 0      511      0.0.0.0:80          0.0.0.0:*    users:(("apache2",pid=812,fd=4))',
+    'LISTEN 0      4096        [::]:22             [::]:*    users:(("sshd",pid=655,fd=4))',
+    'LISTEN 0      4096   127.0.0.1:37730      0.0.0.0:*    users:(("grafana",pid=9001,fd=8))',
+  ].join("\n");
+
+  it("agrees that a wildcard listener collides with a specific bind", () => {
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 80, host: "127.0.0.1" });
+  });
+
+  it("agrees that a wildcard bind collides with a loopback listener", () => {
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 3773, host: "0.0.0.0" });
+  });
+
+  it("agrees that two different specific addresses do not collide", () => {
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 3773, host: "10.0.0.5" });
+  });
+
+  it("agrees that 37730 is not 3773", () => {
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 37730, host: "127.0.0.1" });
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 3773, host: "127.0.0.1" });
+  });
+
+  it("agrees about an IPv6 wildcard row", () => {
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 22, host: "::" });
+  });
+
+  it("agrees that an IPv6 wildcard listener blocks a specific IPv6 bind", () => {
+    // Both directions of the wildcard rule have to be checked separately: this
+    // is the one where the *listener* is the wildcard, and it is the only case
+    // that fails if `::` goes missing from the shell's set of them.
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 22, host: "::1" });
+  });
+
+  it("agrees that a queue depth is not a port", () => {
+    // Every row above has 4096 or 511 in its Recv-Q and Send-Q columns. A check
+    // that scanned the line for a number would refuse to install on this box.
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 4096, host: "0.0.0.0" });
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 511, host: "0.0.0.0" });
+  });
+
+  it("agrees that the peer column holds nothing", () => {
+    assertAgrees({ ssOutput: SS_OUTPUT, port: 9999, host: "0.0.0.0" });
+  });
+
+  it("agrees that ::ffff: loopback is loopback", () => {
+    assertAgrees({
+      ssOutput: 'LISTEN 0 4096 ::ffff:127.0.0.1:3773 *:* users:(("bun",pid=1042,fd=21))',
+      port: 3773,
+      host: "127.0.0.1",
+    });
+  });
+
+  it("agrees that a holder with no pid is still a conflict", () => {
+    // ss without -p, or run unprivileged. Both sides must report the collision
+    // and neither may name a holder; `conflictIsOwnService` then refuses it,
+    // which is the safe direction.
+    assertAgrees({ ssOutput: "LISTEN 0 4096 0.0.0.0:3773 0.0.0.0:*", port: 3773, host: "0.0.0.0" });
+  });
+
+  it("agrees that an empty listing is not a conflict", () => {
+    assertAgrees({ ssOutput: "", port: 3773, host: "0.0.0.0" });
+  });
+
+  it("skips the check rather than refusing when ss is not installed", () => {
+    // The script warns and carries on; if the port really is taken the unit
+    // fails to start and nothing else is touched. Refusing here would make the
+    // installer unusable on a minimal image that simply lacks iproute2.
+    assert.strictEqual(
+      runShellCheck({ ssOutput: SS_OUTPUT, port: 80, host: "0.0.0.0", ssInstalled: false }),
+      "",
+    );
   });
 });
