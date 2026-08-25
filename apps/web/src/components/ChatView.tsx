@@ -1619,7 +1619,10 @@ export default function ChatView(props: ChatViewProps) {
   );
 
   useEffect(() => {
-    if (!isServerThread || shouldUseDiffSheet) {
+    // A draft has a workspace behind it exactly like a started thread does, and
+    // Dev exists to show it. Requiring a server thread meant the mode opened
+    // nothing until after the first turn, which is the least useful moment.
+    if ((!isServerThread && !draftId) || shouldUseDiffSheet) {
       return;
     }
     if (currentDesktopPanelPreference !== "none") {
@@ -1630,11 +1633,9 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     void navigate({
-      to: "/$environmentId/$threadId",
-      params: {
-        environmentId,
-        threadId,
-      },
+      ...(draftId
+        ? { to: "/draft/$draftId" as const, params: buildDraftThreadRouteParams(draftId) }
+        : { to: "/$environmentId/$threadId" as const, params: { environmentId, threadId } }),
       replace: true,
       search: (previous) => {
         const rest = stripDiffSearchParams(previous);
@@ -1705,6 +1706,7 @@ export default function ChatView(props: ChatViewProps) {
     desktopLayoutDefinition.showAutoOpenToast,
     desktopLayoutMode,
     currentDesktopPanelPreference,
+    draftId,
     environmentId,
     isServerThread,
     navigate,

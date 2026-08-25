@@ -130,7 +130,7 @@ export const ChatHeader = memo(function ChatHeader({
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
         <HeaderProjectsTrigger side={projectsSidebarSide} tooltip={projectsTriggerTooltip} />
 
-        <div className="min-w-0 flex-1 @sm/header-actions:flex @sm/header-actions:items-center @sm/header-actions:gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <h2
             className="min-w-0 truncate text-[13px] font-medium leading-tight text-foreground @sm/header-actions:text-sm"
             title={activeThreadTitle}
@@ -138,9 +138,9 @@ export const ChatHeader = memo(function ChatHeader({
             {activeThreadTitle}
           </h2>
           {activeProjectName && (
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 @sm/header-actions:mt-0 @sm/header-actions:shrink-0">
+            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
               <span
-                className="min-w-0 truncate text-[11px] font-medium text-muted-foreground/78 @sm/header-actions:max-w-36 @sm/header-actions:rounded-md @sm/header-actions:border @sm/header-actions:border-border/70 @sm/header-actions:px-1.5 @sm/header-actions:py-0.5 @sm/header-actions:text-xs @sm/header-actions:text-foreground"
+                className="min-w-0 max-w-36 truncate rounded-md border border-border/70 px-1.5 py-0.5 text-xs font-medium text-foreground"
                 title={activeProjectName}
               >
                 {activeProjectName}
@@ -151,7 +151,7 @@ export const ChatHeader = memo(function ChatHeader({
             </div>
           )}
           {activeProjectId ? (
-            <div className="mt-1 flex items-center gap-1.5 @xl/header-actions:mt-0">
+            <div className="flex shrink-0 items-center gap-1.5">
               <CollaborationPresenceBar
                 environmentId={activeThreadEnvironmentId}
                 ownership={activeProjectOwnership}
