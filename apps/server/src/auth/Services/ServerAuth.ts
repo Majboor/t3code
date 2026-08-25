@@ -18,7 +18,7 @@ import type {
 } from "@t3tools/contracts";
 import { UserId } from "@t3tools/contracts";
 import { Data, DateTime, Context } from "effect";
-import type { Effect } from "effect";
+import type { Duration, Effect } from "effect";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import type { SessionRole } from "./SessionCredentialService.ts";
 import type { LocalAuthAccountRecord } from "../../persistence/Services/LocalAuthAccounts.ts";
@@ -89,6 +89,40 @@ export function isMachineOwnerSession(session: AuthenticatedSession): boolean {
 
 export function isMachineOwnerSubject(subject: string): boolean {
   return MACHINE_OWNER_SUBJECTS.has(subject);
+}
+
+/** The subject a local password account signs in as. */
+export const LOCAL_ACCOUNT_SUBJECT_PREFIX = "local-user:";
+
+/**
+ * Whether this session is the only person who could be here.
+ *
+ * A local password account is issued the `client` role, which is right on a
+ * server that holds accounts for other people and wrong on a desktop install,
+ * where the person who signed in is the person who owns the machine. Left as a
+ * guest they get the rationing written for strangers sharing a host — 120 RPCs
+ * a minute, and a workspace panel that cannot finish listing its own files.
+ *
+ * Two things have to be true, and loopback is deliberately not one of them: a
+ * proxy connects from 127.0.0.1 exactly like the owner's browser does. This
+ * server has to be the one holding the projects, and whoever started it has to
+ * have declared that nothing in front of it carries strangers here.
+ */
+export function isSoleOccupantSession(
+  session: AuthenticatedSession,
+  install: {
+    readonly workspaceSource: "this-server" | "paired-environment";
+    readonly publishedBeyondLoopback: boolean;
+  },
+): boolean {
+  if (isMachineOwnerSession(session)) {
+    return true;
+  }
+  return (
+    session.subject.startsWith(LOCAL_ACCOUNT_SUBJECT_PREFIX) &&
+    install.workspaceSource === "this-server" &&
+    !install.publishedBeyondLoopback
+  );
 }
 
 /**
@@ -195,6 +229,35 @@ export interface ServerAuthShape {
     session: AuthenticatedSession,
   ) => Effect.Effect<AuthWebSocketTokenResult, AuthError>;
   readonly issueStartupPairingUrl: (baseUrl: string) => Effect.Effect<string, AuthError>;
+  /**
+   * A bearer token that acts as a person, for something the server starts on
+   * their behalf and hands to a process rather than to them.
+   *
+   * It exists because an agent in a turn had no credential at all: `t3 box run`
+   * from inside a turn refused before it reached a machine, which made the
+   * whole box chain end one link short of the thing it was built for. Handing
+   * over the person's own live session instead would have been fewer moving
+   * parts and the wrong shape — that session belongs to a browser tab, outlives
+   * the work, and cannot be revoked without signing them out of everything.
+   *
+   * The `userId` is the whole point: every account-scoped check downstream
+   * (which boxes are yours, whose provider account pays) reads the identity off
+   * the session, so a token that authenticates as *somebody* but not as *this
+   * person* would be worse than none — it would fail as "no such box".
+   */
+  readonly issueDelegatedUserSession: (input: {
+    readonly userId: UserId;
+    /** Shown in `t3 auth session list`, so a person can tell what asked for it. */
+    readonly label: string;
+    readonly ttl: Duration.Duration;
+  }) => Effect.Effect<
+    {
+      readonly sessionId: AuthSessionId;
+      readonly token: string;
+      readonly expiresAt: DateTime.DateTime;
+    },
+    AuthError
+  >;
 }
 
 export class ServerAuth extends Context.Service<ServerAuth, ServerAuthShape>()(

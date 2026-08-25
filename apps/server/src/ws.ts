@@ -129,9 +129,11 @@ import {
   AuthError,
   type AuthenticatedSession,
   isMachineOwnerSession,
+  isSoleOccupantSession,
   resolveAuthenticatedUserId,
   ServerAuth,
 } from "./auth/Services/ServerAuth.ts";
+import { BOX_HUB_TOKEN_ENV, HUB_DELEGATED_SESSION_TTL } from "./box/hubProtocol.ts";
 import {
   BootstrapCredentialService,
   type BootstrapCredentialChange,
@@ -839,7 +841,10 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       // Token reports reach every watcher of a thread, so only the connection
       // that asked for the turn is allowed to attribute them to its own user.
       const turnsStartedHereRef = yield* Ref.make(new Set<string>());
-      const machineOwnerSession = isMachineOwnerSession(session);
+      const machineOwnerSession = isSoleOccupantSession(session, {
+        workspaceSource: config.workspaceSource,
+        publishedBeyondLoopback: config.publishedBeyondLoopback,
+      });
       /**
        * The tenant this connection is a *guest* of, which is not the same
        * question as which tenant it belongs to.
@@ -875,6 +880,56 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         ),
         Effect.catchTag("AuthError", () => Effect.succeed(collaborationActor)),
       );
+      /**
+       * The hub credential a person's own shell gets, so a terminal in the app
+       * can do what the agent beside it can.
+       *
+       * The agent in a turn is handed one of these, and without this a terminal
+       * opened two panes away would be the one place in the product where
+       * `t3 box` says "no credential" — the person watching an agent drive their
+       * box could not type the same command themselves. Nothing about that
+       * asymmetry was ever decided; it fell out of the agent path being built
+       * first.
+       *
+       * Minted here rather than passed through from the connection: the session
+       * on this socket is a browser session, and putting it in a shell's
+       * environment would leave a credential that outlives the tab in every
+       * process that shell ever starts. This one acts as the same person, is
+       * labelled as a terminal, and expires on its own.
+       *
+       * The key is stripped from whatever the client sent before ours is added.
+       * `env` on the open input is client-supplied, so a caller could otherwise
+       * name a credential rather than be given one — and the entire point of a
+       * hub token is that it says who you are.
+       */
+      const withHubCredential = <T extends { readonly env?: Record<string, string> | undefined }>(
+        input: T,
+      ): Effect.Effect<T> =>
+        serverAuth
+          .issueDelegatedUserSession({
+            userId: collaborationActor.userId,
+            label: "terminal",
+            ttl: HUB_DELEGATED_SESSION_TTL,
+          })
+          .pipe(
+            Effect.map((issued) => issued.token),
+            // A terminal that opens without one is a terminal where `t3 box`
+            // says what it said before. Refusing to open the shell at all would
+            // be a much worse trade.
+            Effect.catch((error) =>
+              Effect.logWarning("could not mint a hub credential for a terminal", {
+                reason: error.message,
+              }).pipe(Effect.as(null)),
+            ),
+            Effect.map((token) => {
+              const { [BOX_HUB_TOKEN_ENV]: _supplied, ...requested } = input.env ?? {};
+              return {
+                ...input,
+                env: token === null ? requested : { ...requested, [BOX_HUB_TOKEN_ENV]: token },
+              };
+            }),
+          );
+
       const requireInviteAcceptingIdentity = <E>(
         inviteId: string,
         toError: (message: string) => E,
@@ -6176,7 +6231,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 Effect.tap(() =>
                   Effect.sync(() => rememberTerminalWorkspaceRoot(input.threadId, input.cwd)),
                 ),
-                Effect.flatMap(() => terminalManager.open(input)),
+                Effect.flatMap(() => withHubCredential(input)),
+                Effect.flatMap((opened) => terminalManager.open(opened)),
               ),
               (message) => terminalRpcError(input.cwd, message),
             ),
@@ -6236,7 +6292,12 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 Effect.tap(() =>
                   Effect.sync(() => rememberTerminalWorkspaceRoot(input.threadId, input.cwd)),
                 ),
-                Effect.flatMap(() => terminalManager.restart(input)),
+                // A restart respawns the shell, so it needs its own fresh one —
+                // the token the terminal was opened with may have expired under
+                // it, and a restart is exactly when a person expects things to
+                // work again.
+                Effect.flatMap(() => withHubCredential(input)),
+                Effect.flatMap((restarted) => terminalManager.restart(restarted)),
               ),
               (message) => terminalRpcError(input.cwd, message),
             ),
