@@ -14,6 +14,7 @@ import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import {
+  ChartNoAxesColumnIcon,
   DiffIcon,
   EllipsisIcon,
   FilesIcon,
@@ -22,6 +23,7 @@ import {
   PanelLeftIcon,
   PanelRightCloseIcon,
   PanelRightIcon,
+  ServerIcon,
   TerminalSquareIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -192,10 +194,15 @@ export const ChatHeader = memo(function ChatHeader({
           />
         )}
         {activeProjectId ? (
-          <ProjectSurfaceLinks
-            environmentId={activeThreadEnvironmentId}
-            projectId={activeProjectId}
-          />
+          // Hidden before the thread title is: a narrow chat column has room for
+          // one of them, and the title says which thread you are typing into.
+          // The overflow menu below carries the same links at these widths.
+          <div className="hidden @2xl/header-actions:flex">
+            <ProjectSurfaceLinks
+              environmentId={activeThreadEnvironmentId}
+              projectId={activeProjectId}
+            />
+          </div>
         ) : null}
         <InlinePanelToggles
           terminalAvailable={terminalAvailable}
@@ -211,6 +218,7 @@ export const ChatHeader = memo(function ChatHeader({
           onToggleDiff={onToggleDiff}
         />
         <ViewOverflowMenu
+          projectId={activeProjectId}
           desktopLayoutMode={desktopLayoutMode}
           desktopLayoutModeDefinitions={desktopLayoutModeDefinitions}
           onDesktopLayoutModeChange={onDesktopLayoutModeChange}
@@ -355,6 +363,8 @@ const InlinePanelToggles = memo(function InlinePanelToggles(props: {
 });
 
 const ViewOverflowMenu = memo(function ViewOverflowMenu(props: {
+  /** Present only when a project is open; the links below need it. */
+  projectId: ProjectId | null;
   desktopLayoutMode: DesktopLayoutMode;
   desktopLayoutModeDefinitions: readonly DesktopLayoutModeDefinition[];
   onDesktopLayoutModeChange: (mode: DesktopLayoutMode) => void;
@@ -387,6 +397,32 @@ const ViewOverflowMenu = memo(function ViewOverflowMenu(props: {
         <TooltipPopup side="bottom">View options</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end" className="min-w-52">
+        {props.projectId ? (
+          <MenuGroup className="@2xl/header-actions:hidden">
+            <MenuItem
+              onClick={() => {
+                void navigate({
+                  to: "/infra/$projectId",
+                  params: { projectId: props.projectId as ProjectId },
+                });
+              }}
+            >
+              <ServerIcon className="size-3.5" aria-hidden="true" />
+              Infrastructure
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                void navigate({
+                  to: "/analytics/$projectId",
+                  params: { projectId: props.projectId as ProjectId },
+                });
+              }}
+            >
+              <ChartNoAxesColumnIcon className="size-3.5" aria-hidden="true" />
+              Analytics
+            </MenuItem>
+          </MenuGroup>
+        ) : null}
         <MenuGroup>
           <MenuGroupLabel>
             <span className="inline-flex items-center gap-1.5">

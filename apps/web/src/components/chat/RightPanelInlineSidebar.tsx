@@ -28,7 +28,17 @@ import { Sidebar, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../DiffPanel"));
 const WorkspacePanel = lazy(() => import("../WorkspacePanel"));
-export const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(22rem,52vw,72rem)";
+/**
+ * How wide the workspace column opens before anybody drags it.
+ *
+ * The workspace is the thing being looked at in this mode and the chat is the
+ * instrument, so the split is roughly three quarters to one. The subtraction is
+ * what keeps that honest on a smaller window: past about 1150px wide the chat
+ * would be squeezed under a usable width, so below that it stops taking a share
+ * and simply leaves the chat 18rem.
+ */
+export const RIGHT_PANEL_INLINE_DEFAULT_WIDTH =
+  "clamp(22rem, min(76vw, calc(100vw - 18rem)), 90rem)";
 export const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 20 * 16;
 export const COMPACT_PANEL_MIN_HEIGHT_PX = 180;
 export const COMPACT_CHAT_MIN_HEIGHT_PX = 220;
