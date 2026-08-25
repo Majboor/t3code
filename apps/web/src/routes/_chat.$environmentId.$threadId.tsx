@@ -1,31 +1,10 @@
 import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
-import {
-  Suspense,
-  lazy,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { cn } from "../lib/utils";
 import { resolveDesktopLayoutModeDefinition } from "../desktopLayoutModes";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
-import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
-import {
-  DiffPanelHeaderSkeleton,
-  DiffPanelLoadingState,
-  DiffPanelShell,
-  type DiffPanelMode,
-} from "../components/DiffPanelShell";
-import {
-  WorkspacePanelLoadingState,
-  WorkspacePanelShell,
-  type WorkspacePanelMode,
-} from "../components/WorkspacePanelShell";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import {
   type DiffRouteSearch,
@@ -42,160 +21,17 @@ import {
   useDesktopLayoutPanelPreferences,
   useProjectSidebarOpen,
 } from "../components/AppSidebarLayout.logic";
-import { WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY } from "../components/AppSidebarLayout.logic";
-import { canAcceptInlineWorkspaceSidebarWidth } from "../lib/inlineWorkspaceSidebarLayout";
 import { RightPanelSheet } from "../components/RightPanelSheet";
+import {
+  COMPACT_CHAT_MIN_HEIGHT_PX,
+  COMPACT_PANEL_MIN_HEIGHT_PX,
+  LazyDiffPanel,
+  LazyWorkspacePanel,
+  ThreadRightPanelInlineSidebar,
+  type RightPanelKind,
+} from "../components/chat/RightPanelInlineSidebar";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
-import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
-
-const DiffPanel = lazy(() => import("../components/DiffPanel"));
-const WorkspacePanel = lazy(() => import("../components/WorkspacePanel"));
-const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(30rem,52vw,72rem)";
-const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 28 * 16;
-const COMPACT_PANEL_MIN_HEIGHT_PX = 180;
-const COMPACT_CHAT_MIN_HEIGHT_PX = 220;
-type RightPanelKind = "diff" | "workspace";
-
-const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
-  return (
-    <DiffPanelShell mode={props.mode} header={<DiffPanelHeaderSkeleton />}>
-      <DiffPanelLoadingState label="Loading diff viewer..." />
-    </DiffPanelShell>
-  );
-};
-
-const LazyDiffPanel = (props: { mode: DiffPanelMode; onClose?: () => void }) => {
-  return (
-    <DiffWorkerPoolProvider>
-      <Suspense fallback={<DiffLoadingFallback mode={props.mode} />}>
-        <DiffPanel mode={props.mode} {...(props.onClose ? { onClose: props.onClose } : {})} />
-      </Suspense>
-    </DiffWorkerPoolProvider>
-  );
-};
-
-const WorkspaceLoadingFallback = (props: { mode: WorkspacePanelMode }) => {
-  return (
-    <WorkspacePanelShell
-      mode={props.mode}
-      header={
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-foreground">Workspace</div>
-          <div className="text-[11px] text-muted-foreground/70">Loading editor…</div>
-        </div>
-      }
-    >
-      <WorkspacePanelLoadingState label="Loading workspace editor..." />
-    </WorkspacePanelShell>
-  );
-};
-
-const LazyWorkspacePanel = (props: {
-  mode: WorkspacePanelMode;
-  onClose?: () => void;
-  onOpenDiff?: () => void;
-}) => {
-  return (
-    <Suspense fallback={<WorkspaceLoadingFallback mode={props.mode} />}>
-      <WorkspacePanel
-        mode={props.mode}
-        {...(props.onClose ? { onClose: props.onClose } : {})}
-        {...(props.onOpenDiff ? { onOpenDiff: props.onOpenDiff } : {})}
-      />
-    </Suspense>
-  );
-};
-
-const ThreadRightPanelInlineSidebar = (props: {
-  open: boolean;
-  side: "left" | "right";
-  preferredPanel: RightPanelKind;
-  onClose: () => void;
-  onOpenPreferredPanel: () => void;
-  renderDiffContent: boolean;
-  renderWorkspaceContent: boolean;
-  projectSidebarOpen: boolean;
-  revalidateWidthOn?: unknown;
-  terminalOpen: boolean;
-}) => {
-  const {
-    open,
-    onClose,
-    onOpenPreferredPanel,
-    preferredPanel,
-    projectSidebarOpen,
-    renderDiffContent,
-    renderWorkspaceContent,
-    revalidateWidthOn,
-    side,
-    terminalOpen,
-  } = props;
-  const onOpenChange = useCallback(
-    (open: boolean) => {
-      if (open) {
-        onOpenPreferredPanel();
-        return;
-      }
-      onClose();
-    },
-    [onClose, onOpenPreferredPanel],
-  );
-  const shouldAcceptInlineSidebarWidth = useCallback(
-    ({
-      currentWidth,
-      nextWidth,
-      phase,
-      wrapper,
-    }: {
-      currentWidth: number;
-      nextWidth: number;
-      phase: "drag" | "guard";
-      wrapper: HTMLElement;
-    }) => {
-      return canAcceptInlineWorkspaceSidebarWidth({
-        currentWidth,
-        measureWithoutMutatingLayout: phase === "guard",
-        nextWidth,
-        projectsSidebarOpen: projectSidebarOpen,
-        terminalOpen,
-        wrapper,
-      });
-    },
-    [projectSidebarOpen, terminalOpen],
-  );
-
-  return (
-    <SidebarProvider
-      defaultOpen={false}
-      open={open}
-      onOpenChange={onOpenChange}
-      className="w-auto min-h-0 flex-none bg-transparent transition-[width] duration-500 ease-out motion-reduce:transition-none"
-      data-layout-column={preferredPanel}
-      style={{ "--sidebar-width": RIGHT_PANEL_INLINE_DEFAULT_WIDTH } as React.CSSProperties}
-    >
-      <Sidebar
-        side={side}
-        collapsible="offcanvas"
-        desktopPosition="inline"
-        className={`${side === "left" ? "border-r" : "border-l"} border-border bg-card text-foreground`}
-        revalidateWidthOn={revalidateWidthOn}
-        resizable={{
-          minWidth: RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH,
-          shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
-          storageKey: WORKSPACE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
-        }}
-      >
-        {renderDiffContent && preferredPanel === "diff" ? (
-          <LazyDiffPanel mode="sidebar" onClose={onClose} />
-        ) : null}
-        {renderWorkspaceContent && preferredPanel === "workspace" ? (
-          <LazyWorkspacePanel mode="sidebar" onClose={onClose} />
-        ) : null}
-        <SidebarRail />
-      </Sidebar>
-    </SidebarProvider>
-  );
-};
+import { SidebarInset } from "~/components/ui/sidebar";
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();

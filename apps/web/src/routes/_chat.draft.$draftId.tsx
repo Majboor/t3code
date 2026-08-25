@@ -14,6 +14,13 @@ import {
   parseDiffRouteSearch,
   stripDiffSearchParams,
 } from "../diffRouteSearch";
+import { resolveDesktopLayoutModeDefinition } from "../desktopLayoutModes";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useSettings } from "../hooks/useSettings";
+import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
+import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { useProjectSidebarOpen } from "../components/AppSidebarLayout.logic";
+import { ThreadRightPanelInlineSidebar } from "../components/chat/RightPanelInlineSidebar";
 
 const WorkspacePanel = lazy(() => import("../components/WorkspacePanel"));
 
@@ -40,6 +47,22 @@ function DraftChatThreadRouteView() {
   const draftId = DraftId.make(rawDraftId);
   const workspaceOpen = search.workspace === "1";
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
+  const desktopLayoutMode = useSettings((settings) => settings.desktopLayoutMode);
+  const desktopLayoutDefinition = useSettings((settings) =>
+    resolveDesktopLayoutModeDefinition(settings),
+  );
+  const [projectSidebarOpen] = useProjectSidebarOpen(desktopLayoutMode);
+  // Narrow windows still get the sheet: a column here would leave neither side
+  // usable, which is the reason the sheet exists at all.
+  const shouldUseSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const terminalOpen = useTerminalStateStore((state) =>
+    draftSession
+      ? selectThreadTerminalState(state.terminalStateByThreadKey, {
+          environmentId: draftSession.environmentId,
+          threadId: draftSession.threadId,
+        }).terminalOpen
+      : false,
+  );
   const serverThread = useStore(
     useMemo(
       () => createThreadSelectorAcrossEnvironments(draftSession?.threadId ?? null),
@@ -96,6 +119,18 @@ function DraftChatThreadRouteView() {
     });
   }, [draftId, navigate]);
 
+  const openWorkspace = useCallback(() => {
+    void navigate({
+      to: "/draft/$draftId",
+      params: { draftId },
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams((previous ?? {}) as Record<string, unknown>),
+        workspace: "1" as const,
+      }),
+    });
+  }, [draftId, navigate]);
+
   if (canonicalThreadRef) {
     return (
       <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
@@ -112,16 +147,50 @@ function DraftChatThreadRouteView() {
     return null;
   }
 
+  const chatColumn = (
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <ChatView
+        draftId={draftId}
+        environmentId={draftSession.environmentId}
+        threadId={draftSession.threadId}
+        routeKind="draft"
+      />
+    </SidebarInset>
+  );
+
+  const inlineWorkspaceColumn = (
+    <ThreadRightPanelInlineSidebar
+      open={workspaceOpen}
+      side={desktopLayoutDefinition.layout === "dev" ? "left" : "right"}
+      preferredPanel="workspace"
+      onClose={closeWorkspace}
+      onOpenPreferredPanel={openWorkspace}
+      renderDiffContent={false}
+      renderWorkspaceContent={workspaceOpen}
+      projectSidebarOpen={projectSidebarOpen}
+      terminalOpen={terminalOpen}
+    />
+  );
+
+  if (!shouldUseSheet) {
+    // Dev puts the files on the left and the chat beside them, the same way the
+    // started thread does. A draft is the same workspace before the first turn.
+    return desktopLayoutDefinition.layout === "dev" ? (
+      <div className="flex h-dvh min-h-0 min-w-0 flex-1" data-layout-column="dev-main">
+        {inlineWorkspaceColumn}
+        {chatColumn}
+      </div>
+    ) : (
+      <>
+        {chatColumn}
+        {inlineWorkspaceColumn}
+      </>
+    );
+  }
+
   return (
     <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-        <ChatView
-          draftId={draftId}
-          environmentId={draftSession.environmentId}
-          threadId={draftSession.threadId}
-          routeKind="draft"
-        />
-      </SidebarInset>
+      {chatColumn}
       <RightPanelSheet open={workspaceOpen} onClose={closeWorkspace}>
         <Suspense fallback={<DraftWorkspaceLoadingFallback />}>
           <WorkspacePanel mode="sheet" onClose={closeWorkspace} />
