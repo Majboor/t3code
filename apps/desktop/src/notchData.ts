@@ -449,7 +449,7 @@ function withActivity(
         `The local server is not answering, so ${subject} is unknown.`,
       );
     case "signed-out":
-      return absentSlot("sign in", `Sign in to T3 Code to see ${subject}.`);
+      return absentSlot("sign in", `Sign in to LogicPacks to see ${subject}.`);
     case "unknown-project":
       return absentSlot(
         "unknown project",
@@ -542,14 +542,14 @@ function buildTokenSpend(outcome: NotchActivityOutcome): NotchFigureView {
 }
 
 /**
- * Nothing in T3 Code reports sync activity — no table, no counter, no RPC — so
+ * Nothing in LogicPacks reports sync activity — no table, no counter, no RPC — so
  * this stays a dash whatever the server says. A zero here would be a claim that
  * nothing is syncing, which is a different and unsupported statement.
  */
 function buildActiveSyncs(): NotchFigureView {
   return absentSlot(
     "not wired",
-    "Nothing in T3 Code reports sync activity yet, so this is blank rather than zero.",
+    "Nothing in LogicPacks reports sync activity yet, so this is blank rather than zero.",
   );
 }
 

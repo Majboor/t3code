@@ -113,7 +113,7 @@ export const initialNotchPanelView: NotchPanelView = {
  */
 const SIGN_IN_LINE = "Not signed in, so there is nothing to report yet.";
 const SIGN_IN_BUTTON_LABEL = "Sign in";
-const SIGN_IN_BUTTON_DETAIL = "Brings the T3 Code window forward, where you can sign in.";
+const SIGN_IN_BUTTON_DETAIL = "Brings the LogicPacks window forward, where you can sign in.";
 
 /** Corner radius of the expanded panel, in CSS pixels. */
 const PANEL_RADIUS = 22;

@@ -165,13 +165,31 @@ describe("ShareProjectButton", () => {
       .toHaveTextContent("cloudflared was not found on this computer.");
   });
 
-  it("is disabled in the browser build rather than offering an action it cannot run", async () => {
+  /**
+   * The browser build has no tunnel and never will, but it can mint a workspace
+   * link — so the control opens and offers that instead of disabling itself and
+   * pointing at a download.
+   */
+  it("still opens in the browser build, offering the web link", async () => {
     mounted = await render(
       <ShareProjectButton environmentId={environmentId} projectId={projectId} />,
     );
 
     const trigger = page.getByTestId("project-share-trigger");
-    await expect.element(trigger).toBeDisabled();
-    await expect.element(trigger).toHaveAttribute("data-share-status", "unsupported");
+    await expect.element(trigger).not.toBeDisabled();
+    await expect.element(trigger).toHaveAttribute("data-share-status", "web-only");
+
+    await trigger.click();
+    await expect.element(page.getByTestId("project-share-web")).toBeInTheDocument();
+    await expect.element(page.getByTestId("project-share-tunnel-desktop-only")).toBeInTheDocument();
+  });
+
+  it("offers no tunnel button in a build that cannot start one", async () => {
+    mounted = await render(
+      <ShareProjectButton environmentId={environmentId} projectId={projectId} />,
+    );
+
+    await page.getByTestId("project-share-trigger").click();
+    expect(page.getByTestId("project-share-primary-action").query()).toBeNull();
   });
 });

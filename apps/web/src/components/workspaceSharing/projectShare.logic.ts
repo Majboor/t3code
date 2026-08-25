@@ -1,3 +1,4 @@
+import { APP_BASE_NAME } from "../../branding";
 import type { DesktopWorkspaceShareState, EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { WorkspaceShareTone } from "./workspaceSharing.logic";
@@ -23,8 +24,29 @@ export interface ProjectShareLinkKindNote {
 export const PROJECT_SHARE_TUNNEL_KIND: ProjectShareLinkKindNote = {
   kind: "tunnel",
   title: "Live link from this computer",
-  lifetime: "Ends when you stop sharing, quit T3 Code, or close this laptop.",
+  lifetime: `Ends when you stop sharing, quit ${APP_BASE_NAME}, or close this laptop.`,
   source: "Started here.",
+};
+
+/**
+ * The one that needs nothing installed, on either end.
+ *
+ * A workspace link is the only scope that grants *use* rather than bytes: the
+ * claim turns a signed-in visitor into a member, so what they get is the
+ * workspace itself in their browser. File and project links are read by a
+ * session-less browser and make nobody a member, which is why "use in web" is
+ * this scope and not the one the button happens to be sitting on.
+ *
+ * It is listed first because it is the answer for most people who press Share.
+ * The tunnel was previously the only offer here, and in a browser build there
+ * was no offer at all — the control disabled itself and pointed at a download,
+ * which is a dead end for someone whose files are not on this laptop anyway.
+ */
+export const PROJECT_SHARE_WEB_KIND: ProjectShareLinkKindNote = {
+  kind: "share-link",
+  title: "Use in web",
+  lifetime: "Lasts until you revoke it.",
+  source: "Started here. They open it in a browser and sign in; nothing to install.",
 };
 
 /** Every kind this control cannot start, so nobody assumes the tunnel is all there is. */
@@ -37,13 +59,14 @@ export const PROJECT_SHARE_OTHER_KINDS: readonly ProjectShareLinkKindNote[] = [
   },
   {
     kind: "share-link",
-    title: "Share link",
+    title: "One file, or one project",
     lifetime: "Lasts until you revoke it.",
-    source: "Scoped to one file, project, or workspace: made in the Files panel.",
+    source: "Narrower than the whole workspace, and made in the Files panel.",
   },
 ];
 
 export const PROJECT_SHARE_LINK_KINDS: readonly ProjectShareLinkKindNote[] = [
+  PROJECT_SHARE_WEB_KIND,
   PROJECT_SHARE_TUNNEL_KIND,
   ...PROJECT_SHARE_OTHER_KINDS,
 ];
@@ -77,14 +100,21 @@ export function describeProjectShareTrigger(input: {
   readonly state: DesktopWorkspaceShareState;
   readonly isDesktop: boolean;
 }): ProjectShareTriggerPresentation {
+  /*
+   * Openable without the desktop bridge, because there is now something inside
+   * worth opening. Only the *tunnel* needs the app; a workspace link is minted
+   * over ordinary HTTP and is the thing most people came here for. Disabling
+   * the whole control because one of its two offers is unavailable sent people
+   * to a download page to solve a problem the browser could already solve.
+   */
   if (!input.isDesktop) {
     return {
-      status: "unsupported",
+      status: "web-only",
       tone: "idle",
       badgeLabel: null,
-      ariaLabel: "Public sharing runs from the desktop app",
+      ariaLabel: "Share this workspace — get a link they can open in a browser",
       isBusy: false,
-      isDisabled: true,
+      isDisabled: false,
     };
   }
 

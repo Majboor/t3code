@@ -1,8 +1,10 @@
+import { APP_BASE_NAME } from "../../branding";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { CheckIcon, CopyIcon, GlobeIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, GlobeIcon, LinkIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useProjectTenancy } from "~/hooks/useProjectTenancy";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -10,12 +12,14 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { mintAndCopyShareLink } from "../shareLinks/mintShareLink";
 import {
   buildTunnelProjectUrl,
   describeProjectShareTrigger,
   PROJECT_SHARE_OTHER_KINDS,
   PROJECT_SHARE_TUNNEL_KIND,
   PROJECT_SHARE_TUNNEL_SCOPE_NOTE,
+  PROJECT_SHARE_WEB_KIND,
   type ProjectShareTriggerPresentation,
 } from "./projectShare.logic";
 import { useWorkspaceShareState } from "./useWorkspaceShareState";
@@ -77,6 +81,48 @@ export function ShareProjectButton({
   const share = useWorkspaceShareState();
   const [isOpen, setIsOpen] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isMintingWebLink, setIsMintingWebLink] = useState(false);
+  const tenancy = useProjectTenancy(environmentId, projectId);
+
+  /**
+   * A project outside any shared workspace has nobody to share it with, so the
+   * offer is withheld rather than rendered and then refused on click.
+   */
+  const canShareInWeb = tenancy.tenantId !== null && tenancy.workspaceId !== null;
+
+  /**
+   * Mint a workspace link and put it on the clipboard in one act.
+   *
+   * Workspace scope, not project scope, and the difference is the whole
+   * feature: claiming a workspace link makes the visitor a *member*, which is
+   * what "use it in the web" means. A project link is served as bytes to a
+   * browser with no session and would hand them a read-only copy while the
+   * button promised them the workspace.
+   *
+   * `public` audience because that is the link you send: anyone holding it who
+   * signs in can claim it. Naming particular people is a different act with a
+   * different payload — see `ShareLinksPanel`, which can take the addresses.
+   */
+  const handleCopyWebLink = useCallback(async () => {
+    if (!canShareInWeb || tenancy.tenantId === null || tenancy.workspaceId === null) {
+      return;
+    }
+    setIsMintingWebLink(true);
+    try {
+      await mintAndCopyShareLink({
+        environmentId,
+        failureTitle: "Could not make a web link",
+        create: {
+          tenantId: tenancy.tenantId,
+          workspaceId: tenancy.workspaceId,
+          scope: "workspace",
+          audience: { kind: "public" },
+        },
+      });
+    } finally {
+      setIsMintingWebLink(false);
+    }
+  }, [canShareInWeb, environmentId, tenancy.tenantId, tenancy.workspaceId]);
 
   const trigger = describeProjectShareTrigger({ state: share.state, isDesktop: share.isDesktop });
   const tunnel = describeWorkspaceShare(share.state);
@@ -135,7 +181,8 @@ export function ShareProjectButton({
         {/* The bridge that owns the tunnel lives in the desktop shell, so this
             build cannot publish the machine holding the files. */}
         <TooltipPopup side="bottom">
-          Public sharing runs from the T3 Code desktop app, on the computer holding these files.
+          Public sharing runs from the {APP_BASE_NAME} desktop app, on the computer holding these
+          files.
         </TooltipPopup>
       </Tooltip>
     );
@@ -167,9 +214,47 @@ export function ShareProjectButton({
             <div>
               <h3 className="text-xs font-medium text-foreground">Send someone a link</h3>
               <p className="text-[10px] text-muted-foreground">
-                Three kinds of link, and they do not last the same amount of time.
+                Several kinds of link, and they do not last the same amount of time.
               </p>
             </div>
+
+            <section
+              className="flex flex-col gap-2 rounded-lg border border-border p-2.5"
+              data-testid="project-share-web"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <span
+                    className="text-xs font-medium text-foreground"
+                    data-testid="project-share-web-headline"
+                  >
+                    {PROJECT_SHARE_WEB_KIND.title}
+                  </span>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    {PROJECT_SHARE_WEB_KIND.source}
+                  </p>
+                </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!canShareInWeb || isMintingWebLink}
+                  onClick={() => void handleCopyWebLink()}
+                  data-testid="project-share-web-action"
+                >
+                  {isMintingWebLink ? (
+                    <Spinner className="size-3" />
+                  ) : (
+                    <LinkIcon className="size-3" aria-hidden />
+                  )}
+                  {isMintingWebLink ? "Making" : "Copy link"}
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                {canShareInWeb
+                  ? "Anyone with this link who signs in joins the workspace and can work in it from a browser. Revoke it any time in the Files panel."
+                  : "This project is not in a shared workspace yet, so there is nobody a link could let in."}
+              </p>
+            </section>
 
             <section
               className="flex flex-col gap-2 rounded-lg border border-border p-2.5"
@@ -194,7 +279,10 @@ export function ShareProjectButton({
                     {PROJECT_SHARE_TUNNEL_KIND.lifetime}
                   </p>
                 </div>
-                {tunnel.primaryAction || tunnel.isPrimaryActionDisabled ? (
+                {/* No button at all without the bridge that owns the tunnel:
+                    one that cannot do anything when pressed is worse than an
+                    absent one, because the person keeps pressing it. */}
+                {share.isDesktop && (tunnel.primaryAction || tunnel.isPrimaryActionDisabled) ? (
                   <Button
                     size="xs"
                     variant={
@@ -210,6 +298,16 @@ export function ShareProjectButton({
                   </Button>
                 ) : null}
               </div>
+
+              {share.isDesktop ? null : (
+                <p
+                  className="text-[10px] text-muted-foreground"
+                  data-testid="project-share-tunnel-desktop-only"
+                >
+                  Runs from the {APP_BASE_NAME} desktop app, on the computer holding these files.
+                  The web link above needs nothing installed.
+                </p>
+              )}
 
               {url ? (
                 <>

@@ -1,3 +1,4 @@
+import { APP_BASE_NAME } from "../../branding";
 import type { DesktopServerExposureState } from "@t3tools/contracts";
 import { CheckIcon, CopyIcon, GlobeIcon, TriangleAlertIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -86,8 +87,8 @@ export function WorkspaceSharingPanel() {
           <GlobeIcon aria-hidden />
           <AlertTitle>Sharing runs from the desktop app</AlertTitle>
           <AlertDescription>
-            This workspace is served from another machine. Open the T3 Code desktop app on the
-            computer holding the files to share it.
+            This workspace is served from another machine. Open the {APP_BASE_NAME} desktop app on
+            the computer holding the files to share it.
           </AlertDescription>
         </Alert>
       </section>

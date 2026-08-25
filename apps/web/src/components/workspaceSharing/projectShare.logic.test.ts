@@ -52,28 +52,36 @@ describe("describeProjectShareTrigger", () => {
     expect(trigger("failed")).toMatchObject({ tone: "error", badgeLabel: "Failed" });
   });
 
-  it("disables itself in the browser build rather than offering a dead action", () => {
+  /**
+   * It used to disable itself here and point at a download. The tunnel does
+   * need the desktop app, but the web link does not, and refusing to open the
+   * control at all sent people to install something to solve a problem their
+   * browser could already solve.
+   */
+  it("still opens in the browser build, where the web link is the offer", () => {
     const view = describeProjectShareTrigger({
       state: shareState("not-shared"),
       isDesktop: false,
     });
 
-    expect(view.status).toBe("unsupported");
-    expect(view.isDisabled).toBe(true);
-    expect(view.ariaLabel).toMatch(/desktop app/i);
+    expect(view.status).toBe("web-only");
+    expect(view.isDisabled).toBe(false);
+    expect(view.ariaLabel).toMatch(/browser/i);
   });
 
-  it("keeps the browser build disabled even if a stale live state is held", () => {
+  it("never claims the tunnel is live in a build that cannot run one", () => {
     const view = describeProjectShareTrigger({ state: shareState("live"), isDesktop: false });
 
-    expect(view.isDisabled).toBe(true);
+    expect(view.status).toBe("web-only");
     expect(view.badgeLabel).toBeNull();
+    expect(view.tone).toBe("idle");
   });
 });
 
 describe("PROJECT_SHARE_LINK_KINDS", () => {
-  it("names all three kinds so none can be mistaken for another", () => {
+  it("names every kind so none can be mistaken for another", () => {
     expect(PROJECT_SHARE_LINK_KINDS.map((entry) => entry.kind)).toEqual([
+      "share-link",
       "tunnel",
       "cloud",
       "share-link",
