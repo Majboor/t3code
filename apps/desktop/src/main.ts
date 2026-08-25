@@ -2147,8 +2147,8 @@ nativeTheme.on("updated", syncAllWindowAppearance);
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1100,
-    height: 780,
+    width: 1280,
+    height: 820,
     minWidth: 840,
     minHeight: 620,
     show: false,

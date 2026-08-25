@@ -28,8 +28,8 @@ import { Sidebar, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../DiffPanel"));
 const WorkspacePanel = lazy(() => import("../WorkspacePanel"));
-export const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(30rem,52vw,72rem)";
-export const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 28 * 16;
+export const RIGHT_PANEL_INLINE_DEFAULT_WIDTH = "clamp(22rem,52vw,72rem)";
+export const RIGHT_PANEL_INLINE_SIDEBAR_MIN_WIDTH = 20 * 16;
 export const COMPACT_PANEL_MIN_HEIGHT_PX = 180;
 export const COMPACT_CHAT_MIN_HEIGHT_PX = 220;
 export type RightPanelKind = "diff" | "workspace";
