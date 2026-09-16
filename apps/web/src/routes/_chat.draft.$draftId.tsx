@@ -17,10 +17,13 @@ import {
 } from "../diffRouteSearch";
 import { resolveDesktopLayoutModeDefinition } from "../desktopLayoutModes";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
-import { useProjectSidebarOpen } from "../components/AppSidebarLayout.logic";
+import {
+  useDesktopLayoutPanelPreferences,
+  useProjectSidebarOpen,
+} from "../components/AppSidebarLayout.logic";
 import { ThreadRightPanelInlineSidebar } from "../components/chat/RightPanelInlineSidebar";
 
 const WorkspacePanel = lazy(() => import("../components/WorkspacePanel"));
@@ -52,6 +55,8 @@ function DraftChatThreadRouteView() {
   const desktopLayoutDefinition = useSettings((settings) =>
     resolveDesktopLayoutModeDefinition(settings),
   );
+  const { updateSettings } = useUpdateSettings();
+  const { setPanelPreferenceForMode } = useDesktopLayoutPanelPreferences();
   const [projectSidebarOpen] = useProjectSidebarOpen(desktopLayoutMode);
   // Narrow windows still get the sheet: a column here would leave neither side
   // usable, which is the reason the sheet exists at all.
@@ -183,6 +188,15 @@ function DraftChatThreadRouteView() {
   }, [canonicalThreadRef, draftSession, navigate, sharedThreadIdToJoin, workspaceOpen]);
 
   const closeWorkspace = useCallback(() => {
+    // Clearing the URL alone isn't enough: ChatView's auto-open effect reads
+    // panelPreferenceByMode and re-navigates to reopen the panel whenever the
+    // URL says closed but the mode's own preference still says "workspace" —
+    // so the preference has to be cleared here too, or the close is undone on
+    // the very next render.
+    setPanelPreferenceForMode(desktopLayoutMode, "none");
+    if (desktopLayoutDefinition.layout === "dev") {
+      updateSettings({ desktopLayoutMode: "vibe" });
+    }
     void navigate({
       to: "/draft/$draftId",
       params: { draftId },
@@ -192,9 +206,17 @@ function DraftChatThreadRouteView() {
         workspace: undefined,
       }),
     });
-  }, [draftId, navigate]);
+  }, [
+    desktopLayoutDefinition.layout,
+    desktopLayoutMode,
+    draftId,
+    navigate,
+    setPanelPreferenceForMode,
+    updateSettings,
+  ]);
 
   const openWorkspace = useCallback(() => {
+    setPanelPreferenceForMode(desktopLayoutMode, "workspace");
     void navigate({
       to: "/draft/$draftId",
       params: { draftId },
@@ -204,7 +226,7 @@ function DraftChatThreadRouteView() {
         workspace: "1" as const,
       }),
     });
-  }, [draftId, navigate]);
+  }, [desktopLayoutMode, draftId, navigate, setPanelPreferenceForMode]);
 
   if (canonicalThreadRef) {
     return (
