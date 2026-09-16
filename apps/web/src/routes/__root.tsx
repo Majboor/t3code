@@ -24,6 +24,8 @@ import { AnchoredToastProvider, ToastProvider, toastManager } from "../component
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { readLocalApi } from "../localApi";
 import { useSettings } from "../hooks/useSettings";
+import { useProductTourStore } from "../productTourStore";
+import { ProductTourOverlay } from "../components/ProductTourOverlay";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKeyFromPath,
@@ -122,6 +124,8 @@ function RootRouteView() {
         <EventRouter />
         <WebSocketConnectionCoordinator />
         <SlowRpcAckToastCoordinator />
+        <ProductTourAutoStart />
+        <ProductTourOverlay />
         <WebSocketConnectionSurface>
           <CommandPalette>
             <AppSidebarLayout>
@@ -132,6 +136,37 @@ function RootRouteView() {
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+/**
+ * Starts the product tour once, for anyone who hasn't seen it. Mounted here
+ * (not inside `_chat.tsx`) because a tour step navigates to `/settings/...`,
+ * a top-level sibling route the `_chat` layout doesn't wrap — the overlay
+ * itself lives here for the same reason, so it survives that navigation
+ * instead of unmounting mid-tour.
+ */
+function ProductTourAutoStart() {
+  const hasSeenProductTour = useSettings((settings) => settings.hasSeenProductTour);
+  const startTour = useProductTourStore((state) => state.start);
+  const tourActive = useProductTourStore((state) => state.active);
+
+  useEffect(() => {
+    if (hasSeenProductTour || tourActive) {
+      return;
+    }
+    // A brief delay so the shell has actually finished mounting (sidebar,
+    // header) before the first spotlight tries to anchor on it.
+    const timeoutId = window.setTimeout(() => {
+      startTour();
+    }, 1_200);
+    return () => window.clearTimeout(timeoutId);
+    // Deliberately runs once per mount: re-firing on every settings change
+    // would restart the tour mid-tour once `hasSeenProductTour` flips false
+    // some other way.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return null;
 }
 
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {

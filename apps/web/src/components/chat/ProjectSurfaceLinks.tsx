@@ -60,7 +60,9 @@ export function ProjectSurfaceLinks({
       {/* Next to the browser link because that link is loopback and people were
           sending it to colleagues; this is the one that survives leaving the
           machine, and it says which kind of link it hands out. */}
-      <ShareProjectButton environmentId={environmentId} projectId={projectId} />
+      <span data-tour="share-project">
+        <ShareProjectButton environmentId={environmentId} projectId={projectId} />
+      </span>
       {/* Beside the browser link on purpose: both answer "can somebody else open
           this", and the sync badge is the only warning that they cannot yet. */}
       <CloudSyncBar environmentId={environmentId} projectId={projectId} />

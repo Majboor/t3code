@@ -726,6 +726,7 @@ describe("wsApi", () => {
     const clientSettings = {
       confirmThreadArchive: true,
       confirmThreadDelete: false,
+      hasSeenProductTour: false,
       desktopLayoutMode: "dev" as const,
       desktopLayoutModesJson: "",
       desktopLayoutAutoOpenToast: true,
@@ -786,6 +787,7 @@ describe("wsApi", () => {
     const clientSettings = {
       confirmThreadArchive: true,
       confirmThreadDelete: false,
+      hasSeenProductTour: false,
       desktopLayoutMode: "dev" as const,
       desktopLayoutModesJson: "",
       desktopLayoutAutoOpenToast: true,

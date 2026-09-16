@@ -32,11 +32,13 @@ function SidebarUtilityRow({
   label,
   isActive = false,
   onClick,
+  dataTour,
 }: {
   readonly icon: ComponentType<{ className?: string }>;
   readonly label: string;
   readonly isActive?: boolean;
   readonly onClick: () => void;
+  readonly dataTour?: string;
 }) {
   return (
     <SidebarMenuItem>
@@ -48,6 +50,7 @@ function SidebarUtilityRow({
           isActive ? "text-foreground" : "text-muted-foreground/70",
         )}
         onClick={onClick}
+        {...(dataTour ? { "data-tour": dataTour } : {})}
       >
         <Icon className={cn("size-3.5", isActive ? "text-foreground" : undefined)} />
         <span className="text-xs">{label}</span>
@@ -108,6 +111,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           label={item.label}
           isActive={currentUtilityPage === item.page}
           onClick={() => handleUtilityClick(item.page)}
+          dataTour={`sidebar-utility-${item.page}`}
         />
       ))}
       {currentUtilityPage ? (

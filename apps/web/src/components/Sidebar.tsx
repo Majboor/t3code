@@ -2231,7 +2231,6 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
   );
 });
 
-
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
   "attributes" | "listeners" | "setActivatorNodeRef"
@@ -2564,7 +2563,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   ]);
 
   return (
-    <SidebarContent className="gap-0">
+    <SidebarContent className="gap-0" data-tour="sidebar-thread-list">
       <SidebarGroup className="px-2 pt-2 pb-1">
         <SidebarMenu>
           <SidebarMenuItem>

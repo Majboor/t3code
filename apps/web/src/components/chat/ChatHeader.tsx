@@ -15,6 +15,7 @@ import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import {
   ChartNoAxesColumnIcon,
+  CompassIcon,
   DiffIcon,
   EllipsisIcon,
   FilesIcon,
@@ -27,6 +28,7 @@ import {
   TerminalSquareIcon,
   SettingsIcon,
 } from "lucide-react";
+import { useProductTourStore } from "~/productTourStore";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
@@ -384,6 +386,7 @@ const ViewOverflowMenu = memo(function ViewOverflowMenu(props: {
   onToggleDiff: () => void;
 }) {
   const navigate = useNavigate();
+  const startTour = useProductTourStore((state) => state.start);
   return (
     <Menu>
       <Tooltip>
@@ -500,6 +503,13 @@ const ViewOverflowMenu = memo(function ViewOverflowMenu(props: {
                 {props.diffToggleShortcutLabel}
               </kbd>
             ) : null}
+          </MenuItem>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuGroup>
+          <MenuItem onClick={() => startTour()}>
+            <CompassIcon className="size-3.5" aria-hidden="true" />
+            Take a tour
           </MenuItem>
         </MenuGroup>
       </MenuPopup>

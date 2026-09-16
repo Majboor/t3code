@@ -35,13 +35,10 @@ function accountProviderNameOf(provider: ServerProvider["provider"]): ProviderNa
 
 async function fetchConnections(): Promise<readonly Connection[]> {
   const accessToken = readSupabaseBrowserAccessToken();
-  const response = await fetch(
-    resolvePrimaryEnvironmentHttpUrl("/api/provider-auth/connections"),
-    {
-      credentials: "include",
-      ...(accessToken ? { headers: { authorization: `Bearer ${accessToken}` } } : {}),
-    },
-  );
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/provider-auth/connections"), {
+    credentials: "include",
+    ...(accessToken ? { headers: { authorization: `Bearer ${accessToken}` } } : {}),
+  });
   if (!response.ok) {
     return [];
   }
@@ -81,18 +78,15 @@ function AccountSwitcher({
     setError(null);
     try {
       const accessToken = readSupabaseBrowserAccessToken();
-      const response = await fetch(
-        resolvePrimaryEnvironmentHttpUrl("/api/provider-auth/account"),
-        {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "content-type": "application/json",
-            ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
-          },
-          body: JSON.stringify({ provider, accountId, makeDefault: true }),
+      const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/provider-auth/account"), {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+          ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
         },
-      );
+        body: JSON.stringify({ provider, accountId, makeDefault: true }),
+      });
       if (!response.ok) {
         setError("Couldn't switch accounts. Try again from Settings → Connections.");
         return;
@@ -176,7 +170,8 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
    * refused. Once the per-account list has loaded, it is trusted over the
    * broader status for exactly that one question.
    */
-  const noAccountForMe = connections !== null && connection !== null && connectedAccounts.length === 0;
+  const noAccountForMe =
+    connections !== null && connection !== null && connectedAccounts.length === 0;
 
   if (status.status === "ready" && !noAccountForMe) {
     return null;
@@ -192,7 +187,7 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   const message = noAccountForMe ? null : (status.message ?? null);
 
   return (
-    <div className="pt-3 mx-auto max-w-3xl">
+    <div className="pt-3 mx-auto max-w-3xl" data-tour="provider-status-banner">
       <Alert variant={noAccountForMe || status.status === "error" ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertTitle>{title}</AlertTitle>

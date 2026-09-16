@@ -615,6 +615,7 @@ export function ProviderAccountsSection() {
   return (
     <SettingsSection
       title="Provider Accounts"
+      dataTour="provider-accounts-section"
       headerAction={
         <Button size="xs" variant="outline" disabled={isRefreshing} onClick={() => void refresh()}>
           {isRefreshing ? spinner : <RefreshCwIcon className="size-3.5" />}
