@@ -70,6 +70,8 @@ export interface WsRpcClient {
     readonly searchEntries: RpcUnaryMethod<typeof WS_METHODS.projectsSearchEntries>;
     readonly writeFile: RpcUnaryMethod<typeof WS_METHODS.projectsWriteFile>;
     readonly createEntry: RpcUnaryMethod<typeof WS_METHODS.projectsCreateEntry>;
+    readonly deleteEntry: RpcUnaryMethod<typeof WS_METHODS.projectsDeleteEntry>;
+    readonly renameEntry: RpcUnaryMethod<typeof WS_METHODS.projectsRenameEntry>;
   };
   readonly filesystem: {
     readonly browse: RpcUnaryMethod<typeof WS_METHODS.filesystemBrowse>;
@@ -165,6 +167,8 @@ export interface WsRpcClient {
     readonly query: RpcUnaryMethod<typeof WS_METHODS.analyticsQuery>;
   };
   readonly deploys: {
+    readonly listTargets: RpcUnaryMethod<typeof WS_METHODS.deployListTargets>;
+    readonly listRuns: RpcUnaryMethod<typeof WS_METHODS.deployListRuns>;
     readonly listDeployments: RpcUnaryMethod<typeof WS_METHODS.deployListDeployments>;
   };
   readonly environment: {
@@ -283,6 +287,10 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.projectsWriteFile](input)),
       createEntry: (input) =>
         transport.request((client) => client[WS_METHODS.projectsCreateEntry](input)),
+      deleteEntry: (input) =>
+        transport.request((client) => client[WS_METHODS.projectsDeleteEntry](input)),
+      renameEntry: (input) =>
+        transport.request((client) => client[WS_METHODS.projectsRenameEntry](input)),
     },
     filesystem: {
       browse: (input) => transport.request((client) => client[WS_METHODS.filesystemBrowse](input)),
@@ -457,6 +465,10 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       query: (input) => transport.request((client) => client[WS_METHODS.analyticsQuery](input)),
     },
     deploys: {
+      listTargets: (input) =>
+        transport.request((client) => client[WS_METHODS.deployListTargets](input)),
+      listRuns: (input) =>
+        transport.request((client) => client[WS_METHODS.deployListRuns](input)),
       listDeployments: (input) =>
         transport.request((client) => client[WS_METHODS.deployListDeployments](input)),
     },

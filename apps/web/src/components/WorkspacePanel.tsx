@@ -34,10 +34,12 @@ import {
   GitCompareArrowsIcon,
   HardDriveUploadIcon,
   LoaderCircleIcon,
+  PencilIcon,
   RefreshCcwIcon,
   PencilLineIcon,
   SaveIcon,
   Share2Icon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react";
 import {
@@ -304,19 +306,6 @@ function hasDraggedFiles(event: DragEvent<HTMLElement>): boolean {
   return [...event.dataTransfer.items].some((item) => item.kind === "file");
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  const chunks: string[] = [];
-  const chunkSize = 0x8000;
-
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
-    chunks.push(String.fromCharCode(...chunk));
-  }
-
-  return btoa(chunks.join(""));
-}
-
 /**
  * Who or what is in this file at this moment.
  *
@@ -413,6 +402,14 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
   onDirectoryDrop: (event: DragEvent<HTMLButtonElement>, directoryPath: string) => void;
   onDirectoryDragOver: (event: DragEvent<HTMLButtonElement>, directoryPath: string) => void;
   onDirectoryDragLeave: (event: DragEvent<HTMLButtonElement>, directoryPath: string) => void;
+  renaming: boolean;
+  renameValue: string;
+  onRenameValueChange: (value: string) => void;
+  onBeginRename: (relativePath: string) => void;
+  onSubmitRename: () => void;
+  onCancelRename: () => void;
+  onDelete: (entry: Pick<ProjectDirectoryEntry, "kind" | "path">) => void;
+  deleting: boolean;
   children?: React.ReactNode;
 }) {
   const { depth, entry, resolvedTheme } = props;
@@ -476,6 +473,13 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
     <div className="group/entry flex w-full items-center pr-2">
       <button
         type="button"
+        draggable={!props.renaming}
+        onDragStart={(event) => {
+          // Lets the row be dropped onto the chat composer, which reads
+          // plain text and inserts it as an `@path` mention.
+          event.dataTransfer.setData("text/plain", `@${entry.path}`);
+          event.dataTransfer.effectAllowed = "copy";
+        }}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left transition-colors",
           props.selected
@@ -488,6 +492,7 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
         data-workspace-entry-path={entry.path}
         data-workspace-entry-kind="file"
         onClick={() => {
+          if (props.renaming) return;
           props.onSelectEntry(entry);
           props.onOpenFile(entry.path);
         }}
@@ -498,7 +503,29 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
           theme={resolvedTheme}
           className="size-3.5"
         />
-        <span className="truncate text-xs">{entry.name}</span>
+        {props.renaming ? (
+          <input
+            type="text"
+            autoFocus
+            value={props.renameValue}
+            data-testid="workspace-entry-rename-input"
+            className="min-w-0 flex-1 truncate rounded-sm border border-primary/50 bg-background px-1 text-xs outline-none"
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => props.onRenameValueChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                props.onSubmitRename();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                props.onCancelRename();
+              }
+            }}
+            onBlur={() => props.onSubmitRename()}
+          />
+        ) : (
+          <span className="truncate text-xs">{entry.name}</span>
+        )}
         {props.author ? (
           <span
             className="ml-1 size-1.5 shrink-0 rounded-full"
@@ -534,6 +561,41 @@ const WorkspaceExplorerRow = memo(function WorkspaceExplorerRow(props: {
           onCopyShareLink={props.onCopyShareLink}
           className="ml-1"
         />
+      ) : null}
+      {!props.renaming ? (
+        <>
+          <button
+            type="button"
+            aria-label={`Rename ${entry.path}`}
+            title="Rename"
+            data-testid="workspace-entry-rename"
+            className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none group-hover/entry:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onBeginRename(entry.path);
+            }}
+          >
+            <PencilIcon className="size-3" />
+          </button>
+          <button
+            type="button"
+            aria-label={`Delete ${entry.path}`}
+            title="Delete"
+            disabled={props.deleting}
+            data-testid="workspace-entry-delete"
+            className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none group-hover/entry:opacity-100 disabled:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onDelete(entry);
+            }}
+          >
+            {props.deleting ? (
+              <LoaderCircleIcon className="size-3 animate-spin" />
+            ) : (
+              <Trash2Icon className="size-3" />
+            )}
+          </button>
+        </>
       ) : null}
     </div>
   );
@@ -787,6 +849,9 @@ export default function WorkspacePanel({
   const [savingFilePath, setSavingFilePath] = useState<string | null>(null);
   const [uploadingDirectoryPath, setUploadingDirectoryPath] = useState<string | null>(null);
   const [dropTargetDirectoryPath, setDropTargetDirectoryPath] = useState<string | null>(null);
+  const [renamingEntryPath, setRenamingEntryPath] = useState<string | null>(null);
+  const [renameEntryValue, setRenameEntryValue] = useState("");
+  const [deletingEntryPath, setDeletingEntryPath] = useState<string | null>(null);
   const [fileStateByPath, setFileStateByPath] = useState<Record<string, ProjectReadFileResult>>({});
   const [draftByPath, setDraftByPath] = useState<Record<string, string>>({});
   const [selectedDiffTurnId, setSelectedDiffTurnId] = useState<TurnId | null>(null);
@@ -2862,6 +2927,144 @@ export default function WorkspacePanel({
     recordFileTouches,
   ]);
 
+  const closeTabsUnderPath = useCallback((relativePath: string) => {
+    const isUnder = (pathValue: string) =>
+      pathValue === relativePath || pathValue.startsWith(`${relativePath}/`);
+    setOpenTabs((current) => {
+      const next = current.filter((pathValue) => !isUnder(pathValue));
+      setActiveFilePath((currentActivePath) =>
+        currentActivePath && isUnder(currentActivePath) ? (next[0] ?? null) : currentActivePath,
+      );
+      return next;
+    });
+    setFileStateByPath((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(next)) {
+        if (isUnder(key)) delete next[key];
+      }
+      return next;
+    });
+    setDraftByPath((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(next)) {
+        if (isUnder(key)) delete next[key];
+      }
+      return next;
+    });
+  }, []);
+
+  const beginRenameEntry = useCallback((relativePath: string) => {
+    const separatorIndex = relativePath.lastIndexOf("/");
+    setRenamingEntryPath(relativePath);
+    setRenameEntryValue(
+      separatorIndex < 0 ? relativePath : relativePath.slice(separatorIndex + 1),
+    );
+  }, []);
+
+  const cancelRenameEntry = useCallback(() => {
+    setRenamingEntryPath(null);
+    setRenameEntryValue("");
+  }, []);
+
+  const submitRenameEntry = useCallback(async () => {
+    const relativePath = renamingEntryPath;
+    const trimmedName = renameEntryValue.trim();
+    if (!relativePath || !activeEnvironmentId || !activeWorkspaceRoot || !trimmedName) {
+      cancelRenameEntry();
+      return;
+    }
+
+    const newRelativePath = joinRelativePath(parentDirectoryOf(relativePath), trimmedName);
+    if (newRelativePath === relativePath) {
+      cancelRenameEntry();
+      return;
+    }
+
+    try {
+      const api = ensureEnvironmentApi(activeEnvironmentId);
+      await api.projects.renameEntry({
+        cwd: activeWorkspaceRoot,
+        relativePath,
+        newRelativePath,
+      });
+
+      setOpenTabs((current) =>
+        current.map((pathValue) => (pathValue === relativePath ? newRelativePath : pathValue)),
+      );
+      setActiveFilePath((current) => (current === relativePath ? newRelativePath : current));
+      setSelectedEntry((current) =>
+        current?.path === relativePath ? { ...current, path: newRelativePath } : current,
+      );
+
+      await loadDirectory(parentDirectoryOf(relativePath));
+      cancelRenameEntry();
+      toastManager.add({
+        type: "success",
+        title: "Renamed",
+        description: `${relativePath} → ${newRelativePath}`,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not rename",
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+      });
+    }
+  }, [
+    activeEnvironmentId,
+    activeWorkspaceRoot,
+    cancelRenameEntry,
+    loadDirectory,
+    renameEntryValue,
+    renamingEntryPath,
+  ]);
+
+  const deleteWorkspaceEntry = useCallback(
+    async (entry: Pick<ProjectDirectoryEntry, "kind" | "path">) => {
+      if (!activeEnvironmentId || !activeWorkspaceRoot) {
+        return;
+      }
+      if (
+        !window.confirm(
+          entry.kind === "directory"
+            ? `Delete "${entry.path}" and everything in it? This cannot be undone.`
+            : `Delete "${entry.path}"? This cannot be undone.`,
+        )
+      ) {
+        return;
+      }
+
+      setDeletingEntryPath(entry.path);
+      try {
+        const api = ensureEnvironmentApi(activeEnvironmentId);
+        await api.projects.deleteEntry({
+          cwd: activeWorkspaceRoot,
+          relativePath: entry.path,
+        });
+
+        closeTabsUnderPath(entry.path);
+        setSelectedEntry((current) =>
+          current.path === entry.path ? { path: null, kind: null } : current,
+        );
+        await loadDirectory(parentDirectoryOf(entry.path));
+        toastManager.add({
+          type: "success",
+          title: entry.kind === "directory" ? "Folder deleted" : "File deleted",
+          description: entry.path,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not delete",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      } finally {
+        setDeletingEntryPath(null);
+      }
+    },
+    [activeEnvironmentId, activeWorkspaceRoot, closeTabsUnderPath, loadDirectory],
+  );
+
   const uploadFilesToDirectory = useCallback(
     async (files: readonly File[], directoryPath: string | null) => {
       if (!activeEnvironmentId || !activeWorkspaceRoot || files.length === 0) {
@@ -2871,16 +3074,18 @@ export default function WorkspacePanel({
       setUploadingDirectoryPath(directoryPath);
 
       try {
-        const api = ensureEnvironmentApi(activeEnvironmentId);
-
         for (const file of files) {
           const relativePath = joinRelativePath(directoryPath, file.name);
-          await api.projects.writeFile({
-            cwd: activeWorkspaceRoot,
-            relativePath,
-            contents: arrayBufferToBase64(await file.arrayBuffer()),
-            encoding: "base64",
+          const response = await fetch(workspaceFileUrl(activeWorkspaceRoot, relativePath), {
+            method: "POST",
+            credentials: "same-origin",
+            body: file,
           });
+          if (!response.ok) {
+            throw new Error(
+              (await response.text().catch(() => "")) || `Upload failed (${response.status}).`,
+            );
+          }
         }
 
         await loadDirectory(directoryPath);
@@ -2992,6 +3197,14 @@ export default function WorkspacePanel({
             onDirectoryDrop={handleDirectoryDrop}
             onDirectoryDragOver={handleDirectoryDragOver}
             onDirectoryDragLeave={handleDirectoryDragLeave}
+            renaming={renamingEntryPath === entry.path}
+            renameValue={renameEntryValue}
+            onRenameValueChange={setRenameEntryValue}
+            onBeginRename={beginRenameEntry}
+            onSubmitRename={submitRenameEntry}
+            onCancelRename={cancelRenameEntry}
+            onDelete={deleteWorkspaceEntry}
+            deleting={deletingEntryPath === entry.path}
           >
             {entry.kind === "directory" && isDirectoryExpanded
               ? renderExplorerEntries(childEntries, depth + 1)
@@ -3000,8 +3213,12 @@ export default function WorkspacePanel({
         );
       }),
     [
+      beginRenameEntry,
+      cancelRenameEntry,
       canShareLinks,
       copyFileShareLink,
+      deleteWorkspaceEntry,
+      deletingEntryPath,
       directoryEntriesByPath,
       dropTargetDirectoryPath,
       expandedDirectoriesByPath,
@@ -3010,10 +3227,13 @@ export default function WorkspacePanel({
       handleDirectoryDrop,
       loadingDirectoriesByPath,
       openFile,
+      renameEntryValue,
+      renamingEntryPath,
       resolvedTheme,
       resolveLatestVisibleDiffState,
       selectedEntry.path,
       shareProjectId,
+      submitRenameEntry,
       toggleDirectory,
       workingTreeStatusByPath,
       workspaceAuthorByPath,

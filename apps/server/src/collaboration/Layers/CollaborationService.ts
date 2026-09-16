@@ -109,9 +109,12 @@ export interface ModelTokenRate {
  * List prices per million tokens, in USD, keyed by the canonical model ids in
  * `contracts/model.ts`.
  *
- * Sources, both read on 2026-08-15:
+ * Sources, both read on 2026-09-16:
  *   - platform.claude.com/docs/en/pricing (the `claude-*` rows)
- *   - developers.openai.com/api/docs/pricing (the `gpt-*` and `o3` rows)
+ *   - developers.openai.com/api/docs/pricing (the `gpt-*` and `o3` rows),
+ *     cross-checked against LiteLLM's community-maintained rate table
+ *     (github.com/BerriAI/litellm, model_prices_and_context_window.json) —
+ *     the same source upstream (github.com/pingdotgg/t3code) prices against.
  *
  * This is a snapshot and it will go stale. It exists so the panel can show an
  * order of magnitude, not an invoice: it knows nothing about negotiated rates,
@@ -123,18 +126,30 @@ export interface ModelTokenRate {
  */
 export const MODEL_TOKEN_RATES_USD: Readonly<Record<string, ModelTokenRate>> = {
   // Anthropic
+  "claude-fable-5-1": { inputPerMillionUsd: 10, outputPerMillionUsd: 50 },
   "claude-fable-5": { inputPerMillionUsd: 10, outputPerMillionUsd: 50 },
+  "claude-mythos-5-1": { inputPerMillionUsd: 10, outputPerMillionUsd: 50 },
   "claude-mythos-5": { inputPerMillionUsd: 10, outputPerMillionUsd: 50 },
   "claude-opus-5": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
   "claude-opus-4-8": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
   "claude-opus-4-7": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
   "claude-opus-4-6": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
   "claude-opus-4-5": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
-  "claude-sonnet-5": { inputPerMillionUsd: 3, outputPerMillionUsd: 15 },
+  // Was priced at the Sonnet 4.6 rate ($3/$15) — Sonnet 5 is actually $2/$10;
+  // confirmed against both the pricing page and LiteLLM's table 2026-09-16.
+  "claude-sonnet-5": { inputPerMillionUsd: 2, outputPerMillionUsd: 10 },
   "claude-sonnet-4-6": { inputPerMillionUsd: 3, outputPerMillionUsd: 15 },
   "claude-sonnet-4-5": { inputPerMillionUsd: 3, outputPerMillionUsd: 15 },
   "claude-haiku-4-5": { inputPerMillionUsd: 1, outputPerMillionUsd: 5 },
   // OpenAI
+  // The Codex CLI's only accepted model with a ChatGPT-account login (see
+  // BUILT_IN_MODELS in provider/Layers/CodexProvider.ts) — every thread's
+  // Codex usage was reported unpriced until this was added.
+  "gpt-6-astra": { inputPerMillionUsd: 10, outputPerMillionUsd: 50 },
+  "gpt-5.6": { inputPerMillionUsd: 4, outputPerMillionUsd: 20 },
+  "gpt-5.6-sol": { inputPerMillionUsd: 4, outputPerMillionUsd: 20 },
+  "gpt-5.6-terra": { inputPerMillionUsd: 2, outputPerMillionUsd: 12 },
+  "gpt-5.6-luna": { inputPerMillionUsd: 0.2, outputPerMillionUsd: 1.2 },
   "gpt-5.4": { inputPerMillionUsd: 2.5, outputPerMillionUsd: 15 },
   "gpt-5.4-mini": { inputPerMillionUsd: 0.75, outputPerMillionUsd: 4.5 },
   "gpt-5.4-nano": { inputPerMillionUsd: 0.2, outputPerMillionUsd: 1.25 },

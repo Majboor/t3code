@@ -46,8 +46,10 @@ import {
   ORCHESTRATION_WS_METHODS,
   type OrchestrationProjectOwnership,
   ProjectCreateEntryError,
+  ProjectDeleteEntryError,
   ProjectListDirectoryError,
   ProjectReadFileError,
+  ProjectRenameEntryError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
@@ -5924,6 +5926,60 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 ),
               ),
               (message) => new ProjectCreateEntryError({ message }),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.projectsDeleteEntry]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsDeleteEntry,
+            withRateLimit(
+              ensureWorkspaceRoot(
+                input.cwd,
+                "file.write",
+                (message) => new ProjectDeleteEntryError({ message }),
+              ).pipe(
+                Effect.flatMap(() =>
+                  workspaceFileSystem.deleteEntry(input).pipe(
+                    Effect.mapError((cause) => {
+                      const message = Schema.is(WorkspacePathOutsideRootError)(cause)
+                        ? "Workspace file path must stay within the project root."
+                        : "Failed to delete workspace entry";
+                      return new ProjectDeleteEntryError({
+                        message,
+                        cause,
+                      });
+                    }),
+                  ),
+                ),
+              ),
+              (message) => new ProjectDeleteEntryError({ message }),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.projectsRenameEntry]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsRenameEntry,
+            withRateLimit(
+              ensureWorkspaceRoot(
+                input.cwd,
+                "file.write",
+                (message) => new ProjectRenameEntryError({ message }),
+              ).pipe(
+                Effect.flatMap(() =>
+                  workspaceFileSystem.renameEntry(input).pipe(
+                    Effect.mapError((cause) => {
+                      const message = Schema.is(WorkspacePathOutsideRootError)(cause)
+                        ? "Workspace file path must stay within the project root."
+                        : "Failed to rename workspace entry";
+                      return new ProjectRenameEntryError({
+                        message,
+                        cause,
+                      });
+                    }),
+                  ),
+                ),
+              ),
+              (message) => new ProjectRenameEntryError({ message }),
             ),
             { "rpc.aggregate": "workspace" },
           ),

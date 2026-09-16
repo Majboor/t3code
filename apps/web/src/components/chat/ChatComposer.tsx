@@ -1630,13 +1630,30 @@ export const ChatComposer = memo(
     };
 
     const onComposerDrop = (event: React.DragEvent<HTMLDivElement>) => {
-      if (!event.dataTransfer.types.includes("Files")) return;
-      event.preventDefault();
-      dragDepthRef.current = 0;
-      setIsDragOverComposer(false);
-      const files = Array.from(event.dataTransfer.files);
-      addComposerImages(files);
-      focusComposer();
+      if (event.dataTransfer.types.includes("Files")) {
+        event.preventDefault();
+        dragDepthRef.current = 0;
+        setIsDragOverComposer(false);
+        const files = Array.from(event.dataTransfer.files);
+        addComposerImages(files);
+        focusComposer();
+        return;
+      }
+
+      // A file dragged out of the workspace panel carries its `@path` mention
+      // as plain text rather than a native OS file, since it is not a local
+      // file drop — just a reference to one already in the project.
+      const mention = event.dataTransfer.getData("text/plain");
+      if (mention.startsWith("@")) {
+        event.preventDefault();
+        dragDepthRef.current = 0;
+        setIsDragOverComposer(false);
+        const trimmed = prompt.trimEnd();
+        const merged =
+          trimmed.length === 0 ? `${mention} ` : `${trimmed} ${mention} `;
+        onPromptChange(merged, merged.length, merged.length, false, []);
+        focusComposer();
+      }
     };
     const handleInterruptPrimaryAction = useCallback(() => {
       void onInterrupt();

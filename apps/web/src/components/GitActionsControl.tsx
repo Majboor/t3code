@@ -893,6 +893,20 @@ export default function GitActionsControl({
     [gitCwd, threadToastData],
   );
 
+  const runInit = () => {
+    const promise = initMutation.mutateAsync();
+    toastManager.promise(promise, {
+      loading: { title: "Initializing git repository...", data: threadToastData },
+      success: { title: "Git repository initialized", data: threadToastData },
+      error: (err) => ({
+        title: "Git init failed",
+        description: err instanceof Error ? err.message : "An error occurred.",
+        data: threadToastData,
+      }),
+    });
+    void promise.catch(() => undefined);
+  };
+
   if (!gitCwd) return null;
 
   return (
@@ -902,7 +916,7 @@ export default function GitActionsControl({
           variant="outline"
           size="xs"
           disabled={initMutation.isPending}
-          onClick={() => initMutation.mutate()}
+          onClick={runInit}
         >
           {initMutation.isPending ? "Initializing..." : "Initialize Git"}
         </Button>

@@ -1,8 +1,17 @@
 import { PROVIDER_DISPLAY_NAMES, type ServerProvider } from "@t3tools/contracts";
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
-import { CircleAlertIcon } from "lucide-react";
+import { CircleAlertIcon, LoaderIcon } from "lucide-react";
+import { readSupabaseBrowserAccessToken } from "../../environments/primary/auth";
+import { resolvePrimaryEnvironmentHttpUrl } from "../../environments/primary/target";
+import {
+  defaultAccountOf,
+  parseConnections,
+  type Connection,
+  type ProviderAccount,
+  type ProviderName,
+} from "../settings/providerAccounts.logic";
 
 /**
  * The provider's own words for "you are not signed in" name a CLI command —
@@ -15,30 +24,181 @@ function isNotAuthenticated(message: string | null): boolean {
   return message !== null && /not authenticated/i.test(message);
 }
 
+/**
+ * `ProviderKind` (what a turn runs) and `ProviderName` (what the account
+ * store files a login under) name the same two providers differently — see
+ * `providerAuthProviderOf` on the server, which this mirrors.
+ */
+function accountProviderNameOf(provider: ServerProvider["provider"]): ProviderName {
+  return provider === "codex" ? "codex" : "claude";
+}
+
+async function fetchConnections(): Promise<readonly Connection[]> {
+  const accessToken = readSupabaseBrowserAccessToken();
+  const response = await fetch(
+    resolvePrimaryEnvironmentHttpUrl("/api/provider-auth/connections"),
+    {
+      credentials: "include",
+      ...(accessToken ? { headers: { authorization: `Bearer ${accessToken}` } } : {}),
+    },
+  );
+  if (!response.ok) {
+    return [];
+  }
+  const data: unknown = await response.json().catch(() => null);
+  return parseConnections(data);
+}
+
+/**
+ * Picking which of this person's own accounts answers for this thread next.
+ *
+ * A turn re-resolves its account fresh every time it starts (see
+ * `resolveProviderAccount` on the server), so there is no per-thread pin to
+ * undo — the whole fix for "my chat is stuck on a dead account" is making it
+ * easy to change which account is the default, from wherever the failure was
+ * actually seen. Settings can do this too; this is the same edit, offered at
+ * the point of pain.
+ */
+function AccountSwitcher({
+  provider,
+  accounts,
+  currentAccountId,
+  onSwitched,
+}: {
+  readonly provider: ProviderName;
+  readonly accounts: readonly ProviderAccount[];
+  readonly currentAccountId: string | null;
+  readonly onSwitched: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const switchTo = async (accountId: string) => {
+    if (accountId === currentAccountId) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const accessToken = readSupabaseBrowserAccessToken();
+      const response = await fetch(
+        resolvePrimaryEnvironmentHttpUrl("/api/provider-auth/account"),
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "content-type": "application/json",
+            ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+          },
+          body: JSON.stringify({ provider, accountId, makeDefault: true }),
+        },
+      );
+      if (!response.ok) {
+        setError("Couldn't switch accounts. Try again from Settings → Connections.");
+        return;
+      }
+      onSwitched();
+    } catch {
+      setError("Couldn't reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (accounts.length < 2) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-muted-foreground">Run on:</span>
+      {accounts.map((account) => (
+        <button
+          key={account.accountId}
+          type="button"
+          disabled={busy}
+          onClick={() => void switchTo(account.accountId)}
+          className={`rounded-full border px-2 py-0.5 text-xs disabled:opacity-50 ${
+            account.accountId === currentAccountId
+              ? "border-foreground/40 bg-foreground/10 font-medium"
+              : "border-border hover:bg-foreground/5"
+          }`}
+        >
+          {account.label}
+        </button>
+      ))}
+      {busy ? <LoaderIcon className="size-3 animate-spin" /> : null}
+      {error ? <span className="text-xs text-destructive">{error}</span> : null}
+    </div>
+  );
+}
+
 export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   status,
 }: {
   status: ServerProvider | null;
 }) {
-  if (!status || status.status === "ready" || status.status === "disabled") {
+  const [connections, setConnections] = useState<readonly Connection[] | null>(null);
+
+  const providerKind = status?.provider ?? null;
+  useEffect(() => {
+    if (providerKind === null) {
+      return;
+    }
+    let cancelled = false;
+    void fetchConnections().then((result) => {
+      if (!cancelled) {
+        setConnections(result);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Re-checked whenever the active provider changes, and once more whenever
+    // an account switch below reports success, via `refetch`.
+  }, [providerKind]);
+
+  if (!status || status.status === "disabled") {
+    return null;
+  }
+
+  const providerName = accountProviderNameOf(status.provider);
+  const connection = connections?.find((entry) => entry.provider === providerName) ?? null;
+  const connectedAccounts = connection?.accounts.filter((account) => account.connected) ?? [];
+  const myDefault = connection ? defaultAccountOf(connection) : null;
+
+  /**
+   * The turn-level health check the rest of this banner reads is one process
+   * wide, not one person wide — it answers "does the box have a working
+   * login", not "does this signed-in person". A workspace where somebody
+   * else's account is healthy would otherwise read as all clear to a person
+   * with nothing connected at all, right up until they sent a message and it
+   * refused. Once the per-account list has loaded, it is trusted over the
+   * broader status for exactly that one question.
+   */
+  const noAccountForMe = connections !== null && connection !== null && connectedAccounts.length === 0;
+
+  if (status.status === "ready" && !noAccountForMe) {
     return null;
   }
 
   const providerLabel = PROVIDER_DISPLAY_NAMES[status.provider] ?? status.provider;
-  const defaultMessage =
-    status.status === "error"
+  const defaultMessage = noAccountForMe
+    ? `No ${providerLabel} account is connected for you.`
+    : status.status === "error"
       ? `${providerLabel} provider is unavailable.`
       : `${providerLabel} provider has limited availability.`;
   const title = `${providerLabel} provider status`;
+  const message = noAccountForMe ? null : (status.message ?? null);
 
   return (
     <div className="pt-3 mx-auto max-w-3xl">
-      <Alert variant={status.status === "error" ? "error" : "warning"}>
+      <Alert variant={noAccountForMe || status.status === "error" ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertTitle>{title}</AlertTitle>
-        <AlertDescription title={status.message ?? defaultMessage}>
-          <span className="line-clamp-3">{status.message ?? defaultMessage}</span>
-          {isNotAuthenticated(status.message ?? null) ? (
+        <AlertDescription title={message ?? defaultMessage}>
+          <span className="line-clamp-3">{message ?? defaultMessage}</span>
+          {noAccountForMe || isNotAuthenticated(message) ? (
             <Link
               to="/settings/connections"
               className="mt-1 inline-block font-medium underline underline-offset-2"
@@ -47,6 +207,14 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
               Connect {providerLabel}
             </Link>
           ) : null}
+          <AccountSwitcher
+            provider={providerName}
+            accounts={connectedAccounts}
+            currentAccountId={myDefault?.accountId ?? null}
+            onSwitched={() => {
+              void fetchConnections().then(setConnections);
+            }}
+          />
         </AlertDescription>
       </Alert>
     </div>

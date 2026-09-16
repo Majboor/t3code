@@ -12,8 +12,12 @@ import type { Effect } from "effect";
 import type {
   ProjectCreateEntryInput,
   ProjectCreateEntryResult,
+  ProjectDeleteEntryInput,
+  ProjectDeleteEntryResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRenameEntryInput,
+  ProjectRenameEntryResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "@t3tools/contracts";
@@ -66,6 +70,27 @@ export interface WorkspaceFileSystemShape {
     input: ProjectCreateEntryInput,
   ) => Effect.Effect<
     ProjectCreateEntryResult,
+    WorkspaceFileSystemError | WorkspacePathOutsideRootError
+  >;
+
+  /**
+   * Delete a file or directory (recursively) relative to the workspace root.
+   */
+  readonly deleteEntry: (
+    input: ProjectDeleteEntryInput,
+  ) => Effect.Effect<
+    ProjectDeleteEntryResult,
+    WorkspaceFileSystemError | WorkspacePathOutsideRootError
+  >;
+
+  /**
+   * Rename or move a file or directory within the workspace root. Both the
+   * source and destination are validated to stay within the root.
+   */
+  readonly renameEntry: (
+    input: ProjectRenameEntryInput,
+  ) => Effect.Effect<
+    ProjectRenameEntryResult,
     WorkspaceFileSystemError | WorkspacePathOutsideRootError
   >;
 }

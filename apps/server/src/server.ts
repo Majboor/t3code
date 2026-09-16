@@ -7,7 +7,7 @@ import { ServerConfig } from "./config.ts";
 import { analyticsIngestRouteLayer } from "./analytics/http.ts";
 import { desktopActivityRouteLayer } from "./desktop/http.ts";
 import { notebookExecuteRouteLayer, notebookRestartRouteLayer } from "./notebook/http.ts";
-import { workspaceFileRouteLayer } from "./workspace/fileHttp.ts";
+import { workspaceFileRouteLayer, workspaceFileUploadRouteLayer } from "./workspace/fileHttp.ts";
 import {
   shareLinkClaimRouteLayer,
   shareLinkPreviewRouteLayer,
@@ -611,6 +611,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   notebookExecuteRouteLayer,
   notebookRestartRouteLayer,
   workspaceFileRouteLayer,
+  workspaceFileUploadRouteLayer,
   // Before the static catch-all: `/s/*` is a public route, not an app path.
   shareLinkRedeemRouteLayer,
   // The join page's two exchanges. `preview` is unauthenticated by design and

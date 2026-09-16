@@ -8,9 +8,22 @@ import { Effect } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { resolveAuthenticatedUserId, ServerAuth } from "../auth/Services/ServerAuth.ts";
+import { makeFixedWindowLimiter } from "../deviceEnrollment/rateLimit.ts";
 import { normalizeDispatchCommand } from "./Normalizer.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+
+/**
+ * The full snapshot can run to tens of MB (see the activity-history cap in
+ * ProjectionSnapshotQuery). A caller that re-fetches it on a tight loop — a
+ * stray monitoring script did exactly this in 2026-09, polling every
+ * ~15-20s and saturating a whole connection around the clock — should be
+ * throttled rather than served every time. One call per session per window
+ * is generous for the real use (a human or a CLI invocation checking in
+ * occasionally) and cuts a runaway poller's bandwidth by an order of
+ * magnitude.
+ */
+const snapshotRateLimiter = makeFixedWindowLimiter({ windowMs: 60_000, maxAttempts: 3 });
 
 const respondToOrchestrationHttpError = (
   error: OrchestrationDispatchCommandError | OrchestrationGetSnapshotError,
@@ -43,7 +56,13 @@ export const orchestrationSnapshotRouteLayer = HttpRouter.add(
   "GET",
   "/api/orchestration/snapshot",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    const session = yield* authenticateOwnerSession;
+    if (!snapshotRateLimiter.check(session.sessionId, Date.now())) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Too many snapshot requests. Wait before fetching the full snapshot again." },
+        { status: 429 },
+      );
+    }
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const snapshot = yield* projectionSnapshotQuery.getSnapshot().pipe(
       Effect.mapError(

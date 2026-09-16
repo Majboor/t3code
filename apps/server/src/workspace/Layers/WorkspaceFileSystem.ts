@@ -274,7 +274,115 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
     };
   });
 
-  return { createEntry, readFile, writeFile } satisfies WorkspaceFileSystemShape;
+  const deleteEntry: WorkspaceFileSystemShape["deleteEntry"] = Effect.fn(
+    "WorkspaceFileSystem.deleteEntry",
+  )(function* (input) {
+    const target = yield* resolveTargetPath({
+      cwd: input.cwd,
+      relativePath: input.relativePath,
+    });
+
+    const exists = yield* pathExists({
+      cwd: input.cwd,
+      relativePath: input.relativePath,
+      absolutePath: target.absolutePath,
+    });
+
+    if (!exists) {
+      return yield* new WorkspaceFileSystemError({
+        cwd: input.cwd,
+        relativePath: input.relativePath,
+        operation: "workspaceFileSystem.deleteEntry",
+        detail: "Target path does not exist.",
+      });
+    }
+
+    yield* fileSystem.remove(target.absolutePath, { recursive: true, force: true }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new WorkspaceFileSystemError({
+            cwd: input.cwd,
+            relativePath: input.relativePath,
+            operation: "workspaceFileSystem.deleteEntry",
+            detail: cause.message,
+            cause,
+          }),
+      ),
+    );
+
+    yield* workspaceEntries.invalidate(input.cwd);
+    return { relativePath: target.relativePath };
+  });
+
+  const renameEntry: WorkspaceFileSystemShape["renameEntry"] = Effect.fn(
+    "WorkspaceFileSystem.renameEntry",
+  )(function* (input) {
+    const source = yield* resolveTargetPath({
+      cwd: input.cwd,
+      relativePath: input.relativePath,
+    });
+    const destination = yield* resolveTargetPath({
+      cwd: input.cwd,
+      relativePath: input.newRelativePath,
+    });
+
+    const sourceExists = yield* pathExists({
+      cwd: input.cwd,
+      relativePath: input.relativePath,
+      absolutePath: source.absolutePath,
+    });
+    if (!sourceExists) {
+      return yield* new WorkspaceFileSystemError({
+        cwd: input.cwd,
+        relativePath: input.relativePath,
+        operation: "workspaceFileSystem.renameEntry",
+        detail: "Target path does not exist.",
+      });
+    }
+
+    const destinationExists = yield* pathExists({
+      cwd: input.cwd,
+      relativePath: input.newRelativePath,
+      absolutePath: destination.absolutePath,
+    });
+    if (destinationExists) {
+      return yield* new WorkspaceFileSystemError({
+        cwd: input.cwd,
+        relativePath: input.newRelativePath,
+        operation: "workspaceFileSystem.renameEntry",
+        detail: "A file or directory already exists at the new path.",
+      });
+    }
+
+    yield* ensureTargetParentDirectory({
+      cwd: input.cwd,
+      relativePath: input.newRelativePath,
+      absolutePath: destination.absolutePath,
+    });
+
+    yield* Effect.tryPromise({
+      try: () => fsPromises.rename(source.absolutePath, destination.absolutePath),
+      catch: (cause) =>
+        new WorkspaceFileSystemError({
+          cwd: input.cwd,
+          relativePath: input.relativePath,
+          operation: "workspaceFileSystem.renameEntry",
+          detail: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+    });
+
+    yield* workspaceEntries.invalidate(input.cwd);
+    return { relativePath: destination.relativePath };
+  });
+
+  return {
+    createEntry,
+    readFile,
+    writeFile,
+    deleteEntry,
+    renameEntry,
+  } satisfies WorkspaceFileSystemShape;
 });
 
 export const WorkspaceFileSystemLive = Layer.effect(WorkspaceFileSystem, makeWorkspaceFileSystem);

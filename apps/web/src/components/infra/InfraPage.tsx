@@ -1,9 +1,22 @@
-import { CircleCheckIcon, CircleDashedIcon, PowerIcon, ShieldQuestionMarkIcon } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  PowerIcon,
+  ShieldQuestionMarkIcon,
+  XCircleIcon,
+} from "lucide-react";
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
 import { scopeProjectRef } from "@t3tools/client-runtime";
 import type { EnvironmentId, EnvironmentService, ProjectId } from "@t3tools/contracts";
+
+import type {
+  DeployListRunsResult,
+  DeployListTargetsResult,
+  DeployRun,
+  DeployTarget,
+} from "@t3tools/contracts";
 
 import { describeLoad, orderDeployments, summariseLoad, totalEvents } from "./deploymentLoad.logic";
 import {
@@ -153,6 +166,29 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
     },
   });
 
+  // What can be deployed, and what already ran. Adding or running a target
+  // stays on the CLI (`t3 deploy add` / `t3 deploy run`) — this only shows
+  // what is already configured, so the CLI's work isn't invisible here.
+  const deployTargets = useQuery({
+    enabled: environmentId !== null,
+    queryKey: ["infra", "deploy-targets", environmentId, projectId],
+    queryFn: async () => {
+      const api = environmentId === null ? undefined : readEnvironmentApi(environmentId);
+      if (!api) throw new Error("This window is not connected to an environment.");
+      return api.deploys.listTargets({ projectId });
+    },
+  });
+
+  const deployRuns = useQuery({
+    enabled: environmentId !== null,
+    queryKey: ["infra", "deploy-runs", environmentId, projectId],
+    queryFn: async () => {
+      const api = environmentId === null ? undefined : readEnvironmentApi(environmentId);
+      if (!api) throw new Error("This window is not connected to an environment.");
+      return api.deploys.listRuns({ projectId, limit: 10 });
+    },
+  });
+
   const disable = useMutation({
     mutationFn: async (packId: string) => {
       const api = environmentId === null ? undefined : readEnvironmentApi(environmentId);
@@ -273,6 +309,8 @@ function InfraPageContent({ projectId }: { projectId: ProjectId }) {
           ))
         )}
       </section>
+
+      <DeployTargetsSection targetsQuery={deployTargets} runsQuery={deployRuns} />
 
       <h2 className="mt-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
         Packs
@@ -476,6 +514,128 @@ function EnvironmentServicesSection({ environmentId }: { environmentId: Environm
         </div>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * What `t3 deploy add` and `t3 deploy run` have already produced from the CLI.
+ *
+ * Read-only, on purpose: adding or running a target is a write into a
+ * project's shape that stays on the CLI (see `EnvironmentApi["deploys"]`).
+ * Before this section existed, a CLI-configured target — or a run an agent
+ * kicked off — was invisible from the web app, which read exactly like
+ * "deploy doesn't work" even when it had.
+ */
+function DeployTargetsSection({
+  targetsQuery,
+  runsQuery,
+}: {
+  targetsQuery: UseQueryResult<DeployListTargetsResult>;
+  runsQuery: UseQueryResult<DeployListRunsResult>;
+}) {
+  const targets = targetsQuery.data?.targets ?? [];
+  const targetsById = new Map(targets.map((target) => [target.id, target] as const));
+  const runs = runsQuery.data?.runs ?? [];
+  const nowMs = Date.now();
+
+  return (
+    <section className="grid gap-2" data-testid="infra-deploy-targets">
+      <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        Deploy targets
+      </h2>
+      {targetsQuery.isLoading ? (
+        <Spinner />
+      ) : targetsQuery.error ? (
+        <Card className="p-4 text-sm" data-testid="infra-deploy-targets-error">
+          {targetsQuery.error instanceof Error
+            ? targetsQuery.error.message
+            : "Could not read this project's deploy targets."}
+        </Card>
+      ) : targets.length === 0 ? (
+        <Card className="p-4" data-testid="infra-deploy-targets-empty">
+          <CardTitle className="text-sm">No deploy targets yet</CardTitle>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            Add one from the CLI:{" "}
+            <code className="text-foreground">
+              t3 deploy add --project &lt;projectId&gt; --name "Build docs" --command "npm run
+              build"
+            </code>
+          </p>
+        </Card>
+      ) : (
+        targets.map((target) => <DeployTargetCard key={target.id} target={target} />)
+      )}
+
+      {runs.length > 0 ? (
+        <div className="mt-1 grid gap-1.5" data-testid="infra-deploy-runs">
+          <p className="text-[11px] text-muted-foreground">Recent runs</p>
+          {runs.map((run) => (
+            <DeployRunRow
+              key={run.id}
+              run={run}
+              targetName={targetsById.get(run.targetId)?.name ?? null}
+              nowMs={nowMs}
+            />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function DeployTargetCard({ target }: { target: DeployTarget }) {
+  const destination =
+    target.kind === "ssh" && target.ssh
+      ? `${target.ssh.user}@${target.ssh.host}`
+      : "this workspace";
+
+  return (
+    <Card className="p-4" data-testid="infra-deploy-target" data-kind={target.kind}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <span className="text-sm font-medium text-foreground">{target.name}</span>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {target.kind === "ssh" ? "over SSH to " : "runs in "}
+            {destination}
+          </p>
+        </div>
+        <span className="text-[11px] text-muted-foreground">{target.kind}</span>
+      </div>
+      <p className="mt-1.5 truncate text-[11px] text-muted-foreground">
+        <code className="text-foreground">{target.command}</code>
+      </p>
+    </Card>
+  );
+}
+
+function DeployRunRow({
+  run,
+  targetName,
+  nowMs,
+}: {
+  run: DeployRun;
+  targetName: string | null;
+  nowMs: number;
+}) {
+  const age = describeSince(run.startedAt, nowMs);
+
+  return (
+    <Card className="p-3 text-xs" data-testid="infra-deploy-run" data-status={run.status}>
+      <div className="flex items-center gap-1.5">
+        {run.status === "succeeded" ? (
+          <CircleCheckIcon className="size-3.5 shrink-0 text-emerald-500" />
+        ) : run.status === "failed" ? (
+          <XCircleIcon className="size-3.5 shrink-0 text-destructive" />
+        ) : (
+          <CircleDashedIcon className="size-3.5 shrink-0 text-amber-500" />
+        )}
+        <span className="font-medium text-foreground">{targetName ?? "Deleted target"}</span>
+        <span className="text-muted-foreground">
+          {run.status}
+          {age === null ? "" : ` · ${age} ago`}
+        </span>
+      </div>
+    </Card>
   );
 }
 

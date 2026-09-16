@@ -51,6 +51,7 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { PublishPackDialog } from "./packDashboard/PublishPackDialog";
 import { readEnvironmentApi } from "../environmentApi";
+import { workspaceFileUrl } from "../lib/workspaceFileUrl";
 import { readEnvironmentConnection } from "../environments/runtime";
 import { cn, newCommandId } from "../lib/utils";
 import {
@@ -637,6 +638,46 @@ function WorkspaceRow({
   const [publishingProject, setPublishingProject] = useState<WorkspaceDashboardProject | null>(
     null,
   );
+  const [dropTargetProjectKey, setDropTargetProjectKey] = useState<string | null>(null);
+  const [uploadingProjectKey, setUploadingProjectKey] = useState<string | null>(null);
+
+  const uploadFilesToProject = useCallback(
+    async (projectEntry: WorkspaceDashboardProject, files: readonly File[]) => {
+      const projectKey = `${projectEntry.project.environmentId}:${projectEntry.project.id}`;
+      if (files.length === 0) {
+        return;
+      }
+      setUploadingProjectKey(projectKey);
+      try {
+        for (const file of files) {
+          const relativePath = file.name.trim().replaceAll("\\", "/").replace(/^\/+/, "");
+          const response = await fetch(
+            workspaceFileUrl(projectEntry.project.cwd, relativePath),
+            { method: "POST", credentials: "same-origin", body: file },
+          );
+          if (!response.ok) {
+            throw new Error(
+              (await response.text().catch(() => "")) || `Upload failed (${response.status}).`,
+            );
+          }
+        }
+        toastManager.add({
+          type: "success",
+          title: files.length === 1 ? "File uploaded" : "Files uploaded",
+          description: `${files.length === 1 ? (files[0]?.name ?? "Upload complete") : `${files.length} files`} → ${projectEntry.project.name}`,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not upload files",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      } finally {
+        setUploadingProjectKey((current) => (current === projectKey ? null : current));
+      }
+    },
+    [],
+  );
 
   return (
     <div className="px-4 py-3" data-testid="dashboard-workspace-row">
@@ -728,10 +769,35 @@ function WorkspaceRow({
 
       {entry.projects.length > 0 ? (
         <div className="mt-3 grid gap-2">
-          {entry.projects.slice(0, 4).map((projectEntry) => (
+          {entry.projects.slice(0, 4).map((projectEntry) => {
+            const projectKey = `${projectEntry.project.environmentId}:${projectEntry.project.id}`;
+            const isDropTarget = dropTargetProjectKey === projectKey;
+            const isUploading = uploadingProjectKey === projectKey;
+            return (
             <div
-              key={`${projectEntry.project.environmentId}:${projectEntry.project.id}`}
-              className="group flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-background/70 pr-1.5 text-xs transition-colors hover:bg-accent/70"
+              key={projectKey}
+              className={cn(
+                "group flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-background/70 pr-1.5 text-xs transition-colors hover:bg-accent/70",
+                isDropTarget && "border-ring bg-accent/70",
+              )}
+              onDragOver={(event) => {
+                if (![...event.dataTransfer.items].some((item) => item.kind === "file")) {
+                  return;
+                }
+                event.preventDefault();
+                setDropTargetProjectKey(projectKey);
+              }}
+              onDragLeave={() =>
+                setDropTargetProjectKey((current) => (current === projectKey ? null : current))
+              }
+              onDrop={(event) => {
+                if (![...event.dataTransfer.items].some((item) => item.kind === "file")) {
+                  return;
+                }
+                event.preventDefault();
+                setDropTargetProjectKey(null);
+                void uploadFilesToProject(projectEntry, [...event.dataTransfer.files]);
+              }}
             >
               <button
                 type="button"
@@ -744,9 +810,11 @@ function WorkspaceRow({
                   {projectEntry.project.name}
                 </span>
                 <span className="shrink-0 text-muted-foreground">
-                  {projectEntry.threadCount > 0
-                    ? formatCount(projectEntry.threadCount, "session")
-                    : "Start session"}
+                  {isUploading
+                    ? "Uploading…"
+                    : projectEntry.threadCount > 0
+                      ? formatCount(projectEntry.threadCount, "session")
+                      : "Start session"}
                 </span>
               </button>
               {/* Labelled rather than an icon alone: publishing was reachable
@@ -790,7 +858,8 @@ function WorkspaceRow({
                 <ChartNoAxesColumnIcon className="size-3.5" />
               </Link>
             </div>
-          ))}
+            );
+          })}
           {entry.projects.length > 4 ? (
             <div className="px-2.5 text-xs text-muted-foreground">
               +{entry.projects.length - 4} more projects

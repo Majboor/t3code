@@ -28,6 +28,17 @@ import { Effect, Layer, Option, Schema, Struct } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
+/**
+ * A busy thread's activity log grows without end — nothing ever prunes it.
+ * Left uncapped, a single `getSnapshot()` response scales with the lifetime
+ * activity of every thread on the instance, which is what let one instance's
+ * full snapshot grow to 21MB and saturate a caller's connection on a tight
+ * poll loop (see logicpacks-agent-working-notes memory, 2026-09-14/15
+ * incident). Keeping only the most recent entries per thread bounds the
+ * response without touching what's actually stored.
+ */
+const SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD = 200;
+
 import {
   isPersistenceError,
   toPersistenceDecodeError,
@@ -831,6 +842,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 activitiesByThread.set(row.threadId, threadActivities);
               }
 
+              for (const [threadId, threadActivities] of activitiesByThread) {
+                if (threadActivities.length > SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD) {
+                  activitiesByThread.set(
+                    threadId,
+                    threadActivities.slice(-SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD),
+                  );
+                }
+              }
+
               for (const row of checkpointRows) {
                 updatedAt = maxIso(updatedAt, row.completedAt);
                 const threadCheckpoints = checkpointsByThread.get(row.threadId) ?? [];
@@ -1396,7 +1416,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
         })),
-        activities: activityRows.map((row) => {
+        // Same unbounded-growth problem as getSnapshot's activity log, but
+        // felt directly here: every thread open/switch re-sends this whole
+        // array over the socket, so a long-running thread's activity history
+        // makes every single switch into it slow and payload-heavy — the
+        // "long chats and you jump between each again and again" complaint.
+        activities: activityRows.slice(-SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD).map((row) => {
           const activity = {
             id: row.activityId,
             tone: row.tone,

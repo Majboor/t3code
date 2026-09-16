@@ -11,7 +11,14 @@ import type {
   AnalyticsQueryInput,
   AnalyticsQueryResult,
 } from "./analytics.ts";
-import type { DeploymentListInput, DeploymentListResult } from "./deploy.ts";
+import type {
+  DeploymentListInput,
+  DeploymentListResult,
+  DeployListRunsInput,
+  DeployListRunsResult,
+  DeployListTargetsInput,
+  DeployListTargetsResult,
+} from "./deploy.ts";
 import type {
   PortCheckInput,
   PortCheckResult,
@@ -54,10 +61,14 @@ import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem
 import type {
   ProjectCreateEntryInput,
   ProjectCreateEntryResult,
+  ProjectDeleteEntryInput,
+  ProjectDeleteEntryResult,
   ProjectListDirectoryInput,
   ProjectListDirectoryResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRenameEntryInput,
+  ProjectRenameEntryResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -435,6 +446,8 @@ export interface EnvironmentApi {
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
     createEntry: (input: ProjectCreateEntryInput) => Promise<ProjectCreateEntryResult>;
+    deleteEntry: (input: ProjectDeleteEntryInput) => Promise<ProjectDeleteEntryResult>;
+    renameEntry: (input: ProjectRenameEntryInput) => Promise<ProjectRenameEntryResult>;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
@@ -576,8 +589,12 @@ export interface EnvironmentApi {
   /**
    * Reading only, for the same reason: registering a deployment is a write into
    * a project's shape, and the app's job here is to show what is already live.
+   * Adding or running a deploy target stays on the CLI for the same reason —
+   * this only shows what targets and runs already exist.
    */
   deploys: {
+    listTargets: (input: DeployListTargetsInput) => Promise<DeployListTargetsResult>;
+    listRuns: (input: DeployListRunsInput) => Promise<DeployListRunsResult>;
     listDeployments: (input: DeploymentListInput) => Promise<DeploymentListResult>;
   };
   /**

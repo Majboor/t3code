@@ -126,6 +126,8 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): WebEnvironmentApi 
       searchEntries: rpcClient.projects.searchEntries,
       writeFile: rpcClient.projects.writeFile,
       createEntry: rpcClient.projects.createEntry,
+      deleteEntry: rpcClient.projects.deleteEntry,
+      renameEntry: rpcClient.projects.renameEntry,
     },
     filesystem: {
       browse: rpcClient.filesystem.browse,
@@ -198,6 +200,8 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): WebEnvironmentApi 
       query: rpcClient.analytics.query,
     },
     deploys: {
+      listTargets: rpcClient.deploys.listTargets,
+      listRuns: rpcClient.deploys.listRuns,
       listDeployments: rpcClient.deploys.listDeployments,
     },
     environment: {

@@ -130,3 +130,42 @@ export class ProjectCreateEntryError extends Schema.TaggedErrorClass<ProjectCrea
     cause: Schema.optional(Schema.Defect),
   },
 ) {}
+
+export const ProjectDeleteEntryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: ProjectRelativePath,
+});
+export type ProjectDeleteEntryInput = typeof ProjectDeleteEntryInput.Type;
+
+export const ProjectDeleteEntryResult = Schema.Struct({
+  relativePath: ProjectRelativePath,
+});
+export type ProjectDeleteEntryResult = typeof ProjectDeleteEntryResult.Type;
+
+export class ProjectDeleteEntryError extends Schema.TaggedErrorClass<ProjectDeleteEntryError>()(
+  "ProjectDeleteEntryError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}
+
+export const ProjectRenameEntryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: ProjectRelativePath,
+  newRelativePath: ProjectRelativePath,
+});
+export type ProjectRenameEntryInput = typeof ProjectRenameEntryInput.Type;
+
+export const ProjectRenameEntryResult = Schema.Struct({
+  relativePath: ProjectRelativePath,
+});
+export type ProjectRenameEntryResult = typeof ProjectRenameEntryResult.Type;
+
+export class ProjectRenameEntryError extends Schema.TaggedErrorClass<ProjectRenameEntryError>()(
+  "ProjectRenameEntryError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}

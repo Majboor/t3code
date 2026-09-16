@@ -28,8 +28,20 @@ import Mime from "@effect/platform-node/Mime";
 
 import { respondToAuthError } from "../auth/http.ts";
 import { ServerAuth } from "../auth/Services/ServerAuth.ts";
+import { WorkspaceEntries } from "./Services/WorkspaceEntries.ts";
 
 export const WORKSPACE_FILE_PATH = "/api/workspace/file";
+
+/**
+ * Safety ceiling for `POST /api/workspace/file`, independent of the much
+ * smaller limits the WS RPC `file.write` path enforces for hosted/public
+ * tenants (`DEFAULT_PUBLIC_ACCESS_LIMITS.maxFileUploadBytes` in ws.ts). This
+ * route exists so uploads don't have to go over the WS RPC envelope at all
+ * (base64 inflation + RPC payload/rate limits were producing the "large file
+ * upload disconnects" bug), so it only needs a generous disk-safety ceiling,
+ * not the same per-tenant metering.
+ */
+const UPLOAD_MAX_BYTES = 512 * 1024 * 1024;
 
 /** Media and text are safe to inline; anything else is sent as a download. */
 const INLINE_TYPES =
@@ -167,5 +179,68 @@ export const workspaceFileRouteLayer = HttpRouter.add(
         "content-disposition": `${inline ? "inline" : "attachment"}; filename="${downloadName}"`,
       },
     });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+/**
+ * `POST /api/workspace/file?cwd=<project root>&path=<relative path>` — upload
+ * a file's raw bytes (any format, e.g. `.glb`) straight to disk.
+ *
+ * Uploads used to only be reachable over the WS RPC `file.write` method,
+ * base64-encoded inside the `{_tag:"Request"}` envelope. That inflates the
+ * payload ~33%, competes with the WS RPC per-request/per-minute size and rate
+ * limits meant for control-plane calls, and for anything more than a few MB
+ * would make the whole socket appear to hang or drop ("upload for large files
+ * just doesn't work / says disconnected"). This route streams the request
+ * body straight to a file instead, with no format restriction.
+ */
+export const workspaceFileUploadRouteLayer = HttpRouter.add(
+  "POST",
+  WORKSPACE_FILE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    yield* serverAuth.authenticateHttpRequest(request);
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const workspaceEntries = yield* WorkspaceEntries;
+
+    const url = HttpServerRequest.toURL(request);
+    const params = Option.isSome(url) ? url.value.searchParams : new URLSearchParams();
+    const cwd = params.get("cwd") ?? "";
+    const relativePath = params.get("path") ?? "";
+    if (!cwd.startsWith("/") || cwd.split("/").includes("..") || !relativePath) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+    const root = path.resolve(cwd);
+    const target = path.resolve(root, relativePath);
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+      return HttpServerResponse.text("Forbidden", { status: 403 });
+    }
+
+    const buffer = yield* request.arrayBuffer;
+    if (buffer.byteLength > UPLOAD_MAX_BYTES) {
+      return HttpServerResponse.text(
+        `File exceeds the ${Math.floor(UPLOAD_MAX_BYTES / (1024 * 1024))}MB upload limit.`,
+        { status: 413 },
+      );
+    }
+
+    yield* fileSystem
+      .makeDirectory(path.dirname(target), { recursive: true })
+      .pipe(Effect.catch(() => Effect.void));
+    const writeSucceeded = yield* fileSystem
+      .writeFile(target, new Uint8Array(buffer))
+      .pipe(
+        Effect.map(() => true),
+        Effect.catch(() => Effect.succeed(false)),
+      );
+    if (!writeSucceeded) {
+      return HttpServerResponse.text("Internal Server Error", { status: 500 });
+    }
+
+    yield* workspaceEntries.invalidate(cwd);
+
+    return HttpServerResponse.jsonUnsafe({ relativePath: path.relative(root, target) || "." });
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
