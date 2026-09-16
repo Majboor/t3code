@@ -9,7 +9,7 @@ import {
   UserId,
   type TenantMembership,
 } from "@t3tools/contracts";
-import { Effect, Layer } from "effect";
+import { Duration, Effect, Layer } from "effect";
 import { vi } from "vitest";
 
 import type { ServerConfigShape } from "../../config.ts";
@@ -18,7 +18,11 @@ import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepository } from "../../persistence/Services/Tenancy.ts";
 import { BootstrapCredentialError } from "../Services/BootstrapCredentialService.ts";
-import { ServerAuth, type ServerAuthShape } from "../Services/ServerAuth.ts";
+import {
+  resolveAuthenticatedUserId,
+  ServerAuth,
+  type ServerAuthShape,
+} from "../Services/ServerAuth.ts";
 import { ServerAuthLive, toBootstrapExchangeAuthError } from "./ServerAuth.ts";
 import { ServerSecretStoreLive } from "./ServerSecretStore.ts";
 import type { SupabaseJwtClaims, SupabaseJwks } from "../supabaseJwt.ts";
@@ -192,6 +196,67 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
       expect(error.status).toBe(500);
       expect(error.message).toBe("Failed to validate bootstrap credential.");
     }),
+  );
+
+  /**
+   * The whole value of a delegated session is the identity on it. A token that
+   * authenticates as *somebody* but not as this person would not fail loudly —
+   * every account-scoped lookup downstream would simply find nothing, and an
+   * agent driving a box would be told the box does not exist.
+   */
+  it.effect("issues a delegated session that authenticates as the named user", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+      const userId = UserId.make("supabase:delegated-user");
+
+      const issued = yield* serverAuth.issueDelegatedUserSession({
+        userId,
+        label: "agent turn (claude)",
+        ttl: Duration.hours(12),
+      });
+      const verified = yield* serverAuth.authenticateHttpRequest(makeBearerRequest(issued.token));
+
+      expect(resolveAuthenticatedUserId(verified)).toBe(userId);
+      expect(verified.method).toBe("bearer-session-token");
+      // Handed to a process, so never wider than the person it acts for.
+      expect(verified.role).toBe("client");
+    }).pipe(Effect.provide(makeServerAuthLayer())),
+  );
+
+  it.effect("lists a delegated session so a person can see it and revoke it", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+
+      const issued = yield* serverAuth.issueDelegatedUserSession({
+        userId: UserId.make("supabase:delegated-user"),
+        label: "agent turn (codex)",
+        ttl: Duration.hours(12),
+      });
+      // Revoking is done from somewhere else — a person's own session — because
+      // a session may not revoke itself. A second delegated one stands in for
+      // that here, since what is under test is whether the first is reachable.
+      const elsewhere = yield* serverAuth.issueDelegatedUserSession({
+        userId: UserId.make("supabase:delegated-user"),
+        label: "the person's own session",
+        ttl: Duration.hours(12),
+      });
+      const listed = yield* serverAuth.listClientSessions(elsewhere.sessionId);
+      const entry = listed.find((session) => session.sessionId === issued.sessionId);
+
+      expect(entry?.client.label).toBe("agent turn (codex)");
+      expect(entry?.client.deviceType).toBe("bot");
+
+      const revoked = yield* serverAuth.revokeClientSession(elsewhere.sessionId, issued.sessionId);
+      const afterRevoke = yield* serverAuth
+        .authenticateHttpRequest(makeBearerRequest(issued.token))
+        .pipe(
+          Effect.as("accepted" as const),
+          Effect.catch(() => Effect.succeed("rejected" as const)),
+        );
+
+      expect(revoked).toBe(true);
+      expect(afterRevoke).toBe("rejected");
+    }).pipe(Effect.provide(makeServerAuthLayer())),
   );
 
   it.effect("issues client pairing credentials by default", () =>

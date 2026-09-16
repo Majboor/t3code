@@ -686,7 +686,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (routed.isActive) {
           yield* routed.adapter.stopSession(routed.threadId);
         }
-        yield* directory.remove(input.threadId);
+        /**
+         * Keep the binding (and with it the resume cursor) when a session stops:
+         * the next turn on this thread must resume the provider's transcript
+         * rather than start a blank conversation. Deleting the row here was why a
+         * stopped/crashed/restarted thread came back with no memory of itself.
+         */
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          status: "stopped",
+        });
         yield* analytics.record("provider.session.stopped", {
           provider: routed.adapter.provider,
         });

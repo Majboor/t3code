@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 
 import { ensureAgentCliShim, withShimOnPath } from "./agentCliShim.ts";
 import { randomUUID } from "node:crypto";
@@ -155,6 +156,7 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
 ];
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
+  "no rollout found",
   "missing thread",
   "no such thread",
   "unknown thread",
@@ -444,6 +446,94 @@ export interface CodexAppServerManagerEvents {
   event: [event: ProviderEvent];
 }
 
+function listDirs(dir: string): ReadonlyArray<string> {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(dir, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+/** Codex keeps one rollout file per thread under `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<threadId>.jsonl`. */
+function findCodexRollout(sessionsDir: string, providerThreadId: string, depth = 0): string | null {
+  let entries: ReadonlyArray<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  try {
+    entries = readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    const full = join(sessionsDir, entry.name);
+    if (entry.isFile() && entry.name.startsWith("rollout-") && entry.name.endsWith(`-${providerThreadId}.jsonl`)) {
+      return full;
+    }
+    if (entry.isDirectory() && depth < 4) {
+      const nested = findCodexRollout(full, providerThreadId, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+/**
+ * Every Codex home on this machine that could hold the rollout of a thread a teammate started:
+ * tenant-runtime provider homes, per-user provider-auth homes, the operator's `~/.codex`, and
+ * siblings of the active home.
+ */
+function candidateCodexHomes(activeHome: string): ReadonlyArray<string> {
+  const found = new Set<string>();
+  const t3Home = process.env["T3CODE_HOME"];
+  if (t3Home !== undefined && t3Home.length > 0) {
+    for (const tenant of listDirs(join(t3Home, "tenant-runtimes"))) {
+      for (const user of listDirs(join(tenant, "provider-homes"))) {
+        found.add(join(user, "codex"));
+      }
+    }
+    for (const user of listDirs(join(t3Home, "userdata", "provider-auth"))) {
+      found.add(join(user, "codex"));
+    }
+  }
+  found.add(join(homedir(), ".codex"));
+  for (const sibling of listDirs(dirname(activeHome))) {
+    found.add(sibling);
+  }
+  found.delete(activeHome);
+  return Array.from(found);
+}
+
+/**
+ * A thread shared inside a workspace can be continued by a different member than the one who
+ * started it, and each member runs Codex in their own home. "present" when the active home has
+ * the rollout, "copied" when it was brought over from another home, "missing" when it exists
+ * nowhere (then the caller must start a fresh thread instead of asking Codex to resume).
+ */
+function ensureCodexRollout(
+  activeHome: string,
+  providerThreadId: string,
+): "present" | "copied" | "missing" {
+  const sessionsDir = join(activeHome, "sessions");
+  if (findCodexRollout(sessionsDir, providerThreadId)) {
+    return "present";
+  }
+  for (const home of candidateCodexHomes(activeHome)) {
+    const source = findCodexRollout(join(home, "sessions"), providerThreadId);
+    if (!source) continue;
+    try {
+      const target = join(sessionsDir, relative(join(home, "sessions"), source));
+      mkdirSync(dirname(target), { recursive: true });
+      if (!existsSync(target)) {
+        copyFileSync(source, target);
+      }
+      return "copied";
+    } catch {
+      return "missing";
+    }
+  }
+  return "missing";
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
 
@@ -581,7 +671,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...sessionOverrides,
         experimentalRawEvents: false,
       };
-      const resumeThreadId = readResumeThreadId(input);
+      const requestedResumeThreadId = readResumeThreadId(input);
+      const rolloutOutcome = requestedResumeThreadId
+        ? ensureCodexRollout(codexHomePath ?? join(homedir(), ".codex"), requestedResumeThreadId)
+        : "none";
+      if (rolloutOutcome === "copied" || rolloutOutcome === "missing") {
+        await Effect.logWarning(
+          rolloutOutcome === "copied"
+            ? "codex rollout copied from a teammate's home for resume"
+            : "codex rollout not found in any home; starting a fresh thread",
+          { threadId, resumeThreadId: requestedResumeThreadId, codexHome: codexHomePath ?? null },
+        ).pipe(this.runPromise);
+      }
+      const resumeThreadId = rolloutOutcome === "missing" ? undefined : requestedResumeThreadId;
       this.emitLifecycleEvent(
         context,
         "session/threadOpenRequested",

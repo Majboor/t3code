@@ -1219,7 +1219,7 @@ try {
   sh(
     `([ -f ${JSON.stringify(path.join(PROJECT_DIR, "app.pid"))} ] && kill "$(cat ${JSON.stringify(path.join(PROJECT_DIR, "app.pid"))})" 2>/dev/null) || true`,
   );
-  sh(`pkill -f "b 127.0.0.1:${PORT}" 2>/dev/null || true`);
+  sh(`pkill -f "[b] 127.0.0.1:${PORT}" 2>/dev/null || true`);
   await browser.close().catch(() => undefined);
   if (!KEEP) {
     // A worktree left behind keeps the directory alive under a different name.

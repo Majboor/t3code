@@ -22,6 +22,7 @@ import {
   SynchronizedRef,
 } from "effect";
 
+import { BOX_HUB_TOKEN_ENV } from "../../box/hubProtocol.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   increment,
@@ -678,6 +679,33 @@ function createTerminalSpawnEnv(
     }
   }
   return spawnEnv;
+}
+
+/**
+ * Whether an environment changed in a way that has to restart the shell.
+ *
+ * Everything in a runtime environment is a reason to respawn except the hub
+ * credential, which is minted fresh every time a terminal is opened and would
+ * therefore differ on every reattach — killing the shell and clearing the
+ * scrollback each time somebody switched tabs or reconnected. That is a far
+ * worse outcome than a running shell holding a slightly older token, and the
+ * older token is not even a problem worth solving here: the value cannot be
+ * changed under a live process anyway, and a restart, which respawns for its own
+ * reasons, picks up the newest one.
+ */
+function runtimeEnvRequiresRespawn(
+  current: Record<string, string> | null,
+  next: Record<string, string> | null,
+): boolean {
+  return !Equal.equals(withoutHubCredential(current), withoutHubCredential(next));
+}
+
+function withoutHubCredential(env: Record<string, string> | null): Record<string, string> | null {
+  if (env === null || !(BOX_HUB_TOKEN_ENV in env)) return env;
+  const { [BOX_HUB_TOKEN_ENV]: _credential, ...rest } = env;
+  // Null rather than an empty object, so "only ever had a credential in it" and
+  // "had nothing in it" compare equal — they mean the same thing to a shell.
+  return Object.keys(rest).length === 0 ? null : rest;
 }
 
 function normalizedRuntimeEnv(
@@ -1682,13 +1710,18 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           const currentRuntimeEnv = liveSession.runtimeEnv;
           const targetCols = input.cols ?? liveSession.cols;
           const targetRows = input.rows ?? liveSession.rows;
-          const runtimeEnvChanged = !Equal.equals(currentRuntimeEnv, nextRuntimeEnv);
+          const runtimeEnvChanged = runtimeEnvRequiresRespawn(currentRuntimeEnv, nextRuntimeEnv);
+          // Recorded whatever happens below, because it is what the *next* spawn
+          // will use. A shell already running cannot be told a new value — a
+          // process's environment is fixed at exec — and the only way to hand it
+          // one is to kill it, which is a decision the branches below make on
+          // grounds of their own.
+          liveSession.runtimeEnv = nextRuntimeEnv;
 
           if (liveSession.cwd !== input.cwd || runtimeEnvChanged) {
             yield* stopProcess(liveSession);
             liveSession.cwd = input.cwd;
             liveSession.worktreePath = input.worktreePath ?? null;
-            liveSession.runtimeEnv = nextRuntimeEnv;
             liveSession.history = "";
             liveSession.pendingHistoryControlSequence = "";
             liveSession.pendingProcessEvents = [];
@@ -1700,7 +1733,6 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               liveSession.history,
             );
           } else if (liveSession.status === "exited" || liveSession.status === "error") {
-            liveSession.runtimeEnv = nextRuntimeEnv;
             liveSession.worktreePath = input.worktreePath ?? null;
             liveSession.history = "";
             liveSession.pendingHistoryControlSequence = "";

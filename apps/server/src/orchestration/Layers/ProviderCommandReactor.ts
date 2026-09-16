@@ -25,6 +25,8 @@ import {
 import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import { ServerAuth } from "../../auth/Services/ServerAuth.ts";
+import { BOX_HUB_TOKEN_ENV, HUB_DELEGATED_SESSION_TTL } from "../../box/hubProtocol.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { CollaborationService } from "../../collaboration/Services/CollaborationService.ts";
 import { ServerConfig } from "../../config.ts";
@@ -254,6 +256,13 @@ const make = Effect.gen(function* () {
    * single-user box — still has turns to run.
    */
   const collaborationService = yield* Effect.serviceOption(CollaborationService);
+  /**
+   * Optional for the same reason, and with a smaller consequence: without it the
+   * agent simply has no hub credential and `t3 box` refuses in the words it
+   * already has. A runtime assembled without an auth stack — a test — should not
+   * stop having turns because of a credential it has no way to mint.
+   */
+  const serverAuth = yield* Effect.serviceOption(ServerAuth);
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -446,7 +455,52 @@ const make = Effect.gen(function* () {
         };
       });
 
-    const resolveProviderLaunchEnvironment = (input: {
+    /**
+     * The credential the agent drives a box with, and the last link in the
+     * chain.
+     *
+     * Everything else was already built — a machine dials a hub, the hub
+     * dispatches verbs to it, a shell drives it — and an agent asked to use any
+     * of it got a worded "no credential" refusal, because nothing had ever put
+     * one in its environment. It is minted rather than borrowed: the person's
+     * own session belongs to a browser tab and outlives the work, while this one
+     * is issued for this turn's author, expires on its own, and shows up in
+     * `t3 auth session list` as something a person can revoke by hand.
+     *
+     * Only the token. The hub's address is deliberately left unset, so the CLI
+     * inside the turn falls through to its usual answer — the server running
+     * from this base directory — which is the same hub by construction, and one
+     * fewer thing to get out of step.
+     *
+     * Nothing here is fatal. A turn that cannot get a credential is a turn where
+     * `t3 box` says what it said before, which is a sentence a reader can act
+     * on; failing the turn over it would take away the work as well.
+     */
+    const resolveHubCredentialEnvironment = (provider: ProviderKind) =>
+      Effect.gen(function* () {
+        if (Option.isNone(serverAuth)) return {};
+        if (actingUserId === undefined || actingUserId === null) return {};
+
+        const issued = yield* serverAuth.value
+          .issueDelegatedUserSession({
+            userId: actingUserId,
+            label: `agent turn (${provider})`,
+            ttl: HUB_DELEGATED_SESSION_TTL,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("provider command reactor could not mint a hub credential", {
+                threadId,
+                provider,
+                reason: error.message,
+              }).pipe(Effect.as(undefined)),
+            ),
+          );
+
+        return issued === undefined ? {} : { [BOX_HUB_TOKEN_ENV]: issued.token };
+      });
+
+    const resolveProviderCredentialEnvironment = (input: {
       readonly provider: ProviderKind;
       readonly cwd: string | undefined;
     }) =>
@@ -533,6 +587,25 @@ const make = Effect.gen(function* () {
         return {
           env: plan.env,
         };
+      });
+
+    /**
+     * One seam, so both branches above get the same treatment.
+     *
+     * The provider credential and the hub credential answer different questions
+     * — who pays for the model, and whose boxes these are — and they are merged
+     * here rather than in each branch so that adding a branch cannot quietly
+     * drop one of them. The hub token goes on last because it is the only key
+     * this function claims outright.
+     */
+    const resolveProviderLaunchEnvironment = (input: {
+      readonly provider: ProviderKind;
+      readonly cwd: string | undefined;
+    }) =>
+      Effect.gen(function* () {
+        const credentials = yield* resolveProviderCredentialEnvironment(input);
+        const hub = yield* resolveHubCredentialEnvironment(input.provider);
+        return { env: { ...credentials.env, ...hub } };
       });
 
     const resolveActiveSession = (threadId: ThreadId) =>

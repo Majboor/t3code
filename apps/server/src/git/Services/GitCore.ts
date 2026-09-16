@@ -21,6 +21,8 @@ import type {
   GitListBranchesInput,
   GitListBranchesResult,
   GitAbortMergeResult,
+  GitResolveConflictsInput,
+  GitResolveConflictsResult,
   GitCompareBranchesInput,
   GitCompareBranchesResult,
   GitMergeBranchInput,
@@ -344,6 +346,14 @@ export interface GitCoreShape {
    * Abort an in-progress merge or rebase.
    */
   readonly abortMerge: (cwd: string) => Effect.Effect<GitAbortMergeResult, GitCommandError>;
+
+  /**
+   * Decide conflicted files by taking one side whole, then finish the merge
+   * commit once nothing is left undecided.
+   */
+  readonly resolveConflicts: (
+    input: GitResolveConflictsInput,
+  ) => Effect.Effect<GitResolveConflictsResult, GitCommandError>;
 }
 
 /**

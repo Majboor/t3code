@@ -53,31 +53,31 @@ wrong guess silently deletes the loser's work.
 The unit of agreement is the **base revision**: the content hash both sides last agreed on
 for a path. For every path, compare `local`, `remote` and `base`:
 
-| local vs base | remote vs base | outcome |
-|---|---|---|
-| same | same | nothing to do |
-| changed | same | upload local |
-| same | changed | download remote |
-| changed | changed, **same content** | agree; just advance the base — a coincidence, not a conflict |
-| changed | changed, different content | **conflict** |
-| deleted | same | delete remote, keep the local absence |
-| same | deleted | **keep local**, restore remote from it (rule 3) |
-| deleted | changed | **keep remote**, restore local from it (rule 3) |
-| changed | deleted | **keep local**, restore remote from it (rule 3) |
-| absent, no base | present | download |
-| present, no base | absent | upload |
+| local vs base    | remote vs base             | outcome                                                      |
+| ---------------- | -------------------------- | ------------------------------------------------------------ |
+| same             | same                       | nothing to do                                                |
+| changed          | same                       | upload local                                                 |
+| same             | changed                    | download remote                                              |
+| changed          | changed, **same content**  | agree; just advance the base — a coincidence, not a conflict |
+| changed          | changed, different content | **conflict**                                                 |
+| deleted          | same                       | delete remote, keep the local absence                        |
+| same             | deleted                    | **keep local**, restore remote from it (rule 3)              |
+| deleted          | changed                    | **keep remote**, restore local from it (rule 3)              |
+| changed          | deleted                    | **keep local**, restore remote from it (rule 3)              |
+| absent, no base  | present                    | download                                                     |
+| present, no base | absent                     | upload                                                       |
 
 Rows the first table did not cover, settled while building `reconcile.ts` and now binding:
 
-| case | outcome |
-|---|---|
-| base present, both sides absent | advance the base to a tombstone, so a stale base stops being reconsidered every pass |
-| no base, both sides present, identical bytes | advance the base — same coincidence rule as above |
-| no base, both sides present, different bytes | **conflict** |
-| a base tombstone | counts as "no base": nothing was agreed, so nothing can be deleted against it |
+| case                                         | outcome                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------ |
+| base present, both sides absent              | advance the base to a tombstone, so a stale base stops being reconsidered every pass |
+| no base, both sides present, identical bytes | advance the base — same coincidence rule as above                                    |
+| no base, both sides present, different bytes | **conflict**                                                                         |
+| a base tombstone                             | counts as "no base": nothing was agreed, so nothing can be deleted against it        |
 
 `deleted` and `null` mean the same thing on the local and remote sides. Whether a path is
-*gone* or *never existed* is derived from the base, not from a tombstone the scanner would
+_gone_ or _never existed_ is derived from the base, not from a tombstone the scanner would
 otherwise have to invent.
 
 **A conflict keeps both.** The remote version takes the path (so collaborators in the

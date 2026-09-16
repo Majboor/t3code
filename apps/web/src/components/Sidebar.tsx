@@ -59,7 +59,7 @@ import {
 } from "@t3tools/contracts/settings";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
-import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
+import { APP_BASE_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isMacPlatform, newCommandId } from "../lib/utils";
 import {
@@ -146,9 +146,11 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import {
   buildSidebarOwnerFilterOptions,
+  buildSidebarWorkspaceFilterOptions,
   getSidebarThreadIdsToPrewarm,
   doesSidebarProjectMatchQuery,
   doesSidebarProjectOwnerMatch,
+  doesSidebarProjectWorkspaceMatch,
   doesSidebarProjectSourceMatch,
   doesSidebarThreadMatchQuery,
   doesSidebarThreadStatusMatch,
@@ -167,6 +169,8 @@ import {
   ThreadStatusPill,
   type SidebarOwnerFilter,
   type SidebarOwnerFilterOption,
+  type SidebarWorkspaceFilter,
+  type SidebarWorkspaceFilterOption,
   type SidebarProjectSourceFilter,
   type SidebarThreadStatusFilter,
 } from "./Sidebar.logic";
@@ -227,6 +231,7 @@ const SIDEBAR_PROJECT_SOURCE_FILTER_LABELS: Record<SidebarProjectSourceFilter, s
   mixed: "Mixed",
 };
 const SIDEBAR_ALL_OWNER_FILTER_LABEL = "All owners";
+const SIDEBAR_ALL_WORKSPACE_FILTER_LABEL = "All workspaces";
 
 function threadJumpLabelMapsEqual(
   left: ReadonlyMap<string, string>,
@@ -2226,21 +2231,6 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
   );
 });
 
-function T3Wordmark() {
-  return (
-    <svg
-      aria-label="T3"
-      className="h-2.5 w-auto shrink-0 text-foreground"
-      viewBox="15.5309 37 94.3941 56.96"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M33.4509 93V47.56H15.5309V37H64.3309V47.56H46.4109V93H33.4509ZM86.7253 93.96C82.832 93.96 78.9653 93.4533 75.1253 92.44C71.2853 91.3733 68.032 89.88 65.3653 87.96L70.4053 78.04C72.5386 79.5867 75.0186 80.8133 77.8453 81.72C80.672 82.6267 83.5253 83.08 86.4053 83.08C89.6586 83.08 92.2186 82.44 94.0853 81.16C95.952 79.88 96.8853 78.12 96.8853 75.88C96.8853 73.7467 96.0586 72.0667 94.4053 70.84C92.752 69.6133 90.0853 69 86.4053 69H80.4853V60.44L96.0853 42.76L97.5253 47.4H68.1653V37H107.365V45.4L91.8453 63.08L85.2853 59.32H89.0453C95.9253 59.32 101.125 60.8667 104.645 63.96C108.165 67.0533 109.925 71.0267 109.925 75.88C109.925 79.0267 109.099 81.9867 107.445 84.76C105.792 87.48 103.259 89.6933 99.8453 91.4C96.432 93.1067 92.0586 93.96 86.7253 93.96Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
 
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
@@ -2395,9 +2385,8 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
               className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
               to="/"
             >
-              <T3Wordmark />
-              <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
-                Code
+              <span className="truncate text-sm font-semibold tracking-tight text-foreground">
+                {APP_BASE_NAME}
               </span>
               <span className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
                 {APP_STAGE_LABEL}
@@ -2435,10 +2424,13 @@ interface SidebarProjectsContentProps {
   sidebarProjectSourceFilter: SidebarProjectSourceFilter;
   sidebarOwnerFilter: SidebarOwnerFilter;
   sidebarOwnerFilterOptions: readonly SidebarOwnerFilterOption[];
+  sidebarWorkspaceFilter: SidebarWorkspaceFilter;
+  sidebarWorkspaceFilterOptions: readonly SidebarWorkspaceFilterOption[];
   onSidebarSearchQueryChange: (query: string) => void;
   onSidebarThreadStatusFilterChange: (filter: SidebarThreadStatusFilter) => void;
   onSidebarProjectSourceFilterChange: (filter: SidebarProjectSourceFilter) => void;
   onSidebarOwnerFilterChange: (filter: SidebarOwnerFilter) => void;
+  onSidebarWorkspaceFilterChange: (filter: SidebarWorkspaceFilter) => void;
   updateSettings: ReturnType<typeof useUpdateSettings>["updateSettings"];
   openAddProject: () => void;
   isManualProjectSorting: boolean;
@@ -2484,10 +2476,13 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     sidebarProjectSourceFilter,
     sidebarOwnerFilter,
     sidebarOwnerFilterOptions,
+    sidebarWorkspaceFilter,
+    sidebarWorkspaceFilterOptions,
     onSidebarSearchQueryChange,
     onSidebarThreadStatusFilterChange,
     onSidebarProjectSourceFilterChange,
     onSidebarOwnerFilterChange,
+    onSidebarWorkspaceFilterChange,
     updateSettings,
     openAddProject,
     isManualProjectSorting,
@@ -2552,14 +2547,17 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     threadStatusFilter: sidebarThreadStatusFilter,
     projectSourceFilter: sidebarProjectSourceFilter,
     ownerFilter: sidebarOwnerFilter,
+    workspaceFilter: sidebarWorkspaceFilter,
   });
   const handleClearSidebarFilters = useCallback(() => {
     onSidebarSearchQueryChange("");
     onSidebarThreadStatusFilterChange("all");
     onSidebarProjectSourceFilterChange("all");
     onSidebarOwnerFilterChange("all");
+    onSidebarWorkspaceFilterChange("all");
   }, [
     onSidebarOwnerFilterChange,
+    onSidebarWorkspaceFilterChange,
     onSidebarProjectSourceFilterChange,
     onSidebarSearchQueryChange,
     onSidebarThreadStatusFilterChange,
@@ -2756,6 +2754,42 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 ))}
               </SelectPopup>
             </Select>
+            <Select
+              value={sidebarWorkspaceFilter}
+              onValueChange={(value) => {
+                if (
+                  value === "all" ||
+                  sidebarWorkspaceFilterOptions.some((option) => option.value === value)
+                ) {
+                  onSidebarWorkspaceFilterChange(value as SidebarWorkspaceFilter);
+                }
+              }}
+            >
+              <SelectTrigger
+                aria-label="Filter projects by workspace"
+                data-testid="sidebar-workspace-filter"
+                className="col-span-2 h-7 w-full min-w-0 text-xs"
+                disabled={sidebarWorkspaceFilterOptions.length === 0}
+              >
+                <SelectValue>
+                  {sidebarWorkspaceFilter === "all"
+                    ? SIDEBAR_ALL_WORKSPACE_FILTER_LABEL
+                    : (sidebarWorkspaceFilterOptions.find(
+                        (option) => option.value === sidebarWorkspaceFilter,
+                      )?.label ?? SIDEBAR_ALL_WORKSPACE_FILTER_LABEL)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="start" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="all">
+                  {SIDEBAR_ALL_WORKSPACE_FILTER_LABEL}
+                </SelectItem>
+                {sidebarWorkspaceFilterOptions.map((option) => (
+                  <SelectItem key={option.value} hideIndicator value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
           </div>
           {activeSidebarFilterCount > 0 ? (
             <button
@@ -2902,6 +2936,8 @@ export default function Sidebar() {
   const [sidebarProjectSourceFilter, setSidebarProjectSourceFilter] =
     useState<SidebarProjectSourceFilter>("all");
   const [sidebarOwnerFilter, setSidebarOwnerFilter] = useState<SidebarOwnerFilter>("all");
+  const [sidebarWorkspaceFilter, setSidebarWorkspaceFilter] =
+    useState<SidebarWorkspaceFilter>("all");
   const selectedThreadCount = useThreadSelectionStore((s) => s.selectedThreadKeys.size);
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -3159,13 +3195,26 @@ export default function Sidebar() {
       setSidebarOwnerFilter("all");
     }
   }, [sidebarOwnerFilter, sidebarOwnerFilterOptions]);
+  const sidebarWorkspaceFilterOptions = useMemo(
+    () => buildSidebarWorkspaceFilterOptions(sortedProjects),
+    [sortedProjects],
+  );
+  useEffect(() => {
+    if (
+      sidebarWorkspaceFilter !== "all" &&
+      !sidebarWorkspaceFilterOptions.some((option) => option.value === sidebarWorkspaceFilter)
+    ) {
+      setSidebarWorkspaceFilter("all");
+    }
+  }, [sidebarWorkspaceFilter, sidebarWorkspaceFilterOptions]);
   const normalizedSidebarSearchQuery = normalizeSidebarSearchQuery(sidebarSearchQuery);
   const filteredSortedProjects = useMemo(() => {
     if (
       normalizedSidebarSearchQuery.length === 0 &&
       sidebarThreadStatusFilter === "all" &&
       sidebarProjectSourceFilter === "all" &&
-      sidebarOwnerFilter === "all"
+      sidebarOwnerFilter === "all" &&
+      sidebarWorkspaceFilter === "all"
     ) {
       return sortedProjects;
     }
@@ -3175,6 +3224,9 @@ export default function Sidebar() {
         return false;
       }
       if (!doesSidebarProjectOwnerMatch(project, sidebarOwnerFilter)) {
+        return false;
+      }
+      if (!doesSidebarProjectWorkspaceMatch(project, sidebarWorkspaceFilter)) {
         return false;
       }
       const projectMatchesSearchQuery = doesSidebarProjectMatchQuery(
@@ -3204,6 +3256,7 @@ export default function Sidebar() {
   }, [
     normalizedSidebarSearchQuery,
     sidebarOwnerFilter,
+    sidebarWorkspaceFilter,
     sidebarProjectSourceFilter,
     sidebarThreadStatusFilter,
     sortedProjects,
@@ -3628,10 +3681,13 @@ export default function Sidebar() {
             sidebarProjectSourceFilter={sidebarProjectSourceFilter}
             sidebarOwnerFilter={sidebarOwnerFilter}
             sidebarOwnerFilterOptions={sidebarOwnerFilterOptions}
+            sidebarWorkspaceFilter={sidebarWorkspaceFilter}
+            sidebarWorkspaceFilterOptions={sidebarWorkspaceFilterOptions}
             onSidebarSearchQueryChange={setSidebarSearchQuery}
             onSidebarThreadStatusFilterChange={setSidebarThreadStatusFilter}
             onSidebarProjectSourceFilterChange={setSidebarProjectSourceFilter}
             onSidebarOwnerFilterChange={setSidebarOwnerFilter}
+            onSidebarWorkspaceFilterChange={setSidebarWorkspaceFilter}
             updateSettings={updateSettings}
             openAddProject={openAddProjectCommandPalette}
             isManualProjectSorting={isManualProjectSorting}

@@ -94,6 +94,28 @@ export function formatBoxRun(report: BoxRunReport): string {
   return `${lines.join("\n")}${detached}${streams}${more}`;
 }
 
+/**
+ * The one place that decides whether a run counts as having failed.
+ *
+ * `formatBoxRun` has always *said* "failed with exit code 3" while the process
+ * exited 0, so anything scripting a box — CI, a pack, an agent chaining `&&` —
+ * read a failed remote command as success unless it parsed `--json`. This is the
+ * same judgement the wording above makes, pulled out so the exit status and the
+ * sentence can never disagree, and so it can be asserted without a box.
+ *
+ * A detached start is a success even though it has no exit code: nothing ran to
+ * completion, and the caller asked for exactly that. A signal and a timeout are
+ * failures — the command did not finish — and each says so in its own words,
+ * because "exit code null" is not a thing a reader can act on.
+ */
+export function describeBoxRunFailure(report: BoxRunReport): string | null {
+  if (report.detachedPid !== null) return null;
+  if (report.timedOut) return `Timed out: ${report.command}`;
+  if (report.signal !== null) return `Ended by ${report.signal}: ${report.command}`;
+  if (report.exitCode === null || report.exitCode === 0) return null;
+  return `Exit code ${report.exitCode}: ${report.command}`;
+}
+
 function ownershipLabel(service: EnvironmentService): string {
   switch (service.ownership) {
     case "ours":

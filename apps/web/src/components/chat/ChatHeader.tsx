@@ -138,7 +138,7 @@ export const ChatHeader = memo(function ChatHeader({
             {activeThreadTitle}
           </h2>
           {activeProjectName && (
-            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
+            <div className="flex min-w-0 shrink items-center gap-1.5">
               <span
                 className="min-w-0 max-w-36 truncate rounded-md border border-border/70 px-1.5 py-0.5 text-xs font-medium text-foreground"
                 title={activeProjectName}
@@ -158,11 +158,14 @@ export const ChatHeader = memo(function ChatHeader({
                 projectId={activeProjectId}
                 threadId={activeThreadId}
               />
-              <CollaborationUsageBar
-                environmentId={activeThreadEnvironmentId}
-                ownership={activeProjectOwnership}
-                projectId={activeProjectId}
-              />
+              {/* Token usage is a desktop-width detail; the people and the panel trigger stay on phones. */}
+              <div className="hidden items-center @md/header-actions:flex">
+                <CollaborationUsageBar
+                  environmentId={activeThreadEnvironmentId}
+                  ownership={activeProjectOwnership}
+                  projectId={activeProjectId}
+                />
+              </div>
             </div>
           ) : null}
         </div>

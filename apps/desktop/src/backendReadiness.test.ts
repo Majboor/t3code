@@ -27,6 +27,40 @@ describe("waitForHttpReady", () => {
     );
   });
 
+  /**
+   * The case that broke every desktop development run: a backend started with
+   * `--dev-url` answers `GET /` with a 302 to the dev server, the probe timed
+   * out on it, and the renderer never received its bootstrap.
+   */
+  it("treats a redirect as ready, because the backend answered", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 302, headers: { location: "/elsewhere" } }));
+
+    await waitForHttpReady("http://127.0.0.1:3773", {
+      fetchImpl,
+      timeoutMs: 1_000,
+      intervalMs: 0,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries a server error, which is not an answer to this question", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 500 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    await waitForHttpReady("http://127.0.0.1:3773", {
+      fetchImpl,
+      timeoutMs: 1_000,
+      intervalMs: 0,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("retries after a readiness request stalls past the per-request timeout", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

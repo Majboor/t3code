@@ -21,6 +21,7 @@ import {
   type WsRpcProtocolSocketUrlProvider,
 } from "./protocol";
 import { isTransportConnectionErrorMessage } from "./transportError";
+import { getWsConnectionStatus } from "./wsConnectionState";
 
 interface SubscribeOptions {
   readonly retryDelay?: Duration.Input;
@@ -32,6 +33,40 @@ interface RequestOptions {
 }
 
 const DEFAULT_SUBSCRIPTION_RETRY_DELAY_MS = Duration.millis(250);
+/**
+ * A request sent while the socket is down sits in the protocol's retry queue
+ * until the socket comes back, which left "Creating..." on screen for as long
+ * as the reconnect took (or forever, once retries ran out). Give it this long
+ * without a live connection, then fail it so the screen can say why.
+ */
+const DISCONNECTED_REQUEST_TIMEOUT_MS = 20_000;
+const DISCONNECTED_REQUEST_POLL_MS = 1_000;
+
+export const DISCONNECTED_REQUEST_MESSAGE =
+  "Not connected to the server. It is reconnecting; try again in a moment.";
+
+function rejectWhileDisconnected(): { readonly promise: Promise<never>; readonly cancel: () => void } {
+  let disconnectedSinceMs: number | null = null;
+  let intervalId: ReturnType<typeof setInterval> | null = null;
+  const promise = new Promise<never>((_, reject) => {
+    intervalId = setInterval(() => {
+      if (getWsConnectionStatus().phase === "connected") {
+        disconnectedSinceMs = null;
+        return;
+      }
+      disconnectedSinceMs ??= Date.now();
+      if (Date.now() - disconnectedSinceMs >= DISCONNECTED_REQUEST_TIMEOUT_MS) {
+        reject(new Error(DISCONNECTED_REQUEST_MESSAGE));
+      }
+    }, DISCONNECTED_REQUEST_POLL_MS);
+  });
+  return {
+    promise,
+    cancel: () => {
+      if (intervalId !== null) clearInterval(intervalId);
+    },
+  };
+}
 const NOOP: () => void = () => undefined;
 
 interface TransportSession {
@@ -73,8 +108,16 @@ export class WsTransport {
     }
 
     const session = this.session;
-    const client = await session.clientPromise;
-    return await session.runtime.runPromise(Effect.suspend(() => execute(client)));
+    const watchdog = rejectWhileDisconnected();
+    try {
+      const client = await Promise.race([session.clientPromise, watchdog.promise]);
+      return await Promise.race([
+        session.runtime.runPromise(Effect.suspend(() => execute(client))),
+        watchdog.promise,
+      ]);
+    } finally {
+      watchdog.cancel();
+    }
   }
 
   async requestStream<TValue>(

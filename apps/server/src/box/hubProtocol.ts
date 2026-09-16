@@ -27,7 +27,7 @@
  * @module Box
  */
 
-import { Schema } from "effect";
+import { Duration, Schema } from "effect";
 
 import { UNIT_VERBS } from "./decideUnitCommand.ts";
 
@@ -45,6 +45,41 @@ export const BOX_COMMANDS_ROUTE = "/api/boxes/:environmentId/commands";
 
 export const boxCommandsPath = (environmentId: string): string =>
   `/api/boxes/${encodeURIComponent(environmentId)}/commands`;
+
+/**
+ * The variable a shell drives a box with, named in one place because several
+ * ends now depend on the spelling.
+ *
+ * `t3 box` reads it. Two places *write* it, into the environment of something
+ * the server is starting for a person: the provider reactor, for the agent in a
+ * turn, and the terminal manager, for the shell that person opened. Either one
+ * getting the name wrong would be silent — an unset variable and a worded
+ * refusal, with nothing to say the two were meant to be the same name.
+ *
+ * It is also in `PROVIDER_LAUNCH_DENIED_ENV_KEYS`, so the value anything sees is
+ * always one minted for whoever it is acting for and never one inherited from
+ * the server's own environment.
+ */
+export const BOX_HUB_TOKEN_ENV = "T3CODE_HUB_TOKEN";
+
+/**
+ * How long a minted hub credential stays good for.
+ *
+ * One number for both writers, because they are answering the same question and
+ * two answers would only ever mean one of them had been forgotten. Neither is
+ * the length of the work: an agent's environment is fixed when the provider
+ * process starts and that process is reused for every turn on the thread, and a
+ * person's terminal lives until they close the tab. A credential that expired
+ * with the first turn would leave the second one holding a token the hub
+ * rejects — which reads as "your box was revoked", the worst kind of wrong
+ * answer.
+ *
+ * A working day is long enough to cover either lifetime and short enough that a
+ * leaked value is not a standing key. Anyone who wants one gone sooner can
+ * revoke it by hand: each is listed and labelled in `t3 auth session list`, and
+ * issued per session rather than per account.
+ */
+export const HUB_DELEGATED_SESSION_TTL = Duration.hours(12);
 
 /**
  * The fields `create` takes, and the reason they are fields rather than a file.

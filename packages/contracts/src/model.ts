@@ -59,26 +59,50 @@ export const ModelCapabilities = Schema.Struct({
 export type ModelCapabilities = typeof ModelCapabilities.Type;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, string> = {
-  codex: "gpt-5.4",
+  codex: "gpt-6-astra",
   claudeAgent: "claude-sonnet-4-6",
 };
 
-export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
+/**
+ * The provider a fresh thread runs on when nobody has chosen one. Claude is the
+ * default on shared servers: it is the account the operator connects first and
+ * the one whose credential survives per-user copies.
+ */
+export const DEFAULT_PROVIDER: ProviderKind = "claudeAgent";
+
+export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER];
+
+export const DEFAULT_MODEL_SELECTION: { provider: ProviderKind; model: string } = {
+  provider: DEFAULT_PROVIDER,
+  model: DEFAULT_MODEL,
+};
 
 /** Per-provider text generation model defaults. */
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER: Record<ProviderKind, string> = {
-  codex: "gpt-5.4-mini",
+  codex: "gpt-6-astra",
   claudeAgent: "claude-haiku-4-5",
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, string>> = {
   codex: {
-    "gpt-5-codex": "gpt-5.4",
-    "5.4": "gpt-5.4",
-    "5.3": "gpt-5.3-codex",
-    "gpt-5.3": "gpt-5.3-codex",
-    "5.3-spark": "gpt-5.3-codex-spark",
-    "gpt-5.3-spark": "gpt-5.3-codex-spark",
+    // Every prior slug now maps to the one model the ChatGPT-account Codex CLI
+    // accepts, so a thread that saved an old model recovers instead of failing
+    // with "model not supported".
+    "gpt-6": "gpt-6-astra",
+    astra: "gpt-6-astra",
+    "gpt-5-codex": "gpt-6-astra",
+    "gpt-5": "gpt-6-astra",
+    "5.4": "gpt-6-astra",
+    "gpt-5.4": "gpt-6-astra",
+    "gpt-5.4-mini": "gpt-6-astra",
+    "5.3": "gpt-6-astra",
+    "gpt-5.3": "gpt-6-astra",
+    "gpt-5.3-codex": "gpt-6-astra",
+    "5.3-spark": "gpt-6-astra",
+    "gpt-5.3-spark": "gpt-6-astra",
+    "gpt-5.3-codex-spark": "gpt-6-astra",
+    "gpt-5.2": "gpt-6-astra",
+    "gpt-5.2-codex": "gpt-6-astra",
   },
   claudeAgent: {
     opus: "claude-opus-4-7",

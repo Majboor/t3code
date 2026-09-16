@@ -43,6 +43,7 @@ export interface SidebarFilterState {
   readonly threadStatusFilter: string;
   readonly projectSourceFilter: string;
   readonly ownerFilter: string;
+  readonly workspaceFilter: string;
 }
 
 /**
@@ -59,6 +60,7 @@ export function countActiveSidebarFilters(state: SidebarFilterState): number {
   if (state.threadStatusFilter !== "all") count += 1;
   if (state.projectSourceFilter !== "all") count += 1;
   if (state.ownerFilter !== "all") count += 1;
+  if (state.workspaceFilter !== "all") count += 1;
   return count;
 }
 

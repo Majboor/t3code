@@ -2503,6 +2503,51 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     return { aborted: rebase.code === 0 };
   });
 
+  const resolveConflicts: GitCoreShape["resolveConflicts"] = Effect.fn("resolveConflicts")(
+    function* (input) {
+      const conflicted = new Set(yield* listConflictPaths(input.cwd));
+      for (const resolution of input.resolutions) {
+        if (!conflicted.has(resolution.path)) {
+          continue;
+        }
+        // `--ours` / `--theirs` write the chosen side into the working tree;
+        // `add` marks the path decided. A path deleted on the chosen side has no
+        // blob to check out, so it is removed instead.
+        const checkout = yield* executeGit(
+          "GitCore.resolveConflicts.checkout",
+          input.cwd,
+          ["checkout", `--${resolution.side}`, "--", resolution.path],
+          { allowNonZeroExit: true },
+        );
+        if (checkout.code === 0) {
+          yield* runGit("GitCore.resolveConflicts.add", input.cwd, ["add", "--", resolution.path]);
+        } else {
+          yield* runGit("GitCore.resolveConflicts.rm", input.cwd, ["rm", "--", resolution.path], true);
+        }
+      }
+      const remaining = yield* listConflictPaths(input.cwd);
+      if (remaining.length > 0) {
+        return { status: "conflicts" as const, conflictPaths: remaining };
+      }
+      const state = yield* getMergeState(input.cwd);
+      if (state.inProgress === "rebase") {
+        yield* runGit("GitCore.resolveConflicts.rebaseContinue", input.cwd, [
+          "-c",
+          "core.editor=true",
+          "rebase",
+          "--continue",
+        ]);
+      } else {
+        const args = ["commit", "--no-edit"];
+        if (input.message) {
+          args.push("-m", input.message);
+        }
+        yield* runGit("GitCore.resolveConflicts.commit", input.cwd, args);
+      }
+      return { status: "completed" as const, conflictPaths: [] };
+    },
+  );
+
   return {
     execute,
     status,
@@ -2534,6 +2579,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     compareBranches,
     getMergeState,
     abortMerge,
+    resolveConflicts,
   } satisfies GitCoreShape;
 });
 

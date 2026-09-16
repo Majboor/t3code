@@ -145,6 +145,7 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): WebEnvironmentApi 
       compareBranches: rpcClient.git.compareBranches,
       getMergeState: rpcClient.git.getMergeState,
       abortMerge: rpcClient.git.abortMerge,
+      resolveConflicts: rpcClient.git.resolveConflicts,
       resolvePullRequest: rpcClient.git.resolvePullRequest,
       preparePullRequestThread: rpcClient.git.preparePullRequestThread,
     },

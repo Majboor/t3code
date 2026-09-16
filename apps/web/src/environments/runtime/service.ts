@@ -1,6 +1,6 @@
 import {
   type AuthSessionRole,
-  type EnvironmentId,
+  EnvironmentId,
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
@@ -28,6 +28,7 @@ import { deriveOrchestrationBatchEffects } from "~/orchestrationEventEffects";
 import { projectQueryKeys } from "~/lib/projectReactQuery";
 import { providerQueryKeys } from "~/lib/providerReactQuery";
 import {
+  createBrowserHandoffCredential,
   getPrimaryKnownEnvironment,
   resolveSupabasePrimaryWebSocketConnectionUrl,
   subscribeSupabaseBrowserSessionChanges,
@@ -68,6 +69,7 @@ import {
 import { useTerminalStateStore } from "~/terminalStateStore";
 import { useUiStateStore } from "~/uiStateStore";
 import { WsTransport } from "../../rpc/wsTransport";
+import { subscribeWsConnected } from "../../rpc/wsConnectionState";
 import { createWsRpcClient, type WsRpcClient } from "../../rpc/wsRpcClient";
 import { derivePhysicalProjectKey } from "../../logicalProject";
 
@@ -86,11 +88,20 @@ type ThreadDetailSubscriptionEntry = {
   refCount: number;
   lastAccessedAt: number;
   evictionTimeoutId: ReturnType<typeof setTimeout> | null;
+  /** Which connection generation this subscription was opened on. */
+  attachedEpoch: number;
 };
 
 const environmentConnections = new Map<EnvironmentId, EnvironmentConnection>();
 const environmentConnectionListeners = new Set<() => void>();
 const threadDetailSubscriptions = new Map<string, ThreadDetailSubscriptionEntry>();
+/**
+ * Bumped every time the WebSocket (re)connects. A subscription opened on an
+ * older generation is dead even though its unsubscribe handle still looks live,
+ * so it has to be reopened — reopening also replays the server's thread
+ * snapshot, which is what repairs a view that went stale while offline.
+ */
+let threadSubscriptionEpoch = 0;
 
 let activeService: EnvironmentServiceState | null = null;
 let needsProviderInvalidation = false;
@@ -176,7 +187,17 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
     entry.unsubscribeConnectionListener = null;
   }
   if (entry.unsubscribe !== NOOP) {
-    return true;
+    if (entry.attachedEpoch === threadSubscriptionEpoch) {
+      return true;
+    }
+    // Opened on a previous connection: drop the dead handle and reopen so the
+    // server sends a fresh snapshot for everything missed while disconnected.
+    try {
+      entry.unsubscribe();
+    } catch {
+      // the old socket is gone; nothing to clean up
+    }
+    entry.unsubscribe = NOOP;
   }
 
   const connection = readEnvironmentConnection(entry.environmentId);
@@ -184,6 +205,7 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
     return false;
   }
 
+  entry.attachedEpoch = threadSubscriptionEpoch;
   entry.unsubscribe = connection.client.orchestration.subscribeThread(
     { threadId: entry.threadId },
     (item) => {
@@ -358,6 +380,7 @@ export function retainThreadDetailSubscription(
     refCount: 1,
     lastAccessedAt: Date.now(),
     evictionTimeoutId: null,
+    attachedEpoch: -1,
   };
   threadDetailSubscriptions.set(key, entry);
   if (!attachThreadDetailSubscription(entry)) {
@@ -697,7 +720,13 @@ async function resolveSavedEnvironmentSocketUrl(
   bearerToken: string,
 ): Promise<string> {
   const relay = record.relay ? { ...record.relay, environmentId: record.environmentId } : null;
-  const direct = { httpBaseUrl: record.httpBaseUrl, wsBaseUrl: record.wsBaseUrl };
+  // A machine enrolled through the portal has no address of its own: its record
+  // carries the hub as a placeholder. Probing the hub would find the hub — and
+  // connect to the wrong environment — so such a record is relayed only.
+  const direct =
+    relay !== null && record.httpBaseUrl === relay.hubHttpBaseUrl
+      ? null
+      : { httpBaseUrl: record.httpBaseUrl, wsBaseUrl: record.wsBaseUrl };
 
   const chosen = chooseEnvironmentTransport({
     direct,
@@ -1097,6 +1126,55 @@ export async function addSavedEnvironment(input: {
   return record;
 }
 
+/**
+ * Saves and connects a machine that reaches this browser only through the
+ * portal's relay: one enrolled from the Connect page, which claimed
+ * `environmentId` when its app dialled in. The browser authenticates to the
+ * hub with a credential standing in for its own session, so nothing is typed.
+ */
+export async function addRelayedEnvironment(input: {
+  readonly environmentId: string;
+  readonly label: string;
+  readonly hubHttpBaseUrl: string;
+}): Promise<SavedEnvironmentRecord> {
+  const environmentId = EnvironmentId.make(input.environmentId);
+  if (environmentConnections.has(environmentId)) {
+    throw new Error("This environment is already connected.");
+  }
+  const hub = new URL(input.hubHttpBaseUrl);
+  const hubWs = new URL(hub.toString());
+  hubWs.protocol = hubWs.protocol === "https:" ? "wss:" : "ws:";
+  const handoff = await createBrowserHandoffCredential();
+  const bearerSession = await bootstrapRemoteBearerSession({
+    httpBaseUrl: hub.origin,
+    credential: handoff.credential,
+  });
+  const record: SavedEnvironmentRecord = {
+    environmentId,
+    label: input.label.trim() || environmentId,
+    // The hub as placeholder marks the record relay-only; see `resolveSavedEnvironmentWsUrl`.
+    httpBaseUrl: hub.origin,
+    wsBaseUrl: hubWs.origin,
+    createdAt: isoNow(),
+    lastConnectedAt: null,
+    relay: { hubHttpBaseUrl: hub.origin },
+  };
+  await persistSavedEnvironmentRecord(record);
+  const didPersistBearerToken = await writeSavedEnvironmentBearerToken(
+    environmentId,
+    bearerSession.sessionToken,
+  );
+  if (!didPersistBearerToken) {
+    throw new Error("Unable to persist saved environment credentials.");
+  }
+  await ensureSavedEnvironmentConnection(record, {
+    bearerToken: bearerSession.sessionToken,
+    role: bearerSession.role,
+  });
+  useSavedEnvironmentRegistryStore.getState().upsert(record);
+  return record;
+}
+
 export async function ensureEnvironmentConnectionBootstrapped(
   environmentId: EnvironmentId,
 ): Promise<void> {
@@ -1137,6 +1215,15 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
 
   createPrimaryEnvironmentConnection();
 
+  const unsubscribeWsConnected = subscribeWsConnected(() => {
+    threadSubscriptionEpoch += 1;
+    for (const entry of [...threadDetailSubscriptions.values()]) {
+      attachThreadDetailSubscription(entry);
+    }
+    needsProviderInvalidation = true;
+    void queryInvalidationThrottler.maybeExecute();
+  });
+
   const unsubscribeSavedEnvironments = useSavedEnvironmentRegistryStore.subscribe(() => {
     if (!hasSavedEnvironmentRegistryHydrated()) {
       return;
@@ -1161,6 +1248,7 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
     queryInvalidationThrottler,
     refCount: 1,
     stop: () => {
+      unsubscribeWsConnected();
       unsubscribeSavedEnvironments();
       unsubscribeSupabaseBrowserSessionChanges();
       queryInvalidationThrottler.cancel();

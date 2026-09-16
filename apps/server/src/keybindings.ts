@@ -6,6 +6,7 @@
  *
  * @module Keybindings
  */
+import { watchDirectoryShallow } from "./shallowWatch.ts";
 import {
   KeybindingRule,
   KeybindingsConfig,
@@ -819,7 +820,7 @@ const makeKeybindings = Effect.gen(function* () {
     // Debounce watch events so the file is fully written before we read it.
     // Editors emit multiple events per save (truncate, write, rename) and
     // `fs.watch` can fire before the content has been flushed to disk.
-    const debouncedKeybindingsEvents = fs.watch(keybindingsConfigDir).pipe(
+    const debouncedKeybindingsEvents = watchDirectoryShallow(keybindingsConfigDir).pipe(
       Stream.filter((event) => {
         return (
           event.path === keybindingsConfigFile ||

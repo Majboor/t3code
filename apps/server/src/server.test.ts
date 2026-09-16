@@ -3180,9 +3180,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         result.elsewhere._tag === "Failure",
         `expected the cross-tenant create to be refused, got ${JSON.stringify(result.elsewhere)}`,
       );
+      // Authorization for a cross-tenant create is the membership check: the
+      // owner is not a member of `tenant-local-personal`, so it is refused for
+      // lacking `workspace.edit` there (the redundant active-tenant guard that
+      // used to word this differently was removed).
       assertInclude(
         result.elsewhere._tag === "Failure" ? result.elsewhere.failure.message : "",
-        "You can only create workspaces in your active tenant.",
+        "does not have workspace.edit",
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

@@ -64,8 +64,9 @@ import {
   Stream,
 } from "effect";
 
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { ensureAgentCliShim, withShimOnPath } from "../../agentCliShim.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -363,6 +364,140 @@ function asCanonicalTurnId(value: TurnId): TurnId {
 
 function asRuntimeRequestId(value: ApprovalRequestId): RuntimeRequestId {
   return RuntimeRequestId.make(value);
+}
+
+/** Claude Code keys its per-project state by the cwd with every non-alphanumeric turned into `-`. */
+function claudeProjectDirName(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+function listDirs(dir: string): ReadonlyArray<string> {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(dir, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Every Claude config dir on this machine that could hold a transcript for a thread:
+ *  - the other members' provider homes in the same tenant runtime and in every other tenant
+ *    runtime (`<T3CODE_HOME>/tenant-runtimes/<tenant>/provider-homes/<user>/claudeAgent/{config,.claude}`),
+ *  - the per-user provider-auth homes (`<T3CODE_HOME>/userdata/provider-auth/<user>/.claude`),
+ *  - siblings of the active config dir, for layouts this list does not know about.
+ */
+function candidateClaudeConfigDirs(activeConfigDir: string): ReadonlyArray<string> {
+  const found = new Set<string>();
+  const t3Home = process.env["T3CODE_HOME"];
+  const roots = new Set<string>();
+  if (t3Home !== undefined && t3Home.length > 0) {
+    roots.add(join(t3Home, "tenant-runtimes"));
+    roots.add(join(t3Home, "userdata"));
+  }
+  // Walk up from the active config dir to the tenant-runtimes / userdata level as a fallback.
+  let cursor = activeConfigDir;
+  for (let depth = 0; depth < 6; depth += 1) {
+    cursor = dirname(cursor);
+    if (cursor === "/" || cursor.length === 0) break;
+    const base = cursor.split("/").pop();
+    if (base === "tenant-runtimes" || base === "userdata") roots.add(cursor);
+  }
+  for (const root of roots) {
+    if (root.endsWith("tenant-runtimes")) {
+      for (const tenant of listDirs(root)) {
+        for (const user of listDirs(join(tenant, "provider-homes"))) {
+          found.add(join(user, "claudeAgent", "config"));
+          found.add(join(user, "claudeAgent", ".claude"));
+        }
+      }
+    } else {
+      for (const user of listDirs(join(root, "provider-auth"))) {
+        found.add(join(user, ".claude"));
+      }
+    }
+  }
+  for (const sibling of listDirs(dirname(activeConfigDir))) {
+    found.add(sibling);
+  }
+  found.delete(activeConfigDir);
+  return Array.from(found);
+}
+
+/**
+ * A transcript file that only carries bookkeeping lines (`last-prompt`, `ai-title`, …) is a
+ * stub Claude Code leaves behind when a resume fails; only a file with actual turns can be
+ * resumed from.
+ */
+function transcriptHasConversation(file: string): boolean {
+  if (!existsSync(file)) {
+    return false;
+  }
+  try {
+    const head = readFileSync(file, { encoding: "utf8", flag: "r" });
+    return /"type":\s*"(user|assistant|summary)"/.test(head);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * "present" when `activeConfigDir` already holds the transcript for `sessionId`; "copied" when it
+ * was brought over from a teammate's Claude config dir (they started the thread); "missing" when no
+ * copy exists anywhere, in which case the caller must not ask Claude to resume it.
+ */
+function ensureClaudeSessionTranscript(
+  activeConfigDir: string,
+  cwd: string | undefined,
+  sessionId: string,
+): "present" | "copied" | "missing" {
+  if (!cwd) {
+    return "present";
+  }
+  const relativeProjectDir = join("projects", claudeProjectDirName(cwd));
+  const relativeTranscript = join(relativeProjectDir, `${sessionId}.jsonl`);
+  const target = join(activeConfigDir, relativeTranscript);
+  if (transcriptHasConversation(target)) {
+    return "present";
+  }
+  for (const configDir of candidateClaudeConfigDirs(activeConfigDir)) {
+    const candidate = join(configDir, relativeTranscript);
+    if (!transcriptHasConversation(candidate)) {
+      continue;
+    }
+    try {
+      mkdirSync(dirname(target), { recursive: true });
+      /**
+       * A session is a chain of transcript files: the one named after the
+       * session id can be a stub whose `leafUuid` points into an earlier file
+       * in the same project dir, so the whole project dir travels together.
+       * Files that already hold a conversation at the target are left alone;
+       * stubs (Claude writes one for the session id on a failed resume) are
+       * replaced.
+       */
+      const sourceProjectDir = join(configDir, relativeProjectDir);
+      for (const entry of readdirSync(sourceProjectDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+        const destination = join(dirname(target), entry.name);
+        if (!transcriptHasConversation(destination)) {
+          copyFileSync(join(sourceProjectDir, entry.name), destination);
+        }
+      }
+      const sessionEnv = join(configDir, "session-env", sessionId);
+      if (existsSync(sessionEnv)) {
+        cpSync(sessionEnv, join(activeConfigDir, "session-env", sessionId), {
+          recursive: true,
+          force: false,
+          errorOnExist: false,
+        });
+      }
+      return "copied";
+    } catch {
+      return "missing";
+    }
+  }
+  return "missing";
 }
 
 function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undefined {
@@ -2519,7 +2654,41 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const startedAt = yield* nowIso;
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
-      const existingResumeSessionId = resumeState?.resume;
+      /**
+       * A thread shared inside a workspace can be continued by a different
+       * member than the one who started it. Each member runs Claude in their
+       * own provider home, so the transcript Claude needs for `--resume` may
+       * live in a teammate's home: bring it over, and if it exists nowhere,
+       * start a fresh session rather than failing the turn with
+       * "No conversation found with session ID".
+       */
+      const launchEnv = input.providerLaunchEnvironment?.env ?? process.env;
+      const claudeConfigDir =
+        launchEnv["CLAUDE_CONFIG_DIR"] ??
+        join(launchEnv["HOME"] ?? process.env["HOME"] ?? homedir(), ".claude");
+      const requestedResumeSessionId = resumeState?.resume;
+      const transcriptOutcome =
+        requestedResumeSessionId === undefined
+          ? "none"
+          : ensureClaudeSessionTranscript(claudeConfigDir, input.cwd, requestedResumeSessionId);
+      const existingResumeSessionId =
+        transcriptOutcome === "present" || transcriptOutcome === "copied"
+          ? requestedResumeSessionId
+          : undefined;
+      if (transcriptOutcome === "copied") {
+        yield* Effect.logInfo("claude session transcript copied from a teammate's provider home", {
+          threadId,
+          sessionId: requestedResumeSessionId,
+          claudeConfigDir,
+        });
+      } else if (transcriptOutcome === "missing") {
+        yield* Effect.logWarning("claude session transcript not found; starting a fresh session", {
+          threadId,
+          requestedResumeSessionId,
+          claudeConfigDir,
+          cwd: input.cwd,
+        });
+      }
       const newSessionId =
         existingResumeSessionId === undefined ? yield* Random.nextUUIDv4 : undefined;
       const sessionId = existingResumeSessionId ?? newSessionId;
@@ -2944,7 +3113,9 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         resumeCursor: {
           ...(threadId ? { threadId } : {}),
           ...(sessionId ? { resume: sessionId } : {}),
-          ...(resumeState?.resumeSessionAt ? { resumeSessionAt: resumeState.resumeSessionAt } : {}),
+          ...(existingResumeSessionId && resumeState?.resumeSessionAt
+            ? { resumeSessionAt: resumeState.resumeSessionAt }
+            : {}),
           turnCount: resumeState?.turnCount ?? 0,
         },
         createdAt: startedAt,

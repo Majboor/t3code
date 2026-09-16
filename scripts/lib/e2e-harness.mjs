@@ -33,6 +33,8 @@ export function unlistProject(projectDir) {
   if (!existsSync(db)) return;
   try {
     execFileSync("sqlite3", [
+      "-cmd",
+      ".timeout 15000",
       db,
       `update projection_projects set deleted_at = datetime('now'), updated_at = datetime('now')
        where deleted_at is null and workspace_root = '${projectDir.replaceAll("'", "''")}';`,
@@ -180,9 +182,25 @@ export function createHarness({
   /** Opens the project's thread view from the dashboard. */
   async function openProject(page) {
     await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await sleep(6_000);
+    // The dashboard lists the project once its membership has landed, which on
+    // a busy host is not always within a fixed pause: poll, and reload once
+    // halfway through for a dashboard that fetched before the membership did.
     const link = page.locator('[data-testid="dashboard-workspace-project-link"]').first();
-    if ((await link.count()) === 0) return false;
+    const deadline = Date.now() + 90_000;
+    let reloaded = false;
+    while ((await link.count().catch(() => 0)) === 0) {
+      if (Date.now() > deadline) {
+        // Say what the dashboard showed instead, so a miss is diagnosable.
+        const shown = (await bodyText(page)).replace(/\s+/g, " ").slice(0, 160);
+        console.log(`  (openProject: no project link after 90s; page says: ${shown})`);
+        return false;
+      }
+      await sleep(2_000);
+      if (!reloaded && Date.now() > deadline - 45_000) {
+        reloaded = true;
+        await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      }
+    }
     await link.click();
     await sleep(navigationMs);
     return true;
@@ -533,7 +551,22 @@ export function createHarness({
   async function createInvite(page, email) {
     await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await sleep(6_000);
-    await page.locator('button:has-text("Invite")').first().click();
+    // The button stays disabled until the project has been stamped with the
+    // workspace it belongs to, which lands a moment after "Add project" on a
+    // shared host. Wait for it rather than clicking a control that refuses.
+    const invite = page.locator('button:has-text("Invite")').first();
+    const deadline = Date.now() + 120_000;
+    let reloaded = false;
+    while (Date.now() < deadline && !(await invite.isEnabled().catch(() => false))) {
+      await sleep(2_000);
+      if (!reloaded && Date.now() > deadline - 30_000) {
+        reloaded = true;
+        await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+        await sleep(4_000);
+      }
+    }
+    if (!(await invite.isEnabled().catch(() => false))) return null;
+    await invite.click();
     await sleep(2_000);
     await page.locator('[data-slot="dialog-panel"] input[type="email"]').first().fill(email);
     await page
@@ -554,8 +587,15 @@ export function createHarness({
   /** Follows an invite in a session that is already signed in. */
   async function acceptInvite(session, inviteUrl) {
     await session.page.goto(inviteUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await sleep(7_000);
-    const seen = await bodyText(session.page);
+    // Acceptance bootstraps a socket and then asks the server; on a busy host
+    // that takes longer than a fixed pause, so wait for the page to decide.
+    let seen = "";
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      seen = await bodyText(session.page);
+      if (/Invite accepted|Could not accept|failed/i.test(seen)) break;
+      await sleep(2_000);
+    }
     await session.page
       .locator('button:has-text("Back to app")')
       .first()

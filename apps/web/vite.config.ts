@@ -82,6 +82,15 @@ export default defineConfig({
               target: devProxyTarget,
               changeOrigin: true,
             },
+            // The app's own socket, which is not optional in the way the other
+            // three entries are: without it the page authenticates against this
+            // origin and then dials the backend directly, arriving with no
+            // session. Every upgrade came back 401 and anything RPC-shaped hung.
+            "/ws": {
+              target: devProxyTarget,
+              changeOrigin: true,
+              ws: true,
+            },
             "/attachments": {
               target: devProxyTarget,
               changeOrigin: true,

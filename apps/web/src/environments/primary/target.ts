@@ -62,6 +62,44 @@ function resolveHttpRequestBaseUrl(httpBaseUrl: string): string {
   return currentUrl.origin;
 }
 
+/**
+ * The socket has to go where the HTTP requests went.
+ *
+ * `resolveHttpRequestBaseUrl` above sends HTTP to the dev server's origin when
+ * the page is being served from it, so the session cookie is stored against
+ * *that* origin. The websocket had no such rule and dialled the backend port
+ * directly, which meant it arrived with no session and every upgrade came back
+ * 401 — a window that loaded, showed data, and then hung on the first action
+ * that needed the socket, with nothing on screen to say why.
+ *
+ * Same conditions as the HTTP rule, deliberately: one of them being true and
+ * the other false is exactly the split this exists to prevent.
+ */
+function resolveWsRequestBaseUrl(wsBaseUrl: string): string {
+  const configuredDevServerUrl = import.meta.env.VITE_DEV_SERVER_URL?.trim();
+  if (!configuredDevServerUrl) {
+    return wsBaseUrl;
+  }
+
+  const currentUrl = new URL(window.location.href);
+  const targetUrl = new URL(wsBaseUrl);
+  const devServerUrl = new URL(configuredDevServerUrl, currentUrl.origin);
+
+  const isCurrentOriginDevServer =
+    (currentUrl.protocol === "http:" || currentUrl.protocol === "https:") &&
+    currentUrl.origin === devServerUrl.origin;
+
+  if (
+    !isCurrentOriginDevServer ||
+    !isLoopbackHostname(currentUrl.hostname) ||
+    !isLoopbackHostname(targetUrl.hostname)
+  ) {
+    return wsBaseUrl;
+  }
+
+  return swapBaseUrlProtocol(currentUrl.origin, currentUrl.protocol === "https:" ? "wss:" : "ws:");
+}
+
 function resolveConfiguredPrimaryTarget(): PrimaryEnvironmentTarget | null {
   const configuredHttpBaseUrl = import.meta.env.VITE_HTTP_URL?.trim() || undefined;
   const configuredWsBaseUrl = import.meta.env.VITE_WS_URL?.trim() || undefined;
@@ -127,7 +165,7 @@ function resolveDesktopPrimaryTarget(): PrimaryEnvironmentTarget | null {
     source: "desktop-managed",
     target: {
       httpBaseUrl: normalizeBaseUrl(desktopBootstrap.httpBaseUrl),
-      wsBaseUrl: normalizeBaseUrl(desktopBootstrap.wsBaseUrl),
+      wsBaseUrl: resolveWsRequestBaseUrl(normalizeBaseUrl(desktopBootstrap.wsBaseUrl)),
     },
   };
 }

@@ -41,10 +41,22 @@ const ENROLLMENTS_PATH = "/api/devices/enrollments";
  */
 export const DEFAULT_ENROLLMENT_CLOUD_BASE_URL = "https://app.logicpacks.io";
 
+/**
+ * The portal this build was published from, baked in at dist time
+ * (`T3CODE_ENROLLMENT_BASE_URL` → `apps/desktop/tsdown.config.ts` `define`).
+ * A download from a self-hosted portal then enrols against that portal without
+ * anybody typing an address; the runtime `T3CODE_CLOUD_URL` still wins.
+ */
+declare const __T3_ENROLLMENT_BASE_URL__: string | undefined;
+const BAKED_ENROLLMENT_BASE_URL: string | undefined =
+  typeof __T3_ENROLLMENT_BASE_URL__ === "string" && __T3_ENROLLMENT_BASE_URL__.length > 0
+    ? __T3_ENROLLMENT_BASE_URL__
+    : undefined;
+
 export function resolveEnrollmentCloudBaseUrl(
   env: Readonly<Record<string, string | undefined>>,
 ): string {
-  const configured = env.T3CODE_CLOUD_URL?.trim();
+  const configured = env.T3CODE_CLOUD_URL?.trim() || BAKED_ENROLLMENT_BASE_URL?.trim();
   if (!configured) {
     return DEFAULT_ENROLLMENT_CLOUD_BASE_URL;
   }

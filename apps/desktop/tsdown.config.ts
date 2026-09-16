@@ -13,6 +13,10 @@ export default defineConfig([
     entry: ["src/main.ts"],
     clean: true,
     noExternal: (id) => id.startsWith("@t3tools/"),
+    // The portal a published build enrols against; see deviceEnrollment/client.ts.
+    define: {
+      __T3_ENROLLMENT_BASE_URL__: JSON.stringify(process.env["T3CODE_ENROLLMENT_BASE_URL"] ?? ""),
+    },
   },
   {
     ...shared,

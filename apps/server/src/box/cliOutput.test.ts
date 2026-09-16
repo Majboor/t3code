@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { BoxCommandEntry } from "../persistence/Services/BoxCommandJournal.ts";
 import {
   boxRefusalJson,
+  describeBoxRunFailure,
   formatBoxHistory,
   formatBoxRefusal,
   formatBoxRun,
@@ -113,6 +114,50 @@ describe("formatBoxRun", () => {
 
   it("reports a timeout as its own outcome", () => {
     expect(formatBoxRun(run({ timedOut: true, exitCode: null }))).toContain("timed out");
+  });
+});
+
+describe("describeBoxRunFailure", () => {
+  it("passes a clean run", () => {
+    expect(describeBoxRunFailure(run())).toBeNull();
+  });
+
+  it("fails a non-zero exit code, and says which", () => {
+    expect(describeBoxRunFailure(run({ exitCode: 3 }))).toBe("Exit code 3: npm ci");
+  });
+
+  it("fails a signal and a timeout in their own words, not as a missing code", () => {
+    expect(describeBoxRunFailure(run({ signal: "SIGKILL", exitCode: null }))).toBe(
+      "Ended by SIGKILL: npm ci",
+    );
+    expect(describeBoxRunFailure(run({ timedOut: true, exitCode: null }))).toBe(
+      "Timed out: npm ci",
+    );
+  });
+
+  /**
+   * A detached start has no exit code and never will. Treating "no code" as a
+   * failure would make `--detach` exit non-zero on every successful use.
+   */
+  it("passes a detached start, which has no exit code by design", () => {
+    expect(describeBoxRunFailure(run({ detachedPid: 5150, exitCode: null }))).toBeNull();
+  });
+
+  /**
+   * The status line and the exit status are the same judgement said twice, and
+   * a reader who sees "failed" in the output and 0 in `$?` cannot trust either.
+   */
+  it("agrees with what formatBoxRun prints", () => {
+    for (const report of [
+      run(),
+      run({ exitCode: 3 }),
+      run({ signal: "SIGKILL", exitCode: null }),
+      run({ timedOut: true, exitCode: null }),
+      run({ detachedPid: 5150, exitCode: null }),
+    ]) {
+      const saidFailure = /failed with exit code|timed out|ended by/.test(formatBoxRun(report));
+      expect(describeBoxRunFailure(report) !== null).toBe(saidFailure);
+    }
   });
 });
 

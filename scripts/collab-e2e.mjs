@@ -299,6 +299,18 @@ function threadKeyOf(url) {
   return path.split("/").at(-1) ?? path;
 }
 
+/** Waits for the invite page to decide, instead of guessing how long a busy host takes. */
+async function waitForInviteDecision(page, timeoutMs = 120_000) {
+  const deadline = Date.now() + timeoutMs;
+  let seen = "";
+  while (Date.now() < deadline) {
+    seen = await bodyText(page);
+    if (/Invite accepted|Could not accept|failed/i.test(seen)) return seen;
+    await sleep(2_000);
+  }
+  return seen;
+}
+
 // ── the run ─────────────────────────────────────────────────────────────────
 
 // Without this the first navigation just times out inside Playwright, which
@@ -349,8 +361,7 @@ try {
   check("clean session is asked to authenticate", /Sign up|Log in|Sign in/.test(invitePrompt));
   check("B signs up from the invite", await signUp(accountB, ACCOUNT_B), ACCOUNT_B);
   await accountB.page.goto(inviteUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await sleep(7_000);
-  check("B accepts the invite", (await bodyText(accountB.page)).includes("Invite accepted"));
+  check("B accepts the invite", (await waitForInviteDecision(accountB.page)).includes("Invite accepted"));
   await accountB.page
     .locator('button:has-text("Back to app")')
     .first()
@@ -494,7 +505,8 @@ try {
 
   const asARereads = await userMessages(accountA2.page);
   const aOwnMessage = asARereads.find((message) => message.text.includes(markerFromA)) ?? null;
-  const bMessageAsASeesIt = asARereads.find((message) => message.text.includes(markerFromB)) ?? null;
+  const bMessageAsASeesIt =
+    asARereads.find((message) => message.text.includes(markerFromB)) ?? null;
 
   // The precondition, asserted rather than assumed: without both messages in
   // one transcript the attribution check below could pass on an empty room.
@@ -531,7 +543,8 @@ try {
   await openProject(accountB.page);
   await sleep(UI_SETTLE_MS);
   const asBRereads = await userMessages(accountB.page);
-  const aMessageAsBSeesIt = asBRereads.find((message) => message.text.includes(markerFromA)) ?? null;
+  const aMessageAsBSeesIt =
+    asBRereads.find((message) => message.text.includes(markerFromA)) ?? null;
   check(
     "B sees A's message attributed to A",
     aMessageAsBSeesIt?.authorName === displayNameFor(ACCOUNT_A),
@@ -785,8 +798,7 @@ try {
   check("A invites C", Boolean(inviteForC), inviteForC ?? "none");
   if (inviteForC) {
     await accountC.page.goto(inviteForC, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await sleep(7_000);
-    const cInvite = await bodyText(accountC.page);
+    const cInvite = await waitForInviteDecision(accountC.page);
     // C is already signed in, so the link must attach to that session rather
     // than send them back through sign-up.
     check(

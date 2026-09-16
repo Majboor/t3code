@@ -5,7 +5,8 @@ import { threadHasStarted } from "../components/ChatView.logic";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";
 import { createThreadSelectorAcrossEnvironments } from "../storeSelectors";
-import { useStore } from "../store";
+import { type AppState, selectEnvironmentState, useStore } from "../store";
+import { type ThreadId } from "@t3tools/contracts";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { WorkspacePanelLoadingState, WorkspacePanelShell } from "../components/WorkspacePanelShell";
@@ -106,6 +107,80 @@ function DraftChatThreadRouteView() {
     }
     void navigate({ to: "/", replace: true });
   }, [canonicalThreadRef, draftSession, navigate]);
+
+  // A shared project's conversation is one place. Two people who walk in from
+  // the dashboard before anyone has spoken each get an empty draft, and the
+  // second one to send used to grow a second thread that the dashboard, and
+  // everybody else, then never opened. So while this draft is still empty and
+  // somebody else starts the project's thread, join theirs instead.
+  //
+  // "Theirs" is a thread this draft had never seen: the ones already listed
+  // when the draft came up stay untouched, so a session opened deliberately
+  // beside older threads keeps its own. A server thread inherits its draft's
+  // creation time, so the other person's thread can carry an *earlier*
+  // timestamp than this draft — hence membership, not age, is the test, with a
+  // ten-minute window so a page reload cannot drag an empty draft into some
+  // months-old conversation that merely arrived late from the server.
+  // Returns the id rather than an object so the store subscription settles.
+  const sharedThreadIdToJoin = useStore(
+    useMemo(() => {
+      if (!draftSession) {
+        return () => null;
+      }
+      const { environmentId, projectId, createdAt } = draftSession;
+      const notBefore = Date.parse(createdAt) - 10 * 60 * 1000;
+      let knownAtMount: Set<ThreadId> | null = null;
+      return (state: AppState): ThreadId | null => {
+        const environmentState = selectEnvironmentState(state, environmentId);
+        const threadIds = environmentState.threadIdsByProjectId[projectId] ?? [];
+        if (knownAtMount === null) {
+          knownAtMount = new Set(threadIds);
+          return null;
+        }
+        if (!environmentState.projectById[projectId]?.ownership) {
+          return null;
+        }
+        let newestId: ThreadId | null = null;
+        let newestCreatedAt = 0;
+        for (const threadId of threadIds) {
+          if (knownAtMount.has(threadId)) {
+            continue;
+          }
+          const shell = environmentState.threadShellById[threadId];
+          if (!shell || shell.archivedAt) {
+            continue;
+          }
+          const shellCreatedAt = Date.parse(shell.createdAt);
+          if (Number.isNaN(shellCreatedAt) || shellCreatedAt < notBefore) {
+            continue;
+          }
+          if (shellCreatedAt >= newestCreatedAt) {
+            newestId = shell.id;
+            newestCreatedAt = shellCreatedAt;
+          }
+        }
+        return newestId;
+      };
+    }, [draftSession?.environmentId, draftSession?.projectId, draftSession?.createdAt]),
+  );
+
+  useEffect(() => {
+    if (!draftSession || canonicalThreadRef || !sharedThreadIdToJoin) {
+      return;
+    }
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams({
+        environmentId: draftSession.environmentId,
+        threadId: sharedThreadIdToJoin,
+      }),
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams((previous ?? {}) as Record<string, unknown>),
+        ...(workspaceOpen ? { workspace: "1" as const } : {}),
+      }),
+    });
+  }, [canonicalThreadRef, draftSession, navigate, sharedThreadIdToJoin, workspaceOpen]);
 
   const closeWorkspace = useCallback(() => {
     void navigate({

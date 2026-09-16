@@ -26,6 +26,8 @@ import {
   GitManagerServiceError,
   GitAbortMergeInput,
   GitAbortMergeResult,
+  GitResolveConflictsInput,
+  GitResolveConflictsResult,
   GitCompareBranchesInput,
   GitCompareBranchesResult,
   GitMergeBranchInput,
@@ -341,6 +343,7 @@ export const WS_METHODS = {
   gitCompareBranches: "git.compareBranches",
   gitGetMergeState: "git.getMergeState",
   gitAbortMerge: "git.abortMerge",
+  gitResolveConflicts: "git.resolveConflicts",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
@@ -936,6 +939,12 @@ export const WsGitGetMergeStateRpc = Rpc.make(WS_METHODS.gitGetMergeState, {
 export const WsGitAbortMergeRpc = Rpc.make(WS_METHODS.gitAbortMerge, {
   payload: GitAbortMergeInput,
   success: GitAbortMergeResult,
+  error: GitCommandError,
+});
+
+export const WsGitResolveConflictsRpc = Rpc.make(WS_METHODS.gitResolveConflicts, {
+  payload: GitResolveConflictsInput,
+  success: GitResolveConflictsResult,
   error: GitCommandError,
 });
 
@@ -1595,6 +1604,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitCompareBranchesRpc,
   WsGitGetMergeStateRpc,
   WsGitAbortMergeRpc,
+  WsGitResolveConflictsRpc,
   WsDeployListTargetsRpc,
   WsDeployCreateTargetRpc,
   WsDeployDeleteTargetRpc,

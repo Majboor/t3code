@@ -47,15 +47,23 @@ export type ThreadTraversalDirection = "previous" | "next";
 export type SidebarThreadStatusFilter = "all" | "needs_attention" | "active" | "completed";
 export type SidebarProjectSourceFilter = "all" | "local" | "remote" | "mixed";
 export type SidebarOwnerFilter = "all" | (string & {});
+export type SidebarWorkspaceFilter = "all" | (string & {});
 
 type SidebarOwnerMetadata = {
   ownerUserId: string | null;
   ownerDisplayName?: string | null;
   tenantDisplayName?: string | null;
+  workspaceId?: string | null;
+  workspaceTitle?: string | null;
 };
 
 export interface SidebarOwnerFilterOption {
   readonly value: SidebarOwnerFilter;
+  readonly label: string;
+}
+
+export interface SidebarWorkspaceFilterOption {
+  readonly value: SidebarWorkspaceFilter;
   readonly label: string;
 }
 
@@ -360,6 +368,45 @@ export function doesSidebarProjectOwnerMatch(
     return true;
   }
   return getProjectOwnershipEntries(project).some((ownership) => ownership.ownerUserId === filter);
+}
+
+/**
+ * The workspaces a project belongs to, for the sidebar's workspace filter.
+ * A project reaches the viewer through its own ownership and through any shared
+ * member copies, each of which names a workspace; the dropdown lists every
+ * distinct one so a person can narrow the tree to a single workspace.
+ */
+export function buildSidebarWorkspaceFilterOptions(
+  projects: readonly SidebarSearchProject[],
+): SidebarWorkspaceFilterOption[] {
+  const workspacesById = new Map<string, string>();
+  for (const project of projects) {
+    for (const ownership of getProjectOwnershipEntries(project)) {
+      if (!ownership.workspaceId || workspacesById.has(ownership.workspaceId)) {
+        continue;
+      }
+      workspacesById.set(
+        ownership.workspaceId,
+        ownership.workspaceTitle ?? ownership.tenantDisplayName ?? ownership.workspaceId,
+      );
+    }
+  }
+
+  return Array.from(workspacesById, ([value, label]) => ({ value, label })).toSorted((left, right) =>
+    left.label.localeCompare(right.label),
+  );
+}
+
+export function doesSidebarProjectWorkspaceMatch(
+  project: SidebarSearchProject,
+  filter: SidebarWorkspaceFilter,
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  return getProjectOwnershipEntries(project).some(
+    (ownership) => ownership.workspaceId === filter,
+  );
 }
 
 export function doesSidebarThreadMatchQuery(

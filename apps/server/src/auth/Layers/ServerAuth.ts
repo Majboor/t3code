@@ -949,6 +949,47 @@ export const makeServerAuth = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * A bearer session that authenticates as `input.userId`, and as nobody else.
+   *
+   * The identity is carried the way it already is for a local account: in the
+   * subject, as `local-user:<id>`, which `authenticateToken` reads back through
+   * `localUserIdFromSubject` and turns into `session.userId` — the same field
+   * every account-scoped check downstream reads. Minting a session and then
+   * *asserting* an identity beside it would have been a second answer to a
+   * question this file already answers once.
+   *
+   * `client` role, never `owner`: this credential is handed to a process, and
+   * the widest thing it should be able to do is what its holder was already
+   * entitled to. Metadata says `bot` and carries the caller's label so a person
+   * reading `t3 auth session list` can see what asked for it and revoke it by
+   * hand, without waiting for the ttl.
+   */
+  const issueDelegatedUserSession: ServerAuthShape["issueDelegatedUserSession"] = (input) =>
+    sessions
+      .issue({
+        subject: `${LOCAL_USER_SUBJECT_PREFIX}${input.userId}`,
+        method: "bearer-session-token",
+        role: "client",
+        client: { deviceType: "bot", label: input.label },
+        ttl: input.ttl,
+      })
+      .pipe(
+        Effect.map((issued) => ({
+          sessionId: issued.sessionId,
+          token: issued.token,
+          expiresAt: issued.expiresAt,
+        })),
+        Effect.mapError(
+          (cause) =>
+            new AuthError({
+              message: "Failed to issue a delegated session.",
+              status: 500,
+              cause,
+            }),
+        ),
+      );
+
   const issueWebSocketToken: ServerAuthShape["issueWebSocketToken"] = (session) =>
     sessions
       .issueWebSocketToken(session.sessionId, {
@@ -1052,6 +1093,7 @@ export const makeServerAuth = Effect.gen(function* () {
     authenticateWebSocketUpgrade,
     issueWebSocketToken,
     issueStartupPairingUrl,
+    issueDelegatedUserSession,
   } satisfies ServerAuthShape;
 });
 

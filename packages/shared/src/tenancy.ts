@@ -188,11 +188,35 @@ export function hasOrganizationPermission(input: {
   );
 }
 
+/**
+ * Internal single-team deployments (the `?waleed` / `?ahad` server) want every
+ * signed-in person to act as an admin, so a stale session tenant id or a
+ * missing role never blocks real work. Set `T3CODE_ALL_USERS_ADMIN=true` on the
+ * server to grant every tenant permission to any authenticated actor. The
+ * browser has no `process`, so it keeps computing real permissions for its UI;
+ * the server is the authority and this only loosens the server's own checks.
+ */
+export const INTERNAL_ALL_USERS_ADMIN: boolean = (() => {
+  try {
+    return typeof process !== "undefined" && process.env?.["T3CODE_ALL_USERS_ADMIN"] === "true";
+  } catch {
+    return false;
+  }
+})();
+
 export function hasTenantPermission(input: TenantAccessInput): boolean {
+  if (INTERNAL_ALL_USERS_ADMIN) return true;
   return input.roles.some((role) => getTenantRolePermissions(role).includes(input.permission));
 }
 
 export function evaluateTenantAccess(input: TenantAccessInput): TenantAccessDecision {
+  if (INTERNAL_ALL_USERS_ADMIN) {
+    return {
+      allowed: true,
+      permission: input.permission,
+      reason: "Internal deployment grants every authenticated actor admin access.",
+    };
+  }
   if (input.roles.length === 0) {
     return {
       allowed: false,
@@ -1034,18 +1058,21 @@ export function isInternalTenantRuntimeHost(host: string): boolean {
   return normalizedHost.startsWith("fc") || normalizedHost.startsWith("fd");
 }
 
-export const DEFAULT_PUBLIC_ACCESS_LIMITS = {
-  maxWebSocketConnectionsPerIp: 60,
-  maxWebSocketConnectionsPerUser: 4,
-  maxWebSocketConnectionsPerTenant: 40,
-  maxRpcRequestsPerMinutePerUser: 120,
-  maxRpcRequestsPerMinutePerTenant: 2_000,
+const BUILT_IN_PUBLIC_ACCESS_LIMITS = {
+  // A person keeps the web app in two tabs, the desktop app and a phone open at
+  // once, and a busy office shares one public IP; the earlier 4/40/60 refused
+  // real sessions with nothing on screen to say why.
+  maxWebSocketConnectionsPerIp: 400,
+  maxWebSocketConnectionsPerUser: 64,
+  maxWebSocketConnectionsPerTenant: 400,
+  maxRpcRequestsPerMinutePerUser: 600,
+  maxRpcRequestsPerMinutePerTenant: 6_000,
   maxRpcRequestBytes: 12 * 1024 * 1024,
   maxFileUploadBytes: 10 * 1024 * 1024,
   maxFileReadBytes: 2 * 1024 * 1024,
   maxDirectoryEntries: 1_000,
   maxDiffBytes: 2 * 1024 * 1024,
-  maxActiveTurnsPerUser: 2,
+  maxActiveTurnsPerUser: 4,
   maxActiveTurnsPerTenant: 20,
   maxActiveProviderSessionsPerUser: 3,
   maxActiveProviderSessionsPerTenant: 30,
@@ -1056,6 +1083,35 @@ export const DEFAULT_PUBLIC_ACCESS_LIMITS = {
   maxRuntimeIdleMs: 15 * 60 * 1000,
   maxRuntimeWallClockMs: 24 * 60 * 60 * 1000,
 } as const satisfies PublicAccessLimits;
+
+/**
+ * Operator overrides, as JSON in `T3CODE_PUBLIC_ACCESS_LIMITS` on the server
+ * (e.g. `{"maxWebSocketConnectionsPerUser": 32}`). Unknown keys and bad values
+ * are ignored so a typo cannot take the limits down with it. The browser has
+ * no `process`, so it always sees the built-in numbers.
+ */
+function readPublicAccessLimitOverrides(): Partial<PublicAccessLimits> {
+  try {
+    const raw =
+      typeof process !== "undefined" ? process.env?.["T3CODE_PUBLIC_ACCESS_LIMITS"] : undefined;
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const overrides: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key in BUILT_IN_PUBLIC_ACCESS_LIMITS && typeof value === "number" && Number.isFinite(value) && value >= 0) {
+        overrides[key] = value;
+      }
+    }
+    return overrides as Partial<PublicAccessLimits>;
+  } catch {
+    return {};
+  }
+}
+
+export const DEFAULT_PUBLIC_ACCESS_LIMITS: PublicAccessLimits = {
+  ...BUILT_IN_PUBLIC_ACCESS_LIMITS,
+  ...readPublicAccessLimitOverrides(),
+};
 
 function sanitizeTenantPathSegment(value: string): string {
   const sanitized = value
@@ -1350,6 +1406,14 @@ const PROVIDER_LAUNCH_DENIED_ENV_KEYS = new Set([
   "CODEX_HOME",
   "HOME",
   "OPENAI_API_KEY",
+  // The credential `t3 box` drives a box with, and the same substitution one
+  // step further out. A server that is itself an installed box has this in its
+  // own environment — that is how the machine reaches its hub — and inheriting
+  // it would let every agent on the box act as the machine's owner rather than
+  // as the person whose turn it is. The reactor puts back a session minted for
+  // that person; the literal name is spelled here rather than imported because
+  // this package cannot see the server's box module.
+  "T3CODE_HUB_TOKEN",
   "XDG_CONFIG_HOME",
 ]);
 

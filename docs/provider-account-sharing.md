@@ -33,15 +33,15 @@ code problem and neither was resolved by building this.
 
 ### Where each requirement lives
 
-| # | What was asked | Where it is |
-|---|---|---|
-| 1 | Per-person "their own" vs "the workspace's" | `ProviderSharingDialog.tsx`, member list → `providerSharing.member.update` |
-| 2 | Contribute my Claude, only if connected | `ProviderSharingSection.tsx` in the collab popover; the server only ever returns genuinely connected accounts in `viewerAccounts` |
-| 3 | Pick which of several accounts | Account picker in the popover (shown only with >1 account); accounts are created at `/settings/connections` |
-| 4 | See whether you are sharing | Per-provider status line and switch in the popover |
-| 5 | Per project/workspace on/off | Every sharing call is keyed `{tenantId, workspaceId}`; the UI names the workspace in the caption, each status line and the switch's aria-label |
-| 6 | Admin picks whose subscription | `ProviderSharingDialog.tsx` policy section → `providerSharing.policy.update` |
-| 7 | See every account in the workspace | Roster in the dialog, from `provider_account_index` restricted to workspace members |
+| #   | What was asked                              | Where it is                                                                                                                                    |
+| --- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Per-person "their own" vs "the workspace's" | `ProviderSharingDialog.tsx`, member list → `providerSharing.member.update`                                                                     |
+| 2   | Contribute my Claude, only if connected     | `ProviderSharingSection.tsx` in the collab popover; the server only ever returns genuinely connected accounts in `viewerAccounts`              |
+| 3   | Pick which of several accounts              | Account picker in the popover (shown only with >1 account); accounts are created at `/settings/connections`                                    |
+| 4   | See whether you are sharing                 | Per-provider status line and switch in the popover                                                                                             |
+| 5   | Per project/workspace on/off                | Every sharing call is keyed `{tenantId, workspaceId}`; the UI names the workspace in the caption, each status line and the switch's aria-label |
+| 6   | Admin picks whose subscription              | `ProviderSharingDialog.tsx` policy section → `providerSharing.policy.update`                                                                   |
+| 7   | See every account in the workspace          | Roster in the dialog, from `provider_account_index` restricted to workspace members                                                            |
 
 ### The shape of it
 
@@ -54,7 +54,7 @@ code problem and neither was resolved by building this.
   are SHA-256 digests: nothing on disk can enumerate "every account in this workspace".
 - **Who may be lent anything** — `resolveProviderAccount.ts` refuses to apply any sharing to
   someone who is not an active member of the tenant. This is load-bearing and easy to remove by
-  accident: a turn is *not* gated on membership (`checkWriteAccessForTurn` deliberately allows a
+  accident: a turn is _not_ gated on membership (`checkWriteAccessForTurn` deliberately allows a
   user with no membership recorded, and the whole check falls open on a failed read), and the
   orchestration read model is not scoped per user, so without this guard a workspace set to a
   shared account would fund anyone who could address a thread in the project. A member-level grant
@@ -110,7 +110,7 @@ code problem and neither was resolved by building this.
    exactly one account per provider. Changing the store layout breaks both — they are the fastest
    way to know the change is coherent.
 5. **`CLAUDE_CODE_OAUTH_TOKEN` stays on the denied list** in `PROVIDER_LAUNCH_DENIED_ENV_KEYS`
-   (`packages/shared/src/tenancy.ts:1341`). A sharing feature makes a leaked machine login *harder*
+   (`packages/shared/src/tenancy.ts:1341`). A sharing feature makes a leaked machine login _harder_
    to debug, not easier.
 6. **The collab panel is a popover, not a tab.** `CollaborationPresenceBar.tsx:195-225` composes
    `CollaborationPeople` and `CollaborationGovernancePanel` inside a `PopoverPopup`

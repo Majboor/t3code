@@ -167,39 +167,46 @@ export function WorkspaceDashboard() {
     [getEnvironmentLabel],
   );
 
+  // Which projects sit in which workspace changes the moment "Add project"
+  // returns and again when an invite lands, and on the first paint after
+  // sign-up the environment socket is often not registered yet. A one-shot
+  // fetch that skipped a missing socket left the dashboard saying "No projects
+  // yet" until somebody reloaded. Reload on those changes, retry while the
+  // environment is still connecting, and refresh on a slow interval as a
+  // backstop, so the dashboard tells the truth without a reload.
+  const projectOwnershipKey = useMemo(
+    () =>
+      projects
+        .map((project) => `${project.environmentId}:${project.id}:${project.ownership?.workspaceId ?? "-"}`)
+        .toSorted()
+        .join("|"),
+    [projects],
+  );
   useEffect(() => {
     let cancelled = false;
-    for (const environmentId of tenancyEnvironmentIds) {
-      const api = readEnvironmentApi(environmentId);
-      if (!api) {
-        continue;
+    let retry: number | null = null;
+    const load = () => {
+      if (cancelled) return;
+      let missing = false;
+      for (const environmentId of tenancyEnvironmentIds) {
+        if (!readEnvironmentApi(environmentId)) {
+          missing = true;
+          continue;
+        }
+        void reloadTenancySnapshot(environmentId);
       }
-      void api.organizations
-        .list()
-        .then((snapshot) => {
-          if (cancelled) return;
-          setTenancySnapshotsByEnvironment((previous) => ({
-            ...previous,
-            [environmentId]: {
-              environmentId,
-              environmentLabel: getEnvironmentLabel(environmentId),
-              snapshot,
-            },
-          }));
-        })
-        .catch((error) => {
-          if (cancelled) return;
-          setTenancySnapshotsByEnvironment((previous) => {
-            const { [environmentId]: _removed, ...rest } = previous;
-            return rest;
-          });
-          console.debug("Failed to load tenancy workspace metadata", error);
-        });
-    }
+      if (missing) {
+        retry = window.setTimeout(load, 2_000);
+      }
+    };
+    load();
+    const interval = window.setInterval(load, 15_000);
     return () => {
       cancelled = true;
+      if (retry !== null) window.clearTimeout(retry);
+      window.clearInterval(interval);
     };
-  }, [getEnvironmentLabel, tenancyEnvironmentIds]);
+  }, [projectOwnershipKey, reloadTenancySnapshot, tenancyEnvironmentIds]);
   const handleToggleFavorite = useCallback(
     (entry: WorkspaceDashboardThread) => {
       const threadRef = scopeThreadRef(entry.thread.environmentId, entry.thread.id);
@@ -950,16 +957,25 @@ function EmptyDashboard({
             <span>Add Project</span>
           </button>
         </div>
-        <p className="mt-5 text-xs leading-relaxed text-muted-foreground">
-          Working from a browser?{" "}
-          <Link
-            className="font-medium text-foreground underline underline-offset-2"
-            to="/environments"
-          >
-            Connect the machine you work on
-          </Link>{" "}
-          and its projects show up here.
-        </p>
+        {/*
+         * Only in a browser, which is what it says and was not what it did.
+         *
+         * The desktop app *is* the machine you work on: its projects are already
+         * here, so telling the person to go and connect one is an instruction
+         * that cannot be carried out and quietly suggests the app is not working.
+         */}
+        {isElectron ? null : (
+          <p className="mt-5 text-xs leading-relaxed text-muted-foreground">
+            Working from a browser?{" "}
+            <Link
+              className="font-medium text-foreground underline underline-offset-2"
+              to="/environments"
+            >
+              Connect the machine you work on
+            </Link>{" "}
+            and its projects show up here.
+          </p>
+        )}
       </div>
     </section>
   );
@@ -982,11 +998,24 @@ function CreateWorkspaceDialog({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const selectedTarget = targets.find((target) => createTargetKey(target) === targetKey) ?? null;
 
+  // Reset the form when the dialog opens, and only then. The targets list is
+  // rebuilt every time the tenancy snapshot refreshes (which the dashboard
+  // does on a timer), and resetting on that as well wiped the name while the
+  // person was still typing it.
   useEffect(() => {
     if (!open) return;
     setTitle("");
     setErrorMessage(null);
-    setTargetKey(targets[0] ? createTargetKey(targets[0]) : "");
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    setTargetKey((current) =>
+      targets.some((target) => createTargetKey(target) === current)
+        ? current
+        : targets[0]
+          ? createTargetKey(targets[0])
+          : "",
+    );
   }, [open, targets]);
 
   return (

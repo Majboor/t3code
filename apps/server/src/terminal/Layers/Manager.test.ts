@@ -986,6 +986,55 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
     }),
   );
 
+  /**
+   * The hub credential is minted per open, so it differs on every reattach. If
+   * that counted as an environment change, switching tabs or reconnecting would
+   * kill the shell and clear the scrollback — which is what this asserts does
+   * not happen.
+   */
+  it.effect("reattaches to a running shell when only the hub credential differs", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput({ env: { T3CODE_HUB_TOKEN: "minted-first" } }));
+      yield* manager.open(openInput({ env: { T3CODE_HUB_TOKEN: "minted-second" } }));
+
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+      expect(ptyAdapter.spawnInputs[0]?.env.T3CODE_HUB_TOKEN).toBe("minted-first");
+    }),
+  );
+
+  it.effect("still respawns when something other than the credential changes", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(
+        openInput({ env: { T3CODE_HUB_TOKEN: "minted-first", CUSTOM_FLAG: "1" } }),
+      );
+      yield* manager.open(
+        openInput({ env: { T3CODE_HUB_TOKEN: "minted-second", CUSTOM_FLAG: "2" } }),
+      );
+
+      expect(ptyAdapter.spawnInputs).toHaveLength(2);
+      // The respawn takes the newest credential with it, not the one the shell
+      // was originally opened with.
+      expect(ptyAdapter.spawnInputs[1]?.env.T3CODE_HUB_TOKEN).toBe("minted-second");
+    }),
+  );
+
+  /**
+   * A restart respawns for its own reasons, and is the moment a shell holding a
+   * stale credential gets a working one.
+   */
+  it.effect("carries the newest hub credential through a restart", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput({ env: { T3CODE_HUB_TOKEN: "minted-first" } }));
+      yield* manager.restart(restartInput({ env: { T3CODE_HUB_TOKEN: "minted-second" } }));
+
+      expect(ptyAdapter.spawnInputs).toHaveLength(2);
+      expect(ptyAdapter.spawnInputs[1]?.env.T3CODE_HUB_TOKEN).toBe("minted-second");
+    }),
+  );
+
   it.effect("starts zsh with prompt spacer disabled to avoid `%` end markers", () =>
     Effect.gen(function* () {
       if (process.platform === "win32") return;

@@ -68,12 +68,12 @@ ProviderWorkspaceAccount { userId, displayName, provider, accountId, label, crea
 
 RPC methods, added to `WS_METHODS` in `packages/contracts/src/rpc.ts`:
 
-| method | input | result | who |
-|---|---|---|---|
-| `providerSharing.overview.get` | `{tenantId, workspaceId}` | `ProviderSharingOverviewResult` | any member |
-| `providerSharing.share.update` | `{tenantId, workspaceId, provider, accountId, enabled}` | `{share}` | the owner, for themselves only |
-| `providerSharing.policy.update` | `{tenantId, workspaceId, provider, mode, sharedOwnerUserId?, sharedAccountId?}` | `{policy}` | admin |
-| `providerSharing.member.update` | `{tenantId, workspaceId, userId, provider, access}` | `{grant}` | admin |
+| method                          | input                                                                           | result                          | who                            |
+| ------------------------------- | ------------------------------------------------------------------------------- | ------------------------------- | ------------------------------ |
+| `providerSharing.overview.get`  | `{tenantId, workspaceId}`                                                       | `ProviderSharingOverviewResult` | any member                     |
+| `providerSharing.share.update`  | `{tenantId, workspaceId, provider, accountId, enabled}`                         | `{share}`                       | the owner, for themselves only |
+| `providerSharing.policy.update` | `{tenantId, workspaceId, provider, mode, sharedOwnerUserId?, sharedAccountId?}` | `{policy}`                      | admin                          |
+| `providerSharing.member.update` | `{tenantId, workspaceId, userId, provider, access}`                             | `{grant}`                       | admin                          |
 
 `ProviderSharingOverviewResult` is one read that powers the whole panel:
 
@@ -110,15 +110,15 @@ Precedence, strictest first:
 
 0. **Only members of the workspace are lent anything.** Applied in the resolver, not the decision
    function: a non-member is given `NO_SHARING` and so runs on their own account or not at all.
-   Nothing upstream enforces this — `checkWriteAccessForTurn` lets a user with *no* membership run
+   Nothing upstream enforces this — `checkWriteAccessForTurn` lets a user with _no_ membership run
    a turn on purpose, so without this a shared workspace would fund anyone who could address a
    thread in the project. The predicate is the same one that check uses, so the two agree.
 1. A contributor's **off** switch always wins — a share with `enabled === false` is invisible.
 2. Effective access = `grant?.access ?? (policy?.mode === "shared" ? "workspace" : "own")`.
 3. `workspace` → the policy's named account, only if still shared and still connected.
 4. Otherwise the acting user's **own default account**.
-5. Otherwise refuse. The message must offer both routes: *"No Claude account is connected for you.
-   Connect one in Settings → Connections, or ask a workspace admin to share one."*
+5. Otherwise refuse. The message must offer both routes: _"No Claude account is connected for you.
+   Connect one in Settings → Connections, or ask a workspace admin to share one."_
 
 A workspace-access member whose shared account has gone falls back to their own if they have one,
 and refuses otherwise. Revocation stops **new** turns only; turns already running keep their
@@ -140,7 +140,7 @@ Environment for a shared account is the **owner's**: `HOME` = owner's provider-a
 ## House rules
 
 - Effect v4 (`effect/unstable/sql/SqlClient`), `.ts` extensions on relative imports, `bun --bun`.
-- Comments explain *why*, never *what*; match the density of the file you are editing.
+- Comments explain _why_, never _what_; match the density of the file you are editing.
 - Tests colocated (`*.test.ts`), run with `bun --bun vitest run <path>`.
 - `bun --bun turbo run typecheck` must pass for the package you touched.
 - Never log or return token material; `http.ts` already redacts `sk-ant-…` and that must hold.

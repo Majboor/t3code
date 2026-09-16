@@ -19,12 +19,12 @@ import {
   openIsolatedSession,
   sleep,
   unlistProject,
-} from "/Users/hico/Desktop/waleed_codes/p36/t3code/scripts/lib/e2e-harness.mjs";
+} from "./lib/e2e-harness.mjs";
 const { chromium } = createRequire(
-  "/Users/hico/Desktop/waleed_codes/p36/t3code/apps/web/package.json",
+  new URL("../apps/web/package.json", import.meta.url),
 )("playwright");
 
-const BASE = "http://localhost:5733",
+const BASE = process.env["T3_E2E_BASE_URL"] ?? "http://localhost:5733",
   RUN = String(Date.now());
 const DIR = path.join(os.homedir(), "Desktop", `t3-bar-${RUN}`);
 fs.mkdirSync(DIR, { recursive: true });

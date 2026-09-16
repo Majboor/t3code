@@ -286,7 +286,7 @@ function whyNoMark(mark) {
  * So poll for the row instead of re-navigating blindly, and reload only if it
  * never comes. Costs nothing when the dashboard is quick.
  */
-async function reachProject(page, timeoutMs = 60_000) {
+async function reachProject(page, timeoutMs = 120_000) {
   const link = page.locator('[data-testid="dashboard-workspace-project-link"]').first();
   const deadline = Date.now() + timeoutMs;
   let reloaded = false;
@@ -440,6 +440,18 @@ async function userMessages(page) {
     );
 }
 
+/** Waits for the invite page to decide, instead of guessing how long a busy host takes. */
+async function waitForInviteDecision(page, timeoutMs = 120_000) {
+  const deadline = Date.now() + timeoutMs;
+  let seen = "";
+  while (Date.now() < deadline) {
+    seen = await bodyText(page);
+    if (/Invite accepted|Could not accept|failed/i.test(seen)) return seen;
+    await sleep(2_000);
+  }
+  return seen;
+}
+
 // ── the run ─────────────────────────────────────────────────────────────────
 
 const reachable = await fetch(BASE_URL, { redirect: "manual" }).then(
@@ -495,10 +507,9 @@ try {
   );
   check("B signs up with a fresh login", await signUp(accountB, ACCOUNT_B), ACCOUNT_B);
   await accountB.page.goto(inviteForB, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await sleep(7_000);
   check(
     "B joins the workspace from the link",
-    (await bodyText(accountB.page)).includes("Invite accepted"),
+    (await waitForInviteDecision(accountB.page)).includes("Invite accepted"),
   );
   await accountB.page
     .locator('button:has-text("Back to app")')
@@ -597,8 +608,7 @@ try {
   check("A gets a link for C", Boolean(inviteForC), inviteForC ?? "none");
   if (inviteForC) {
     await accountC.page.goto(inviteForC, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await sleep(7_000);
-    const cSaw = await bodyText(accountC.page);
+    const cSaw = await waitForInviteDecision(accountC.page);
     check("C is not sent back through sign-up", !/Sign up now|Create your account/i.test(cSaw));
     check("C joins the workspace from the link", cSaw.includes("Invite accepted"));
     await accountC.page

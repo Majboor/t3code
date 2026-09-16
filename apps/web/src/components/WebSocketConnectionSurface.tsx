@@ -14,6 +14,12 @@ import { toastManager } from "./ui/toast";
 import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 
 const FORCED_WS_RECONNECT_DEBOUNCE_MS = 5_000;
+/**
+ * The scheduled retries stop after `WS_RECONNECT_MAX_ATTEMPTS`; a person who
+ * left the tab open through a server restart or a long network blip was then
+ * stuck on "Retries exhausted" until they reloaded. Keep trying at this pace.
+ */
+export const EXHAUSTED_WS_RECONNECT_INTERVAL_MS = 30_000;
 type WsAutoReconnectTrigger = "focus" | "online";
 
 const connectionTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -87,6 +93,13 @@ export function shouldAutoReconnect(
   trigger: WsAutoReconnectTrigger,
 ): boolean {
   const uiState = getWsConnectionUiState(status);
+
+  // A handshake in flight is the reconnect; restarting the transport here
+  // closes that socket before it opens (the browser logs exactly that) and the
+  // retry starts from zero on a server that was about to answer.
+  if (status.phase === "connecting") {
+    return false;
+  }
 
   if (trigger === "online") {
     return (
@@ -188,6 +201,28 @@ export function WebSocketConnectionCoordinator() {
       window.removeEventListener("focus", handleFocus);
     };
   }, []);
+
+  useEffect(() => {
+    if (status.reconnectPhase !== "exhausted" || !status.online || !status.hasConnected) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      const currentStatus = getWsConnectionStatus();
+      if (
+        currentStatus.reconnectPhase !== "exhausted" ||
+        currentStatus.phase === "connecting" ||
+        !currentStatus.online
+      ) {
+        return;
+      }
+      runReconnect(false);
+    }, EXHAUSTED_WS_RECONNECT_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [status.hasConnected, status.online, status.reconnectPhase]);
 
   useEffect(() => {
     if (status.reconnectPhase !== "waiting" || status.nextRetryAt === null) {

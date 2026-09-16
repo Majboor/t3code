@@ -95,9 +95,20 @@ function postEvent(projectId, ingestKey, properties) {
  */
 async function openAnalyticsFromDashboard(page) {
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await sleep(7_000);
+  // The link appears once the project's workspace has landed, which on a busy
+  // or freshly booted host is not always within a fixed pause: poll, with one
+  // reload halfway for a dashboard that fetched before the membership did.
   const link = page.locator('[data-testid="dashboard-workspace-analytics-link"]').first();
-  if ((await link.count()) === 0) return null;
+  const deadline = Date.now() + 90_000;
+  let reloaded = false;
+  while ((await link.count().catch(() => 0)) === 0) {
+    if (Date.now() > deadline) return null;
+    await sleep(2_000);
+    if (!reloaded && Date.now() > deadline - 22_000) {
+      reloaded = true;
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    }
+  }
   await link.click();
   await sleep(8_000);
   return /\/analytics\/([^/?#]+)/.exec(page.url())?.[1] ?? null;

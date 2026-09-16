@@ -1164,7 +1164,8 @@ async function runArtifact(browser, artifact, index) {
     sh(
       `([ -f ${JSON.stringify(path.join(dir, "app.pid"))} ] && kill "$(cat ${JSON.stringify(path.join(dir, "app.pid"))})" 2>/dev/null) || true`,
     );
-    sh(`pkill -f "b 127.0.0.1:${port}" 2>/dev/null || true`);
+    // Bracketed so the pattern cannot match the shell running this very command.
+    sh(`pkill -f "[b] 127.0.0.1:${port}" 2>/dev/null || true`);
     await owner.context.close().catch(() => undefined);
     await mate.context.close().catch(() => undefined);
     if (!KEEP) {

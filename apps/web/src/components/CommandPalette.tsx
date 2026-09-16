@@ -3,6 +3,7 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER,
   type EnvironmentId,
   type FilesystemBrowseResult,
   parseWorkspaceRootAlreadyClaimedProjectId,
@@ -357,7 +358,11 @@ function OpenCommandPaletteDialog() {
     [browseEnvironmentId, currentProjectCwdForBrowse],
   );
 
-  const { data: browseResult, isPending: isBrowsePending } = useQuery({
+  const {
+    data: browseResult,
+    isPending: isBrowsePending,
+    error: browseError,
+  } = useQuery({
     queryKey: [
       "filesystemBrowse",
       browseEnvironmentId,
@@ -834,8 +839,8 @@ function OpenCommandPaletteDialog() {
             ? { ownership: addProjectWorkspaceContext.ownership }
             : {}),
           defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+            provider: DEFAULT_PROVIDER,
+            model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
           },
           createdAt: new Date().toISOString(),
         });
@@ -922,9 +927,19 @@ function OpenCommandPaletteDialog() {
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canSubmitBrowsePath = isBrowsing && !relativePathNeedsActiveProject;
+  /**
+   * Never offered on the back of a lookup that failed.
+   *
+   * `!browseResult` is true both for "this directory does not exist" and for
+   * "the request never got an answer", and the two must not lead to the same
+   * offer: a refused browse — rate limit, dropped socket — would otherwise put
+   * "Create & Add" in front of someone whose folder exists and is full, and
+   * pressing it acts on a directory nobody has managed to look at.
+   */
   const willCreateProjectPath =
     canSubmitBrowsePath &&
     !isBrowsePending &&
+    browseError === null &&
     query.trim().length > 0 &&
     !hasHighlightedBrowseItem &&
     (hasTrailingPathSeparator(query) ? !browseResult : exactBrowseEntry === null);
@@ -1123,11 +1138,22 @@ function OpenCommandPaletteDialog() {
             onExecuteItem={executeItem}
             {...(relativePathNeedsActiveProject
               ? { emptyStateMessage: "Relative paths require an active project." }
-              : willCreateProjectPath
+              : /* A failure rendered as "nothing here" is the worst of both: it
+                   reads as an answer about the folder, and it is silent about
+                   the only thing that would let anyone act — that nobody
+                   managed to look. */
+                browseError !== null
                 ? {
-                    emptyStateMessage: "Press Enter to create this folder and add it as a project.",
+                    emptyStateMessage: `Could not read this folder. ${
+                      browseError instanceof Error ? browseError.message : "Try again."
+                    }`,
                   }
-                : {})}
+                : willCreateProjectPath
+                  ? {
+                      emptyStateMessage:
+                        "Press Enter to create this folder and add it as a project.",
+                    }
+                  : {})}
           />
         </CommandPanel>
         <CommandFooter className="gap-3 max-sm:flex-col max-sm:items-start">

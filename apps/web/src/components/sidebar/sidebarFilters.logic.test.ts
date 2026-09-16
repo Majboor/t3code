@@ -61,6 +61,7 @@ const NO_FILTERS = {
   threadStatusFilter: "all",
   projectSourceFilter: "all",
   ownerFilter: "all",
+  workspaceFilter: "all",
 };
 
 describe("countActiveSidebarFilters", () => {
@@ -79,8 +80,9 @@ describe("countActiveSidebarFilters", () => {
         threadStatusFilter: "needs_attention",
         projectSourceFilter: "remote",
         ownerFilter: "user-1",
+        workspaceFilter: "workspace-1",
       }),
-    ).toBe(4);
+    ).toBe(5);
   });
 });
 

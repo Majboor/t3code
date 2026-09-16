@@ -20,6 +20,10 @@ const BrowserSavedEnvironmentRecordSchema = Schema.Struct({
   createdAt: Schema.String,
   lastConnectedAt: Schema.NullOr(Schema.String),
   bearerToken: Schema.optionalKey(Schema.String),
+  // Optional and nullable exactly as on the contract: a record saved before
+  // relays existed has no such key, and dropping it here would turn a relayed
+  // environment into a direct one at the hub's address after the next reload.
+  relay: Schema.optionalKey(Schema.NullOr(Schema.Struct({ hubHttpBaseUrl: Schema.String }))),
 });
 type BrowserSavedEnvironmentRecord = typeof BrowserSavedEnvironmentRecordSchema.Type;
 
@@ -44,6 +48,7 @@ function toPersistedSavedEnvironmentRecord(
     wsBaseUrl: record.wsBaseUrl,
     createdAt: record.createdAt,
     lastConnectedAt: record.lastConnectedAt,
+    ...(record.relay !== undefined ? { relay: record.relay } : {}),
   };
 }
 
@@ -136,6 +141,7 @@ export function writeBrowserSavedEnvironmentRegistry(
             createdAt: record.createdAt,
             lastConnectedAt: record.lastConnectedAt,
             bearerToken,
+            ...(record.relay !== undefined ? { relay: record.relay } : {}),
           }
         : toPersistedSavedEnvironmentRecord(record);
     }),
@@ -174,6 +180,7 @@ export function writeBrowserSavedEnvironmentSecret(
         createdAt: record.createdAt,
         lastConnectedAt: record.lastConnectedAt,
         bearerToken: secret,
+        ...(record.relay !== undefined ? { relay: record.relay } : {}),
       } satisfies BrowserSavedEnvironmentRecord;
     }),
   });

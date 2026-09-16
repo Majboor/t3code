@@ -77,4 +77,30 @@ describe("clientPersistenceStorage", () => {
       ],
     });
   });
+
+  it("keeps a relayed record relayed across a reload, with and without a secret", async () => {
+    getTestWindow();
+    const {
+      readBrowserSavedEnvironmentRegistry,
+      writeBrowserSavedEnvironmentRegistry,
+      writeBrowserSavedEnvironmentSecret,
+    } = await import("./clientPersistenceStorage");
+    const relayedRecord: PersistedSavedEnvironmentRecord = {
+      ...savedRegistryRecord,
+      httpBaseUrl: "https://hub.example.com",
+      wsBaseUrl: "wss://hub.example.com",
+      relay: { hubHttpBaseUrl: "https://hub.example.com" },
+    };
+
+    writeBrowserSavedEnvironmentRegistry([relayedRecord]);
+    expect(readBrowserSavedEnvironmentRegistry()).toEqual([relayedRecord]);
+
+    // Writing the secret alone must not strip the relay either: that is the
+    // order a freshly opened machine is saved in, and nothing rewrites the
+    // registry between the secret and the next page load.
+    expect(writeBrowserSavedEnvironmentSecret(testEnvironmentId, "bearer-token")).toBe(true);
+    expect(readBrowserSavedEnvironmentRegistry()).toEqual([relayedRecord]);
+    writeBrowserSavedEnvironmentRegistry([relayedRecord]);
+    expect(readBrowserSavedEnvironmentRegistry()).toEqual([relayedRecord]);
+  });
 });

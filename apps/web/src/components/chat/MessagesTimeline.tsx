@@ -315,7 +315,19 @@ function TimelineRowContent({ row }: { row: TimelineRow }) {
           const author = resolveMessageAuthor(row.message, ctx.collaborationMembers);
           return (
             <div className="flex justify-end">
-              <div className="group relative max-w-[80%] rounded-2xl rounded-br-sm border border-border bg-secondary px-4 py-3">
+              <div
+                className="group relative max-w-[80%] rounded-2xl rounded-br-sm border border-border bg-secondary px-4 py-3"
+                data-author-color={author?.color}
+                style={
+                  author
+                    ? {
+                        borderColor: author.color,
+                        boxShadow: `inset 3px 0 0 0 ${author.color}`,
+                        backgroundColor: `color-mix(in srgb, ${author.color} 10%, var(--secondary))`,
+                      }
+                    : undefined
+                }
+              >
                 {author ? (
                   <div
                     className="mb-1.5 flex items-center gap-1.5"

@@ -15,6 +15,7 @@ export {
 } from "./catalog";
 
 export {
+  addRelayedEnvironment,
   addSavedEnvironment,
   disconnectSavedEnvironment,
   ensureEnvironmentConnectionBootstrapped,

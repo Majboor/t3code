@@ -103,6 +103,7 @@ export interface WsRpcClient {
     readonly compareBranches: RpcUnaryMethod<typeof WS_METHODS.gitCompareBranches>;
     readonly getMergeState: RpcUnaryMethod<typeof WS_METHODS.gitGetMergeState>;
     readonly abortMerge: RpcUnaryMethod<typeof WS_METHODS.gitAbortMerge>;
+    readonly resolveConflicts: RpcUnaryMethod<typeof WS_METHODS.gitResolveConflicts>;
     readonly resolvePullRequest: RpcUnaryMethod<typeof WS_METHODS.gitResolvePullRequest>;
     readonly preparePullRequestThread: RpcUnaryMethod<
       typeof WS_METHODS.gitPreparePullRequestThread
@@ -343,6 +344,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       getMergeState: (input) =>
         transport.request((client) => client[WS_METHODS.gitGetMergeState](input)),
       abortMerge: (input) => transport.request((client) => client[WS_METHODS.gitAbortMerge](input)),
+      resolveConflicts: (input) =>
+        transport.request((client) => client[WS_METHODS.gitResolveConflicts](input)),
       resolvePullRequest: (input) =>
         transport.request((client) => client[WS_METHODS.gitResolvePullRequest](input)),
       preparePullRequestThread: (input) =>

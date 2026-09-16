@@ -77,6 +77,10 @@ export interface ServerConfigShape extends ServerDerivedPaths {
    * auth layer stops taking loopback as proof of identity.
    */
   readonly publishedBeyondLoopback: boolean;
+  /** Seed every hosted provider home from the operator's own login (T3CODE_OPERATOR_PROVIDER_FALLBACK). */
+  readonly operatorProviderFallback?: boolean;
+  /** Where the desktop installers live, served at /downloads (T3CODE_DESKTOP_DOWNLOAD_DIR). */
+  readonly desktopDownloadDir?: string;
   readonly unsafeNoAuth: boolean;
   readonly basicAuthUsername: string | undefined;
   readonly basicAuthPassword: string | undefined;
@@ -207,6 +211,7 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           host: undefined,
           desktopBootstrapToken: undefined,
           publishedBeyondLoopback: false,
+          operatorProviderFallback: false,
           unsafeNoAuth: false,
           basicAuthUsername: undefined,
           basicAuthPassword: undefined,

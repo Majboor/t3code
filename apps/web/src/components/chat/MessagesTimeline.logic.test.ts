@@ -492,9 +492,13 @@ describe("resolveMessageAuthor", () => {
     expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, alone)).toBeNull();
   });
 
-  it("says nothing while the roster is still on its way", () => {
+  it("draws a provisional tag while the roster is still on its way", () => {
     const loading = { byUserId: new Map(), viewerUserId: null };
-    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, loading)).toBeNull();
+    const label = resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, loading);
+    expect(label).not.toBeNull();
+    expect(label?.isKnown).toBe(false);
+    expect(label?.isViewer).toBe(false);
+    expect(label?.color).toBeTruthy();
   });
 
   it("leaves an unattributed message alone rather than guessing", () => {

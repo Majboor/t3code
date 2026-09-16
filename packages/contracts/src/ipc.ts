@@ -21,6 +21,8 @@ import type {
 import type {
   GitAbortMergeInput,
   GitAbortMergeResult,
+  GitResolveConflictsInput,
+  GitResolveConflictsResult,
   GitCheckoutInput,
   GitCompareBranchesInput,
   GitCompareBranchesResult,
@@ -448,6 +450,7 @@ export interface EnvironmentApi {
     compareBranches: (input: GitCompareBranchesInput) => Promise<GitCompareBranchesResult>;
     getMergeState: (input: GitMergeStateInput) => Promise<GitMergeStateResult>;
     abortMerge: (input: GitAbortMergeInput) => Promise<GitAbortMergeResult>;
+    resolveConflicts: (input: GitResolveConflictsInput) => Promise<GitResolveConflictsResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,

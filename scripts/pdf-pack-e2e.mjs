@@ -326,13 +326,26 @@ try {
     "--group-by",
     "title",
   ]);
-  const longest = byPage.split("\n")[0] ?? "";
+  // The CLI prints a title line and a table header before the rows; only the
+  // rows say anything about the reading.
+  const tableRows = (output) => {
+    const lines = output.split("\n");
+    const header = lines.findIndex((line) => /\bValue\s+Events\b/.test(line));
+    if (header === -1) return [];
+    const rows = [];
+    for (const line of lines.slice(header + 1)) {
+      if (line.trim() === "") break;
+      rows.push(line);
+    }
+    return rows;
+  };
+  const longest = tableRows(byPage)[0] ?? "";
   check(
     "the most-read page is the one they lingered on",
     longest.startsWith("What we changed"),
-    longest,
+    longest || byPage.replace(/\n/g, " | "),
   );
-  check("its total is both visits added up", longest.includes("65"), longest);
+  check("its total is both visits added up", /\b65\b/.test(longest), longest);
 
   const reads = t3([
     "analytics",
@@ -346,10 +359,15 @@ try {
     "--group-by",
     "title",
   ]);
+  const countedRows = tableRows(reads);
+  const countedEvents = countedRows.reduce(
+    (total, row) => total + Number(row.trim().split(/\s+/).at(-1) ?? 0),
+    0,
+  );
   check(
     "every page that was opened is counted",
-    reads.split("\n").length === 4,
-    reads.replace(/\n/g, " | "),
+    countedRows.length === 4 && countedEvents === reading.length,
+    `${countedRows.length} titles, ${countedEvents} events — ${reads.replace(/\n/g, " | ")}`,
   );
 
   const furthest = t3([

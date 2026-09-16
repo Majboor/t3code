@@ -24,7 +24,7 @@ ports, their failures — and that is a hosting business wearing a product's clo
 puts the machine back where the work already is.
 
 **What this changes:** nothing about how the app connects. Pairing already exists here. What
-it changes is that pairing is the *intended* path for the web interface rather than an
+it changes is that pairing is the _intended_ path for the web interface rather than an
 accident, so it deserves the same care as any other first-run surface.
 
 ## The cloud is for packs and the CLI, and nothing else
@@ -74,23 +74,23 @@ What this does **not** yet do, so nobody promises it:
   `cert.pem`, so named tunnels cannot be minted unattended and both instances are still
   reachable only through disposable `trycloudflare.com` URLs.
 - The deployed build predates all of this — and the rename — by four days.
-- A `paired-environment` server refuses to create projects, but nothing yet *moves* the
+- A `paired-environment` server refuses to create projects, but nothing yet _moves_ the
   existing hosted workspaces to beta. That is a data migration, not a flag.
 
 ## A machine can be a runner instead of a workspace, added 2026-08-21
 
-`workspaceSource` says what a *server* is for. Nothing said what a **machine** was for, and
+`workspaceSource` says what a _server_ is for. Nothing said what a **machine** was for, and
 two very different things were both showing up as "a machine you connected":
 
 - A **workspace host** — where the agent works. It holds projects, and because per-user
   provider credentials are enforced with no fallback, it is useless until the person has
   connected a Claude or Codex account of their own.
-- A **runner** — a box the agent *drives*. It runs and serves things, holds ports, and no
+- A **runner** — a box the agent _drives_. It runs and serves things, holds ports, and no
   turn ever executes on it.
 
 Every connected machine looked like the first kind, so connecting a deploy target led to the
 same place a new laptop does: connect a provider account before you can do anything. That is
-the friction this removes. A runner is never asked, and it is asked *because of what it is*
+the friction this removes. A runner is never asked, and it is asked _because of what it is_
 rather than because of what its owner happens to have connected already — so somebody who has
 never touched Claude gets the same silence on a deploy box as somebody with two subscriptions.
 
@@ -99,7 +99,7 @@ projects you are expected to open, and it is not offered as somewhere to start a
 **can** still do is everything its credential could always do — the role is a statement of
 purpose, not a permission boundary, and it must never become one. `decideProviderAccount` is
 untouched: a turn dispatched from anywhere still resolves a real per-user credential or is
-refused. This changes what the product *asks* for, never what a session may reach.
+refused. This changes what the product _asks_ for, never what a session may reach.
 
 **The role is chosen by the person approving, not claimed by the machine.** A request to join
 is not evidence of anything — that is why the approval screen exists at all — and the person
@@ -113,7 +113,7 @@ by two different parties.
 `resolveWorkspaceSource` established. It resolves `runner` and nothing else to `runner`, so
 an absent column, a `null`, and a role invented by a later build all land on `workspace-host`.
 The asymmetry is the point: `workspace-host` is what every machine connected before this
-existed genuinely is, *and* it is the role that gets asked for a provider account. A value
+existed genuinely is, _and_ it is the role that gets asked for a provider account. A value
 this build cannot read must never be able to talk the app out of asking.
 
 A machine that reconnects takes the new answer rather than its old one, because a revival is a
@@ -141,19 +141,19 @@ colleague: from the app, sharing a workspace is one action and the recipient get
 
 These are two different acts and must never be confused in the UI, which is exactly the bug
 that prompted this: a share recipient landed on **"Pair with this environment — paste a
-pairing token"**, a screen for trusting a *device*, offering a credential they have no way to
+pairing token"**, a screen for trusting a _device_, offering a credential they have no way to
 obtain. Under `desktop-managed-local` the server advertises `desktop-bootstrap` as the only
 bootstrap method, so there is no token that page could ever accept from them.
 
-- **Pairing** is for *your own* browser reaching *your own* environment.
-- **A share link** is for *somebody else* reaching *your* workspace, and must carry its own
+- **Pairing** is for _your own_ browser reaching _your own_ environment.
+- **A share link** is for _somebody else_ reaching _your_ workspace, and must carry its own
   way in — a public link, or one scoped to named people who sign in or sign up.
 
 ## What we take from upstream, and what we do not
 
 **Take** — self-contained UI, adapted rather than copied wholesale:
 
-- The connect/pair surface's *shape*: an auth shell with eyebrow, title and a sentence that
+- The connect/pair surface's _shape_: an auth shell with eyebrow, title and a sentence that
   says what is about to happen, instead of a bare "Paste token" field.
 - Copy-to-clipboard affordances on codes and URLs.
 - The usage-insights redesign, thread action menus, workspace navigation, `AnimatedHeight`,
@@ -237,7 +237,7 @@ The rules live in one pure function, `packages/shared/src/filePresence.ts`, shar
 server and the browser rather than written twice. The counting is deliberately asymmetric:
 people are counted per account, so one person with two tabs open is one person, and agents
 are counted per thread, so one person running two turns into one file is two writers racing.
-A person and their *own* agent in one file is still the urgent case — it is the commonest way
+A person and their _own_ agent in one file is still the urgent case — it is the commonest way
 somebody loses unsaved work.
 
 What it changes, in three places:

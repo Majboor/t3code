@@ -10,6 +10,7 @@
  *
  * @module ServerSettings
  */
+import { watchDirectoryShallow } from "./shallowWatch.ts";
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
@@ -281,7 +282,7 @@ const makeServerSettings = Effect.gen(function* () {
     // Debounce watch events so the file is fully written before we read it.
     // Editors emit multiple events per save (truncate, write, rename) and
     // `fs.watch` can fire before the content has been flushed to disk.
-    const debouncedSettingsEvents = fs.watch(settingsDir).pipe(
+    const debouncedSettingsEvents = watchDirectoryShallow(settingsDir).pipe(
       Stream.filter((event) => {
         return (
           event.path === settingsFile ||

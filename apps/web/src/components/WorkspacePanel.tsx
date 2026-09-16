@@ -1,5 +1,12 @@
 import * as Schema from "effect/Schema";
 import Editor from "@monaco-editor/react";
+import NotebookView, {
+  type NotebookExecuteEvent,
+  type NotebookExecuteHandle,
+} from "./notebook/NotebookView";
+import { isNotebookPath, normalizeNotebookOutput } from "./notebook/notebookModel.logic";
+
+import { mediaKindForPath, workspaceFileUrl } from "../lib/workspaceFileUrl";
 
 import { useLocalMonaco } from "../lib/monacoSetup";
 import { FileDiff } from "@pierre/diffs/react";
@@ -859,6 +866,75 @@ export default function WorkspacePanel({
     activeFilePath && activeFileState && !activeFileState.isBinary && !activeFileState.tooLarge
       ? (draftByPath[activeFilePath] ?? activeFileState.contents)
       : "";
+  // Live notebook execution: POST a cell to the per-user kernel behind
+  // `/api/notebook/execute` (see apps/server/src/notebook). One kernel per
+  // notebook path, so cells share state; results come back when the cell ends.
+  const runNotebookCell = useCallback(
+    (code: string, onEvent: (event: NotebookExecuteEvent) => void): NotebookExecuteHandle => {
+      const cwd = activeWorkspaceRoot;
+      const kernelId = activeFilePath;
+      let cancelled = false;
+      const done = (async () => {
+        onEvent({ type: "status", busy: true });
+        try {
+          if (!cwd || !kernelId) {
+            onEvent({ type: "error", message: "No workspace directory for this notebook." });
+            return;
+          }
+          const response = await fetch("/api/notebook/execute", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ kernelId, cwd, code }),
+          });
+          if (!response.ok) {
+            onEvent({ type: "error", message: `Kernel error (${response.status}).` });
+            return;
+          }
+          const data = (await response.json()) as {
+            executionCount?: number | null;
+            outputs?: unknown[];
+          };
+          if (cancelled) return;
+          if (typeof data.executionCount === "number") {
+            onEvent({ type: "execution_count", count: data.executionCount });
+          }
+          for (const raw of data.outputs ?? []) {
+            const output = normalizeNotebookOutput(raw);
+            if (output) onEvent({ type: "output", output });
+          }
+        } catch (error) {
+          onEvent({ type: "error", message: error instanceof Error ? error.message : "Kernel request failed." });
+        } finally {
+          onEvent({ type: "status", busy: false });
+        }
+      })();
+      return {
+        done,
+        cancel: () => {
+          cancelled = true;
+          if (kernelId) {
+            void fetch("/api/notebook/restart", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ kernelId }),
+            }).catch(() => undefined);
+          }
+        },
+      };
+    },
+    [activeFilePath, activeWorkspaceRoot],
+  );
+  const restartNotebookKernel = useCallback(() => {
+    if (!activeFilePath) return;
+    void fetch("/api/notebook/restart", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kernelId: activeFilePath }),
+    }).catch(() => undefined);
+  }, [activeFilePath]);
   const observedWorkspaceDiffSignatureRef = useRef("");
   const hasObservedWorkspaceDiffBaselineRef = useRef(false);
   const observedLiveWorkspaceDiffSignatureRef = useRef("");
@@ -1058,7 +1134,23 @@ export default function WorkspacePanel({
       setActiveFilePath(relativePath);
       setSelectedEntry({ path: relativePath, kind: "file" });
       if (!fileStateByPath[relativePath]) {
-        void loadFile(relativePath);
+        if (mediaKindForPath(relativePath)) {
+          // Media renders from the byte-serving endpoint, not the text read
+          // (which would refuse a large video), so skip loadFile and mark it
+          // binary so the media branch takes over.
+          setFileStateByPath((current) => ({
+            ...current,
+            [relativePath]: {
+              relativePath: relativePath as ProjectReadFileResult["relativePath"],
+              contents: "",
+              isBinary: true,
+              tooLarge: false,
+              sizeBytes: 0,
+            },
+          }));
+        } else {
+          void loadFile(relativePath);
+        }
       }
     },
     [fileStateByPath, loadFile],
@@ -3389,13 +3481,49 @@ export default function WorkspacePanel({
                   <LoaderCircleIcon className="size-4 animate-spin" />
                   Loading file…
                 </div>
+              ) : activeFileState &&
+                activeFilePath &&
+                activeWorkspaceRoot &&
+                mediaKindForPath(activeFilePath) ? (
+                <div
+                  className="flex h-full items-center justify-center overflow-auto bg-background/60 p-4"
+                  data-workspace-file-mode="media"
+                >
+                  {(() => {
+                    const kind = mediaKindForPath(activeFilePath);
+                    // Office documents are rendered by the server as PDF (LibreOffice) for the viewer.
+                    const src = workspaceFileUrl(activeWorkspaceRoot, activeFilePath, {
+                      convert: kind === "office" ? "pdf" : undefined,
+                    });
+                    if (kind === "image") {
+                      // eslint-disable-next-line @next/next/no-img-element -- workspace media, no host
+                      return <img alt={basenameOfPath(activeFilePath)} className="max-h-full max-w-full object-contain" src={src} />;
+                    }
+                    if (kind === "video") {
+                      return <video className="max-h-full max-w-full" src={src} controls />;
+                    }
+                    if (kind === "audio") {
+                      return <audio className="w-full max-w-lg" src={src} controls />;
+                    }
+                    return <iframe title={basenameOfPath(activeFilePath)} className="h-full w-full border-0" src={src} />;
+                  })()}
+                </div>
               ) : activeFileState?.isBinary ? (
                 <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
                   <FileWarningIcon className="size-5 text-muted-foreground/70" />
                   <div className="text-sm font-medium text-foreground">
-                    Binary files aren&apos;t editable here yet
+                    No preview for this file type yet
                   </div>
                   <div className="text-xs text-muted-foreground/70">{activeFilePath}</div>
+                  {activeWorkspaceRoot ? (
+                    <a
+                      className="mt-2 rounded-md border border-border/70 bg-card/70 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-card"
+                      href={workspaceFileUrl(activeWorkspaceRoot, activeFilePath, { download: true })}
+                      download={basenameOfPath(activeFilePath)}
+                    >
+                      Download file
+                    </a>
+                  ) : null}
                 </div>
               ) : activeFileState?.tooLarge ? (
                 <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
@@ -3582,6 +3710,20 @@ export default function WorkspacePanel({
                     />
                   ) : null}
                 </div>
+              ) : activeFileState &&
+                activeFilePath &&
+                isNotebookPath(activeFilePath) &&
+                !activeFileState.isBinary &&
+                !activeFileState.tooLarge ? (
+                <NotebookView
+                  value={activeFileDraft}
+                  cwd={activeWorkspaceRoot ?? undefined}
+                  onChange={(json) =>
+                    setDraftByPath((current) => ({ ...current, [activeFilePath]: json }))
+                  }
+                  execute={activeWorkspaceRoot ? runNotebookCell : undefined}
+                  onRestartKernel={restartNotebookKernel}
+                />
               ) : activeFileState ? (
                 <div className="h-full" data-workspace-file-mode="editor">
                   <Editor

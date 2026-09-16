@@ -364,8 +364,37 @@ function resolveDesktopDevServerUrl(): string {
   return devServerUrl;
 }
 
+/**
+ * The portal this machine enrolled to, if any: the one saved environment whose
+ * id enrollment minted. The embedded server dials it as a box so the portal can
+ * reach this machine's projects without an address of its own.
+ */
+function resolveEnrolledHubBaseUrl(): string | null {
+  try {
+    const enrolled = readSavedEnvironmentRegistry(SAVED_ENVIRONMENT_REGISTRY_PATH).find((record) =>
+      String(record.environmentId).startsWith("enrolled-"),
+    );
+    return enrolled?.httpBaseUrl ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where the embedded server reads its hub credential: `<state>/secrets/hub-session-token.bin`. */
+function writeHubSessionTokenForBackend(sessionToken: string): void {
+  const secretsDir = Path.join(STATE_DIR, "secrets");
+  FS.mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
+  const target = Path.join(secretsDir, "hub-session-token.bin");
+  FS.writeFileSync(target, sessionToken, { mode: 0o600 });
+  FS.chmodSync(target, 0o600);
+}
+
 function backendChildEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
+  const hub = resolveEnrolledHubBaseUrl();
+  if (hub && !env.T3CODE_HUB_URL) {
+    env.T3CODE_HUB_URL = hub;
+  }
   delete env.T3CODE_PORT;
   delete env.T3CODE_MODE;
   delete env.T3CODE_NO_BROWSER;
@@ -2283,7 +2312,7 @@ let deviceEnrollmentWindow: EnrollmentWindowController | null = null;
  */
 let pendingDesktopDeepLink: DesktopDeepLink | null = null;
 
-const enrollmentCloudBaseUrl = resolveEnrollmentCloudBaseUrl(process.env);
+let enrollmentCloudBaseUrl = resolveEnrollmentCloudBaseUrl(process.env);
 const enrollmentDeviceLabel = resolveDeviceLabel(OS.hostname());
 
 /**
@@ -2346,6 +2375,18 @@ function ensureDeviceEnrollmentSurface(): DeviceEnrollmentController {
         record,
         sessionToken: credential.sessionToken,
       });
+      // The same credential lets the embedded server dial the portal as a box,
+      // which is what puts this machine on the portal's Environments page.
+      // Restart the server so it picks up the hub address and the token.
+      try {
+        writeHubSessionTokenForBackend(credential.sessionToken);
+        writeDesktopLogHeader("device enrollment stored hub credential; restarting backend to dial the portal");
+        void stopBackendAndWaitForExit().then(() => startBackend());
+      } catch (error) {
+        writeDesktopLogHeader(
+          `device enrollment could not hand the hub credential to the backend message=${formatErrorMessage(error)}`,
+        );
+      }
     },
     onState: presentDeviceEnrollmentState,
     log: writeDesktopLogHeader,
@@ -2402,6 +2443,27 @@ function handleDeviceEnrollmentAction(action: EnrollmentWindowAction): void {
  * one naming the code this process asked for.
  */
 function handleDesktopDeepLink(link: DesktopDeepLink): void {
+  if (link.server !== null) {
+    // The portal named itself: a person pressed "connect this computer" there.
+    // Point enrollment at it, replacing any run against another portal, and
+    // start straight away — the browser that sent this is already signed in.
+    if (!app.isReady()) {
+      pendingDesktopDeepLink = link;
+      return;
+    }
+    if (link.server !== enrollmentCloudBaseUrl) {
+      deviceEnrollmentController?.dispose();
+      deviceEnrollmentController = null;
+      deviceEnrollmentWindow?.close();
+      deviceEnrollmentWindow = null;
+      enrollmentCloudBaseUrl = link.server;
+      writeDesktopLogHeader(`device enrollment retargeted to ${link.server}`);
+    }
+    const retargeted = ensureDeviceEnrollmentSurface();
+    retargeted.start();
+    presentDeviceEnrollmentState(retargeted.getState());
+    return;
+  }
   const controller = deviceEnrollmentController;
   if (!controller) {
     // Held rather than dropped, and the reason is timing rather than tidiness.
@@ -2414,7 +2476,7 @@ function handleDesktopDeepLink(link: DesktopDeepLink): void {
     pendingDesktopDeepLink = link;
     return;
   }
-  if (!controller.handleApprovalCallback(link.code)) {
+  if (link.code === null || !controller.handleApprovalCallback(link.code)) {
     writeDesktopLogHeader("deep link ignored because its code does not match this machine's");
     return;
   }
@@ -2479,6 +2541,12 @@ function offerDeviceEnrollmentIfUnconfigured(): void {
   // way to connect is a bad first launch; turning it into a refusal to start is
   // an unusable one, and the manual pairing screen still works either way.
   try {
+    if (pendingDesktopDeepLink?.server) {
+      // A link naming a portal is an instruction, whether or not this machine
+      // already has an account somewhere else.
+      drainPendingDesktopDeepLink();
+      return;
+    }
     if (hasConnectedEnvironment(SAVED_ENVIRONMENT_REGISTRY_PATH)) {
       return;
     }

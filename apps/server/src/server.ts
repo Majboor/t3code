@@ -6,6 +6,8 @@ import type { Socket as NodeNetSocket } from "node:net";
 import { ServerConfig } from "./config.ts";
 import { analyticsIngestRouteLayer } from "./analytics/http.ts";
 import { desktopActivityRouteLayer } from "./desktop/http.ts";
+import { notebookExecuteRouteLayer, notebookRestartRouteLayer } from "./notebook/http.ts";
+import { workspaceFileRouteLayer } from "./workspace/fileHttp.ts";
 import {
   shareLinkClaimRouteLayer,
   shareLinkPreviewRouteLayer,
@@ -60,6 +62,7 @@ import {
   browserApiCorsLayer,
 } from "./http.ts";
 import { installScriptRouteLayer } from "./install/http.ts";
+import { desktopDownloadsRouteLayer } from "./downloads/http.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import { OpenLive } from "./open.ts";
@@ -117,6 +120,7 @@ import {
   authSessionSignOutRouteLayer,
   authWebSocketTokenRouteLayer,
 } from "./auth/http.ts";
+import { authQuickLoginRouteLayer } from "./auth/quickLogin.ts";
 import { basicAuthMiddlewareLayer } from "./auth/basicAuth.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
@@ -184,6 +188,10 @@ function isBenignNodeSocketError(error: unknown): boolean {
 
 function attachNodeHttpSocketErrorGuards(server: NodeHttpServerType): NodeHttpServerType {
   server.on("connection", (socket: NodeNetSocket) => {
+    // A laptop that sleeps or changes networks leaves its socket half-open on
+    // this side; without probes the kernel keeps it (and its per-user
+    // connection slot) for hours. Probe after 30 s idle so it is released.
+    socket.setKeepAlive(true, 30_000);
     socket.on("error", (error) => {
       if (isBenignNodeSocketError(error)) {
         return;
@@ -587,6 +595,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   authClientsRouteLayer,
   authOnboardingRouteLayer,
   authPasswordRouteLayer,
+  authQuickLoginRouteLayer,
   authPairingLinksRevokeRouteLayer,
   authPairingLinksRouteLayer,
   authPairingCredentialRouteLayer,
@@ -599,6 +608,9 @@ export const makeRoutesLayer = Layer.mergeAll(
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
   desktopActivityRouteLayer,
+  notebookExecuteRouteLayer,
+  notebookRestartRouteLayer,
+  workspaceFileRouteLayer,
   // Before the static catch-all: `/s/*` is a public route, not an app path.
   shareLinkRedeemRouteLayer,
   // The join page's two exchanges. `preview` is unauthenticated by design and
@@ -655,6 +667,9 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Unauthenticated, because the caller is a bare `curl` on a machine with no
   // account — the same premise the enrollment routes start from.
   installScriptRouteLayer,
+  // Also public, also before the catch-all: the installers a person downloads
+  // before they have an account.
+  desktopDownloadsRouteLayer,
   staticAndDevRouteLayer,
   websocketRpcRouteLayer,
 ).pipe(Layer.provide(browserApiCorsLayer));

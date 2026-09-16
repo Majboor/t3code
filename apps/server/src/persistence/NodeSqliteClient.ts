@@ -228,6 +228,10 @@ const make = (
       new DatabaseSync(options.filename, {
         readOnly: options.readonly ?? false,
         allowExtension: options.allowExtension ?? false,
+        // Wait for a writer rather than fail with SQLITE_BUSY: the CLI and the
+        // suites open the same file while the server is mid-transaction, and
+        // "database is locked" turned honest ingests into missing events.
+        timeout: 5_000,
       }),
   );
 

@@ -576,7 +576,9 @@ async function notchPhase({ app, page }) {
   );
   check("the slots are sized for the panel", drawn.panelWidth === `${NOTCH_GEOMETRY.panelWidth}px`);
   check("it starts collapsed", drawn.state === "collapsed", `${drawn.state}`);
-  note(`panel reads: ${drawn.title} — ${drawn.slots.map((s) => `${s.label} ${s.value} ${s.note}`).join(" | ")}`);
+  note(
+    `panel reads: ${drawn.title} — ${drawn.slots.map((s) => `${s.label} ${s.value} ${s.note}`).join(" | ")}`,
+  );
 
   // The panel draws a sign-in button only when nobody is signed in — and the
   // desktop app bootstraps its own owner, so a sandbox usually *is* signed in
@@ -717,10 +719,11 @@ async function notchPhase({ app, page }) {
       .catch(() => undefined);
   }
 
-  if (hasActionButton) await panel
-    .locator("[data-notch-action-button]")
-    .click({ timeout: 5_000 })
-    .catch((error) => note(`sign-in click: ${String(error).slice(0, 200)}`));
+  if (hasActionButton)
+    await panel
+      .locator("[data-notch-action-button]")
+      .click({ timeout: 5_000 })
+      .catch((error) => note(`sign-in click: ${String(error).slice(0, 200)}`));
   await sleep(hasActionButton ? 1_500 : 0);
   const after = await readNotchProbe(app);
   if (hasActionButton) {
@@ -869,7 +872,9 @@ async function notchLivePhase({ app, page }) {
     .evaluate(() => localStorage.getItem("t3code.supabase.accessToken"))
     .catch(() => null);
   if (!token) {
-    note("no Supabase token in the app window — sign-in never completed, so the signed-in panel cannot be observed");
+    note(
+      "no Supabase token in the app window — sign-in never completed, so the signed-in panel cannot be observed",
+    );
     check("the panel keeps saying sign in rather than inventing figures", true);
     return;
   }

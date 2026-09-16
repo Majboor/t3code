@@ -97,7 +97,41 @@ export function recordWsConnectionAttempt(socketUrl: string): WsConnectionStatus
   }));
 }
 
+/**
+ * Anyone who has to re-establish per-connection state after a drop.
+ *
+ * A reconnect gives the client a new socket but the same client object, so
+ * long-lived subscriptions opened on the old socket are silently dead: nothing
+ * else tells a subscriber that it has to resubscribe. Without this, a thread
+ * whose turn finished while the socket was down keeps showing "Working…" until
+ * the page is reloaded.
+ */
+const wsConnectedListeners = new Set<() => void>();
+
+export function subscribeWsConnected(listener: () => void): () => void {
+  wsConnectedListeners.add(listener);
+  return () => {
+    wsConnectedListeners.delete(listener);
+  };
+}
+
+function notifyWsConnected(): void {
+  for (const listener of [...wsConnectedListeners]) {
+    try {
+      listener();
+    } catch {
+      // a listener must never break the connection bookkeeping
+    }
+  }
+}
+
 export function recordWsConnectionOpened(): WsConnectionStatus {
+  const status = recordWsConnectionOpenedState();
+  notifyWsConnected();
+  return status;
+}
+
+function recordWsConnectionOpenedState(): WsConnectionStatus {
   return updateWsConnectionStatus((current) => ({
     ...current,
     closeCode: null,
@@ -196,4 +230,19 @@ function applyDisconnectState(
           ? "exhausted"
           : "waiting",
   };
+}
+
+/**
+ * Reconnect delay that never gives up: same backoff, capped, and defined for
+ * every attempt index. `getWsReconnectDelayMsForRetry` returns null past the
+ * UI's attempt budget, which the transport used to read as "stop trying" —
+ * leaving a tab permanently disconnected after a laptop sleep.
+ */
+export function getWsReconnectDelayMsForAttempt(attemptIndex: number): number {
+  const index = Number.isInteger(attemptIndex) && attemptIndex > 0 ? attemptIndex : 0;
+  const exponent = Math.min(index, WS_RECONNECT_MAX_RETRIES);
+  return Math.min(
+    Math.round(WS_RECONNECT_INITIAL_DELAY_MS * WS_RECONNECT_BACKOFF_FACTOR ** exponent),
+    WS_RECONNECT_MAX_DELAY_MS,
+  );
 }

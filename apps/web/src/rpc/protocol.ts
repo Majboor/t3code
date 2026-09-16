@@ -11,7 +11,7 @@ import {
   trackRpcRequestSent,
 } from "./requestLatencyState";
 import {
-  getWsReconnectDelayMsForRetry,
+  getWsReconnectDelayMsForAttempt,
   recordWsConnectionAttempt,
   recordWsConnectionClosed,
   recordWsConnectionErrored,
@@ -153,8 +153,12 @@ export function createWsRpcProtocolLayer(
   const socketLayer = Socket.layerWebSocket(resolvedUrl).pipe(
     Layer.provide(trackingWebSocketConstructorLayer),
   );
-  const retryPolicy = Schedule.addDelay(Schedule.recurs(WS_RECONNECT_MAX_RETRIES), (retryCount) =>
-    Effect.succeed(Duration.millis(getWsReconnectDelayMsForRetry(retryCount) ?? 0)),
+  // Retry for as long as the tab is open, with the same backoff capped at
+  // WS_RECONNECT_MAX_DELAY_MS. Bounding this at WS_RECONNECT_MAX_RETRIES meant a
+  // tab that lost the socket while backgrounded (throttled timers burn the
+  // attempts in seconds) never reconnected again until a manual reload.
+  const retryPolicy = Schedule.addDelay(Schedule.forever, (retryCount) =>
+    Effect.succeed(Duration.millis(getWsReconnectDelayMsForAttempt(retryCount))),
   );
   const protocolLayer = Layer.effect(
     RpcClient.Protocol,

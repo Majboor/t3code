@@ -63,11 +63,19 @@ export function resolveMessageAuthor(
     return null;
   }
 
-  // No roster yet. Not even the reader's own id is known, so every message
-  // would come out as a stranger's — say nothing until there is something true
-  // to say.
+  // No roster yet. The reader's own id is not known either, so nobody can be
+  // told apart from the viewer — but an unlabelled bubble reads as the
+  // reader's own words, which is the worse mistake in a shared thread. Draw a
+  // provisional tag in the author's colour; the name arrives with the roster.
   if (members.viewerUserId === null) {
-    return null;
+    return {
+      userId: authorUserId,
+      displayName: UNKNOWN_MEMBER_NAME,
+      avatarInitials: UNKNOWN_MEMBER_INITIALS,
+      color: memberColorForUserId(authorUserId),
+      isViewer: false,
+      isKnown: false,
+    };
   }
 
   const isViewer = authorUserId === members.viewerUserId;

@@ -26,10 +26,28 @@ export function resolveAndPersistPreferredEditor(
   return editor ?? null;
 }
 
-export async function openInPreferredEditor(api: LocalApi, targetPath: string): Promise<EditorId> {
+export interface OpenInPreferredEditorOptions {
+  /**
+   * Where a browser can show the file when this machine has no desktop editor
+   * (hosted/web deployments): the file is opened in a new tab instead of failing.
+   */
+  readonly fallbackUrl?: string | null | undefined;
+}
+
+export async function openInPreferredEditor(
+  api: LocalApi,
+  targetPath: string,
+  options?: OpenInPreferredEditorOptions,
+): Promise<EditorId | "browser"> {
   const { availableEditors } = await api.server.getConfig();
   const editor = resolveAndPersistPreferredEditor(availableEditors);
-  if (!editor) throw new Error("No available editors found.");
+  if (!editor) {
+    if (options?.fallbackUrl && typeof window !== "undefined") {
+      window.open(options.fallbackUrl, "_blank", "noopener");
+      return "browser";
+    }
+    throw new Error("No available editors found.");
+  }
   await api.shell.openInEditor(targetPath, editor);
   return editor;
 }

@@ -49,7 +49,10 @@ export type DesktopDeepLinkOutcome = "approved" | "denied";
 
 export interface EnrollmentDeepLink {
   readonly action: "enroll";
-  readonly code: string;
+  /** The code of a run in flight (an approval callback), or null for a fresh start. */
+  readonly code: string | null;
+  /** The portal to enrol against, when the link names one: `logicpacks://enroll?server=https://…`. */
+  readonly server: string | null;
   readonly outcome: DesktopDeepLinkOutcome | null;
 }
 
@@ -70,6 +73,19 @@ function normaliseCode(raw: string | null | undefined): string | null {
   }
   const trimmed = raw.trim();
   return CODE_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+/** An http(s) origin and nothing more — no path, no credentials, no other scheme. */
+function normaliseServer(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (url.username !== "" || url.password !== "") return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
 }
 
 function normaliseOutcome(raw: string | null | undefined): DesktopDeepLinkOutcome | null {
@@ -130,13 +146,15 @@ export function parseDesktopDeepLink(value: unknown): DesktopDeepLink | null {
   // query parameter is the friendlier form to generate. Query wins when both
   // are present, because it is the one the approval page writes deliberately.
   const code = normaliseCode(url.searchParams.get("code")) ?? normaliseCode(segments.shift());
-  if (!code) {
+  const server = normaliseServer(url.searchParams.get("server"));
+  if (!code && !server) {
     return null;
   }
 
   return {
     action: "enroll",
     code,
+    server,
     outcome: normaliseOutcome(url.searchParams.get("status")),
   };
 }

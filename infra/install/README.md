@@ -112,17 +112,17 @@ and executes nothing.
 
 ## What it installs, and where
 
-| Path                                            | What                               | Removed by `--uninstall` |
-| ----------------------------------------------- | ---------------------------------- | ------------------------ |
-| `/opt/t3-environment`                           | bun runtime + server bundle        | yes                      |
-| `/opt/t3-environment/libexec/t3-environment.sh` | a copy of this script, for removal | yes                      |
-| `/var/lib/t3-environment`                       | database, logs, worktrees          | **no — see below**       |
-| `/etc/systemd/system/t3-environment.service`    | the unit                           | yes                      |
-| `/opt/t3-environment/libexec/t3-unit-helper`    | the one thing the agent may `sudo` | yes                      |
-| `/etc/sudoers.d/t3-environment`                 | one line, naming that helper       | yes                      |
+| Path                                            | What                                | Removed by `--uninstall`    |
+| ----------------------------------------------- | ----------------------------------- | --------------------------- |
+| `/opt/t3-environment`                           | bun runtime + server bundle         | yes                         |
+| `/opt/t3-environment/libexec/t3-environment.sh` | a copy of this script, for removal  | yes                         |
+| `/var/lib/t3-environment`                       | database, logs, worktrees           | **no — see below**          |
+| `/etc/systemd/system/t3-environment.service`    | the unit                            | yes                         |
+| `/opt/t3-environment/libexec/t3-unit-helper`    | the one thing the agent may `sudo`  | yes                         |
+| `/etc/sudoers.d/t3-environment`                 | one line, naming that helper        | yes                         |
 | `/var/lib/t3-environment/apps`                  | where the agent's own services live | **no — under the data dir** |
-| `t3-app-*.service` written by that helper       | the agent's own units              | yes (only its own)       |
-| system user `t3env`                             | uid < 1000, no shell, no password  | yes                      |
+| `t3-app-*.service` written by that helper       | the agent's own units               | yes (only its own)          |
+| system user `t3env`                             | uid < 1000, no shell, no password   | yes                         |
 
 Nothing else. No packages are installed — not by the installer and not by the
 privileged helper — no unit anything else wrote is touched, and no file outside
@@ -231,19 +231,19 @@ it.
 
 ### What it will not do
 
-| Attempt                                             | What happens                                                       |
-| --------------------------------------------------- | ------------------------------------------------------------------ |
-| `systemctl stop <anything>` as `t3env`              | Refused by systemd — the account has no polkit authorisation       |
-| `sudo systemctl …`                                  | Refused by sudo — not in the rule                                  |
-| `sudo <any other binary>`                           | Refused by sudo — the rule names one path                          |
-| Helper, on a unit outside `t3-app-*`                | `refused (unit-name-outside-prefix)`                               |
-| Helper, on a `t3-app-*` unit it did not write       | `refused (unit-not-ours)` — the marker, not the name, decides      |
-| `t3-app-../other`, `t3-app-x;sh`, `t3-app-Ｘ`       | `refused (unit-name-malformed)` — allowlist, not a prefix test     |
-| `--exec` outside the deploy root                    | `refused (path-outside-deploy-root)`                               |
-| `--exec` through a symlink out of the deploy root   | Same — resolution happens **before** the decision                  |
-| Deploy root replaced with a symlink to `/`          | `refused (deploy-root-unsafe)`                                     |
-| `--arg $'x\nUser=root'`, `--description $'x\n…'`    | `refused (argument-malformed)` / `(description-malformed)`         |
-| Installing a package                                | Not a verb. Out of scope, deliberately — ask the machine's owner   |
+| Attempt                                           | What happens                                                     |
+| ------------------------------------------------- | ---------------------------------------------------------------- |
+| `systemctl stop <anything>` as `t3env`            | Refused by systemd — the account has no polkit authorisation     |
+| `sudo systemctl …`                                | Refused by sudo — not in the rule                                |
+| `sudo <any other binary>`                         | Refused by sudo — the rule names one path                        |
+| Helper, on a unit outside `t3-app-*`              | `refused (unit-name-outside-prefix)`                             |
+| Helper, on a `t3-app-*` unit it did not write     | `refused (unit-not-ours)` — the marker, not the name, decides    |
+| `t3-app-../other`, `t3-app-x;sh`, `t3-app-Ｘ`     | `refused (unit-name-malformed)` — allowlist, not a prefix test   |
+| `--exec` outside the deploy root                  | `refused (path-outside-deploy-root)`                             |
+| `--exec` through a symlink out of the deploy root | Same — resolution happens **before** the decision                |
+| Deploy root replaced with a symlink to `/`        | `refused (deploy-root-unsafe)`                                   |
+| `--arg $'x\nUser=root'`, `--description $'x\n…'`  | `refused (argument-malformed)` / `(description-malformed)`       |
+| Installing a package                              | Not a verb. Out of scope, deliberately — ask the machine's owner |
 
 Every one of those was exercised against a real systemd container, as `t3env`,
 against a foreign service that was still running afterwards.
@@ -388,7 +388,7 @@ build. What is set is the subset that costs nothing: `NoNewPrivileges`,
 `shellcheck -s sh infra/install/t3-environment.sh infra/install/t3-unit-helper.sh`
 must pass.
 
-The helper validates its arguments *before* it checks for root, so the whole
+The helper validates its arguments _before_ it checks for root, so the whole
 refusal table can be exercised from the test suite on any POSIX machine —
 `decideUnitCommand.test.ts` does exactly that, running `/bin/sh
 infra/install/t3-unit-helper.sh` against each attempt. What still needs a

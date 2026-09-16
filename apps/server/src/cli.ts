@@ -34,6 +34,7 @@ import {
   Option,
   Path,
   References,
+  Runtime,
   Schema,
   SchemaIssue,
   SchemaTransformation,
@@ -127,7 +128,8 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { HUB_SESSION_TOKEN_SECRET } from "./box/Layers/BoxRelayDialer.ts";
 import { makeBoxHubCommands, type BoxHubCommandsShape } from "./box/hubClient.ts";
-import { type BoxRefused } from "./box/Services/BoxCommands.ts";
+import { BOX_HUB_TOKEN_ENV } from "./box/hubProtocol.ts";
+import { type BoxRefused, type BoxRunReport } from "./box/Services/BoxCommands.ts";
 import {
   UNIT_DEPLOY_ROOT,
   UNIT_PREFIX,
@@ -140,6 +142,7 @@ import {
   boxRunJson,
   boxServicesJson,
   boxUnitJson,
+  describeBoxRunFailure,
   formatBoxHistory,
   formatBoxLogs,
   formatBoxOutput,
@@ -174,6 +177,7 @@ const BootstrapEnvelopeSchema = Schema.Struct({
   noBrowser: Schema.optional(Schema.Boolean),
   unsafeNoAuth: Schema.optional(Schema.Boolean),
   publishedBeyondLoopback: Schema.optional(Schema.Boolean),
+  operatorProviderFallback: Schema.optional(Schema.Boolean),
   desktopBootstrapToken: Schema.optional(Schema.String),
   supabaseProjectUrl: Schema.optional(Schema.URLFromString),
   supabaseAnonKey: Schema.optional(Schema.String),
@@ -302,6 +306,19 @@ const EnvServerConfig = Config.all({
   // this process. The server cannot detect that for itself, and until it is told,
   // it treats a loopback socket as proof that the caller is the owner.
   publishedBeyondLoopback: Config.boolean("T3CODE_PUBLISHED_BEYOND_LOOPBACK").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  // The operator lends their own Claude/Codex login to every hosted account on
+  // this server: a freshly isolated provider home is seeded from `~/.claude` and
+  // `~/.codex` the first time a person's turn needs it. Off by default — on a
+  // published host that is a deliberate decision to pay for everyone's turns.
+  operatorProviderFallback: Config.boolean("T3CODE_OPERATOR_PROVIDER_FALLBACK").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  // The directory the portal serves desktop installers from (see downloads/http.ts).
+  desktopDownloadDir: Config.string("T3CODE_DESKTOP_DOWNLOAD_DIR").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -501,6 +518,8 @@ export const resolveServerConfig = (
       bootstrap?.unsafeNoAuth === true;
     const publishedBeyondLoopback =
       env.publishedBeyondLoopback === true || bootstrap?.publishedBeyondLoopback === true;
+    const operatorProviderFallback =
+      env.operatorProviderFallback === true || bootstrap?.operatorProviderFallback === true;
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
@@ -571,6 +590,8 @@ export const resolveServerConfig = (
       startupPresentation,
       desktopBootstrapToken,
       publishedBeyondLoopback,
+      operatorProviderFallback,
+      ...(env.desktopDownloadDir?.trim() ? { desktopDownloadDir: env.desktopDownloadDir.trim() } : {}),
       unsafeNoAuth,
       basicAuthUsername: env.basicAuthUsername?.trim() || undefined,
       basicAuthPassword: env.basicAuthPassword?.trim() || undefined,
@@ -2345,9 +2366,10 @@ const resolveBoxHubUrl = Effect.fn("resolveBoxHubUrl")(function* (
  * credential: `t3 secret set hub-session-token` already puts things there with
  * the right permissions, and `t3 secret list` already answers "is this shell
  * configured".
+ *
+ * The third holder is not a person at all: an agent inside a turn gets this
+ * variable set for it, minted for whoever's turn it is. See `BOX_HUB_TOKEN_ENV`.
  */
-const BOX_HUB_TOKEN_ENV = "T3CODE_HUB_TOKEN";
-
 const resolveBoxHubToken = Effect.fn("resolveBoxHubToken")(function* () {
   const fromEnvironment = yield* Config.string(BOX_HUB_TOKEN_ENV).pipe(Config.option);
   if (Option.isSome(fromEnvironment) && fromEnvironment.value.trim().length > 0) {
@@ -2423,6 +2445,38 @@ const boxAnswer = <A extends { readonly outcome: string }>(
       )
     : Effect.succeed(json ? JSON.stringify(toJson(report as A), null, 2) : format(report as A));
 
+/**
+ * What this process exits with when the box ran the command and the command
+ * failed.
+ *
+ * One reserved number rather than the remote code itself, because the two
+ * failures are not the same fact and a caller has to be able to tell them apart:
+ * every other non-zero exit from `t3` means the verb did not work — no hub, no
+ * credential, refused, unreachable — while this one means the verb worked
+ * perfectly and what ran on the far end did not. Mirroring the remote code would
+ * collapse `exit 1` on the box into "T3 failed", which is the reading that
+ * matters most to get right. The code itself is still printed, and still in
+ * `--json` as `exitCode`, so nothing that already parsed it has to change.
+ *
+ * This is a change to a shipped verb: a non-zero remote exit used to leave this
+ * process at 0. Anything that relied on that was relying on a bug.
+ */
+const BOX_REMOTE_FAILURE_EXIT_CODE = 20;
+
+/**
+ * The report already printed; this only carries the exit status out.
+ *
+ * `errorReported: false` because the failure has been said properly once
+ * already — in the command's own words, with its output — and an Effect error
+ * log underneath it would be the same news a second time, worse phrased.
+ */
+class BoxRemoteCommandFailed extends Error {
+  // `override` because Effect declares both on the global `Error` — that is how
+  // a plain thrown error carries an exit code without a wrapper type.
+  override readonly [Runtime.errorExitCode] = BOX_REMOTE_FAILURE_EXIT_CODE;
+  override readonly [Runtime.errorReported] = false;
+}
+
 const boxRunCommand = Command.make("run", {
   baseDir: baseDirFlag,
   json: jsonFlag,
@@ -2436,12 +2490,27 @@ const boxRunCommand = Command.make("run", {
     Argument.withDescription("The command to run, after `--`."),
   ),
 }).pipe(
-  Command.withDescription("Run a command on a box and report its exit code."),
+  Command.withDescription(
+    `Run a command on a box and report its exit code. Exits ${BOX_REMOTE_FAILURE_EXIT_CODE} when the command failed on the box, to keep that apart from this verb failing to reach it.`,
+  ),
   Command.withHandler((flags) =>
     runBoxCommand(flags, (commands) =>
       commands.run({ command: flags.command, detach: flags.detach }).pipe(
         Effect.mapError((error) => new Error(error.message)),
-        Effect.flatMap((report) => boxAnswer(report, flags.json, formatBoxRun, boxRunJson)),
+        Effect.flatMap((report) =>
+          boxAnswer(report, flags.json, formatBoxRun, boxRunJson).pipe(
+            Effect.flatMap((printed) => {
+              // Narrowed by boxAnswer: a refusal has already failed above.
+              const failure =
+                report.outcome === "refused" ? null : describeBoxRunFailure(report as BoxRunReport);
+              return failure === null
+                ? Effect.succeed(printed)
+                : Console.log(printed).pipe(
+                    Effect.andThen(Effect.fail(new BoxRemoteCommandFailed(failure))),
+                  );
+            }),
+          ),
+        ),
       ),
     ),
   ),

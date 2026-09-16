@@ -521,9 +521,14 @@ export const authSelfPairingCredentialRouteLayer = HttpRouter.add(
     const serverAuth = yield* ServerAuth;
     const request = yield* HttpServerRequest.HttpServerRequest;
     const session = yield* serverAuth.authenticateHttpRequest(request);
-    if (session.role !== "owner") {
+    // The credential carries exactly the caller's own role and subject, so a
+    // `client` session handing itself off gains nothing it did not have — and
+    // on a published host every signed-in person is a `client`. Refusing them
+    // left the browser unable to reach its own enrolled machines through the
+    // relay, which needs a bearer for the same person the cookie names.
+    if (session.role !== "owner" && session.role !== "client") {
       return yield* new AuthError({
-        message: "Only owner sessions can hand this session to a browser.",
+        message: "Only signed-in sessions can hand this session to a browser.",
         status: 403,
       });
     }

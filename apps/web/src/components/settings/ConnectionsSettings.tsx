@@ -1007,7 +1007,7 @@ export function ConnectionsSettings() {
       <SettingsSection
         title="Environments"
         headerAction={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button size="xs" variant="ghost" render={<Link to="/environments" />}>
               Open full page
             </Button>

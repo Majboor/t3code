@@ -579,6 +579,9 @@ const makeTenancyRepository = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* sql`DELETE FROM collaboration_activities`;
           yield* sql`DELETE FROM collaboration_presence`;
+          // Non-organization memberships are owned by this snapshot: a member removed in memory
+          // must also disappear from the table, otherwise the next restart resurrects them.
+          yield* sql`DELETE FROM tenant_memberships WHERE organization_id IS NULL`;
           yield* persistInvites(snapshot.invites);
           yield* persistMemberships(snapshot.memberships);
           for (const presence of snapshot.presence) {

@@ -29,13 +29,21 @@
 import * as Path from "node:path";
 
 import { Effect, Layer } from "effect";
+import { HttpServer } from "effect/unstable/http";
 
+import { ServerAuth } from "../../auth/Services/ServerAuth.ts";
 import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerEnvironment } from "../../environment/Services/ServerEnvironment.ts";
 import { ServiceRegistry } from "../../environment/Services/ServiceRegistry.ts";
-import { createEnvironmentDialer, type RelaySocketLike } from "../../environmentRelay/dialer.ts";
+import {
+  createEnvironmentDialer,
+  createLoopbackRelaySessionFactory,
+  type RelayLocalSessionFactory,
+  type RelaySocketLike,
+} from "../../environmentRelay/dialer.ts";
 import { EnvironmentServiceRepository } from "../../persistence/Services/EnvironmentServices.ts";
+import { formatHostForUrl, isWildcardHost } from "../../startupAccess.ts";
 import { createBoxResponder } from "../boxResponder.ts";
 import { createNodeBoxMachine } from "../nodeBoxMachine.ts";
 import { createBoxRelaySessionFactory } from "../relaySession.ts";
@@ -66,7 +74,32 @@ async function mintHubWebSocketToken(input: {
   readonly hubBaseUrl: string;
   readonly sessionToken: string;
 }): Promise<string> {
-  const url = new URL("/api/auth/ws-token", input.hubBaseUrl);
+  const minted = await mintWebSocketToken({
+    baseUrl: input.hubBaseUrl,
+    sessionToken: input.sessionToken,
+  });
+  if (minted.outcome === "refused") {
+    throw new Error(
+      `The hub would not issue a connection token (${minted.status}). The credential in \`${HUB_SESSION_TOKEN_SECRET}\` may have been revoked.`,
+    );
+  }
+  return minted.token;
+}
+
+/**
+ * `POST /api/auth/ws-token` against any server, as a bearer.
+ *
+ * Shared by the outbound dial (against the hub) and the loopback session that
+ * serves a relayed browser (against this very process). A refusal is returned
+ * rather than thrown because the two callers mean different things by it: the
+ * hub refusing is a revoked enrollment, this process refusing its own loopback
+ * session is a session that has aged out and should simply be minted again.
+ */
+async function mintWebSocketToken(input: {
+  readonly baseUrl: string;
+  readonly sessionToken: string;
+}): Promise<{ outcome: "issued"; token: string } | { outcome: "refused"; status: number }> {
+  const url = new URL("/api/auth/ws-token", input.baseUrl);
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -77,9 +110,7 @@ async function mintHubWebSocketToken(input: {
   });
 
   if (!response.ok) {
-    throw new Error(
-      `The hub would not issue a connection token (${response.status}). The credential in \`${HUB_SESSION_TOKEN_SECRET}\` may have been revoked.`,
-    );
+    return { outcome: "refused", status: response.status };
   }
 
   const payload = (await response.json()) as {
@@ -88,9 +119,62 @@ async function mintHubWebSocketToken(input: {
   };
   const token = typeof payload.token === "string" ? payload.token : payload.wsToken;
   if (typeof token !== "string" || token.length === 0) {
-    throw new Error("The hub issued a connection token this build cannot read.");
+    throw new Error("The server issued a connection token this build cannot read.");
   }
-  return token;
+  return { outcome: "issued", token };
+}
+
+/**
+ * What a relayed browser is served when this process is a workspace and not
+ * only a box: this server's own `/ws`, as the owner.
+ *
+ * The desktop app's embedded server is the case. A person enrolled that machine
+ * from the portal, the hub has already matched the attaching browser to the
+ * account the machine belongs to, and the machine is theirs — so the browser
+ * gets what their own desktop window gets, which is the owner session a
+ * loopback caller is issued. The session is minted once and kept for the life
+ * of the dialer; one relayed tab must not add a row to "connected clients"
+ * every time it reconnects. When it ages out, the next browser mints a new one.
+ *
+ * Only `desktop` mode gets this. A `web` server that dials a hub is a box in
+ * the sense the comment on `openLocalSession` below describes, and handing its
+ * workspace to every relayed browser would be a policy change that belongs to
+ * whoever operates it, not to this file.
+ */
+function createDesktopWorkspaceRelaySessionFactory(input: {
+  readonly localBaseUrl: () => string | null;
+  readonly issueOwnerSessionToken: () => Promise<string>;
+  readonly onError: (message: string) => void;
+}): RelayLocalSessionFactory {
+  let ownerSessionToken: string | null = null;
+
+  return createLoopbackRelaySessionFactory({
+    localWebSocketUrl: async () => {
+      const baseUrl = input.localBaseUrl();
+      if (baseUrl === null) {
+        throw new Error("this server has not finished listening");
+      }
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        ownerSessionToken ??= await input.issueOwnerSessionToken();
+        const minted = await mintWebSocketToken({ baseUrl, sessionToken: ownerSessionToken });
+        if (minted.outcome === "issued") {
+          const url = new URL("/ws", baseUrl);
+          url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+          url.searchParams.set("wsToken", minted.token);
+          return url.toString();
+        }
+        // A refused loopback session has aged out or been revoked from the
+        // clients list; forget it and mint a fresh one, once.
+        ownerSessionToken = null;
+        if (attempt === 1) {
+          input.onError(`this server refused its own loopback session (${minted.status})`);
+          throw new Error(`loopback session refused (${minted.status})`);
+        }
+      }
+      throw new Error("unreachable");
+    },
+    connect: (url) => new WebSocket(url) as unknown as RelaySocketLike,
+  });
 }
 
 const makeBoxRelayDialer = Effect.gen(function* () {
@@ -101,6 +185,8 @@ const makeBoxRelayDialer = Effect.gen(function* () {
 
   const environment = yield* ServerEnvironment;
   const secrets = yield* ServerSecretStore;
+  const serverAuth = yield* ServerAuth;
+  const httpServer = yield* HttpServer.HttpServer;
   const registry = yield* ServiceRegistry;
   const services = yield* EnvironmentServiceRepository;
   const descriptor = yield* environment.getDescriptor;
@@ -162,10 +248,43 @@ const makeBoxRelayDialer = Effect.gen(function* () {
     reportHealth: () => ({ state: health.state, detail: null }),
     openLocalSession: createBoxRelaySessionFactory({
       respond,
-      // No fallback on purpose. A box is not a workspace — it holds no
-      // projects and runs no turns — so there is nothing here for a browser to
-      // attach to, and opening a loopback RPC session for one would be
-      // inventing a workspace on a machine that must never have one.
+      // A box is not a workspace — it holds no projects and runs no turns — so
+      // a plain server dialling a hub has nothing for a browser to attach to,
+      // and opening a loopback RPC session for one would be inventing a
+      // workspace on a machine that must never have one. The desktop app's
+      // embedded server is the exception: it *is* the person's workspace, and
+      // the relay is how the portal reaches it. See
+      // `createDesktopWorkspaceRelaySessionFactory`.
+      ...(config.mode === "desktop"
+        ? {
+            fallback: createDesktopWorkspaceRelaySessionFactory({
+              localBaseUrl: () => {
+                const address = httpServer.address;
+                if (typeof address === "string" || !("port" in address)) {
+                  return null;
+                }
+                const host =
+                  config.host === undefined || isWildcardHost(config.host)
+                    ? "127.0.0.1"
+                    : formatHostForUrl(config.host);
+                return `http://${host}:${address.port}`;
+              },
+              issueOwnerSessionToken: () =>
+                runPromise(
+                  serverAuth
+                    .issueLoopbackOwnerSession({
+                      deviceType: "bot",
+                      label: "Portal relay (this machine)",
+                      ipAddress: "127.0.0.1",
+                    })
+                    .pipe(Effect.map((issued) => issued.sessionToken)),
+                ),
+              onError: (message) => {
+                runSync(Effect.logWarning(`box relay: ${message}`));
+              },
+            }),
+          }
+        : {}),
       onError: (message) => {
         runSync(Effect.logWarning(`box relay: ${message}`));
       },
@@ -213,4 +332,6 @@ export const BoxRelayDialerLive: Layer.Layer<
   | ServerSecretStore
   | ServiceRegistry
   | EnvironmentServiceRepository
+  | ServerAuth
+  | HttpServer.HttpServer
 > = Layer.effectDiscard(makeBoxRelayDialer);

@@ -8,6 +8,7 @@ import { useStore } from "~/store";
 import { EnvironmentInstallSection } from "../devices/EnvironmentInstallSection";
 import { SurfaceHeading, SurfaceSection, SurfaceShell } from "../SurfaceShell";
 import { Button } from "../ui/button";
+import { AccountMachinesSection } from "./AccountMachinesSection";
 import { AddEnvironmentForm } from "./AddEnvironmentForm";
 import { EnvironmentConnectList } from "./EnvironmentConnectList";
 
@@ -77,6 +78,8 @@ export function EnvironmentsSurface({
             <p className="text-sm leading-relaxed text-muted-foreground">{gateExplanation}</p>
           </div>
         ) : null}
+
+        <AccountMachinesSection {...(variant === "page" ? { onOpen: handleSelect } : {})} />
 
         <SurfaceSection
           title="Your environments"

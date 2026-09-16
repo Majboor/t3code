@@ -1,4 +1,5 @@
 import Mime from "@effect/platform-node/Mime";
+import { gzipSync } from "node:zlib";
 import { Data, Effect, FileSystem, Option, Path } from "effect";
 import { cast } from "effect/Function";
 import {
@@ -23,7 +24,33 @@ import { BrowserTraceCollector } from "./observability/Services/BrowserTraceColl
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { quickLoginNameFromSearch, readQuickLogins } from "./auth/quickLogin.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+
+/**
+ * Assets are served straight from disk, which sent 3.7 MB of JavaScript
+ * uncompressed on every first load and told the browser nothing about caching.
+ * Gzip the text types once per file (keyed by path and mtime) and let hashed
+ * `/assets/*` files be cached for good; `index.html` must stay fresh.
+ */
+const COMPRESSIBLE_TYPES = /^(text\/|application\/(javascript|json|xml)|image\/svg)/;
+const compressedAssetCache = new Map<string, { readonly mtimeMs: number; readonly gz: Uint8Array }>();
+
+function compressedAsset(
+  filePath: string,
+  mtimeMs: number,
+  data: Uint8Array,
+): Uint8Array {
+  const cached = compressedAssetCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.gz;
+  const gz = new Uint8Array(gzipSync(data, { level: 6 }));
+  compressedAssetCache.set(filePath, { mtimeMs, gz });
+  return gz;
+}
+
+function staticCacheControl(relativePath: string): string {
+  return relativePath.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache";
+}
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
@@ -248,6 +275,16 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const staticRoot = path.resolve(staticDir);
+    // Internal quick logins: `/?waleed` becomes a server-side sign-in and a
+    // redirect back here with the session cookie set. See auth/quickLogin.ts.
+    if (url.value.pathname === "/") {
+      const quickName = quickLoginNameFromSearch(url.value.searchParams, readQuickLogins());
+      if (quickName !== null) {
+        return HttpServerResponse.redirect(`/api/auth/quick?name=${encodeURIComponent(quickName)}`, {
+          status: 302,
+        });
+      }
+    }
     const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
     const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
     const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
@@ -304,9 +341,25 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Internal Server Error", { status: 500 });
     }
 
+    const acceptsGzip = /\bgzip\b/.test(request.headers["accept-encoding"] ?? "");
+    const cacheControl = staticCacheControl(staticRelativePath);
+    if (acceptsGzip && COMPRESSIBLE_TYPES.test(contentType) && data.byteLength > 1024) {
+      const mtimeMs = Option.getOrElse(fileInfo.mtime, () => new Date(0)).getTime();
+      return HttpServerResponse.uint8Array(compressedAsset(filePath, mtimeMs, data), {
+        status: 200,
+        contentType,
+        headers: {
+          "content-encoding": "gzip",
+          vary: "Accept-Encoding",
+          "cache-control": cacheControl,
+        },
+      });
+    }
+
     return HttpServerResponse.uint8Array(data, {
       status: 200,
       contentType,
+      headers: { "cache-control": cacheControl, vary: "Accept-Encoding" },
     });
   }),
 );

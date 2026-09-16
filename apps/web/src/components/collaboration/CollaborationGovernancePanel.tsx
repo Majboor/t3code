@@ -7,6 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import { useState } from "react";
 
+import type { GitConflictResolutionSide } from "@t3tools/contracts";
 import type { CollaborationGovernance } from "../../hooks/useCollaborationGovernance";
 import { cn } from "../../lib/utils";
 import { findWorkspaceContention } from "./contention.logic";
@@ -152,6 +153,69 @@ export function CollaborationBranchClaims({
   const { branchClaims, canManage } = governance;
   const [merging, setMerging] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<Record<string, ReadonlyArray<string>>>({});
+  const [choices, setChoices] = useState<Record<string, GitConflictResolutionSide>>({});
+  const [resolving, setResolving] = useState<string | null>(null);
+
+  /**
+   * Ends a conflicted merge from the panel: every named file takes one side
+   * whole, and the merge commit lands once nothing is left undecided. Line-level
+   * editing still needs an editor; this is the decision the lead can make here.
+   */
+  const resolveClaim = async (branch: string, paths: ReadonlyArray<string>) => {
+    if (!environmentId || !workspaceRoot) return;
+    const api = readEnvironmentApi(environmentId);
+    if (!api) return;
+    setResolving(branch);
+    try {
+      const result = await api.git.resolveConflicts({
+        cwd: workspaceRoot,
+        resolutions: paths.map((path) => ({ path, side: choices[`${branch}:${path}`] ?? "theirs" })),
+        message: `Merge ${branch} (conflicts decided from the workspace panel)`,
+      });
+      if (result.status === "conflicts") {
+        setConflicts((current) => ({ ...current, [branch]: result.conflictPaths }));
+        toastManager.add({
+          type: "error",
+          title: "Some files are still undecided",
+          description: `${result.conflictPaths.length} file(s) remain in conflict.`,
+        });
+        return;
+      }
+      setConflicts((current) => {
+        const { [branch]: _removed, ...rest } = current;
+        return rest;
+      });
+      toastManager.add({ type: "success", title: `Merged ${branch}` });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not resolve the merge",
+        description: error instanceof Error ? error.message : "The request failed.",
+      });
+    } finally {
+      setResolving(null);
+    }
+  };
+
+  const abortClaim = async (branch: string) => {
+    if (!environmentId || !workspaceRoot) return;
+    const api = readEnvironmentApi(environmentId);
+    if (!api) return;
+    try {
+      await api.git.abortMerge({ cwd: workspaceRoot });
+      setConflicts((current) => {
+        const { [branch]: _removed, ...rest } = current;
+        return rest;
+      });
+      toastManager.add({ type: "success", title: "Merge abandoned", description: `${branch} was left as it was.` });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not abandon the merge",
+        description: error instanceof Error ? error.message : "The request failed.",
+      });
+    }
+  };
 
   /**
    * Lets whoever runs the workspace merge somebody else's branch.
@@ -244,16 +308,63 @@ export function CollaborationBranchClaims({
             {branch} needs somebody to decide
           </div>
           <div className="mt-0.5 text-[10px] text-muted-foreground">
-            Both sides changed the same lines. Open each file, decide what it should say, and
-            commit.
+            Both sides changed the same lines. Pick which side each file keeps, or open the file
+            and decide line by line, then finish the merge.
           </div>
-          <div className="mt-1 grid gap-0.5">
-            {paths.map((path) => (
-              <div key={path} className="truncate font-mono text-[10px] text-foreground">
-                {path}
-              </div>
-            ))}
+          <div className="mt-1 grid gap-1">
+            {paths.map((path) => {
+              const key = `${branch}:${path}`;
+              const side = choices[key] ?? "theirs";
+              return (
+                <div
+                  key={path}
+                  className="flex items-center gap-1"
+                  data-testid="collaboration-merge-conflict-file"
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground">
+                    {path}
+                  </span>
+                  <select
+                    aria-label={`Which side ${path} keeps`}
+                    className="h-6 rounded border border-border bg-background px-1 text-[10px]"
+                    data-testid="collaboration-merge-conflict-side"
+                    value={side}
+                    onChange={(event) =>
+                      setChoices((current) => ({
+                        ...current,
+                        [key]: event.target.value as GitConflictResolutionSide,
+                      }))
+                    }
+                  >
+                    <option value="theirs">Keep {branch}</option>
+                    <option value="ours">Keep current branch</option>
+                  </select>
+                </div>
+              );
+            })}
           </div>
+          {canManage ? (
+            <div className="mt-1.5 flex items-center gap-1">
+              <Button
+                size="xs"
+                variant="default"
+                data-testid="collaboration-merge-resolve"
+                disabled={resolving === branch}
+                onClick={() => void resolveClaim(branch, paths)}
+              >
+                {resolving === branch ? "Finishing…" : "Resolve & merge"}
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                data-testid="collaboration-merge-abort"
+                disabled={resolving === branch}
+                onClick={() => void abortClaim(branch)}
+              >
+                Abandon merge
+              </Button>
+            </div>
+          ) : null}
         </div>
       ))}
     </div>

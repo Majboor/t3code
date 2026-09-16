@@ -13,6 +13,7 @@ describe("parseDesktopDeepLink", () => {
     expect(parseDesktopDeepLink("logicpacks://enroll?code=ABC123xyz")).toEqual({
       action: "enroll",
       code: "ABC123xyz",
+      server: null,
       outcome: null,
     });
   });
@@ -21,6 +22,7 @@ describe("parseDesktopDeepLink", () => {
     expect(parseDesktopDeepLink("logicpacks://enroll/ABC123xyz")).toEqual({
       action: "enroll",
       code: "ABC123xyz",
+      server: null,
       outcome: null,
     });
   });

@@ -79,14 +79,14 @@ t3 deploy run web-3000 \
   --analytics-properties 'path:string:required,seconds:number'
 ```
 
-| Flag                     | Default                                          |
-| ------------------------ | ------------------------------------------------ |
-| `--analytics-stream`     | none — without it, no analytics is wired at all  |
-| `--analytics-key-var`    | `T3_ANALYTICS_INGEST_KEY`                        |
-| `--analytics-purpose`    | "Reported by the `<deployment>` deployment."     |
-| `--analytics-properties` | empty — the stream accepts no properties          |
-| `--deployment-name`      | the target's name                                |
-| `--url`                  | none — the deployment is recorded without one     |
+| Flag                     | Default                                         |
+| ------------------------ | ----------------------------------------------- |
+| `--analytics-stream`     | none — without it, no analytics is wired at all |
+| `--analytics-key-var`    | `T3_ANALYTICS_INGEST_KEY`                       |
+| `--analytics-purpose`    | "Reported by the `<deployment>` deployment."    |
+| `--analytics-properties` | empty — the stream accepts no properties        |
+| `--deployment-name`      | the target's name                               |
+| `--url`                  | none — the deployment is recorded without one   |
 
 `--analytics-purpose` and `--analytics-properties` are read only when the
 stream has to be declared. The run says which of the two happened: `stream
@@ -96,7 +96,7 @@ before the deploy runs, rather than surfacing as a decode failure after the
 command has already executed.
 
 Reissuing stops the previous key working, so a deploy that would cut off a
-*different* live deployment is refused and nothing runs. The refusal names who
+_different_ live deployment is refused and nothing runs. The refusal names who
 reports to the stream and the two ways out: redeploy under that deployment's
 name, or report to a different stream.
 

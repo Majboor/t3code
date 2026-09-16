@@ -173,8 +173,8 @@ export function resolveAppModelSelectionState(
   providers: ReadonlyArray<ServerProvider>,
 ): ModelSelection {
   const selection = settings.textGenerationModelSelection ?? {
-    provider: "codex" as const,
-    model: DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER.codex,
+    provider: "claudeAgent" as const,
+    model: DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER.claudeAgent,
   };
   const provider = resolveSelectableProvider(providers, selection.provider);
 

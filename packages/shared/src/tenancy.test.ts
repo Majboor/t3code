@@ -186,17 +186,17 @@ describe("organization RBAC", () => {
 describe("tenant usage limits", () => {
   it("publishes the initial public access limit policy", () => {
     expect(DEFAULT_PUBLIC_ACCESS_LIMITS).toEqual({
-      maxWebSocketConnectionsPerIp: 60,
-      maxWebSocketConnectionsPerUser: 4,
-      maxWebSocketConnectionsPerTenant: 40,
-      maxRpcRequestsPerMinutePerUser: 120,
-      maxRpcRequestsPerMinutePerTenant: 2_000,
+      maxWebSocketConnectionsPerIp: 400,
+      maxWebSocketConnectionsPerUser: 64,
+      maxWebSocketConnectionsPerTenant: 400,
+      maxRpcRequestsPerMinutePerUser: 600,
+      maxRpcRequestsPerMinutePerTenant: 6_000,
       maxRpcRequestBytes: 12 * 1024 * 1024,
       maxFileUploadBytes: 10 * 1024 * 1024,
       maxFileReadBytes: 2 * 1024 * 1024,
       maxDirectoryEntries: 1_000,
       maxDiffBytes: 2 * 1024 * 1024,
-      maxActiveTurnsPerUser: 2,
+      maxActiveTurnsPerUser: 4,
       maxActiveTurnsPerTenant: 20,
       maxActiveProviderSessionsPerUser: 3,
       maxActiveProviderSessionsPerTenant: 30,
@@ -217,7 +217,7 @@ describe("tenant usage limits", () => {
     const checks = evaluateTenantUsageLimits(
       {
         ...emptyCounters,
-        webSocketConnectionsForIp: 60,
+        webSocketConnectionsForIp: 400,
       },
       limits,
     );
@@ -225,8 +225,8 @@ describe("tenant usage limits", () => {
     expect(checks[0]).toEqual({
       allowed: false,
       limit: "webSocketConnectionsForIp",
-      current: 60,
-      maximum: 60,
+      current: 400,
+      maximum: 400,
     });
     expect(
       findFirstTenantUsageLimitViolation({ ...emptyCounters, activeTurnsForTenant: 20 }, limits),
@@ -1006,6 +1006,35 @@ describe("provider account isolation", () => {
       XDG_CONFIG_HOME: account.configDir,
     });
     expect(plan.env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  /**
+   * A server that is itself an installed box carries this in its own
+   * environment, and it is that machine's credential. Inherited into a turn it
+   * would let every agent on the box act as the machine's owner rather than as
+   * whoever's turn it is — the same substitution the provider keys above are
+   * stripped for. The reactor puts back one minted for the acting user.
+   */
+  it("does not hand a turn the machine's own hub credential", () => {
+    const runtimeLayout = deriveTenantRuntimeDirectoryLayout({
+      tenantId: "tenant-acme",
+      rootDir: "/opt/t3-tenants",
+    });
+
+    const plan = deriveProviderLaunchEnvironment({
+      account: makeProviderAccount(),
+      providerSession: makeProviderSession(),
+      tenantSession: makeTenantSession(),
+      runtimeLayout,
+      baseEnv: {
+        HOME: "/Users/dev",
+        PATH: "/usr/local/bin:/usr/bin",
+        T3CODE_HUB_TOKEN: "the-machine's-own-session",
+      },
+    });
+
+    expect(plan.env.T3CODE_HUB_TOKEN).toBeUndefined();
+    expect(plan.env.PATH).toBe("/usr/local/bin:/usr/bin");
   });
 
   it("derives isolated Claude launch environment without inheriting Anthropic credentials", () => {

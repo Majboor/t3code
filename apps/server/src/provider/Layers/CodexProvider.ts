@@ -67,93 +67,11 @@ const PROVIDER = "codex" as const;
 const OPENAI_AUTH_PROVIDERS = new Set(["openai"]);
 const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
-    slug: "gpt-5.4",
-    name: "GPT-5.4",
-    isCustom: false,
-    capabilities: {
-      reasoningEffortLevels: [
-        { value: "xhigh", label: "Extra High" },
-        { value: "high", label: "High", isDefault: true },
-        { value: "medium", label: "Medium" },
-        { value: "low", label: "Low" },
-      ],
-      supportsFastMode: true,
-      supportsThinkingToggle: false,
-      contextWindowOptions: [],
-      promptInjectedEffortLevels: [],
-    },
-  },
-  {
-    slug: "gpt-5.4-mini",
-    name: "GPT-5.4 Mini",
-    isCustom: false,
-    capabilities: {
-      reasoningEffortLevels: [
-        { value: "xhigh", label: "Extra High" },
-        { value: "high", label: "High", isDefault: true },
-        { value: "medium", label: "Medium" },
-        { value: "low", label: "Low" },
-      ],
-      supportsFastMode: true,
-      supportsThinkingToggle: false,
-      contextWindowOptions: [],
-      promptInjectedEffortLevels: [],
-    },
-  },
-  {
-    slug: "gpt-5.3-codex",
-    name: "GPT-5.3 Codex",
-    isCustom: false,
-    capabilities: {
-      reasoningEffortLevels: [
-        { value: "xhigh", label: "Extra High" },
-        { value: "high", label: "High", isDefault: true },
-        { value: "medium", label: "Medium" },
-        { value: "low", label: "Low" },
-      ],
-      supportsFastMode: true,
-      supportsThinkingToggle: false,
-      contextWindowOptions: [],
-      promptInjectedEffortLevels: [],
-    },
-  },
-  {
-    slug: "gpt-5.3-codex-spark",
-    name: "GPT-5.3 Codex Spark",
-    isCustom: false,
-    capabilities: {
-      reasoningEffortLevels: [
-        { value: "xhigh", label: "Extra High" },
-        { value: "high", label: "High", isDefault: true },
-        { value: "medium", label: "Medium" },
-        { value: "low", label: "Low" },
-      ],
-      supportsFastMode: true,
-      supportsThinkingToggle: false,
-      contextWindowOptions: [],
-      promptInjectedEffortLevels: [],
-    },
-  },
-  {
-    slug: "gpt-5.2-codex",
-    name: "GPT-5.2 Codex",
-    isCustom: false,
-    capabilities: {
-      reasoningEffortLevels: [
-        { value: "xhigh", label: "Extra High" },
-        { value: "high", label: "High", isDefault: true },
-        { value: "medium", label: "Medium" },
-        { value: "low", label: "Low" },
-      ],
-      supportsFastMode: true,
-      supportsThinkingToggle: false,
-      contextWindowOptions: [],
-      promptInjectedEffortLevels: [],
-    },
-  },
-  {
-    slug: "gpt-5.2",
-    name: "GPT-5.2",
+    // The only model the installed Codex CLI accepts with a ChatGPT-account
+    // login (the gpt-5.x names were rejected: "not supported when using Codex
+    // with a ChatGPT account"). It is the CLI's own default.
+    slug: "gpt-6-astra",
+    name: "GPT-6 Astra",
     isCustom: false,
     capabilities: {
       reasoningEffortLevels: [

@@ -1,6 +1,7 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER,
   type ClaudeAgentEffort,
   type EnvironmentId,
   type MessageId,
@@ -823,8 +824,8 @@ export default function ChatView(props: ChatViewProps) {
             threadId,
             draftThread,
             fallbackDraftProject?.defaultModelSelection ?? {
-              provider: "codex",
-              model: DEFAULT_MODEL_BY_PROVIDER.codex,
+              provider: DEFAULT_PROVIDER,
+              model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
             },
             localDraftError,
           )

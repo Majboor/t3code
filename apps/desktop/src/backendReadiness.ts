@@ -50,6 +50,11 @@ export function isBackendReadinessAborted(error: unknown): error is BackendReadi
   return error instanceof BackendReadinessAbortedError;
 }
 
+/** Answered, but from somewhere else. Still an answer. */
+function isRedirect(status: number): boolean {
+  return status >= 300 && status < 400;
+}
+
 export async function waitForHttpReady(
   baseUrl: string,
   options?: WaitForHttpReadyOptions,
@@ -60,7 +65,26 @@ export async function waitForHttpReady(
   const intervalMs = options?.intervalMs ?? DEFAULT_INTERVAL_MS;
   const requestTimeoutMs = options?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const readinessPath = options?.path ?? "/";
-  const isReady = options?.isReady ?? ((response: Response) => response.ok);
+  /**
+   * A redirect is an answer, so it means ready.
+   *
+   * The question this probe asks is "is the backend up and serving", and
+   * anything that came back over HTTP has already answered it — the loop below
+   * only retries on a thrown request, which is what "not up yet" actually looks
+   * like. Requiring 2xx made a redirect indistinguishable from a dead socket.
+   *
+   * That is not hypothetical. A backend started with `--dev-url` answers `GET /`
+   * with a 302 to the dev server, which is every desktop development run: the
+   * probe timed out after 60s, the bootstrap never completed, and the renderer
+   * fell back to whatever `VITE_WS_URL` happened to say — a different server, or
+   * none — where its token meant nothing and every socket got a 401. The visible
+   * symptom was a window that loaded and then hung on the first action.
+   *
+   * `redirect: "manual"` above is what makes this readable rather than followed,
+   * and it was already there; only the verdict was wrong.
+   */
+  const isReady =
+    options?.isReady ?? ((response: Response) => response.ok || isRedirect(response.status));
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {

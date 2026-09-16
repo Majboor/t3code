@@ -81,6 +81,7 @@ import {
   type TerminalEvent,
   WS_METHODS,
   WsRpcGroup,
+  DEFAULT_PROVIDER,
 } from "@t3tools/contracts";
 import {
   DEFAULT_PUBLIC_ACCESS_LIMITS,
@@ -2580,14 +2581,15 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         readonly accessMode?: "private" | "invite-only" | "organization";
       }) => {
         const tenantSession = session.tenantSessionContext;
-        if (tenantSession && tenantSession.tenantId !== input.tenantId) {
-          return Effect.fail(
-            new OrganizationError({
-              code: "invalid-role",
-              message: "You can only create workspaces in your active tenant.",
-            }),
-          );
-        }
+        // Authorization is the membership check below: `ensureTenantPermission`
+        // confirms this user is a member of `input.tenantId` with
+        // `workspace.edit`, looking across every tenant they belong to. An
+        // earlier guard here also refused whenever the session's *cached*
+        // active tenant differed from the target, which rejected legitimate
+        // creates after the tenant list changed or the token aged (the
+        // recurring "only create in your active tenant" error) even though the
+        // person plainly had the right. The membership check is the real gate,
+        // so the redundant active-tenant guard is gone.
 
         /**
          * The bootstrap tenant is created on demand a few lines below, so
@@ -3133,7 +3135,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   provider ??
                   command.bootstrap.createThread.modelSelection.provider ??
                   project?.defaultModelSelection?.provider ??
-                  "codex",
+                  DEFAULT_PROVIDER,
                 cwd,
               });
             }
@@ -3161,7 +3163,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 provider ??
                 thread.modelSelection.provider ??
                 project?.defaultModelSelection?.provider ??
-                "codex",
+                DEFAULT_PROVIDER,
               cwd,
             });
           }),
@@ -3188,15 +3190,27 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         provider: ProviderKind,
         authHomeDir: string,
       ): Effect.Effect<void, never> => {
-        if (!isSingleMachineServer) {
+        // A single operator machine seeds by default; a published host only when
+        // the operator asked to lend their login to everyone (see cli.ts).
+        if (!isSingleMachineServer && config.operatorProviderFallback !== true) {
           return Effect.void;
         }
         const sourceHome = operatorProviderHome(provider);
+        // Claude Code reads its credentials from `CLAUDE_CONFIG_DIR` (the
+        // account's `config/` directory) or `$HOME/.claude`, not from the home
+        // itself, so a copy at the home root alone left every turn "Not logged
+        // in". Seed the places the CLI actually looks as well.
+        const targetDirs =
+          provider === "claudeAgent"
+            ? [authHomeDir, path.join(authHomeDir, "config"), path.join(authHomeDir, ".claude")]
+            : [authHomeDir];
         return Effect.forEach(
-          OPERATOR_PROVIDER_CREDENTIAL_FILES[provider],
-          (fileName) =>
+          targetDirs.flatMap((dir) =>
+            OPERATOR_PROVIDER_CREDENTIAL_FILES[provider].map((fileName) => [dir, fileName] as const),
+          ),
+          ([dir, fileName]) =>
             Effect.gen(function* () {
-              const target = path.join(authHomeDir, fileName);
+              const target = path.join(dir, fileName);
               if (yield* fileSystem.exists(target)) {
                 return;
               }
@@ -3204,6 +3218,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               if (!(yield* fileSystem.exists(source))) {
                 return;
               }
+              yield* fileSystem.makeDirectory(dir, { recursive: true });
               yield* fileSystem.copyFile(source, target);
               yield* fileSystem.chmod(target, 0o600);
             }).pipe(Effect.ignore),
@@ -4229,11 +4244,16 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                * predates the concept. `ShareLinkService.readProject` makes the
                * same allowance for the same reason.
                */
+              // On a server published to other people, an unowned project is
+              // the host's own (the cwd it was started from, a CLI-added path)
+              // and belongs on nobody else's dashboard: showing it handed every
+              // fresh account a second project with the host's files behind it.
+              const unownedProjectsAreShared = !config.publishedBeyondLoopback;
               const isVisibleProject = (project: OrchestrationProjectShell): boolean =>
                 visibleTenantIds === null ||
-                project.ownership === undefined ||
-                project.ownership === null ||
-                visibleTenantIds.has(project.ownership.tenantId);
+                (project.ownership === undefined || project.ownership === null
+                  ? unownedProjectsAreShared
+                  : visibleTenantIds.has(project.ownership.tenantId));
               const visibleProjectIds = new Set(
                 snapshot.projects.filter(isVisibleProject).map((project) => project.id),
               );
@@ -6221,6 +6241,23 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "git" },
           ),
+        [WS_METHODS.gitResolveConflicts]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitResolveConflicts,
+            withRateLimit(
+              ensureWorkspaceRoot(input.cwd, "project.edit", (message) =>
+                gitRpcError(input.cwd, message),
+              ).pipe(
+                Effect.flatMap(() =>
+                  git
+                    .resolveConflicts(input)
+                    .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+                ),
+              ),
+              (message) => gitRpcError(input.cwd, message),
+            ),
+            { "rpc.aggregate": "git" },
+          ),
         [WS_METHODS.terminalOpen]: (input) =>
           observeRpcEffect(
             WS_METHODS.terminalOpen,
@@ -6465,6 +6502,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const request = yield* HttpServerRequest.HttpServerRequest;
         const serverAuth = yield* ServerAuth;
         const sessions = yield* SessionCredentialService;
+        const upgradeStartedAt = Date.now();
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request);
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           spanPrefix: "ws.rpc",
@@ -6478,6 +6516,15 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           ),
         );
         const connectionSlot = yield* acquireActiveWebSocketConnectionSlot(request, session);
+        // A browser aborts a handshake that takes too long and reports only
+        // "closed before the connection is established"; say here how long
+        // the server side took when it was the slow party.
+        const upgradeMs = Date.now() - upgradeStartedAt;
+        if (upgradeMs > 2_000) {
+          yield* Effect.logWarning("websocket upgrade slow").pipe(
+            Effect.annotateLogs({ upgradeMs, userId: resolveAuthenticatedUserId(session) }),
+          );
+        }
         return yield* Effect.acquireUseRelease(
           sessions.markConnected(session.sessionId).pipe(Effect.as(connectionSlot)),
           () => rpcWebSocketHttpEffect,

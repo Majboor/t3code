@@ -22,6 +22,7 @@ import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { toastManager } from "./ui/toast";
 import { openInPreferredEditor } from "../editorPreferences";
+import { relativeWorkspacePath, workspaceFileViewUrl } from "../lib/workspaceFileUrl";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
@@ -243,6 +244,8 @@ function SuspenseShikiCodeBlock({
 
 interface MarkdownFileLinkProps {
   href: string;
+  /** Project root the link was resolved against; lets the browser open the file when no editor exists. */
+  cwd?: string | undefined;
   targetPath: string;
   displayPath: string;
   filePath: string;
@@ -333,6 +336,7 @@ function normalizeMarkdownLinkHrefKey(href: string): string {
 
 const MarkdownFileLink = memo(function MarkdownFileLink({
   href,
+  cwd,
   targetPath,
   displayPath,
   filePath,
@@ -350,14 +354,17 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       return;
     }
 
-    void openInPreferredEditor(api, targetPath).catch((error) => {
+    const relativePath = relativeWorkspacePath(cwd, targetPath);
+    const fallbackUrl =
+      cwd && relativePath !== null ? workspaceFileViewUrl(cwd, relativePath) : null;
+    void openInPreferredEditor(api, targetPath, { fallbackUrl }).catch((error) => {
       toastManager.add({
         type: "error",
         title: "Unable to open file",
         description: error instanceof Error ? error.message : "An error occurred.",
       });
     });
-  }, [targetPath]);
+  }, [cwd, targetPath]);
 
   const handleCopy = useCallback((value: string, title: string) => {
     if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
@@ -518,6 +525,7 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
         return (
           <MarkdownFileLink
             href={href ?? fileLinkMeta.targetPath}
+            cwd={cwd}
             targetPath={fileLinkMeta.targetPath}
             displayPath={fileLinkMeta.displayPath}
             filePath={fileLinkMeta.filePath}

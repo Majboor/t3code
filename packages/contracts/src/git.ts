@@ -241,6 +241,30 @@ export const GitAbortMergeResult = Schema.Struct({
 });
 export type GitAbortMergeResult = typeof GitAbortMergeResult.Type;
 
+/** Which side of a conflicted file wins: the branch being merged into, or the one merged in. */
+export const GitConflictResolutionSide = Schema.Literals(["ours", "theirs"]);
+export type GitConflictResolutionSide = typeof GitConflictResolutionSide.Type;
+
+export const GitConflictResolution = Schema.Struct({
+  path: TrimmedNonEmptyStringSchema,
+  side: GitConflictResolutionSide,
+});
+export type GitConflictResolution = typeof GitConflictResolution.Type;
+
+export const GitResolveConflictsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  resolutions: Schema.Array(GitConflictResolution),
+  message: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type GitResolveConflictsInput = typeof GitResolveConflictsInput.Type;
+
+export const GitResolveConflictsResult = Schema.Struct({
+  /** `completed` once every conflict is decided and the merge commit exists. */
+  status: Schema.Literals(["completed", "conflicts"]),
+  conflictPaths: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+export type GitResolveConflictsResult = typeof GitResolveConflictsResult.Type;
+
 // RPC Results
 
 const GitStatusPr = Schema.Struct({

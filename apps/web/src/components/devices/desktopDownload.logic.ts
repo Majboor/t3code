@@ -149,6 +149,46 @@ export function desktopArtifactFileName(input: {
 export const DESKTOP_DOWNLOAD_BASE_URL: string | null = null;
 
 /**
+ * What the portal has actually published, read at runtime from
+ * `/downloads/manifest.json` (served by `apps/server/src/downloads/http.ts`).
+ * A platform missing from `files` is one nobody has built yet — Windows needs a
+ * Windows builder, so it is the usual absentee.
+ */
+export const DESKTOP_DOWNLOAD_MANIFEST_PATH = "/downloads/manifest.json";
+
+export interface DesktopDownloadManifest {
+  readonly version: string;
+  readonly files: Partial<Record<DesktopPlatform, string>>;
+}
+
+export function parseDesktopDownloadManifest(value: unknown): DesktopDownloadManifest | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const files = record["files"];
+  if (typeof files !== "object" || files === null) return null;
+  const parsed: Partial<Record<DesktopPlatform, string>> = {};
+  for (const platform of ["macos", "windows", "linux"] as const) {
+    const file = (files as Record<string, unknown>)[platform];
+    if (typeof file === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(file)) {
+      parsed[platform] = file;
+    }
+  }
+  return {
+    version: typeof record["version"] === "string" ? record["version"] : "",
+    files: parsed,
+  };
+}
+
+/** The same-origin address of a published installer, or null when that platform has none. */
+export function resolvePublishedDesktopDownloadUrl(
+  manifest: DesktopDownloadManifest | null,
+  platform: DesktopPlatform,
+): string | null {
+  const file = manifest?.files[platform];
+  return file ? `/downloads/${encodeURIComponent(file)}` : null;
+}
+
+/**
  * The link for a build, or null when there is nowhere to link to.
  *
  * Callers must handle the null rather than defaulting it — that is the point of
@@ -179,7 +219,17 @@ export interface DesktopDownloadAvailability {
  * with no explanation — reads as a bug in the page rather than a release that
  * has not happened.
  */
-export function describeDesktopDownloadAvailability(): DesktopDownloadAvailability {
+export function describeDesktopDownloadAvailability(
+  manifest: DesktopDownloadManifest | null = null,
+): DesktopDownloadAvailability {
+  if (manifest !== null && Object.keys(manifest.files).length > 0) {
+    return {
+      published: true,
+      title: manifest.version ? `Downloads are ready (${manifest.version})` : "Downloads are ready",
+      detail:
+        "Pick your operating system and the installer starts immediately. Launch it once installed and it opens this portal to connect — nothing to type.",
+    };
+  }
   if (DESKTOP_DOWNLOAD_BASE_URL !== null) {
     return {
       published: true,

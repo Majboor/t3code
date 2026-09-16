@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
-import { AlertTriangleIcon, DownloadIcon, KeyRoundIcon } from "lucide-react";
-import { useMemo } from "react";
+import { AlertTriangleIcon, DownloadIcon, KeyRoundIcon, MonitorSmartphoneIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { APP_BASE_NAME, APP_VERSION } from "~/branding";
 import { SurfaceHeading, SurfaceSection, SurfaceShell, type SurfaceVariant } from "../SurfaceShell";
@@ -8,7 +8,11 @@ import { Button } from "../ui/button";
 import { EnvironmentInstallSection } from "./EnvironmentInstallSection";
 import {
   desktopArtifactFileName,
+  DESKTOP_DOWNLOAD_MANIFEST_PATH,
   describeDesktopDownloadAvailability,
+  parseDesktopDownloadManifest,
+  resolvePublishedDesktopDownloadUrl,
+  type DesktopDownloadManifest,
   detectDesktopPlatform,
   orderDesktopDownloadTargets,
   resolveDesktopDownloadUrl,
@@ -48,7 +52,23 @@ export function DesktopDownloadSurface({
     [],
   );
   const targets = useMemo(() => orderDesktopDownloadTargets(detected), [detected]);
-  const availability = describeDesktopDownloadAvailability();
+  // What this portal has published, asked at runtime so a new build is a copy
+  // into the downloads directory rather than a redeploy of the web app.
+  const [manifest, setManifest] = useState<DesktopDownloadManifest | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(DESKTOP_DOWNLOAD_MANIFEST_PATH, { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body) => {
+        if (!cancelled) setManifest(parseDesktopDownloadManifest(body));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const availability = describeDesktopDownloadAvailability(manifest);
+  const portalOrigin = typeof window === "undefined" ? "" : window.location.origin;
   const [primary, ...alternatives] = targets;
 
   return (
@@ -86,15 +106,36 @@ export function DesktopDownloadSurface({
             }
           >
             <div className="space-y-4 px-4 py-4 sm:px-5">
-              <DownloadButton target={primary} emphasis="primary" />
+              <DownloadButton target={primary} emphasis="primary" manifest={manifest} />
               {alternatives.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
                   <span className="text-xs text-muted-foreground">Other builds:</span>
                   {alternatives.map((target) => (
-                    <DownloadButton key={target.platform} target={target} emphasis="secondary" />
+                    <DownloadButton
+                      key={target.platform}
+                      target={target}
+                      emphasis="secondary"
+                      manifest={manifest}
+                    />
                   ))}
                 </div>
               ) : null}
+              <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
+                <span className="text-xs text-muted-foreground">Already installed?</span>
+                <Button
+                  data-testid="download-open-app-connect"
+                  size="sm"
+                  variant="outline"
+                  render={
+                    <a
+                      href={`logicpacks://enroll?server=${encodeURIComponent(portalOrigin)}`}
+                    />
+                  }
+                >
+                  <MonitorSmartphoneIcon />
+                  Open {APP_BASE_NAME} and connect this computer
+                </Button>
+              </div>
             </div>
           </SurfaceSection>
         ) : null}
@@ -160,15 +201,19 @@ export function DesktopDownloadSurface({
 function DownloadButton({
   target,
   emphasis,
+  manifest,
 }: {
   readonly target: DesktopDownloadTarget;
   readonly emphasis: "primary" | "secondary";
+  readonly manifest: DesktopDownloadManifest | null;
 }) {
-  const href = resolveDesktopDownloadUrl({
-    platform: target.platform,
-    version: APP_VERSION,
-    arch: "arm64",
-  });
+  const href =
+    resolvePublishedDesktopDownloadUrl(manifest, target.platform) ??
+    resolveDesktopDownloadUrl({
+      platform: target.platform,
+      version: APP_VERSION,
+      arch: "arm64",
+    });
   const label = `Download for ${target.osName} (.${target.fileExtension})`;
 
   if (href === null) {

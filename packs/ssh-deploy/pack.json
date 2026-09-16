@@ -12,13 +12,7 @@
       "displayName": "t3demo"
     },
     "license": "UNLICENSED",
-    "tags": [
-      "deploy",
-      "ssh",
-      "tui",
-      "web",
-      "documents"
-    ]
+    "tags": ["deploy", "ssh", "tui", "web", "documents"]
   },
   "provenance": {
     "workspace": {

@@ -22,6 +22,7 @@ import {
   TurnId,
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
+import { resolveModelSlug } from "@t3tools/shared/model";
 import { Effect, FileSystem, Layer, Path, Queue, Schema, Context, Stream } from "effect";
 
 import {
@@ -1461,7 +1462,7 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         ...(homePath ? { homePath } : {}),
         ...(launchEnvironment ? { environment: launchEnvironment } : {}),
         ...(input.modelSelection?.provider === "codex"
-          ? { model: input.modelSelection.model }
+          ? { model: resolveModelSlug(input.modelSelection.model, "codex") }
           : {}),
         ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
           ? { serviceTier: "fast" }
@@ -1526,7 +1527,7 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           threadId: input.threadId,
           ...(input.input !== undefined ? { input: input.input } : {}),
           ...(input.modelSelection?.provider === "codex"
-            ? { model: input.modelSelection.model }
+            ? { model: resolveModelSlug(input.modelSelection.model, "codex") }
             : {}),
           ...(input.modelSelection?.provider === "codex" &&
           input.modelSelection.options?.reasoningEffort !== undefined
