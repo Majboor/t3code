@@ -16,6 +16,7 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   UserId,
+  type CanonicalRequestType,
   type ProviderEvent,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
@@ -82,7 +83,8 @@ interface AssistantMessageState {
 }
 const assistantMessageState = new Map<string, AssistantMessageState>();
 
-function mapToRuntimeEvents(event: ProviderEvent): ReadonlyArray<ProviderRuntimeEvent> {
+/** Exported for `GlmAdapter.test.ts` - not part of the adapter's public Layer surface. */
+export function mapToRuntimeEvents(event: ProviderEvent): ReadonlyArray<ProviderRuntimeEvent> {
   const base = {
     eventId: EventId.make(randomUUID()),
     provider: PROVIDER,
@@ -108,11 +110,24 @@ function mapToRuntimeEvents(event: ProviderEvent): ReadonlyArray<ProviderRuntime
   }
 
   if (event.kind === "request" && event.method === "session/request_permission") {
+    // `event.requestKind` is already correctly classified from the ACP
+    // toolCall's own `kind` by `glmAcpManager.ts`'s `toolCallKindToRequestKind`
+    // - map it to the canonical `requestType` string the shared projector
+    // (`ProviderRuntimeIngestion.ts`'s `requestKindFromCanonicalRequestType`)
+    // and the web client (`session-logic.ts`'s `requestKindFromRequestType`)
+    // both already recognize. Sending the old always-"dynamic_tool_call"
+    // literal here meant every GLM permission request silently vanished from
+    // `derivePendingApprovals` client-side - neither function has ever known
+    // that string - so the turn sat blocked with no visible approval UI.
+    const requestParams = event.payload as { toolCall?: { title?: string } } | undefined;
     return [
       asRuntimeEvent({
         ...base,
         type: "request.opened",
-        payload: { requestType: "dynamic_tool_call", args: event.payload },
+        payload: {
+          requestType: canonicalRequestTypeFromRequestKind(event.requestKind),
+          ...(requestParams?.toolCall?.title ? { detail: requestParams.toolCall.title } : {}),
+        },
       }),
     ];
   }
@@ -123,7 +138,7 @@ function mapToRuntimeEvents(event: ProviderEvent): ReadonlyArray<ProviderRuntime
         ...base,
         type: "request.resolved",
         payload: {
-          requestType: "dynamic_tool_call",
+          requestType: canonicalRequestTypeFromRequestKind(event.requestKind),
           decision: (event.payload as { decision?: string } | undefined)?.decision,
         },
       }),
@@ -245,6 +260,28 @@ function mapToRuntimeEvents(event: ProviderEvent): ReadonlyArray<ProviderRuntime
   // updates, usage_update, compaction_*) are deliberately dropped for v1 — none
   // are load-bearing for "GLM is a selectable, working provider."
   return [];
+}
+
+/**
+ * Inverse of `glmAcpManager.ts`'s `toolCallKindToRequestKind` - turns the
+ * three-way `ProviderRequestKind` back into the canonical `requestType`
+ * string vocabulary both `ProviderRuntimeIngestion.ts` and the web client's
+ * `session-logic.ts` switch on. `undefined` (no `requestKind` on the event)
+ * falls back to the command-approval gate, same "ask, don't silently allow"
+ * posture as `toolCallKindToRequestKind`'s own default case.
+ */
+function canonicalRequestTypeFromRequestKind(
+  requestKind: "command" | "file-read" | "file-change" | undefined,
+): CanonicalRequestType {
+  switch (requestKind) {
+    case "file-read":
+      return "file_read_approval";
+    case "file-change":
+      return "file_change_approval";
+    case "command":
+    default:
+      return "command_execution_approval";
+  }
 }
 
 function toolCallItemType(kind: string | undefined): "command_execution" | "file_change" | "unknown" {
