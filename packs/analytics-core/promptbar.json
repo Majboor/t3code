@@ -1,0 +1,8 @@
+{"id":"analytics_core","name":"Report deployment analytics",
+ "description":"Record product events from a deployment and ask questions of them",
+ "phrasings":["add analytics to this","track events on this deployment","report usage stats",
+   "log page views","hook up analytics","wire up event tracking","analytics lagao",
+   "show me traffic for this","how many people used this","instrument this for metrics",
+   "add a metrics dashboard","count requests to this endpoint","report signups"],
+ "params":[{"name":"event","type":"string","required":false,"desc":"which event to report or query"}],
+ "prompt":"Wire up analytics-core for this deployment: declare the event before sending it, post with the key alone, and never let a failed report break the page."}
