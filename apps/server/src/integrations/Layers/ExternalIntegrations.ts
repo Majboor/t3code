@@ -14,6 +14,7 @@ import {
   type ExternalIntegrationsShape,
   type PagesDeployResult,
   type RepoActionResult,
+  type ZoneAnalyticsResult,
   type ZoneConnectResult,
 } from "../Services/ExternalIntegrations.ts";
 
@@ -484,7 +485,13 @@ const makeExternalIntegrations = Effect.gen(function* () {
         try: () =>
           res.json() as Promise<{
             success: boolean;
-            result?: { totals?: { requests?: { all?: number }; uniques?: { all?: number } } };
+            result?: {
+              totals?: {
+                requests?: { all?: number };
+                uniques?: { all?: number };
+                bandwidth?: { all?: number };
+              };
+            };
           }>,
         catch: (cause) => new IntegrationError({ message: "Unreadable Cloudflare response.", cause }),
       }));
@@ -492,7 +499,8 @@ const makeExternalIntegrations = Effect.gen(function* () {
       return {
         requests: body.result?.totals?.requests?.all ?? 0,
         uniqueVisitors: body.result?.totals?.uniques?.all ?? 0,
-      };
+        bandwidthBytes: body.result?.totals?.bandwidth?.all ?? 0,
+      } satisfies ZoneAnalyticsResult;
     });
 
   return {

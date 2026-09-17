@@ -70,9 +70,11 @@ export {
   fetchIntegrationsStatus,
   startIntegrationAuthorize,
   disconnectIntegration,
+  fetchCloudflareZoneAnalytics,
   type IntegrationProvider,
   type IntegrationConnectionStatus,
   type IntegrationsStatus,
+  type CloudflareZoneAnalytics,
 } from "./integrations";
 
 export { resolvePrimaryEnvironmentHttpUrl, isLoopbackHostname } from "./target";

@@ -12,6 +12,12 @@ export interface IntegrationsStatus {
   readonly cloudflare: IntegrationConnectionStatus;
 }
 
+export interface CloudflareZoneAnalytics {
+  readonly requests: number;
+  readonly uniqueVisitors: number;
+  readonly bandwidthBytes: number;
+}
+
 function parseIntegrationErrorMessage(text: string): string | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
@@ -58,4 +64,17 @@ export async function disconnectIntegration(provider: IntegrationProvider): Prom
       await readIntegrationErrorMessage(response, `Failed to disconnect ${provider} (${response.status}).`),
     );
   }
+}
+
+export async function fetchCloudflareZoneAnalytics(zoneId: string): Promise<CloudflareZoneAnalytics> {
+  const response = await fetch(
+    resolvePrimaryEnvironmentHttpUrl(`/api/integrations/cloudflare/zones/${encodeURIComponent(zoneId)}/analytics`),
+    { credentials: "include" },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await readIntegrationErrorMessage(response, `Failed to load zone analytics (${response.status}).`),
+    );
+  }
+  return (await response.json()) as CloudflareZoneAnalytics;
 }
