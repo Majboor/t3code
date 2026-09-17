@@ -8,6 +8,8 @@ import {
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
   AuthUpdateUserProfileInput,
+  CompleteOnboardingInput,
+  UpdateUserPreferencesInput,
   type AuthWebSocketTokenResult,
   type ServerAuthPolicy,
 } from "@t3tools/contracts";
@@ -316,6 +318,59 @@ export const authOnboardingRouteLayer = HttpRouter.add(
       } satisfies AuthOnboardingState,
       { status: 200 },
     );
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+export const authPreferencesRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/auth/preferences",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const preferences = yield* serverAuth.getUserPreferences(request);
+    return HttpServerResponse.jsonUnsafe(preferences, { status: 200 });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+export const authPreferencesUpdateRouteLayer = HttpRouter.add(
+  "PATCH",
+  "/api/auth/preferences",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const payload = yield* HttpServerRequest.schemaBodyJson(UpdateUserPreferencesInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AuthError({
+            message: "Invalid account preferences update.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const preferences = yield* serverAuth.updateUserPreferences(request, payload);
+    return HttpServerResponse.jsonUnsafe(preferences, { status: 200 });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+export const authCompleteOnboardingRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/auth/preferences/onboarding",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const payload = yield* HttpServerRequest.schemaBodyJson(CompleteOnboardingInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AuthError({
+            message: "Invalid onboarding answers.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const preferences = yield* serverAuth.completeOnboarding(request, payload);
+    return HttpServerResponse.jsonUnsafe(preferences, { status: 200 });
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 

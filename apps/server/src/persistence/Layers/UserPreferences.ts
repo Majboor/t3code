@@ -112,7 +112,7 @@ const makeUserPreferencesRepository = Effect.gen(function* () {
   const getBySubject: UserPreferencesRepositoryShape["getBySubject"] = (input) =>
     getPreferencesRowBySubject(input).pipe(
       Effect.mapError(toPersistenceSqlError("UserPreferencesRepository.getBySubject:query")),
-      Effect.map((row) => (Option.isSome(row) ? Option.some(toUserPreferences(row.value)) : row)),
+      Effect.map((row) => Option.map(row, toUserPreferences)),
     );
 
   return {
