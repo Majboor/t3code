@@ -166,6 +166,8 @@ import {
   ActivityNoteRepositoryLive,
   SharedPromptRepositoryLive,
 } from "./persistence/Layers/ActivityNotes.ts";
+import { PromptbarTelemetryRepositoryLive } from "./persistence/Layers/PromptbarTelemetry.ts";
+import { promptbarTelemetryRouteLayer } from "./promptbar/http.ts";
 import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderSharing.ts";
 import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
@@ -387,6 +389,11 @@ const ThreadPreferenceLayerLive = ProjectionThreadPreferenceRepositoryLive.pipe(
 );
 const DeployRepositoryLayerLive = DeployRepositoryLive.pipe(Layer.provide(PersistenceLayerLive));
 
+/** One row per promptbar outcome (accepted/dismissed/abstained), for the eval harness. */
+const PromptbarTelemetryRepositoryLayerLive = PromptbarTelemetryRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 /**
  * Who lends a provider account to whom. Reached from three places that do not
  * otherwise meet — the connect flow indexing an account, the panel reading the
@@ -488,6 +495,7 @@ const PersistenceServicesLayerLive = Layer.mergeAll(
   AnalyticsLayerLive,
   DeploymentRegistryLayerLive,
   ServiceRegistryLayerLive,
+  PromptbarTelemetryRepositoryLayerLive,
 );
 
 const TenantRuntimeLifecycleOwnerLayerLive = TenantRuntimeLifecycleOwnerLive.pipe(
@@ -665,6 +673,10 @@ export const makeRoutesLayer = Layer.mergeAll(
   cloudflarePagesProjectRouteLayer,
   cloudflareConnectDomainRouteLayer,
   cloudflareZoneAnalyticsRouteLayer,
+  // The write side of the promptbar eval loop. `/api/promptbar/resolve` (the
+  // hybrid retrieval read side) is wired in separately by the service that
+  // implements it.
+  promptbarTelemetryRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
   desktopActivityRouteLayer,
