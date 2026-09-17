@@ -15,6 +15,7 @@ import { EnvironmentConnectList } from "../environments/EnvironmentConnectList";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { ConnectedMachinesSection } from "./ConnectedMachinesSection";
+import { ExternalIntegrationsSection } from "./ExternalIntegrationsSection";
 import { ProviderAccountsSection } from "./ProviderAccountsSection";
 import {
   SettingsPageContainer,
@@ -1040,6 +1041,8 @@ export function ConnectionsSettings() {
       <ConnectedMachinesSection />
 
       <ProviderAccountsSection />
+
+      <ExternalIntegrationsSection />
     </SettingsPageContainer>
   );
 }
