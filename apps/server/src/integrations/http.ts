@@ -3,6 +3,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 
 import { resolveAuthenticatedUserId, ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "../auth/http.ts";
+import { detectRegistrarHint } from "./registrarHint.ts";
 import {
   ExternalIntegrations,
   IntegrationError,
@@ -194,12 +195,15 @@ export const cloudflareConnectDomainRouteLayer = HttpRouter.add(
       Effect.mapError((cause) => new IntegrationError({ message: "Invalid payload.", status: 400, cause })),
     );
     const integrations = yield* ExternalIntegrations;
+    // Read before the zone exists: this is the only moment the domain's
+    // *current* nameservers (the ones naming its registrar) are still live.
+    const hint = yield* Effect.promise(() => detectRegistrarHint(input.domain));
     const result = yield* integrations.cloudflareConnectDomain(
       resolveAuthenticatedUserId(session),
       input.accountId,
       input.domain,
     );
-    return HttpServerResponse.jsonUnsafe(result, { status: 201 });
+    return HttpServerResponse.jsonUnsafe({ ...result, registrarHint: hint.registrar }, { status: 201 });
   }).pipe(
     Effect.catchTag("AuthError", (error) => respondToAuthError(error)),
     Effect.catchTag("IntegrationError", (error) => respondToIntegrationError(error)),
