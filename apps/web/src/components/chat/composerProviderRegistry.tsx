@@ -191,6 +191,15 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
         />
       ),
   },
+  // GLM's effort control lives in the main model picker itself now (a
+  // slider replacing the raw model checklist — see `ProviderModelPicker.tsx`
+  // and `GlmEffortSlider.tsx`), not a separate traits menu. Having both would
+  // just be two competing controls for the same three-way choice.
+  glm: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: () => null,
+    renderTraitsPicker: () => null,
+  },
 };
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {

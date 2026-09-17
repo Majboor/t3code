@@ -4,6 +4,7 @@ import {
   DEFAULT_PROVIDER,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ModelSelection,
+  ProviderKind,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -18,6 +19,7 @@ import {
   Queue,
   Ref,
   Scope,
+  Schema,
   Context,
   Console,
 } from "effect";
@@ -156,10 +158,19 @@ export const launchStartupHeartbeat = recordStartupHeartbeat.pipe(
   Effect.asVoid,
 );
 
-export const getAutoBootstrapDefaultModelSelection = (): ModelSelection => ({
-  provider: DEFAULT_PROVIDER,
-  model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
-});
+/** Same instance-scoped override `ws.ts`'s `resolveDefaultProviderOverride` reads. */
+function resolveDefaultProvider(): typeof DEFAULT_PROVIDER {
+  const raw = process.env.T3CODE_DEFAULT_PROVIDER;
+  return raw !== undefined && Schema.is(ProviderKind)(raw) ? raw : DEFAULT_PROVIDER;
+}
+
+export const getAutoBootstrapDefaultModelSelection = (): ModelSelection => {
+  const provider = resolveDefaultProvider();
+  return {
+    provider,
+    model: DEFAULT_MODEL_BY_PROVIDER[provider],
+  };
+};
 
 export const resolveWelcomeBase = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;

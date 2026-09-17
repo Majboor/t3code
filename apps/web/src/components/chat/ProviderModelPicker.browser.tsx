@@ -112,6 +112,55 @@ const TEST_PROVIDERS: ReadonlyArray<ServerProvider> = [
       },
     ],
   },
+  {
+    provider: "glm",
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated", type: "api_key", label: "LogicPacks API" },
+    checkedAt: new Date().toISOString(),
+    slashCommands: [],
+    skills: [],
+    models: [
+      {
+        slug: "z-ai/glm-5.3-flash-uncensored",
+        name: "GLM-5.3 Flash (LogicPacks)",
+        isCustom: false,
+        capabilities: {
+          reasoningEffortLevels: [],
+          supportsFastMode: false,
+          supportsThinkingToggle: false,
+          contextWindowOptions: [],
+          promptInjectedEffortLevels: [],
+        },
+      },
+      {
+        slug: "deepseek/deepseek-v4.1-flash-thinking",
+        name: "DeepSeek V4.1 Flash (thinking)",
+        isCustom: false,
+        capabilities: {
+          reasoningEffortLevels: [],
+          supportsFastMode: false,
+          supportsThinkingToggle: false,
+          contextWindowOptions: [],
+          promptInjectedEffortLevels: [],
+        },
+      },
+      {
+        slug: "deepseek/deepseek-v4.1-flash",
+        name: "DeepSeek V4.1 Flash",
+        isCustom: false,
+        capabilities: {
+          reasoningEffortLevels: [],
+          supportsFastMode: false,
+          supportsThinkingToggle: false,
+          contextWindowOptions: [],
+          promptInjectedEffortLevels: [],
+        },
+      },
+    ],
+  },
 ];
 
 function buildCodexProvider(models: ServerProvider["models"]): ServerProvider {
@@ -254,6 +303,46 @@ describe("ProviderModelPicker", () => {
         expect(text).toContain("Claude Sonnet 4.6");
         expect(text).toContain("Claude Haiku 4.5");
         expect(text).not.toContain("Codex");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  // Regression: once a GLM thread committed to a provider (session bound,
+  // matching `lockedProvider: "glm"` here), `store.ts`'s `toLegacyProvider`
+  // used to coerce the session's provider to "codex" for any non-Codex/Claude
+  // value — locking this picker onto Codex's branch entirely: Codex's model
+  // checklist instead of the GLM slider, and the trigger label falling
+  // through to the raw GLM model id string because it never matched any
+  // Codex slug. Fixed in `toLegacyProvider`; this exercises the picker the
+  // same way the real bug reached it (a `lockedProvider` value that is
+  // genuinely "glm", proving the picker itself handles it correctly — the
+  // fix upstream is what ensures this value is what actually gets passed
+  // once a GLM session is bound).
+  it("shows the GLM slider (not Codex's checklist or icon-driven branch) when locked to glm mid-thread", async () => {
+    const mounted = await mountPicker({
+      provider: "glm",
+      model: "z-ai/glm-5.3-flash-uncensored",
+      lockedProvider: "glm",
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        // The slider's tier labels and live model-name label are present...
+        expect(text).toContain("Low");
+        expect(text).toContain("Medium");
+        expect(text).toContain("High");
+        expect(text).toContain("GLM-5.3 Flash (LogicPacks)");
+        // ...and nothing about Codex leaked in, and no raw model id string
+        // is visible anywhere (the exact reported symptom).
+        expect(text).not.toContain("Codex");
+        expect(text).not.toContain("GPT");
+        expect(text).not.toContain("z-ai/glm-5.3-flash-uncensored");
+        expect(text).not.toContain("deepseek/deepseek-v4.1-flash");
       });
     } finally {
       await mounted.cleanup();

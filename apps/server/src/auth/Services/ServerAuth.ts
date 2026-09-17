@@ -11,10 +11,13 @@ import type {
   AuthSessionState,
   AuthUpdateUserProfileInput,
   AuthUserProfile,
+  CompleteOnboardingInput,
   ServerAuthDescriptor,
   ServerAuthSessionMethod,
   AuthWebSocketTokenResult,
   TenantSessionContext,
+  UpdateUserPreferencesInput,
+  UserPreferences,
 } from "@t3tools/contracts";
 import { UserId } from "@t3tools/contracts";
 import { Data, DateTime, Context } from "effect";
@@ -163,6 +166,17 @@ export interface ServerAuthShape {
     request: HttpServerRequest.HttpServerRequest,
     input: AuthUpdateUserProfileInput,
   ) => Effect.Effect<AuthUserProfile, AuthError>;
+  readonly getUserPreferences: (
+    request: HttpServerRequest.HttpServerRequest,
+  ) => Effect.Effect<UserPreferences, AuthError>;
+  readonly completeOnboarding: (
+    request: HttpServerRequest.HttpServerRequest,
+    input: CompleteOnboardingInput,
+  ) => Effect.Effect<UserPreferences, AuthError>;
+  readonly updateUserPreferences: (
+    request: HttpServerRequest.HttpServerRequest,
+    input: UpdateUserPreferencesInput,
+  ) => Effect.Effect<UserPreferences, AuthError>;
   readonly issueLoopbackOwnerSession: (requestMetadata: AuthClientMetadata) => Effect.Effect<
     {
       readonly response: AuthBootstrapResult;

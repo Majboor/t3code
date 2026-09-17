@@ -74,6 +74,9 @@ import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionD
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime.ts";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter.ts";
 import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter.ts";
+import { GlmAdapterLive } from "./provider/Layers/GlmAdapter.ts";
+import { LogicPacksGatewayLive } from "./gateway/Layers/LogicPacksGateway.ts";
+import { GatewayAccountRepositoryLive } from "./persistence/Layers/GatewayAccounts.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
@@ -121,6 +124,11 @@ import {
   authWebSocketTokenRouteLayer,
 } from "./auth/http.ts";
 import { authQuickLoginRouteLayer } from "./auth/quickLogin.ts";
+import {
+  gatewayKeyRouteLayer,
+  gatewayRedeemRouteLayer,
+  gatewayUsageRouteLayer,
+} from "./gateway/http.ts";
 import { basicAuthMiddlewareLayer } from "./auth/basicAuth.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
@@ -282,9 +290,18 @@ const ProviderLayerLive = Layer.unwrap(
     const claudeAdapterLayer = makeClaudeAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
+    // GlmAdapter's credential comes from LogicPacksGateway (Phase A's
+    // gateway_accounts mapping), not an OAuth account — it needs its own
+    // small dependency chain rather than anything the Codex/Claude adapters
+    // already carry.
+    const glmAdapterLayer = GlmAdapterLive.pipe(
+      Layer.provide(LogicPacksGatewayLive),
+      Layer.provide(GatewayAccountRepositoryLive),
+    );
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
+      Layer.provide(glmAdapterLayer),
       Layer.provideMerge(ProviderSessionDirectoryLayerLive),
     );
     return makeProviderServiceLive(
@@ -605,6 +622,9 @@ export const makeRoutesLayer = Layer.mergeAll(
   authSessionRouteLayer,
   authSessionSignOutRouteLayer,
   authWebSocketTokenRouteLayer,
+  gatewayUsageRouteLayer,
+  gatewayRedeemRouteLayer,
+  gatewayKeyRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
   desktopActivityRouteLayer,

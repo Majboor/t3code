@@ -1034,6 +1034,22 @@ export function deriveProviderLaunchEnvironment(
         },
         secretEnvKeys: [],
       };
+    case "glm":
+      // GLM's credential is a LogicPacks gateway API key, not an OAuth
+      // `ProviderAccount` — it never goes through this isolation path
+      // (`ProviderCommandReactor.ts` resolves GLM's launch env directly from
+      // `LogicPacksGateway` instead). Reaching this branch means something
+      // upstream incorrectly built a `ProviderAccount` for GLM; refuse rather
+      // than hand out a launch environment for a credential model this
+      // function was never designed to isolate.
+      return {
+        allowed: false,
+        reason: "GLM does not use provider-account isolation.",
+        provider: input.account.provider,
+        cwd: input.providerSession.cwd,
+        env: {},
+        secretEnvKeys: [],
+      };
   }
 }
 

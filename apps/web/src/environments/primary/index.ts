@@ -53,5 +53,15 @@ export {
   type SupabasePasswordAuthMode,
   __resetServerAuthBootstrapForTests,
 } from "./auth";
+export {
+  fetchGatewayApiKey,
+  fetchGatewayUsage,
+  redeemGatewayCode,
+  type GatewayRedeemResult,
+  type GatewayUsageResult,
+  type GatewaySessionWindow,
+  type GatewayUsageBySource,
+  type GatewayDailyActivity,
+} from "./gateway";
 
 export { resolvePrimaryEnvironmentHttpUrl, isLoopbackHostname } from "./target";

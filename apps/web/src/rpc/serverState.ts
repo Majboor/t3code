@@ -51,6 +51,8 @@ const selectKeybindings = (config: ServerConfig | null) => config?.keybindings ?
 const selectKeybindingsConfigPath = (config: ServerConfig | null) =>
   config?.keybindingsConfigPath ?? null;
 const selectObservability = (config: ServerConfig | null) => config?.observability ?? null;
+const selectDefaultProviderOverride = (config: ServerConfig | null) =>
+  config?.defaultProviderOverride;
 const selectProviders = (config: ServerConfig | null) =>
   config?.providers ?? EMPTY_SERVER_PROVIDERS;
 const selectSettings = (config: ServerConfig | null): ServerSettings =>
@@ -284,6 +286,15 @@ export function useServerKeybindingsConfigPath(): string | null {
 
 export function useServerObservability(): ServerConfig["observability"] | null {
   return useAtomValue(serverConfigAtom, selectObservability);
+}
+
+/**
+ * Instance-scoped default-provider override (`T3CODE_DEFAULT_PROVIDER`), set
+ * only on a single test instance so far. `undefined` everywhere else — callers
+ * fall back to the contracts `DEFAULT_PROVIDER` constant unchanged.
+ */
+export function useDefaultProviderOverride(): ServerConfig["defaultProviderOverride"] {
+  return useAtomValue(serverConfigAtom, selectDefaultProviderOverride);
 }
 
 export function useServerWelcomeSubscription(

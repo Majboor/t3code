@@ -8,6 +8,8 @@ import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { GlmAdapter } from "../Services/GlmAdapter.ts";
+import type { GlmAdapterShape } from "../Services/GlmAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
@@ -47,6 +49,23 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakeGlmAdapter: GlmAdapterShape = {
+  provider: "glm",
+  capabilities: { sessionModelSwitch: "unsupported" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
 const layer = it.layer(
   Layer.mergeAll(
     Layer.provide(
@@ -54,6 +73,7 @@ const layer = it.layer(
       Layer.mergeAll(
         Layer.succeed(CodexAdapter, fakeCodexAdapter),
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
+        Layer.succeed(GlmAdapter, fakeGlmAdapter),
       ),
     ),
     NodeServices.layer,
@@ -70,7 +90,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(claude, fakeClaudeAdapter);
 
       const providers = yield* registry.listProviders();
-      assert.deepEqual(providers, ["codex", "claudeAgent"]);
+      assert.deepEqual(providers, ["codex", "claudeAgent", "glm"]);
     }),
   );
 

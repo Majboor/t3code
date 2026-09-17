@@ -505,6 +505,24 @@ const make = Effect.gen(function* () {
       readonly cwd: string | undefined;
     }) =>
       Effect.gen(function* () {
+        // GLM's credential is the acting user's own LogicPacks gateway API key
+        // (Phase A's `gateway_accounts`), not an OAuth account — it never goes
+        // through `resolveProviderAccount`'s sharing/tenancy rules, which exist
+        // only to decide *whose* Claude/Codex login answers for a turn. GlmAdapter
+        // resolves the actual key itself via `LogicPacksGateway`; this only needs
+        // to say *which* user is asking.
+        if (input.provider === "glm") {
+          if (actingUserId === undefined || actingUserId === null) {
+            return yield* new ProviderAdapterRequestError({
+              provider: input.provider,
+              method: "thread.turn.start",
+              detail:
+                "This thread has no message attributed to an account, so T3 cannot tell which LogicPacks gateway account to use. Send a message as a signed-in user and try again.",
+            });
+          }
+          return { env: { T3CODE_GLM_USER_ID: String(actingUserId) } };
+        }
+
         if (!input.cwd) {
           return yield* resolveConnectedLaunchEnvironment(input.provider);
         }

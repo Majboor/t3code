@@ -407,6 +407,31 @@ describe("deriveLockedProvider", () => {
     ).toBe("claudeAgent");
   });
 
+  // Regression: `store.ts`'s `toLegacyProvider` (which produces
+  // `thread.session.provider` before it ever reaches this function) used to
+  // have no "glm" case and silently coerced it to "codex" — locking every
+  // active GLM thread's composer onto Codex's icon/model list. Fixed there;
+  // this confirms the value it now produces flows through correctly here.
+  it("locks to glm once a GLM session is bound, not codex", () => {
+    expect(
+      deriveLockedProvider({
+        thread: {
+          ...makeThread(),
+          messages: [message("user", "message-1")],
+          session: {
+            provider: "glm",
+            status: "ready",
+            createdAt: "2026-03-29T00:00:01.000Z",
+            updatedAt: "2026-03-29T00:00:02.000Z",
+            orchestrationStatus: "idle",
+          },
+        },
+        selectedProvider: "codex",
+        threadProvider: "codex",
+      }),
+    ).toBe("glm");
+  });
+
   it("locks once a turn has run, even after its session went away", () => {
     expect(
       deriveLockedProvider({

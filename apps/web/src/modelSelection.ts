@@ -45,6 +45,13 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "your-claude-model-slug",
     example: "claude-sonnet-5-0",
   },
+  glm: {
+    provider: "glm",
+    title: "LogicPacks",
+    description: "Save additional LogicPacks gateway model slugs for the picker and `/model` command.",
+    placeholder: "your-glm-model-slug",
+    example: "z-ai/glm-5.3",
+  },
 };
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
@@ -164,6 +171,12 @@ export function getCustomModelOptionsByProvider(
       providers,
       "claudeAgent",
       selectedProvider === "claudeAgent" ? selectedModel : undefined,
+    ),
+    glm: getAppModelOptions(
+      settings,
+      providers,
+      "glm",
+      selectedProvider === "glm" ? selectedModel : undefined,
     ),
   };
 }

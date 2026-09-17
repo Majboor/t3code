@@ -66,7 +66,9 @@ export function applyServerSettingsPatch(
     textGenerationModelSelection: {
       provider: selectionPatch.provider ?? current.textGenerationModelSelection.provider,
       model: selectionPatch.model ?? current.textGenerationModelSelection.model,
-      ...(selectionPatch.options ? { options: selectionPatch.options } : {}),
+      ...("options" in selectionPatch && selectionPatch.options
+        ? { options: selectionPatch.options }
+        : {}),
     },
   };
 }

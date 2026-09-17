@@ -1,5 +1,6 @@
 import { type ProviderKind, type ServerProvider } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
+import { Link } from "@tanstack/react-router";
 import { memo, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
@@ -18,9 +19,17 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { getProviderSnapshot } from "../../providerModels";
+import { useProviderConnections } from "../../hooks/useProviderConnections";
+import { GlmEffortSlider } from "./GlmEffortSlider";
+
+const ACCOUNT_PROVIDER_NAME_OF: Partial<Record<ProviderKind, "codex" | "claude">> = {
+  codex: "codex",
+  claudeAgent: "claude",
+};
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -33,6 +42,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
+  glm: OpenCodeIcon,
   cursor: CursorIcon,
 };
 
@@ -64,12 +74,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   onProviderModelChange: (provider: ProviderKind, model: string) => void;
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const connections = useProviderConnections(isMenuOpen && props.lockedProvider === null);
   const activeProvider = props.lockedProvider ?? props.provider;
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
     selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
-  const handleModelChange = (provider: ProviderKind, value: string) => {
+  const handleModelChange = (
+    provider: ProviderKind,
+    value: string,
+    options?: { closeMenu?: boolean },
+  ) => {
     if (props.disabled) return;
     if (!value) return;
     const resolvedModel = resolveSelectableModel(
@@ -79,8 +94,34 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     );
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel);
-    setIsMenuOpen(false);
+    // The slider is a continuous drag, not a click-to-select item — closing
+    // the popup mid-drag would yank focus out from under the pointer.
+    if (options?.closeMenu !== false) setIsMenuOpen(false);
   };
+
+  function renderModelChoices(provider: ProviderKind, currentModel: string) {
+    if (provider === "glm") {
+      return (
+        <GlmEffortSlider
+          model={currentModel}
+          onModelChange={(nextModel) => handleModelChange(provider, nextModel, { closeMenu: false })}
+        />
+      );
+    }
+    return (
+      <MenuRadioGroup value={currentModel} onValueChange={(value) => handleModelChange(provider, value)}>
+        {props.modelOptionsByProvider[provider].map((modelOption) => (
+          <MenuRadioItem
+            key={`${provider}:${modelOption.slug}`}
+            value={modelOption.slug}
+            onClick={() => setIsMenuOpen(false)}
+          >
+            {modelOption.name}
+          </MenuRadioItem>
+        ))}
+      </MenuRadioGroup>
+    );
+  }
 
   return (
     <Menu
@@ -128,22 +169,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       </MenuTrigger>
       <MenuPopup align="start">
         {props.lockedProvider !== null ? (
-          <MenuGroup>
-            <MenuRadioGroup
-              value={props.model}
-              onValueChange={(value) => handleModelChange(props.lockedProvider!, value)}
-            >
-              {props.modelOptionsByProvider[props.lockedProvider].map((modelOption) => (
-                <MenuRadioItem
-                  key={`${props.lockedProvider}:${modelOption.slug}`}
-                  value={modelOption.slug}
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  {modelOption.name}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </MenuGroup>
+          <MenuGroup>{renderModelChoices(props.lockedProvider, props.model)}</MenuGroup>
         ) : (
           <>
             {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
@@ -173,6 +199,42 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                   </MenuItem>
                 );
               }
+              // A provider can be server-ready (installed, enabled) but have
+              // no account this person has connected — GLM has no such
+              // concept (always "connected", the credential is automatic).
+              // Kept visible rather than hidden, greyed out with a tooltip
+              // that says exactly what to do, same spirit as the
+              // "Not installed"/"Disabled" states above for a different
+              // reason (no server-side capability at all).
+              const accountProviderName = ACCOUNT_PROVIDER_NAME_OF[option.value];
+              const connection = connections?.find((c) => c.provider === accountProviderName);
+              const isDisconnected =
+                accountProviderName !== undefined && connections !== null && connection?.connected !== true;
+
+              if (isDisconnected) {
+                return (
+                  <Tooltip key={option.value}>
+                    <TooltipTrigger
+                      render={
+                        <Link
+                          to="/settings/connections"
+                          className="flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-base text-foreground/50 outline-none hover:bg-accent/50 sm:min-h-7 sm:text-sm"
+                          onClick={() => setIsMenuOpen(false)}
+                        />
+                      }
+                    >
+                      <OptionIcon
+                        aria-hidden="true"
+                        className={cn("size-4 shrink-0 opacity-50", providerIconClassName(option.value, ""))}
+                      />
+                      <span>{option.label}</span>
+                      <span className="ms-auto text-[11px] uppercase tracking-[0.08em]">Not connected</span>
+                    </TooltipTrigger>
+                    <TooltipPopup side="right">Connect {option.label}</TooltipPopup>
+                  </Tooltip>
+                );
+              }
+
               return (
                 <MenuSub key={option.value}>
                   <MenuSubTrigger>
@@ -187,20 +249,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                   </MenuSubTrigger>
                   <MenuSubPopup className="[--available-height:min(24rem,70vh)]" sideOffset={4}>
                     <MenuGroup>
-                      <MenuRadioGroup
-                        value={props.provider === option.value ? props.model : ""}
-                        onValueChange={(value) => handleModelChange(option.value, value)}
-                      >
-                        {props.modelOptionsByProvider[option.value].map((modelOption) => (
-                          <MenuRadioItem
-                            key={`${option.value}:${modelOption.slug}`}
-                            value={modelOption.slug}
-                            onClick={() => setIsMenuOpen(false)}
-                          >
-                            {modelOption.name}
-                          </MenuRadioItem>
-                        ))}
-                      </MenuRadioGroup>
+                      {renderModelChoices(
+                        option.value,
+                        props.provider === option.value ? props.model : "",
+                      )}
                     </MenuGroup>
                   </MenuSubPopup>
                 </MenuSub>

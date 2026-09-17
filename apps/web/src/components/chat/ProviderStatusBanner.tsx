@@ -28,9 +28,19 @@ function isNotAuthenticated(message: string | null): boolean {
  * `ProviderKind` (what a turn runs) and `ProviderName` (what the account
  * store files a login under) name the same two providers differently — see
  * `providerAuthProviderOf` on the server, which this mirrors.
+ *
+ * Returns `null` for a provider with no OAuth-connect model at all (GLM: the
+ * credential is the caller's own LogicPacks gateway key, resolved
+ * automatically at session start, never a "connect your account" flow).
+ * Forcing GLM into the `"claude"` bucket here (the bug this replaced) made
+ * every fresh signup — who has never connected a Claude account, which is
+ * irrelevant to GLM — read as "no GLM account connected", even though GLM's
+ * own `status.status` was already `"ready"`.
  */
-function accountProviderNameOf(provider: ServerProvider["provider"]): ProviderName {
-  return provider === "codex" ? "codex" : "claude";
+function accountProviderNameOf(provider: ServerProvider["provider"]): ProviderName | null {
+  if (provider === "codex") return "codex";
+  if (provider === "claudeAgent") return "claude";
+  return null;
 }
 
 async function fetchConnections(): Promise<readonly Connection[]> {
@@ -135,8 +145,9 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   const [connections, setConnections] = useState<readonly Connection[] | null>(null);
 
   const providerKind = status?.provider ?? null;
+  const providerName = providerKind === null ? null : accountProviderNameOf(providerKind);
   useEffect(() => {
-    if (providerKind === null) {
+    if (providerName === null) {
       return;
     }
     let cancelled = false;
@@ -150,14 +161,14 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
     };
     // Re-checked whenever the active provider changes, and once more whenever
     // an account switch below reports success, via `refetch`.
-  }, [providerKind]);
+  }, [providerName]);
 
   if (!status || status.status === "disabled") {
     return null;
   }
 
-  const providerName = accountProviderNameOf(status.provider);
-  const connection = connections?.find((entry) => entry.provider === providerName) ?? null;
+  const connection =
+    providerName === null ? null : (connections?.find((entry) => entry.provider === providerName) ?? null);
   const connectedAccounts = connection?.accounts.filter((account) => account.connected) ?? [];
   const myDefault = connection ? defaultAccountOf(connection) : null;
 
@@ -169,9 +180,16 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
    * with nothing connected at all, right up until they sent a message and it
    * refused. Once the per-account list has loaded, it is trusted over the
    * broader status for exactly that one question.
+   *
+   * Only meaningful for a provider that actually has an OAuth-connect model
+   * (`providerName !== null`) — GLM's credential is automatic, so there is
+   * nothing to "connect" and this never applies to it.
    */
   const noAccountForMe =
-    connections !== null && connection !== null && connectedAccounts.length === 0;
+    providerName !== null &&
+    connections !== null &&
+    connection !== null &&
+    connectedAccounts.length === 0;
 
   if (status.status === "ready" && !noAccountForMe) {
     return null;
@@ -193,7 +211,7 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
         <AlertTitle>{title}</AlertTitle>
         <AlertDescription title={message ?? defaultMessage}>
           <span className="line-clamp-3">{message ?? defaultMessage}</span>
-          {noAccountForMe || isNotAuthenticated(message) ? (
+          {providerName !== null && (noAccountForMe || isNotAuthenticated(message)) ? (
             <Link
               to="/settings/connections"
               className="mt-1 inline-block font-medium underline underline-offset-2"
@@ -202,14 +220,16 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
               Connect {providerLabel}
             </Link>
           ) : null}
-          <AccountSwitcher
-            provider={providerName}
-            accounts={connectedAccounts}
-            currentAccountId={myDefault?.accountId ?? null}
-            onSwitched={() => {
-              void fetchConnections().then(setConnections);
-            }}
-          />
+          {providerName === null ? null : (
+            <AccountSwitcher
+              provider={providerName}
+              accounts={connectedAccounts}
+              currentAccountId={myDefault?.accountId ?? null}
+              onSwitched={() => {
+                void fetchConnections().then(setConnections);
+              }}
+            />
+          )}
         </AlertDescription>
       </Alert>
     </div>

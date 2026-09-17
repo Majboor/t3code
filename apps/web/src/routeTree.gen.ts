@@ -18,10 +18,13 @@ import { Route as DownloadRouteImport } from './routes/download'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as SettingsUsageActivityRouteImport } from './routes/settings.usage-activity'
 import { Route as SettingsOrganizationRouteImport } from './routes/settings.organization'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
+import { Route as SettingsBillingRouteImport } from './routes/settings.billing'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
+import { Route as SettingsApiUsageRouteImport } from './routes/settings.api-usage'
 import { Route as SettingsAccountRouteImport } from './routes/settings.account'
 import { Route as ChatPackPackIdRouteImport } from './routes/_chat.pack.$packId'
 import { Route as ChatInfraProjectIdRouteImport } from './routes/_chat.infra.$projectId'
@@ -74,6 +77,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ChatRoute,
 } as any)
+const SettingsUsageActivityRoute = SettingsUsageActivityRouteImport.update({
+  id: '/usage-activity',
+  path: '/usage-activity',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsOrganizationRoute = SettingsOrganizationRouteImport.update({
   id: '/organization',
   path: '/organization',
@@ -89,9 +97,19 @@ const SettingsConnectionsRoute = SettingsConnectionsRouteImport.update({
   path: '/connections',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsBillingRoute = SettingsBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   id: '/archived',
   path: '/archived',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsApiUsageRoute = SettingsApiUsageRouteImport.update({
+  id: '/api-usage',
+  path: '/api-usage',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsAccountRoute = SettingsAccountRouteImport.update({
@@ -142,10 +160,13 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRouteWithChildren
   '/share': typeof ShareRoute
   '/settings/account': typeof SettingsAccountRoute
+  '/settings/api-usage': typeof SettingsApiUsageRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/billing': typeof SettingsBillingRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/organization': typeof SettingsOrganizationRoute
+  '/settings/usage-activity': typeof SettingsUsageActivityRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/analytics/$projectId': typeof ChatAnalyticsProjectIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -162,10 +183,13 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRouteWithChildren
   '/share': typeof ShareRoute
   '/settings/account': typeof SettingsAccountRoute
+  '/settings/api-usage': typeof SettingsApiUsageRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/billing': typeof SettingsBillingRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/organization': typeof SettingsOrganizationRoute
+  '/settings/usage-activity': typeof SettingsUsageActivityRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/analytics/$projectId': typeof ChatAnalyticsProjectIdRoute
@@ -185,10 +209,13 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRouteWithChildren
   '/share': typeof ShareRoute
   '/settings/account': typeof SettingsAccountRoute
+  '/settings/api-usage': typeof SettingsApiUsageRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/billing': typeof SettingsBillingRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/organization': typeof SettingsOrganizationRoute
+  '/settings/usage-activity': typeof SettingsUsageActivityRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/analytics/$projectId': typeof ChatAnalyticsProjectIdRoute
@@ -209,10 +236,13 @@ export interface FileRouteTypes {
     | '/settings'
     | '/share'
     | '/settings/account'
+    | '/settings/api-usage'
     | '/settings/archived'
+    | '/settings/billing'
     | '/settings/connections'
     | '/settings/general'
     | '/settings/organization'
+    | '/settings/usage-activity'
     | '/$environmentId/$threadId'
     | '/analytics/$projectId'
     | '/draft/$draftId'
@@ -229,10 +259,13 @@ export interface FileRouteTypes {
     | '/settings'
     | '/share'
     | '/settings/account'
+    | '/settings/api-usage'
     | '/settings/archived'
+    | '/settings/billing'
     | '/settings/connections'
     | '/settings/general'
     | '/settings/organization'
+    | '/settings/usage-activity'
     | '/'
     | '/$environmentId/$threadId'
     | '/analytics/$projectId'
@@ -251,10 +284,13 @@ export interface FileRouteTypes {
     | '/settings'
     | '/share'
     | '/settings/account'
+    | '/settings/api-usage'
     | '/settings/archived'
+    | '/settings/billing'
     | '/settings/connections'
     | '/settings/general'
     | '/settings/organization'
+    | '/settings/usage-activity'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/analytics/$projectId'
@@ -340,6 +376,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/settings/usage-activity': {
+      id: '/settings/usage-activity'
+      path: '/usage-activity'
+      fullPath: '/settings/usage-activity'
+      preLoaderRoute: typeof SettingsUsageActivityRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/organization': {
       id: '/settings/organization'
       path: '/organization'
@@ -361,11 +404,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsConnectionsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/billing': {
+      id: '/settings/billing'
+      path: '/billing'
+      fullPath: '/settings/billing'
+      preLoaderRoute: typeof SettingsBillingRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/archived': {
       id: '/settings/archived'
       path: '/archived'
       fullPath: '/settings/archived'
       preLoaderRoute: typeof SettingsArchivedRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/api-usage': {
+      id: '/settings/api-usage'
+      path: '/api-usage'
+      fullPath: '/settings/api-usage'
+      preLoaderRoute: typeof SettingsApiUsageRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/account': {
@@ -445,18 +502,24 @@ const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 interface SettingsRouteChildren {
   SettingsAccountRoute: typeof SettingsAccountRoute
+  SettingsApiUsageRoute: typeof SettingsApiUsageRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
+  SettingsBillingRoute: typeof SettingsBillingRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsOrganizationRoute: typeof SettingsOrganizationRoute
+  SettingsUsageActivityRoute: typeof SettingsUsageActivityRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAccountRoute: SettingsAccountRoute,
+  SettingsApiUsageRoute: SettingsApiUsageRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
+  SettingsBillingRoute: SettingsBillingRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsOrganizationRoute: SettingsOrganizationRoute,
+  SettingsUsageActivityRoute: SettingsUsageActivityRoute,
 }
 
 const SettingsRouteWithChildren = SettingsRoute._addFileChildren(

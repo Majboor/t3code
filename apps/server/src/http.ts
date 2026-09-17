@@ -309,7 +309,13 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     }
 
     const ext = path.extname(filePath);
-    if (!ext) {
+    // A request that already names a real file extension (e.g. a hashed JS
+    // chunk under /assets/) is asking for a specific static file, never a
+    // client-side route — if it's missing, that's a real 404. Only an
+    // extensionless path (a client-side route with no file of its own) falls
+    // back to `index.html` so the SPA's own router can take over.
+    const looksLikeStaticAsset = ext.length > 0;
+    if (!looksLikeStaticAsset) {
       filePath = path.resolve(filePath, "index.html");
       if (!isWithinStaticRoot(filePath)) {
         return HttpServerResponse.text("Invalid static file path", { status: 400 });
@@ -320,6 +326,15 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       .stat(filePath)
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!fileInfo || fileInfo.type !== "File") {
+      if (looksLikeStaticAsset) {
+        // A missing asset must 404, not silently succeed as HTML — a stale
+        // tab's `import()` of a chunk hash from before a redeploy needs a
+        // real failure so the browser's module loader (and this app's own
+        // `vite:preloadError` recovery) can react to it, rather than being
+        // handed `text/html` for a `.js` request and rejecting it outright
+        // with "'text/html' is not a valid JavaScript MIME type".
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
       const indexPath = path.resolve(staticRoot, "index.html");
       const indexData = yield* fileSystem
         .readFile(indexPath)

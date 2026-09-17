@@ -29,7 +29,7 @@ export const ORCHESTRATION_WS_METHODS = {
   subscribeThread: "orchestration.subscribeThread",
 } as const;
 
-export const ProviderKind = Schema.Literals(["codex", "claudeAgent"]);
+export const ProviderKind = Schema.Literals(["codex", "claudeAgent", "glm"]);
 export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
@@ -61,7 +61,26 @@ export const ClaudeModelSelection = Schema.Struct({
 });
 export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
-export const ModelSelection = Schema.Union([CodexModelSelection, ClaudeModelSelection]);
+export const GlmModelOptions = Schema.Struct({});
+export type GlmModelOptions = typeof GlmModelOptions.Type;
+
+export const GlmModelSelection = Schema.Struct({
+  provider: Schema.Literal("glm"),
+  model: TrimmedNonEmptyString,
+  // No real per-model options yet, but the field exists (always empty) so
+  // every `ModelSelection` union member shares the same `options?` shape —
+  // widespread code across the frontend reads `selection.options` on the
+  // union without narrowing by provider first, matching Codex/Claude's
+  // existing behavior instead of forcing ~25 call sites to narrow.
+  options: Schema.optionalKey(GlmModelOptions),
+});
+export type GlmModelSelection = typeof GlmModelSelection.Type;
+
+export const ModelSelection = Schema.Union([
+  CodexModelSelection,
+  ClaudeModelSelection,
+  GlmModelSelection,
+]);
 export type ModelSelection = typeof ModelSelection.Type;
 
 export const RuntimeMode = Schema.Literals([

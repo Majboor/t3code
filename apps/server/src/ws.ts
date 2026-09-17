@@ -65,7 +65,7 @@ import {
   type ProviderAccount,
   type ProviderAccountConnectScope,
   type ProviderAccountSummary,
-  type ProviderKind,
+  ProviderKind,
   type ProviderSessionIsolation,
   ProviderSessionId,
   ProviderSharingError,
@@ -3181,6 +3181,11 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const OPERATOR_PROVIDER_CREDENTIAL_FILES = {
         codex: ["auth.json", "config.toml"],
         claudeAgent: [".credentials.json", "settings.json"],
+        // GLM's credential is a LogicPacks gateway API key (LogicPacksGateway),
+        // never a local operator-home file — nothing to seed, so this list is
+        // always empty and the operator-fallback path becomes a safe no-op if
+        // ever reached for "glm".
+        glm: [],
       } as const satisfies Record<ProviderKind, ReadonlyArray<string>>;
 
       const operatorProviderHome = (provider: ProviderKind): string =>
@@ -3264,6 +3269,16 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 }),
           ),
           Effect.flatMap(({ snapshot, target, canConnectPersonalAccount }) => {
+            // GLM's credential is the calling user's own LogicPacks gateway API
+            // key (`LogicPacksGateway`, Phase A), not an OAuth account isolated
+            // into a home/config/secrets directory — there is nothing to
+            // persist here. `GlmAdapter.startSession` resolves the real
+            // credential itself via `T3CODE_GLM_USER_ID` (see
+            // `ProviderCommandReactor.ts`'s `resolveProviderCredentialEnvironment`).
+            if (target.provider === "glm") {
+              return Effect.void;
+            }
+
             const reusableAccount = snapshot.providerAccounts
               .filter(
                 (account) =>
@@ -3989,6 +4004,11 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           );
       };
 
+      const resolveDefaultProviderOverride = (): ProviderKind | undefined => {
+        const raw = process.env.T3CODE_DEFAULT_PROVIDER;
+        return raw !== undefined && Schema.is(ProviderKind)(raw) ? raw : undefined;
+      };
+
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
@@ -4004,6 +4024,12 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
+          // Instance-scoped default-provider override for new projects/threads,
+          // config-gated on `T3CODE_DEFAULT_PROVIDER` (only ever set on a single
+          // test instance) — every other instance sends `undefined` here and
+          // frontend callers fall back to the compile-time `DEFAULT_PROVIDER`
+          // constant unchanged.
+          defaultProviderOverride: resolveDefaultProviderOverride(),
           availableEditors: resolveAvailableEditors(),
           observability: {
             logsDirectoryPath: config.logsDir,

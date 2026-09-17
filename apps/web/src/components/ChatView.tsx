@@ -186,6 +186,7 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
+  useDefaultProviderOverride,
   useServerAvailableEditors,
   useServerConfig,
   useServerKeybindings,
@@ -817,6 +818,7 @@ export default function ChatView(props: ChatViewProps) {
     routeKind === "server" && serverThread
       ? null
       : ((draftId ? localDraftErrorsByDraftId[draftId] : null) ?? null);
+  const defaultProviderOverride = useDefaultProviderOverride();
   const localDraftThread = useMemo(
     () =>
       draftThread
@@ -824,13 +826,19 @@ export default function ChatView(props: ChatViewProps) {
             threadId,
             draftThread,
             fallbackDraftProject?.defaultModelSelection ?? {
-              provider: DEFAULT_PROVIDER,
-              model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
+              provider: defaultProviderOverride ?? DEFAULT_PROVIDER,
+              model: DEFAULT_MODEL_BY_PROVIDER[defaultProviderOverride ?? DEFAULT_PROVIDER],
             },
             localDraftError,
           )
         : undefined,
-    [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
+    [
+      defaultProviderOverride,
+      draftThread,
+      fallbackDraftProject?.defaultModelSelection,
+      localDraftError,
+      threadId,
+    ],
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
   const activeThread = isServerThread ? serverThread : localDraftThread;
@@ -1114,9 +1122,15 @@ export default function ChatView(props: ChatViewProps) {
       ? primaryServerConfig
       : (activeEnvRuntimeState?.serverConfig ?? primaryServerConfig);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
+  // Was hardcoded to "codex" here — the one fallback in this file that never
+  // consulted `defaultProviderOverride`/`DEFAULT_PROVIDER`. Unreachable once a
+  // thread or project has its own provider, but for a genuinely fresh
+  // composer (no thread, no project default, no draft selection yet — the
+  // very first thing a brand-new account sees) this was the actual value
+  // used, silently bypassing `T3CODE_DEFAULT_PROVIDER` on this one instance.
   const unlockedSelectedProvider = resolveSelectableProvider(
     providerStatuses,
-    selectedProviderByThreadId ?? threadProvider ?? "codex",
+    selectedProviderByThreadId ?? threadProvider ?? defaultProviderOverride ?? DEFAULT_PROVIDER,
   );
   const selectedProvider: ProviderKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);

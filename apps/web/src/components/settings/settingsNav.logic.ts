@@ -3,6 +3,9 @@ export type SettingsSectionPath =
   | "/settings/account"
   | "/settings/organization"
   | "/settings/connections"
+  | "/settings/api-usage"
+  | "/settings/usage-activity"
+  | "/settings/billing"
   | "/settings/archived";
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsSectionPath, string>> = {
@@ -10,6 +13,9 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsSectionPath, strin
   "/settings/account": "Account",
   "/settings/organization": "Organization",
   "/settings/connections": "Connections",
+  "/settings/api-usage": "API usage",
+  "/settings/usage-activity": "Usage & activity",
+  "/settings/billing": "Billing",
   "/settings/archived": "Archive",
 };
 

@@ -137,8 +137,11 @@ const DESKTOP_LAYOUT_MODE_LABELS: Record<string, string> = {
   dev: "Dev mode",
 };
 
+// GLM has no binary/home-path install settings — it's not an OAuth-connected
+// account (see the plan's accepted-gap list), so this panel deliberately
+// stays scoped to the two providers that actually have something to install.
 type InstallProviderSettings = {
-  provider: ProviderKind;
+  provider: "codex" | "claudeAgent";
   title: string;
   binaryPlaceholder: string;
   binaryDescription: ReactNode;
@@ -995,12 +998,16 @@ export function GeneralSettingsPanel() {
       settings.providers.claudeAgent.customModels.length > 0 ||
       settings.providers.claudeAgent.launchArgs !== "",
     ),
+    // GLM has no install/binary settings to expose a details toggle for
+    // (accepted gap — it isn't an OAuth-connected account) — always closed.
+    glm: false,
   });
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
     codex: "",
     claudeAgent: "",
+    glm: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>

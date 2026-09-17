@@ -94,7 +94,7 @@ import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
-import { useServerKeybindings } from "../rpc/serverState";
+import { useDefaultProviderOverride, useServerKeybindings } from "../rpc/serverState";
 import { resolveShortcutCommand } from "../keybindings";
 import {
   Command,
@@ -223,6 +223,7 @@ function OpenCommandPaletteDialog() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const threads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const keybindings = useServerKeybindings();
+  const defaultProviderOverride = useDefaultProviderOverride();
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
   const [browseGeneration, setBrowseGeneration] = useState(0);
@@ -839,8 +840,8 @@ function OpenCommandPaletteDialog() {
             ? { ownership: addProjectWorkspaceContext.ownership }
             : {}),
           defaultModelSelection: {
-            provider: DEFAULT_PROVIDER,
-            model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
+            provider: defaultProviderOverride ?? DEFAULT_PROVIDER,
+            model: DEFAULT_MODEL_BY_PROVIDER[defaultProviderOverride ?? DEFAULT_PROVIDER],
           },
           createdAt: new Date().toISOString(),
         });
@@ -871,6 +872,7 @@ function OpenCommandPaletteDialog() {
       browseHomePath,
       addProjectWorkspaceContext,
       currentProjectCwdForBrowse,
+      defaultProviderOverride,
       handleNewThread,
       openExistingProject,
       projects,

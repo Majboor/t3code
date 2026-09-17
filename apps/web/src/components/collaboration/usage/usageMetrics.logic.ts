@@ -230,7 +230,7 @@ export function formatWeekChange(change: number | null): string | null {
 }
 
 /** Where a provider's colour comes from, resolved by the panel's own palette. */
-export type UsageProviderKey = "codex" | "claudeAgent" | "unrecorded";
+export type UsageProviderKey = "codex" | "claudeAgent" | "glm" | "unrecorded";
 
 export interface ProviderSliceView {
   readonly key: UsageProviderKey;

@@ -9,6 +9,10 @@ import {
 const SLICE_COLOR: Record<UsageProviderKey, string> = {
   codex: "var(--usage-codex)",
   claudeAgent: "var(--usage-claude)",
+  // No dedicated theme color defined for GLM yet (cosmetic, accepted gap) —
+  // falls back to the "unrecorded" var rather than an undefined CSS custom
+  // property, which would render as no background at all.
+  glm: "var(--usage-glm, var(--usage-unrecorded))",
   unrecorded: "var(--usage-unrecorded)",
 };
 

@@ -8,6 +8,12 @@ import {
   type AuthSessionState,
   type AuthUpdateUserProfileInput,
   type AuthUserProfile,
+  type CompleteOnboardingInput,
+  type OnboardingExperience,
+  type OnboardingFocus,
+  type OnboardingRole,
+  type UpdateUserPreferencesInput,
+  type UserPreferences,
   AuthSessionId,
   type TenantSessionContext,
   type Tenant,
@@ -33,8 +39,13 @@ import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
 import { TenancyRepository } from "../../persistence/Services/Tenancy.ts";
 import { AuthUserProfileRepositoryLive } from "../../persistence/Layers/AuthUserProfiles.ts";
 import { AuthUserProfileRepository } from "../../persistence/Services/AuthUserProfiles.ts";
+import { UserPreferencesRepositoryLive } from "../../persistence/Layers/UserPreferences.ts";
+import { UserPreferencesRepository } from "../../persistence/Services/UserPreferences.ts";
 import { LocalAuthAccountRepositoryLive } from "../../persistence/Layers/LocalAuthAccounts.ts";
 import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
+import { GatewayAccountRepositoryLive } from "../../persistence/Layers/GatewayAccounts.ts";
+import { LogicPacksGatewayLive } from "../../gateway/Layers/LogicPacksGateway.ts";
+import { LogicPacksGateway } from "../../gateway/Services/LogicPacksGateway.ts";
 import { AuthControlPlane } from "../Services/AuthControlPlane.ts";
 import { ServerAuthPolicyLive } from "./ServerAuthPolicy.ts";
 import { BootstrapCredentialService } from "../Services/BootstrapCredentialService.ts";
@@ -115,7 +126,9 @@ export const makeServerAuth = Effect.gen(function* () {
   const sessions = yield* SessionCredentialService;
   const tenancyRepository = yield* TenancyRepository;
   const userProfiles = yield* AuthUserProfileRepository;
+  const userPreferences = yield* UserPreferencesRepository;
   const localAccounts = yield* LocalAuthAccountRepository;
+  const logicPacksGateway = yield* LogicPacksGateway;
   const serverConfig = yield* ServerConfig;
   const descriptor = yield* policy.getDescriptor();
   const supabaseConfig = resolveSupabaseAuthBridgeConfig(serverConfig);
@@ -670,6 +683,92 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
+  const getUserPreferences: ServerAuthShape["getUserPreferences"] = (request) =>
+    authenticateRequest(request).pipe(
+      Effect.flatMap((session) =>
+        userPreferences.getBySubject({ subject: session.subject }).pipe(
+          Effect.map((record) =>
+            toUserPreferences(Option.isSome(record) ? record.value : undefined),
+          ),
+        ),
+      ),
+      Effect.mapError((cause) =>
+        cause instanceof AuthError
+          ? cause
+          : new AuthError({
+              message: "Failed to load account preferences.",
+              status: 500,
+              cause,
+            }),
+      ),
+    );
+
+  const completeOnboarding: ServerAuthShape["completeOnboarding"] = (request, input) =>
+    authenticateRequest(request).pipe(
+      Effect.flatMap((session) =>
+        Effect.gen(function* () {
+          const role = input.role ?? ONBOARDING_SKIP_DEFAULTS.role;
+          const experience = input.experience ?? ONBOARDING_SKIP_DEFAULTS.experience;
+          const focus = input.focus ?? ONBOARDING_SKIP_DEFAULTS.focus;
+          const defaults = onboardingDefaultsFor({ role, experience, focus });
+          const updatedAt = yield* DateTime.now;
+          const record = {
+            subject: session.subject,
+            onboardingCompletedAt: DateTime.toUtc(updatedAt),
+            onboardingRole: input.role,
+            onboardingExperience: input.experience,
+            onboardingFocus: input.focus,
+            ...defaults,
+            updatedAt: DateTime.toUtc(updatedAt),
+          };
+          yield* userPreferences.upsert(record);
+          return toUserPreferences(record);
+        }),
+      ),
+      Effect.mapError((cause) =>
+        cause instanceof AuthError
+          ? cause
+          : new AuthError({
+              message: "Failed to save onboarding.",
+              status: 500,
+              cause,
+            }),
+      ),
+    );
+
+  const updateUserPreferences: ServerAuthShape["updateUserPreferences"] = (request, input) =>
+    authenticateRequest(request).pipe(
+      Effect.flatMap((session) =>
+        Effect.gen(function* () {
+          const existing = yield* userPreferences.getBySubject({ subject: session.subject });
+          const current = Option.isSome(existing) ? existing.value : undefined;
+          const updatedAt = yield* DateTime.now;
+          const record = {
+            subject: session.subject,
+            onboardingCompletedAt: current?.onboardingCompletedAt ?? null,
+            onboardingRole: current?.onboardingRole ?? null,
+            onboardingExperience: current?.onboardingExperience ?? null,
+            onboardingFocus: current?.onboardingFocus ?? null,
+            orgSettingsVisible: input.orgSettingsVisible ?? current?.orgSettingsVisible ?? false,
+            vibeModeEnabled: input.vibeModeEnabled ?? current?.vibeModeEnabled ?? false,
+            apiUsageTabVisible: input.apiUsageTabVisible ?? current?.apiUsageTabVisible ?? true,
+            updatedAt: DateTime.toUtc(updatedAt),
+          };
+          yield* userPreferences.upsert(record);
+          return toUserPreferences(record);
+        }),
+      ),
+      Effect.mapError((cause) =>
+        cause instanceof AuthError
+          ? cause
+          : new AuthError({
+              message: "Failed to save account preferences.",
+              status: 500,
+              cause,
+            }),
+      ),
+    );
+
   const issueLoopbackOwnerSession: ServerAuthShape["issueLoopbackOwnerSession"] = (
     requestMetadata,
   ) => issueOwnerBrowserSession(LOOPBACK_OWNER_SUBJECT, requestMetadata);
@@ -766,6 +865,12 @@ export const makeServerAuth = Effect.gen(function* () {
               }),
           ),
         );
+
+      // Never fails (see LogicPacksGateway's contract) -- a gateway hiccup
+      // must not block someone creating a LogicPacks account. Users who slip
+      // through unprovisioned (or signed up via Supabase, not hooked here)
+      // get self-healed the first time they open Settings -> API usage/Billing.
+      yield* logicPacksGateway.provisionForUser({ userId, email });
 
       return yield* issueLocalAccountSession({
         userId,
@@ -1078,6 +1183,9 @@ export const makeServerAuth = Effect.gen(function* () {
     resolveUserProfile,
     resolveLocalAccount,
     updateUserProfile,
+    getUserPreferences,
+    completeOnboarding,
+    updateUserPreferences,
     issueLoopbackOwnerSession,
     issueUnsafeNoAuthOwnerSession,
     authenticatePassword,
@@ -1096,6 +1204,64 @@ export const makeServerAuth = Effect.gen(function* () {
     issueDelegatedUserSession,
   } satisfies ServerAuthShape;
 });
+
+/**
+ * Skipping the onboarding questionnaire is defined as answering it "Full-stack,
+ * some experience, individual" — every consumer of a skipped answer set (the
+ * record kept for posterity, and the defaults derived below) goes through this
+ * one constant rather than re-deciding what "skipped" means.
+ */
+const ONBOARDING_SKIP_DEFAULTS = {
+  role: "individual" as const,
+  experience: "some" as const,
+  focus: "fullstack" as const,
+} satisfies {
+  role: OnboardingRole;
+  experience: OnboardingExperience;
+  focus: OnboardingFocus;
+};
+
+/**
+ * Onboarding only ever sets the *initial* value of these three settings —
+ * every one of them is independently toggleable afterward regardless of what
+ * was answered here, so this is the only place these defaults are decided.
+ */
+function onboardingDefaultsFor(input: {
+  readonly role: OnboardingRole;
+  readonly experience: OnboardingExperience;
+  readonly focus: OnboardingFocus;
+}): {
+  readonly orgSettingsVisible: boolean;
+  readonly vibeModeEnabled: boolean;
+  readonly apiUsageTabVisible: boolean;
+} {
+  return {
+    orgSettingsVisible: input.role === "agency" || input.role === "enterprise",
+    vibeModeEnabled: input.experience === "new",
+    apiUsageTabVisible:
+      input.role !== "student" && (input.focus === "backend" || input.focus === "fullstack"),
+  };
+}
+
+function toUserPreferences(record?: {
+  readonly onboardingCompletedAt: unknown;
+  readonly onboardingRole: OnboardingRole | null;
+  readonly onboardingExperience: OnboardingExperience | null;
+  readonly onboardingFocus: OnboardingFocus | null;
+  readonly orgSettingsVisible: boolean;
+  readonly vibeModeEnabled: boolean;
+  readonly apiUsageTabVisible: boolean;
+}): UserPreferences {
+  return {
+    onboardingCompleted: record?.onboardingCompletedAt != null,
+    onboardingRole: record?.onboardingRole ?? null,
+    onboardingExperience: record?.onboardingExperience ?? null,
+    onboardingFocus: record?.onboardingFocus ?? null,
+    orgSettingsVisible: record?.orgSettingsVisible ?? false,
+    vibeModeEnabled: record?.vibeModeEnabled ?? false,
+    apiUsageTabVisible: record?.apiUsageTabVisible ?? true,
+  };
+}
 
 function toAuthUserProfile(
   session: AuthenticatedSession,
@@ -1264,7 +1430,14 @@ export const ServerAuthLive = Layer.effect(ServerAuth, makeServerAuth).pipe(
   Layer.provideMerge(AuthControlPlaneLive),
   Layer.provideMerge(AuthCoreLive),
   Layer.provideMerge(AuthUserProfileRepositoryLive),
-  Layer.provideMerge(LocalAuthAccountRepositoryLive),
+  Layer.provideMerge(UserPreferencesRepositoryLive),
   Layer.provideMerge(TenancyRepositoryLive),
   Layer.provideMerge(ServerAuthPolicyLive),
+  Layer.provideMerge(LogicPacksGatewayLive),
+  // After LogicPacksGatewayLive, not before: LogicPacksGatewayLive now also
+  // depends on LocalAuthAccountRepository (to resolve a user's email for
+  // self-heal provisioning), and Layer.provideMerge only discharges a
+  // requirement introduced by layers merged *before* it in this pipe.
+  Layer.provideMerge(LocalAuthAccountRepositoryLive),
+  Layer.provideMerge(GatewayAccountRepositoryLive),
 );

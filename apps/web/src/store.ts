@@ -129,7 +129,7 @@ function arraysEqual<T>(left: readonly T[], right: readonly T[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function normalizeModelSelection<T extends { provider: "codex" | "claudeAgent"; model: string }>(
+function normalizeModelSelection<T extends { provider: ProviderKind; model: string }>(
   selection: T,
 ): T {
   return {
@@ -1009,7 +1009,17 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex" || providerName === "claudeAgent") {
+  // Was missing "glm" — every GLM thread with an active session got
+  // `session.provider` silently coerced to "codex" here the moment it
+  // committed to a provider (first turn/session/non-user message). Since
+  // `deriveLockedProvider` (ChatView.logic.ts) reads `thread.session.provider`
+  // once committed, this locked the composer's model picker onto Codex's
+  // branch/icon/model list for every active GLM thread — wrong icon (OpenAI),
+  // wrong model list (Codex slugs, none matching the real GLM model), and a
+  // raw GLM model id leaking into the trigger label because it never matched
+  // any Codex slug. No separate "auto-revert" mechanism exists anywhere in
+  // this codebase; this one bug fully accounts for the reported symptoms.
+  if (providerName === "codex" || providerName === "claudeAgent" || providerName === "glm") {
     return providerName;
   }
   return "codex";

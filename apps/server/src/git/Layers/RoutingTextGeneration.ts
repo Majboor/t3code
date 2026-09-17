@@ -11,9 +11,9 @@
  */
 import { Effect, Layer, Context } from "effect";
 
+import type { ProviderKind } from "@t3tools/contracts";
 import {
   TextGeneration,
-  type TextGenerationProvider,
   type TextGenerationShape,
 } from "../Services/TextGeneration.ts";
 import { CodexTextGenerationLive } from "./CodexTextGeneration.ts";
@@ -39,7 +39,10 @@ const makeRoutingTextGeneration = Effect.gen(function* () {
   const codex = yield* CodexTextGen;
   const claude = yield* ClaudeTextGen;
 
-  const route = (provider?: TextGenerationProvider): TextGenerationShape =>
+  // GLM has no text-generation implementation of its own (accepted gap, see
+  // DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER's comment) — it falls
+  // through to Codex's, same as any other non-Claude provider.
+  const route = (provider?: ProviderKind): TextGenerationShape =>
     provider === "claudeAgent" ? claude : codex;
 
   return {

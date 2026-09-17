@@ -1,5 +1,14 @@
 import type { ComponentType } from "react";
-import { ArchiveIcon, Building2Icon, Link2Icon, Settings2Icon, UserIcon } from "lucide-react";
+import {
+  ActivityIcon,
+  ArchiveIcon,
+  Building2Icon,
+  CreditCardIcon,
+  GaugeIcon,
+  Link2Icon,
+  Settings2Icon,
+  UserIcon,
+} from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
@@ -28,6 +37,9 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/account": UserIcon,
   "/settings/organization": Building2Icon,
   "/settings/connections": Link2Icon,
+  "/settings/api-usage": GaugeIcon,
+  "/settings/usage-activity": ActivityIcon,
+  "/settings/billing": CreditCardIcon,
   "/settings/archived": ArchiveIcon,
 };
 

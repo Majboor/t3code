@@ -32,6 +32,7 @@ export type ClaudeModelOptions = typeof ClaudeModelOptions.Type;
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
+  glm: Schema.optional(Schema.Struct({})),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -61,6 +62,7 @@ export type ModelCapabilities = typeof ModelCapabilities.Type;
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, string> = {
   codex: "gpt-6-astra",
   claudeAgent: "claude-sonnet-4-6",
+  glm: "z-ai/glm-5.3-flash-uncensored",
 };
 
 /**
@@ -81,9 +83,15 @@ export const DEFAULT_MODEL_SELECTION: { provider: ProviderKind; model: string } 
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER: Record<ProviderKind, string> = {
   codex: "gpt-6-astra",
   claudeAgent: "claude-haiku-4-5",
+  // GLM never actually generates a commit message — `RoutingTextGeneration.ts`
+  // routes anything that isn't claudeAgent to Codex's implementation, an
+  // accepted, documented gap (see the plan's "accepted gap" list) — this entry
+  // only exists to satisfy the exhaustive Record.
+  glm: "z-ai/glm-5.3-flash-uncensored",
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, string>> = {
+  glm: {},
   codex: {
     // Every prior slug now maps to the one model the ChatGPT-account Codex CLI
     // accepts, so a thread that saved an old model recovers instead of failing
@@ -127,4 +135,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
+  // Product branding, not the underlying tech (GLM-5.3/DeepSeek via the
+  // LogicPacks gateway) — the composer shows this, not the real model names.
+  glm: "LogicPacks",
 };

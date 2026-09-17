@@ -498,3 +498,61 @@ export const AuthOnboardingState = Schema.Struct({
   nextStep: AuthOnboardingStep,
 });
 export type AuthOnboardingState = typeof AuthOnboardingState.Type;
+
+/**
+ * The one-time product-onboarding questionnaire shown after signup — distinct
+ * from `AuthOnboardingStep` above, which tracks workspace/invite setup. This
+ * only ever sets the *initial* default for the three settings below; every one
+ * of them remains an independent toggle in Settings afterward regardless of
+ * what (if anything) was answered here.
+ */
+export const OnboardingRole = Schema.Literals([
+  "individual",
+  "startup",
+  "agency",
+  "enterprise",
+  "student",
+]);
+export type OnboardingRole = typeof OnboardingRole.Type;
+
+export const OnboardingExperience = Schema.Literals(["new", "some", "experienced"]);
+export type OnboardingExperience = typeof OnboardingExperience.Type;
+
+export const OnboardingFocus = Schema.Literals(["backend", "frontend", "fullstack", "unsure"]);
+export type OnboardingFocus = typeof OnboardingFocus.Type;
+
+export const UserPreferences = Schema.Struct({
+  onboardingCompleted: Schema.Boolean,
+  onboardingRole: Schema.NullOr(OnboardingRole),
+  onboardingExperience: Schema.NullOr(OnboardingExperience),
+  onboardingFocus: Schema.NullOr(OnboardingFocus),
+  orgSettingsVisible: Schema.Boolean,
+  vibeModeEnabled: Schema.Boolean,
+  apiUsageTabVisible: Schema.Boolean,
+});
+export type UserPreferences = typeof UserPreferences.Type;
+
+/**
+ * Submitted once, whether the user answered every question or hit "Skip for
+ * now" (skip is normalized by the caller to `null` fields before this reaches
+ * the server, which then applies the same defaults as "Full-stack, some
+ * experience, individual").
+ */
+export const CompleteOnboardingInput = Schema.Struct({
+  role: Schema.NullOr(OnboardingRole),
+  experience: Schema.NullOr(OnboardingExperience),
+  focus: Schema.NullOr(OnboardingFocus),
+});
+export type CompleteOnboardingInput = typeof CompleteOnboardingInput.Type;
+
+/**
+ * Every field independently optional: each of the three settings can be
+ * flipped on its own from Settings, with no relation to the other two or to
+ * whatever onboarding originally set.
+ */
+export const UpdateUserPreferencesInput = Schema.Struct({
+  orgSettingsVisible: Schema.optional(Schema.Boolean),
+  vibeModeEnabled: Schema.optional(Schema.Boolean),
+  apiUsageTabVisible: Schema.optional(Schema.Boolean),
+});
+export type UpdateUserPreferencesInput = typeof UpdateUserPreferencesInput.Type;
