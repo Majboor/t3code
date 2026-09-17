@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
+import { useUserPreferences } from "../../hooks/useUserPreferences";
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import {
   SidebarContent,
@@ -56,13 +57,23 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const { preferences } = useUserPreferences();
+  // `null` (not loaded yet) reads as "visible" - never flash-hide a section
+  // the user can already see, only hide once we know for sure it's off.
+  const orgSettingsVisible = preferences?.orgSettingsVisible ?? true;
+  const apiUsageTabVisible = preferences?.apiUsageTabVisible ?? true;
+  const visibleNavItems = SETTINGS_NAV_ITEMS.filter((item) => {
+    if (item.to === "/settings/organization") return orgSettingsVisible;
+    if (item.to === "/settings/api-usage") return apiUsageTabVisible;
+    return true;
+  });
 
   return (
     <>
       <SidebarContent className="overflow-x-hidden">
         <SidebarGroup className="px-2 py-3">
           <SidebarMenu>
-            {SETTINGS_NAV_ITEMS.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = isSettingsSectionActive(pathname, item.to);
               return (

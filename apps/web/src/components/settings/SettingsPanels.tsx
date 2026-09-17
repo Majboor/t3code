@@ -78,6 +78,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AccountAvatarField } from "./AccountAvatarField";
+import { PersonalizationSettingsSection } from "./PersonalizationSettingsSection";
 import { ProviderAccountsSection } from "./ProviderAccountsSection";
 import {
   SettingResetButton,
@@ -2130,6 +2131,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <PersonalizationSettingsSection />
     </SettingsPageContainer>
   );
 }
