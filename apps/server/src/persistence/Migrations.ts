@@ -78,6 +78,8 @@ import Migration0062 from "./Migrations/062_MachineRole.ts";
 import Migration0063 from "./Migrations/063_EnvironmentServiceRegistry.ts";
 import Migration0064 from "./Migrations/064_BoxCommandJournal.ts";
 import Migration0065 from "./Migrations/065_GatewayAccounts.ts";
+import Migration0066 from "./Migrations/066_UserPreferences.ts";
+import Migration0067 from "./Migrations/067_ActivityNotes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -155,6 +157,8 @@ export const migrationEntries = [
   [63, "EnvironmentServiceRegistry", Migration0063],
   [64, "BoxCommandJournal", Migration0064],
   [65, "GatewayAccounts", Migration0065],
+  [66, "UserPreferences", Migration0066],
+  [67, "ActivityNotes", Migration0067],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
