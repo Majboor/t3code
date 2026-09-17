@@ -1,5 +1,5 @@
 import { Config, DateTime, Effect, Layer, Option } from "effect";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import type { UserId } from "@t3tools/contracts";
 
@@ -384,9 +384,21 @@ const makeExternalIntegrations = Effect.gen(function* () {
     Effect.gen(function* () {
       const token = yield* requireToken(userId, "cloudflare");
       const form = new FormData();
+      // Required by Cloudflare's own contract, not optional metadata: a
+      // deployment request with files but no `manifest` maps nothing to
+      // anything on their end, per their documented API. This SHA-256 hash
+      // is a reasonable content digest, but Cloudflare's own asset hashing
+      // (historically blake3-based for Workers/Pages) is not publicly
+      // pinned down as identical to this -- verify against a real deploy
+      // once a live OAuth-connected account exists to test with, before
+      // trusting this in production.
+      const manifest: Record<string, string> = {};
       for (const [path, content] of files) {
-        form.append(path.replace(/^\/+/, ""), new Blob([content]), path.replace(/^\/+/, ""));
+        const normalizedPath = path.replace(/^\/+/, "");
+        manifest[`/${normalizedPath}`] = createHash("sha256").update(content).digest("hex").slice(0, 32);
+        form.append(normalizedPath, new Blob([content]), normalizedPath);
       }
+      form.append("manifest", JSON.stringify(manifest));
       const res = yield* Effect.tryPromise({
         try: () =>
           fetch(`${CLOUDFLARE_API}/accounts/${accountId}/pages/projects/${projectName}/deployments`, {

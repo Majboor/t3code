@@ -2250,13 +2250,88 @@ const publishCloudflareDomainCommand = Command.make("cloudflare-domain", {
   ),
 );
 
+// Text-vs-binary sniff, not a real MIME check: a null byte in the first 8KB
+// is what every text editor / git already use as "this file is binary", and
+// it's enough to keep an image or a font from being mangled through a UTF-8
+// decode round-trip rather than just uploaded and skipped.
+const isProbablyText = (buffer: Buffer): boolean => !buffer.subarray(0, 8192).includes(0);
+
+const publishCloudflarePagesCommand = Command.make("cloudflare-pages", {
+  baseDir: baseDirFlag,
+  accountId: Argument.string("accountId").pipe(Argument.withDescription("Cloudflare account id.")),
+  projectName: Argument.string("projectName").pipe(
+    Argument.withDescription("Pages project name — reused on redeploy, not recreated."),
+  ),
+  outputDir: Argument.string("outputDir").pipe(
+    Argument.withDescription("Built static site directory to upload, e.g. dist."),
+  ),
+}).pipe(
+  Command.withDescription(
+    "Create (if new) a Cloudflare Pages project and upload a built static site directory to it. " +
+      "Requires Cloudflare connected in Settings > Connections first. The site is live at " +
+      "<projectName>.pages.dev once this succeeds. Run this after your own build step, not instead " +
+      "of one — this only uploads what's already built.",
+  ),
+  Command.withHandler((flags) =>
+    runPublishCommand(flags, (integrations, userId) =>
+      Effect.gen(function* () {
+        const created = yield* integrations
+          .cloudflareCreatePagesProject(userId, flags.accountId, flags.projectName)
+          .pipe(Effect.mapError((cause) => new Error(cause.message)));
+        const entries = yield* Effect.tryPromise({
+          try: async () => {
+            const { readdir, readFile } = await import("node:fs/promises");
+            const { join, relative } = await import("node:path");
+            const files = new Map<string, string>();
+            const walk = async (dir: string): Promise<void> => {
+              for (const entry of await readdir(dir, { withFileTypes: true })) {
+                const fullPath = join(dir, entry.name);
+                if (entry.isDirectory()) {
+                  await walk(fullPath);
+                } else if (entry.isFile()) {
+                  // `cloudflareDeployPages` only accepts text content today —
+                  // a real gap for a general static site (binary assets like
+                  // images/fonts would need a Map<string, Uint8Array> variant
+                  // and a matching change to the manifest-hashing code).
+                  // Skipped rather than silently corrupted by a bad UTF-8
+                  // decode of binary data.
+                  const buffer = await readFile(fullPath);
+                  if (isProbablyText(buffer)) {
+                    files.set(relative(flags.outputDir, fullPath), buffer.toString("utf8"));
+                  }
+                }
+              }
+            };
+            await walk(flags.outputDir);
+            return files;
+          },
+          catch: (cause) => new Error(`Failed to read ${flags.outputDir}: ${String(cause)}`),
+        });
+        if (entries.size === 0) {
+          return yield* Effect.fail(
+            new Error(`${flags.outputDir} has no (text) files — build the site before publishing it.`),
+          );
+        }
+        const deployed = yield* integrations
+          .cloudflareDeployPages(userId, flags.accountId, flags.projectName, entries)
+          .pipe(Effect.mapError((cause) => new Error(cause.message)));
+        return `Deployed ${entries.size} files to ${created.subdomain}.pages.dev: ${deployed.deploymentUrl}`;
+      }),
+    ),
+  ),
+);
+
 const publishCommand = Command.make("publish").pipe(
   Command.withDescription(
     "Publish a project's code and its deployed site to accounts the user connected in " +
       "Settings > Connections (GitHub, Cloudflare). Pair with `deploy` for where the thing runs " +
       "and `analytics` for what it reports once it does.",
   ),
-  Command.withSubcommands([publishGithubRepoCommand, publishCloudflareDomainCommand]),
+  Command.withSubcommands([
+    publishGithubRepoCommand,
+    publishCloudflareDomainCommand,
+    publishCloudflarePagesCommand,
+  ]),
 );
 
 const deployCommand = Command.make("deploy").pipe(
