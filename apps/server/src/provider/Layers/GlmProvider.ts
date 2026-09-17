@@ -45,7 +45,7 @@ const DEFAULT_GLM_MODEL_CAPABILITIES: ModelCapabilities = {
 const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
     slug: "z-ai/glm-5.3-flash-uncensored",
-    name: "GLM-5.3 Flash (LogicPacks)",
+    name: "GLM-5.3 Flash (Uncensored)",
     isCustom: false,
     capabilities: DEFAULT_GLM_MODEL_CAPABILITIES,
   },

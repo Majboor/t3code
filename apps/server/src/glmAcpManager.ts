@@ -62,8 +62,8 @@ const GLM_MODEL_SELECTOR = `logicpacks/${GLM_MODEL_ID}`;
  * harness; T3 resolves its own tiers to real model ids client-side instead).
  */
 const GLM_MODEL_NAMES: Readonly<Record<string, string>> = {
-  "z-ai/glm-5.3-flash-uncensored": "GLM-5.3 Flash (LogicPacks)",
-  "z-ai/glm-5.3-flash": "GLM-5.3 Flash (censored)",
+  "z-ai/glm-5.3-flash-uncensored": "GLM-5.3 Flash (Uncensored)",
+  "z-ai/glm-5.3-flash": "GLM-5.3 Flash (Censored)",
   "z-ai/glm-5.3": "GLM-5.3",
   "deepseek/deepseek-v4.1-flash-thinking": "DeepSeek V4.1 Flash (thinking)",
   "deepseek/deepseek-v4.1-flash": "DeepSeek V4.1 Flash",

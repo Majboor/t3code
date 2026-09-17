@@ -26,7 +26,7 @@ export const GLM_EFFORT_TIER_LABEL: Readonly<Record<GlmEffortTier, string>> = {
 
 /** Short, real model names for the slider's live drag label. */
 export const GLM_EFFORT_TIER_MODEL_LABEL: Readonly<Record<GlmEffortTier, string>> = {
-  high: "GLM-5.3 Flash (LogicPacks)",
+  high: "GLM-5.3 Flash (Uncensored)",
   medium: "DeepSeek Thinking",
   low: "DeepSeek Flash",
 };

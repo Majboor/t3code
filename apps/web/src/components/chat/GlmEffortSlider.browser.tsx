@@ -70,7 +70,7 @@ describe("GlmEffortSlider", () => {
       { container: host },
     );
 
-    expect(document.body.textContent ?? "").toContain("GLM-5.3 Flash (LogicPacks)");
+    expect(document.body.textContent ?? "").toContain("GLM-5.3 Flash (Uncensored)");
 
     // Drag from the High (rightmost) position to the far left — Low.
     dragThumbTo(host, 0);

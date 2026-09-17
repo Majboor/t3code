@@ -125,7 +125,7 @@ const TEST_PROVIDERS: ReadonlyArray<ServerProvider> = [
     models: [
       {
         slug: "z-ai/glm-5.3-flash-uncensored",
-        name: "GLM-5.3 Flash (LogicPacks)",
+        name: "GLM-5.3 Flash (Uncensored)",
         isCustom: false,
         capabilities: {
           reasoningEffortLevels: [],
@@ -336,10 +336,13 @@ describe("ProviderModelPicker", () => {
         expect(text).toContain("Low");
         expect(text).toContain("Medium");
         expect(text).toContain("High");
-        expect(text).toContain("GLM-5.3 Flash (LogicPacks)");
-        // ...and nothing about Codex leaked in, and no raw model id string
-        // is visible anywhere (the exact reported symptom).
-        expect(text).not.toContain("Codex");
+        expect(text).toContain("GLM-5.3 Flash (Uncensored)");
+        // Codex/Claude now appear as greyed-out "start a new project to
+        // switch" entries below the slider (the locked-provider UX fix), but
+        // still with no raw model id or Codex's own model names leaking in
+        // anywhere (the original reported symptom).
+        expect(text).toContain("Codex");
+        expect(text).toContain("Claude");
         expect(text).not.toContain("GPT");
         expect(text).not.toContain("z-ai/glm-5.3-flash-uncensored");
         expect(text).not.toContain("deepseek/deepseek-v4.1-flash");

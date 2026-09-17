@@ -169,7 +169,43 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       </MenuTrigger>
       <MenuPopup align="start">
         {props.lockedProvider !== null ? (
-          <MenuGroup>{renderModelChoices(props.lockedProvider, props.model)}</MenuGroup>
+          <>
+            <MenuGroup>{renderModelChoices(props.lockedProvider, props.model)}</MenuGroup>
+            {(() => {
+              const otherProviders = AVAILABLE_PROVIDER_OPTIONS.filter(
+                (option) => option.value !== props.lockedProvider,
+              );
+              if (otherProviders.length === 0) return null;
+              return (
+                <>
+                  <MenuDivider />
+                  <MenuGroup>
+                    {otherProviders.map((option) => {
+                      const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
+                      return (
+                        <Tooltip key={option.value}>
+                          <TooltipTrigger
+                            render={
+                              <div className="flex min-h-8 cursor-default items-center gap-2 rounded-sm px-2 py-1 text-base text-foreground/40 outline-none sm:min-h-7 sm:text-sm" />
+                            }
+                          >
+                            <OptionIcon
+                              aria-hidden="true"
+                              className={cn("size-4 shrink-0 opacity-40", providerIconClassName(option.value, ""))}
+                            />
+                            <span>{option.label}</span>
+                          </TooltipTrigger>
+                          <TooltipPopup side="right">
+                            Start a new project to use {option.label}
+                          </TooltipPopup>
+                        </Tooltip>
+                      );
+                    })}
+                  </MenuGroup>
+                </>
+              );
+            })()}
+          </>
         ) : (
           <>
             {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
