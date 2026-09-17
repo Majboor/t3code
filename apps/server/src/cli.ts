@@ -2270,7 +2270,9 @@ const publishCloudflarePagesCommand = Command.make("cloudflare-pages", {
     "Create (if new) a Cloudflare Pages project and upload a built static site directory to it. " +
       "Requires Cloudflare connected in Settings > Connections first. The site is live at " +
       "<projectName>.pages.dev once this succeeds. Run this after your own build step, not instead " +
-      "of one — this only uploads what's already built.",
+      "of one — this only uploads what's already built. Once this succeeds, offer the user " +
+      "`t3 publish github-actions` so future pushes to their repo redeploy automatically instead " +
+      "of coming back through this command every time — it is a separate opt-in step, not run here.",
   ),
   Command.withHandler((flags) =>
     runPublishCommand(flags, (integrations, userId) =>
@@ -2315,8 +2317,107 @@ const publishCloudflarePagesCommand = Command.make("cloudflare-pages", {
         const deployed = yield* integrations
           .cloudflareDeployPages(userId, flags.accountId, flags.projectName, entries)
           .pipe(Effect.mapError((cause) => new Error(cause.message)));
-        return `Deployed ${entries.size} files to ${created.subdomain}.pages.dev: ${deployed.deploymentUrl}`;
+        return (
+          `Deployed ${entries.size} files to ${created.subdomain}.pages.dev: ${deployed.deploymentUrl}. ` +
+          "Ask the user if they'd like future pushes to redeploy automatically — if so, run " +
+          "`t3 publish github-actions` to commit a workflow for it."
+        );
       }),
+    ),
+  ),
+);
+
+/**
+ * The workflow committed by `t3 publish github-actions` — kept as a standalone,
+ * exported function (rather than inlined into the command handler) so its
+ * content can be asserted on directly, the same way `buildSshCommand` in
+ * deploy/Layers/DeployService.ts is pulled out for its own test rather than
+ * only exercised through a full deploy run.
+ */
+export function buildCloudflarePagesWorkflowYaml(input: {
+  readonly projectName: string;
+  readonly outputDir: string;
+  readonly branch: string;
+}): string {
+  return `name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [${input.branch}]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build
+      - name: Deploy to Cloudflare Pages
+        run: npx wrangler pages deploy ${input.outputDir} --project-name=${input.projectName}
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+`;
+}
+
+const publishGithubActionsCommand = Command.make("github-actions", {
+  baseDir: baseDirFlag,
+  owner: Argument.string("owner").pipe(
+    Argument.withDescription("GitHub repo owner (user or org) — from `t3 publish github-repo`."),
+  ),
+  repo: Argument.string("repo").pipe(Argument.withDescription("GitHub repo name to commit the workflow to.")),
+  projectName: Argument.string("projectName").pipe(
+    Argument.withDescription("Cloudflare Pages project name — from `t3 publish cloudflare-pages`."),
+  ),
+  outputDir: Flag.string("output-dir").pipe(
+    Flag.withDefault("dist"),
+    Flag.withDescription("Build output directory the workflow should deploy. Defaults to dist."),
+  ),
+  branch: Flag.string("branch").pipe(
+    Flag.withDefault("main"),
+    Flag.withDescription("Branch that triggers an auto-deploy on push. Defaults to main."),
+  ),
+}).pipe(
+  Command.withDescription(
+    "Commit a GitHub Actions workflow (.github/workflows/deploy.yml) to a connected repo so a " +
+      "future push redeploys the Cloudflare Pages project without coming back through this CLI. " +
+      "Offer this after `t3 publish cloudflare-pages` succeeds rather than running it " +
+      "unconditionally — it is a separate opt-in, not part of that deploy. Requires GitHub " +
+      "connected in Settings > Connections. The workflow still expects CLOUDFLARE_API_TOKEN and " +
+      "CLOUDFLARE_ACCOUNT_ID as GitHub Actions repo secrets — this CLI can commit files on the " +
+      "user's behalf but has no path to write repo secrets, so tell the user to add those two " +
+      "by hand (repo Settings > Secrets and variables > Actions) before the workflow can run.",
+  ),
+  Command.withHandler((flags) =>
+    runPublishCommand(flags, (integrations, userId) =>
+      integrations
+        .githubPushFile(
+          userId,
+          flags.owner,
+          flags.repo,
+          ".github/workflows/deploy.yml",
+          buildCloudflarePagesWorkflowYaml({
+            projectName: flags.projectName,
+            outputDir: flags.outputDir,
+            branch: flags.branch,
+          }),
+          "Add Cloudflare Pages auto-deploy workflow",
+        )
+        .pipe(
+          Effect.map(
+            () =>
+              `Committed .github/workflows/deploy.yml to ${flags.owner}/${flags.repo} — pushes to ` +
+              `${flags.branch} will redeploy ${flags.projectName} once CLOUDFLARE_API_TOKEN and ` +
+              "CLOUDFLARE_ACCOUNT_ID are added as repo secrets.",
+          ),
+          Effect.mapError((cause) => new Error(cause.message)),
+        ),
     ),
   ),
 );
@@ -2331,6 +2432,7 @@ const publishCommand = Command.make("publish").pipe(
     publishGithubRepoCommand,
     publishCloudflareDomainCommand,
     publishCloudflarePagesCommand,
+    publishGithubActionsCommand,
   ]),
 );
 

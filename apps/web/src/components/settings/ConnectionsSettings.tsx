@@ -14,6 +14,7 @@ import { AddEnvironmentDialog } from "../environments/AddEnvironmentDialog";
 import { EnvironmentConnectList } from "../environments/EnvironmentConnectList";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
+import { CloudflareAnalyticsSection } from "./CloudflareAnalyticsSection";
 import { ConnectedMachinesSection } from "./ConnectedMachinesSection";
 import { ExternalIntegrationsSection } from "./ExternalIntegrationsSection";
 import { ProviderAccountsSection } from "./ProviderAccountsSection";
@@ -1043,6 +1044,8 @@ export function ConnectionsSettings() {
       <ProviderAccountsSection />
 
       <ExternalIntegrationsSection />
+
+      <CloudflareAnalyticsSection />
     </SettingsPageContainer>
   );
 }

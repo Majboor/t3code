@@ -136,6 +136,7 @@ import { storageUsageRouteLayer } from "./storage/http.ts";
 import {
   cloudflareConnectDomainRouteLayer,
   cloudflarePagesProjectRouteLayer,
+  cloudflareZoneAnalyticsRouteLayer,
   githubCreateRepoRouteLayer,
   githubPushFileRouteLayer,
   integrationsCallbackRouteLayer,
@@ -663,6 +664,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   githubPushFileRouteLayer,
   cloudflarePagesProjectRouteLayer,
   cloudflareConnectDomainRouteLayer,
+  cloudflareZoneAnalyticsRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
   desktopActivityRouteLayer,

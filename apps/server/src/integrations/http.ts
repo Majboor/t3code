@@ -184,6 +184,33 @@ export const cloudflarePagesProjectRouteLayer = HttpRouter.add(
   ),
 );
 
+/** The `:zoneId` route segment — Cloudflare zone ids are opaque strings, no format to validate beyond presence. */
+const zoneIdFromRoute = HttpRouter.params.pipe(
+  Effect.flatMap((params) => {
+    const zoneId = params["zoneId"];
+    return zoneId
+      ? Effect.succeed(zoneId)
+      : Effect.fail(new IntegrationError({ message: "Missing zoneId.", status: 400 }));
+  }),
+);
+
+export const cloudflareZoneAnalyticsRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/integrations/cloudflare/zones/:zoneId/analytics",
+  Effect.gen(function* () {
+    const serverAuth = yield* ServerAuth;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const session = yield* serverAuth.authenticateHttpRequest(request);
+    const zoneId = yield* zoneIdFromRoute;
+    const integrations = yield* ExternalIntegrations;
+    const result = yield* integrations.cloudflareZoneAnalytics(resolveAuthenticatedUserId(session), zoneId);
+    return HttpServerResponse.jsonUnsafe(result, { status: 200 });
+  }).pipe(
+    Effect.catchTag("AuthError", (error) => respondToAuthError(error)),
+    Effect.catchTag("IntegrationError", (error) => respondToIntegrationError(error)),
+  ),
+);
+
 export const cloudflareConnectDomainRouteLayer = HttpRouter.add(
   "POST",
   "/api/integrations/cloudflare/domains",

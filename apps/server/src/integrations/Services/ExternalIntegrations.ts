@@ -42,6 +42,12 @@ export interface ZoneConnectResult {
   readonly status: string;
 }
 
+export interface ZoneAnalyticsResult {
+  readonly requests: number;
+  readonly uniqueVisitors: number;
+  readonly bandwidthBytes: number;
+}
+
 export interface ExternalIntegrationsShape {
   readonly isConfigured: (provider: "github" | "cloudflare") => boolean;
   readonly startAuthorize: (
@@ -110,7 +116,7 @@ export interface ExternalIntegrationsShape {
   readonly cloudflareZoneAnalytics: (
     userId: UserId,
     zoneId: string,
-  ) => Effect.Effect<{ requests: number; uniqueVisitors: number }, IntegrationError>;
+  ) => Effect.Effect<ZoneAnalyticsResult, IntegrationError>;
 
   /** For per-session agent CLI injection — the raw token, if connected. */
   readonly getRawToken: (

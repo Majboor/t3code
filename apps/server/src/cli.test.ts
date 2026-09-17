@@ -6,7 +6,7 @@ import { join } from "node:path";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { NetService } from "@t3tools/shared/Net";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -14,8 +14,9 @@ import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as CliError from "effect/unstable/cli/CliError";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
+import { describe } from "vitest";
 
-import { cli } from "./cli.ts";
+import { buildCloudflarePagesWorkflowYaml, cli } from "./cli.ts";
 import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "./config.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -502,4 +503,30 @@ it.layer(NodeServices.layer)("cli log-level parsing", (it) => {
       assert.equal(optionError.option, "--dev-url");
     }),
   );
+});
+
+describe("buildCloudflarePagesWorkflowYaml", () => {
+  it("deploys the given project/output dir on push to the given branch", () => {
+    const yaml = buildCloudflarePagesWorkflowYaml({
+      projectName: "my-site",
+      outputDir: "dist",
+      branch: "main",
+    });
+
+    expect(yaml).toContain("branches: [main]");
+    expect(yaml).toContain("npx wrangler pages deploy dist --project-name=my-site");
+    expect(yaml).toContain("CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}");
+    expect(yaml).toContain("CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}");
+  });
+
+  it("honors a non-default branch and output directory", () => {
+    const yaml = buildCloudflarePagesWorkflowYaml({
+      projectName: "docs-site",
+      outputDir: "build",
+      branch: "release",
+    });
+
+    expect(yaml).toContain("branches: [release]");
+    expect(yaml).toContain("npx wrangler pages deploy build --project-name=docs-site");
+  });
 });
