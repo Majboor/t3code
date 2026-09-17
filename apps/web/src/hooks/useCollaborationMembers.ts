@@ -22,6 +22,60 @@ const NO_MEMBERS: ReadonlyMap<string, CollaborationMember> = new Map();
 const ROSTER_RETRY_BASE_MS = 500;
 const ROSTER_RETRY_MAX_ATTEMPT = 7;
 
+interface RosterCacheEntry {
+  readonly members: readonly CollaborationMember[];
+  readonly viewerUserId: string | null;
+}
+
+/**
+ * Last roster this browser saw for a given workspace, kept across component
+ * mounts.
+ *
+ * The component that calls this hook does not stay mounted across every
+ * navigation that logically keeps the same conversation going — most notably,
+ * sending the first message of a local draft thread promotes it to a real
+ * thread on a different route, which remounts the chat view (and this hook)
+ * from scratch right as that first turn starts streaming. Without this cache,
+ * a workspace whose roster this browser already knows a second ago would
+ * still start that new mount back at "nobody known yet", which is exactly
+ * the window `resolveMessageAuthor` labels every message — including the
+ * reader's own — as "Someone else". Seeding state from here instead means a
+ * remount into an already-visited workspace renders correctly immediately,
+ * with the network refresh (still kicked off on mount) only there to catch
+ * anything that changed since.
+ */
+const rosterCacheByScopeKey = new Map<string, RosterCacheEntry>();
+
+function rosterCacheKey(scope: { tenantId: TenantId; workspaceId: WorkspaceId }): string {
+  return `${scope.tenantId}:${scope.workspaceId}`;
+}
+
+function readRosterCache(
+  scope: { tenantId: TenantId; workspaceId: WorkspaceId } | null,
+): RosterCacheEntry | null {
+  if (!scope) {
+    return null;
+  }
+  return rosterCacheByScopeKey.get(rosterCacheKey(scope)) ?? null;
+}
+
+function writeRosterCache(
+  scope: { tenantId: TenantId; workspaceId: WorkspaceId },
+  entry: RosterCacheEntry,
+): void {
+  rosterCacheByScopeKey.set(rosterCacheKey(scope), entry);
+}
+
+export function __resetCollaborationMembersCacheForTests(): void {
+  rosterCacheByScopeKey.clear();
+}
+
+export const __collaborationMembersCacheForTests = {
+  read: readRosterCache,
+  write: writeRosterCache,
+  key: rosterCacheKey,
+};
+
 /**
  * The roster, indexed for looking up the author of a message.
  *
@@ -36,14 +90,22 @@ export function useCollaborationMembers(input: {
   workspaceId: WorkspaceId | null;
 }): CollaborationMembers {
   const { environmentId, tenantId, workspaceId } = input;
-  const [members, setMembers] = useState<readonly CollaborationMember[]>([]);
-  const [viewerUserId, setViewerUserId] = useState<string | null>(null);
-  const requestSequenceRef = useRef(0);
 
   const scope = useMemo(
     () => (tenantId && workspaceId ? { tenantId, workspaceId } : null),
     [tenantId, workspaceId],
   );
+
+  // Seeded from the cache so a remount into a workspace this browser already
+  // has an answer for (see `rosterCacheByScopeKey` above) renders correctly
+  // on its very first paint instead of starting over at "nobody known yet".
+  const [members, setMembers] = useState<readonly CollaborationMember[]>(
+    () => readRosterCache(scope)?.members ?? [],
+  );
+  const [viewerUserId, setViewerUserId] = useState<string | null>(
+    () => readRosterCache(scope)?.viewerUserId ?? null,
+  );
+  const requestSequenceRef = useRef(0);
 
   const retryTimerRef = useRef<number | null>(null);
   const retryAttemptRef = useRef(0);
@@ -85,6 +147,7 @@ export function useCollaborationMembers(input: {
           retryAttemptRef.current = 0;
           setMembers(result.members);
           setViewerUserId(result.viewerUserId);
+          writeRosterCache(scope, { members: result.members, viewerUserId: result.viewerUserId });
         })
         .catch(() => onUnavailable?.());
     },
