@@ -83,6 +83,7 @@ import Migration0067 from "./Migrations/067_ActivityNotes.ts";
 import Migration0068 from "./Migrations/068_NotificationPopups.ts";
 import Migration0069 from "./Migrations/069_ExternalConnections.ts";
 import Migration0070 from "./Migrations/070_DeployTargetsCloudflare.ts";
+import Migration0071 from "./Migrations/071_PromptbarTestSet.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -165,6 +166,7 @@ export const migrationEntries = [
   [68, "NotificationPopups", Migration0068],
   [69, "ExternalConnections", Migration0069],
   [70, "DeployTargetsCloudflare", Migration0070],
+  [71, "PromptbarTestSet", Migration0071],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

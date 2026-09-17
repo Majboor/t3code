@@ -22,6 +22,7 @@
     "prepare": "effect-language-service patch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "eval:promptbar": "node scripts/promptbar-eval.ts",
     "test:process-reaper": "vitest run src/server.test.ts src/provider/Layers/ClaudeAdapter.test.ts src/provider/Layers/ProviderSessionDirectory.test.ts src/provider/Layers/ProviderSessionReaper.test.ts src/provider/Layers/CodexAdapter.test.ts"
   },
   "dependencies": {
