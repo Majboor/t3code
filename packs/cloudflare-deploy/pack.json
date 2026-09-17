@@ -1,0 +1,260 @@
+{
+  "formatVersion": "2.0",
+  "identity": {
+    "id": "pack_380221aa574070fe3fbe",
+    "name": "cloudflare-deploy",
+    "version": "0.1.0",
+    "displayName": "cloudflare-deploy",
+    "summary": "Deploy through T3's native Cloudflare quick-tunnel and Pages target kinds",
+    "publisher": {
+      "type": "user",
+      "handle": "t3demo",
+      "displayName": "t3demo"
+    },
+    "license": "UNLICENSED",
+    "tags": ["deploy", "cloudflare", "tunnel", "pages", "oauth"]
+  },
+  "provenance": {
+    "workspace": {
+      "workspaceKeyId": "wsk_2fadd5dfb56c40d6bd28"
+    },
+    "extractedAt": "2026-09-17T16:53:37.000Z",
+    "extractedBy": {
+      "type": "agent",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "actingFor": {
+        "type": "user",
+        "displayName": "t3demo"
+      }
+    },
+    "handover": {
+      "path": "handover.md",
+      "summary": "New pack for the cloudflare-tunnel/cloudflare-pages DeployTargetKind added in this same change. cloudflare-tunnel is real-tested end to end: three runs surfaced a fixed bug (a stale previous-run failure line matching the URL pattern instead of the real tunnel) and one open issue (a cloudflare-tunnel run can take as long as cloudflared itself takes to give up, because plain nohup does not detach it into its own session — setsid is the advised fix, not yet re-verified). cloudflare-pages is schema-complete and typechecks but has not been run against a live Cloudflare account, because that needs a person to complete OAuth consent in a browser first, which an agent cannot do and this pack does not work around with a personal API token.",
+      "generatedAt": "2026-09-17T16:53:37.000Z"
+    }
+  },
+  "capability": {
+    "does": "Deploys a project through a Cloudflare quick tunnel (no account needed) or to Cloudflare Pages (via the person's own connected account), registering either as a live deployment T3 can see.",
+    "nonGoals": [
+      "Does not create or manage a named (persistent) Cloudflare tunnel — quick tunnels only, so the address changes on every restart.",
+      "Does not attach a custom domain to a Pages deployment — that is the registrar-detection/zone-connect flow under Settings, not this pack.",
+      "Does not deploy over SSH — that is ssh-deploy."
+    ]
+  },
+  "knowledge": {
+    "failureModes": [
+      {
+        "id": "stale-log-line-matches-as-the-tunnel-url",
+        "symptom": "The deployment registers with url https://api.trycloudflare.com — cloudflared's own control-plane host — instead of the real tunnel address, even though the real address is also in the log.",
+        "trigger": "cloudflared writes into the same log path across redeploys (a plain `>>` append redirect). A previous run's failure line ('failed to request quick Tunnel: Post \"https://api.trycloudflare.com/tunnel\": context deadline exceeded') contains a real https://….trycloudflare.com-shaped URL, and a naive pattern matches it — the first match in the file — instead of the real tunnel's line from the current run.",
+        "attributedTo": {
+          "kind": "pack"
+        },
+        "severity": "critical",
+        "silent": true,
+        "detection": {
+          "signal": "log-pattern",
+          "match": "deployment url is exactly https://api.trycloudflare.com"
+        },
+        "resolution": {
+          "kind": "fixed",
+          "inVersion": "0.1.0",
+          "change": "The match pattern excludes the literal api.trycloudflare.com host, and the log file is truncated at the start of every run so stale content cannot survive even if the pattern is imperfect."
+        },
+        "firstSeenAt": "2026-09-17T15:40:00.000Z",
+        "lastSeenAt": "2026-09-17T15:40:00.000Z",
+        "deploymentsAffected": 1,
+        "conditions": {
+          "observedAt": "2026-09-17T15:40:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "local machine, published by a cloudflare quick tunnel"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-09-17T15:40:00.000Z"
+        }
+      },
+      {
+        "id": "nohup-does-not-detach-cloudflared-from-the-runs-wait",
+        "symptom": "t3 deploy run on a cloudflare-tunnel target takes as long to return as cloudflared itself takes to give up — measured at 2m21s for a run whose own foreground script finished in about a second.",
+        "trigger": "The deploy command backgrounds cloudflared with `nohup cloudflared ... </dev/null >>log 2>&1 &`. nohup only ignores SIGHUP; it does not start a new session, so cloudflared stays in the launcher's process group and the process runner's wait for its stdio pipes to close ends up tied to cloudflared's own exit rather than the launcher script finishing — a plain, well-behaved background service rarely shows this because its parent shell exits almost immediately, but cloudflared keeps running (and keeps the pipe from closing) until it succeeds or times out on its own.",
+        "attributedTo": {
+          "kind": "host",
+          "detail": "Process-group/session behavior of background jobs started with `&` inside a non-interactive shell, not specific to any one OS."
+        },
+        "severity": "medium",
+        "silent": false,
+        "detection": {
+          "signal": "healthcheck",
+          "match": "deploy run takes multiple minutes to return for a cloudflare-tunnel target"
+        },
+        "resolution": {
+          "kind": "open",
+          "currentAdvice": "Wrap the backgrounded cloudflared invocation in setsid (`setsid cloudflared tunnel --url http://127.0.0.1:$PORT </dev/null >>\"$T3_TUNNEL_LOG_PATH\" 2>&1 &`) to put it in a new session. Written into DeployService.ts and this pack's integration prompt as current advice; not yet re-verified end-to-end — the next real deploy through this pack should confirm it actually returns quickly and this entry should move to fixed once it does."
+        },
+        "firstSeenAt": "2026-09-17T16:30:00.000Z",
+        "lastSeenAt": "2026-09-17T16:53:00.000Z",
+        "deploymentsAffected": 2,
+        "conditions": {
+          "observedAt": "2026-09-17T16:53:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "local machine, published by a cloudflare quick tunnel"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-09-17T16:53:00.000Z"
+        }
+      }
+    ],
+    "integration": [
+      {
+        "id": "detach-cloudflared-with-setsid-not-just-nohup",
+        "title": "setsid, not just nohup, for the tunnel process",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Background cloudflared with `setsid ... </dev/null >>\"$T3_TUNNEL_LOG_PATH\" 2>&1 &`, not plain `nohup ... &`.",
+          "rationale": "nohup only ignores SIGHUP; it does not start a new session, so the process stays in the launcher's process group and a process runner waiting on stdio-pipe closure ends up waiting on cloudflared's own exit instead of the launcher script returning.",
+          "example": "setsid cloudflared tunnel --url http://127.0.0.1:8947 </dev/null >>\"$T3_TUNNEL_LOG_PATH\" 2>&1 &"
+        },
+        "conditions": {
+          "observedAt": "2026-09-17T16:53:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "local machine, published by a cloudflare quick tunnel"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-09-17T16:53:00.000Z"
+        }
+      },
+      {
+        "id": "no-url-flag-needed-for-a-tunnel-target",
+        "title": "Do not pass --url for a cloudflare-tunnel target",
+        "detail": {
+          "kind": "wiring",
+          "prompt": "Unlike ssh-deploy's hand-rolled quick-tunnel path, a cloudflare-tunnel target's `t3 deploy run` reads the address back out of $T3_TUNNEL_LOG_PATH itself and registers it — there is nothing to poll and no --url to pass. The deploy command's only job is to background the service and cloudflared (with cloudflared's output redirected into $T3_TUNNEL_LOG_PATH) and exit.",
+          "touches": []
+        },
+        "conditions": {
+          "observedAt": "2026-09-17T16:00:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "local machine, published by a cloudflare quick tunnel"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-09-17T16:00:00.000Z"
+        }
+      },
+      {
+        "id": "pages-deploy-needs-a-human-oauth-step-first",
+        "title": "A cloudflare-pages target needs Cloudflare connected first, and that is a human's job",
+        "detail": {
+          "kind": "wiring",
+          "prompt": "Before registering a cloudflare-pages target, check whether Cloudflare is connected for this account (the connect UI is under Settings → Connections). If it is not, stop and say so plainly rather than working around it: connecting requires a person to complete an OAuth consent screen in a browser, which an agent cannot do, and this pack does not attempt it with a personally-held Cloudflare API token. Once connected, ExternalIntegrations resolves the account's token server-side for every Cloudflare call this pack makes — the deploy command itself never sees or needs a credential.",
+          "touches": []
+        },
+        "conditions": {
+          "observedAt": "2026-09-17T16:53:00.000Z",
+          "other": [
+            {
+              "axis": "deployment-target",
+              "value": "Cloudflare Pages, via a connected account"
+            }
+          ]
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-09-17T16:53:00.000Z"
+        }
+      }
+    ]
+  },
+  "requirements": {
+    "environment": [],
+    "toolchain": [
+      {
+        "name": "cloudflared"
+      }
+    ],
+    "preflightCommand": "command -v cloudflared >/dev/null"
+  },
+  "runtime": {
+    "target": "none",
+    "commands": {
+      "start": {
+        "command": "${DEPLOY_START_COMMAND}",
+        "cwd": ".",
+        "description": "Backgrounds the project's own service and, for a cloudflare-tunnel target, cloudflared redirected into $T3_TUNNEL_LOG_PATH."
+      }
+    }
+  },
+  "permissions": {
+    "acceptsInboundNetwork": true,
+    "secrets": []
+  },
+  "verification": {
+    "record": {
+      "measuredAt": "2026-09-17T16:53:37.000Z",
+      "installsAttempted": 1,
+      "installsSucceeded": 1,
+      "deploymentsAttempted": 3,
+      "deploymentsSurviving": 1,
+      "cumulativeServiceDays": 0,
+      "breakagesCaught": 2,
+      "breakagesFixed": 1
+    }
+  },
+  "visibility": {
+    "scope": "workspace",
+    "workspaceKeyId": "wsk_2fadd5dfb56c40d6bd28"
+  },
+  "integration": {
+    "prompt": "Deploy this project through Cloudflare — either a quick tunnel (no account needed) or Cloudflare Pages (needs the person's Cloudflare account connected once, under Settings → Connections).\n\nAsk T3 what it already knows before asking the person anything: `t3 deploy list --project <projectId>` names every target the project has, including its kind and, for a cloudflare-tunnel target, its port, or for cloudflare-pages, its account/project/build directory. If a target is listed, this is a redeploy: reuse it by name. If none is, ask what you need and register one (step 3 below) so the next deploy finds it.\n\nChoose the kind:\n- **cloudflare-tunnel** — the project's service runs on this machine (or wherever the deploy command executes) and is published by an anonymous Cloudflare quick tunnel. No account, no DNS, no pre-existing setup. The address changes every time the tunnel restarts.\n- **cloudflare-pages** — a static build output directory is uploaded to Cloudflare Pages under the person's own connected account. The address is stable (`<project>.pages.dev`) across deploys.\n\nFor **cloudflare-tunnel**:\n1. Work out the service's port, and preflight that nothing already holds it.\n2. Write a start command that backgrounds two things and then exits quickly — the same contract every deploy target already expects:\n   - the project's own service, redirected away from this shell's stdio and with stdin closed (`</dev/null`), or `t3 deploy run` will wait on it rather than return;\n   - `cloudflared tunnel --url http://127.0.0.1:$PORT`, likewise with stdin closed and its stdout/stderr redirected into `$T3_TUNNEL_LOG_PATH` — the exact path is injected into the command's environment, do not construct it yourself. **Use `setsid`, not just `nohup`**, on the cloudflared invocation: `setsid cloudflared tunnel --url http://127.0.0.1:$PORT </dev/null >>\"$T3_TUNNEL_LOG_PATH\" 2>&1 &`. Plain `nohup` only ignores SIGHUP — it does not start a new session, so cloudflared stays tied to this shell's process group and the deploy can end up waiting on cloudflared's own lifetime (measured: over two minutes, when cloudflared itself was slow to fail) rather than on your script returning.\n3. Register it: `t3 deploy add --project <projectId> --name <name> --command '<the whole script>' --tunnel-port <port>`.\n4. `t3 deploy run <targetId>` — no `--url` needed. It reads the real `https://….trycloudflare.com` address back out of the tunnel log itself and registers it as the deployment's URL. Say that address in your reply; it is the only thing that changes between restarts.\n\nFor **cloudflare-pages**:\n1. Check whether Cloudflare is connected for this account (Settings → Connections). If it is not, **stop and say so** — connecting needs a person to complete an OAuth consent screen in a browser, which you cannot do, and this pack does not use a personally-held Cloudflare API token as a workaround.\n2. Once connected, work out the build command and which directory it writes its output to.\n3. Register it: `t3 deploy add --project <projectId> --name <name> --command '<build command>' --pages-account-id <accountId> --pages-project <name> --pages-build-dir <dir>`. The account id comes from the connected account, not from anywhere the agent invents one.\n4. `t3 deploy run <targetId>` runs the build, then deploys `<dir>` to that Pages project using the connected account's OAuth token — nothing is asked of the deploy command itself.\n\nEither kind registers a real deployment through `DeploymentRegistry`, exactly like a `command`/`ssh` target — it shows up on the project's Infrastructure page and can be wired to an analytics stream with `--analytics-stream` the same way. Keep the target's name stable across redeploys, for the same reason ssh-deploy's targets do: a new name each time stands up a rival deployment instead of replacing the old one."
+  },
+  "contents": {
+    "readmePath": "README.md",
+    "files": [
+      {
+        "path": "README.md",
+        "sha256": "7c0d73e987f1952ee7d99ecf323392dfe21494a7dced0f7789ba955f47561d00",
+        "bytes": 7229
+      },
+      {
+        "path": "handover.md",
+        "sha256": "4b7512115fb78bf4e73994ab9e7a94ab6c34e580ae39bc8da14823cb71ad4128",
+        "bytes": 6657
+      }
+    ]
+  }
+}
