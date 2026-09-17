@@ -1,0 +1,8 @@
+{"id":"gmail_apps_script_mail","name":"Send mail via Gmail Apps Script",
+ "description":"Send email through a Google Apps Script web app tied to a Gmail account",
+ "phrasings":["send an email","shoot a note to","email john about this","mail karo",
+   "send this over gmail","email the client","send a confirmation email","mail bhejo",
+   "notify them by email","send an email receipt","email the team this update"],
+ "params":[{"name":"to","type":"string","required":true,"desc":"recipient address"},
+           {"name":"subject","type":"string","required":false,"desc":"email subject"}],
+ "prompt":"Send an email to {to} using the gmail-apps-script-mail pack. Remember: plain text only, and check the per-mailbox daily send cap first."}

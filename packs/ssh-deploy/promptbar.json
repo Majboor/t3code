@@ -1,0 +1,11 @@
+{"id":"ssh_deploy","name":"Deploy over SSH",
+ "description":"Ship a project to a host over SSH and keep it running, whatever shape the thing is",
+ "phrasings":["deploy this to the server","ship it over ssh","push this live on the vps",
+   "deploy karo remote pe","put this on the box","send this to the cloud node",
+   "run this on the remote host","ssh deploy this project","host this app remotely",
+   "get this running on the server","publish this over ssh","bhej do server pe",
+   "deploy to production over ssh","stand this up on the remote box"],
+ "params":[{"name":"target","type":"string","required":false,"desc":"local or cloud deploy target name"},
+           {"name":"project","type":"string","required":true,"desc":"which project to deploy"}],
+ "prompt":"Deploy {project} using the ssh-deploy pack. Run `t3 deploy list --project {project}` first; if no targets exist, ask which one before doing anything.",
+ "packId":"pack_c7f9cb58f6a544e7b16c"}

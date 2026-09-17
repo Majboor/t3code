@@ -1,0 +1,7 @@
+{"id":"pdf_delivery","name":"Serve a generated PDF",
+ "description":"Generate and serve a PDF document and report how far readers get through it",
+ "phrasings":["make this into a pdf","generate a pdf report","send them a pdf",
+   "export this as pdf","create a downloadable pdf","pdf banao","serve a pdf download",
+   "build a pdf invoice","generate a printable report","turn this into a document"],
+ "params":[{"name":"content","type":"string","required":true,"desc":"what to render into the pdf"}],
+ "prompt":"Generate a PDF for {content} using the pdf-delivery pack and report read-through analytics."}
