@@ -40,6 +40,8 @@ const target: DeployTarget = {
   kind: "command",
   command: "./start.sh",
   ssh: null,
+  cloudflareTunnel: null,
+  cloudflarePages: null,
   createdAt: "2026-08-19T10:00:00.000Z",
   updatedAt: "2026-08-19T10:00:00.000Z",
   archivedAt: null,

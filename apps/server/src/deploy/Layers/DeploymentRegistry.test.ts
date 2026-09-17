@@ -44,6 +44,8 @@ const seed = Effect.gen(function* () {
     kind: "command",
     command: "make deploy",
     ssh: null,
+    cloudflareTunnel: null,
+    cloudflarePages: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     archivedAt: null,

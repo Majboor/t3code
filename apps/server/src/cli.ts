@@ -154,6 +154,9 @@ import {
   formatBoxUnit,
 } from "./box/cliOutput.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import { ExternalConnectionRepositoryLive } from "./persistence/Layers/ExternalConnections.ts";
+import { ExternalIntegrations, type ExternalIntegrationsShape } from "./integrations/Services/ExternalIntegrations.ts";
+import { ExternalIntegrationsLive } from "./integrations/Layers/ExternalIntegrations.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
 import { getAutoBootstrapDefaultModelSelection } from "./serverRuntimeStartup.ts";
 import {
@@ -1512,6 +1515,27 @@ const deployAddCommand = Command.make("add", {
     Flag.withDescription("Path to an SSH private key."),
     Flag.optional,
   ),
+  tunnelPort: Flag.integer("tunnel-port").pipe(
+    Flag.withDescription(
+      "Expose the command's service on this port via a Cloudflare quick tunnel. The command " +
+        "must start the service AND a `cloudflared tunnel --url http://127.0.0.1:$PORT` " +
+        "redirected to `$T3_TUNNEL_LOG_PATH`, then return — same 'start it in the background " +
+        "and exit' contract every deploy target already expects.",
+    ),
+    Flag.optional,
+  ),
+  pagesAccountId: Flag.string("pages-account-id").pipe(
+    Flag.withDescription("Cloudflare account id (with --pages-project) to deploy a Pages site."),
+    Flag.optional,
+  ),
+  pagesProject: Flag.string("pages-project").pipe(
+    Flag.withDescription("Cloudflare Pages project name."),
+    Flag.optional,
+  ),
+  pagesBuildDir: Flag.string("pages-build-dir").pipe(
+    Flag.withDescription("Directory (relative to the workspace) to upload — usually your build output."),
+    Flag.optional,
+  ),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Add a deploy target."),
@@ -1528,6 +1552,15 @@ const deployAddCommand = Command.make("add", {
         const remotePath = Option.getOrUndefined(flags.sshPath);
         const passwordSecretName = Option.getOrUndefined(flags.sshPasswordSecret);
         const identityFile = Option.getOrUndefined(flags.sshIdentityFile);
+        const tunnelPort = Option.getOrUndefined(flags.tunnelPort);
+        const pagesAccountId = Option.getOrUndefined(flags.pagesAccountId);
+        const pagesProject = Option.getOrUndefined(flags.pagesProject);
+        const pagesBuildDir = Option.getOrUndefined(flags.pagesBuildDir);
+        if ((pagesAccountId !== undefined) !== (pagesProject !== undefined) || (pagesAccountId !== undefined) !== (pagesBuildDir !== undefined)) {
+          return yield* Effect.fail(
+            new Error("--pages-account-id, --pages-project and --pages-build-dir must all be given together."),
+          );
+        }
         const projectId = ProjectId.make(flags.project);
 
         // Read before writing purely so the output can say "updated" rather
@@ -1539,12 +1572,21 @@ const deployAddCommand = Command.make("add", {
           .pipe(Effect.mapError((error) => new Error(error.message)));
         const reused = siblings.some((candidate) => candidate.name === flags.name);
 
+        const kind =
+          pagesAccountId !== undefined
+            ? ("cloudflare-pages" as const)
+            : tunnelPort !== undefined
+              ? ("cloudflare-tunnel" as const)
+              : host !== undefined
+                ? ("ssh" as const)
+                : ("command" as const);
+
         const target = yield* deploy
           .createTarget({
             projectId,
             name: flags.name,
             command: flags.command,
-            kind: host !== undefined ? "ssh" : "command",
+            kind,
             ...(host !== undefined && user !== undefined
               ? {
                   ssh: {
@@ -1553,6 +1595,16 @@ const deployAddCommand = Command.make("add", {
                     ...(remotePath !== undefined ? { remotePath } : {}),
                     ...(passwordSecretName !== undefined ? { passwordSecretName } : {}),
                     ...(identityFile !== undefined ? { identityFile } : {}),
+                  },
+                }
+              : {}),
+            ...(tunnelPort !== undefined ? { cloudflareTunnel: { port: tunnelPort } } : {}),
+            ...(pagesAccountId !== undefined && pagesProject !== undefined && pagesBuildDir !== undefined
+              ? {
+                  cloudflarePages: {
+                    accountId: pagesAccountId,
+                    projectName: pagesProject,
+                    buildOutputDir: pagesBuildDir,
                   },
                 }
               : {}),
@@ -2097,6 +2149,189 @@ const secretRemoveCommand = Command.make("remove", {
 const secretCommand = Command.make("secret").pipe(
   Command.withDescription("Store the secrets a deploy target refers to by name."),
   Command.withSubcommands([secretSetCommand, secretListCommand, secretRemoveCommand]),
+);
+
+/**
+ * Publishes to GitHub/Cloudflare on behalf of whichever user the running
+ * turn belongs to — `T3_USER_ID` is already in every provider's launch
+ * environment (`deriveProviderLaunchEnvironment`, `packages/shared/src/tenancy.ts`),
+ * so there is nothing new to inject: an agent invoking this from inside a
+ * session already has it set. A bare CLI invocation with no `T3_USER_ID`
+ * (nobody's turn, just a shell) fails with a clear message rather than
+ * silently acting as no one.
+ */
+const runPublishCommand = Effect.fn("runPublishCommand")(function* (
+  flags: { readonly baseDir: Option.Option<string> },
+  run: (integrations: ExternalIntegrationsShape, userId: UserId) => Effect.Effect<string, Error>,
+) {
+  const rawUserId = process.env.T3_USER_ID;
+  if (!rawUserId) {
+    return yield* Effect.fail(
+      new Error(
+        "T3_USER_ID is not set. This command acts on behalf of a specific user and only runs " +
+          "inside a live turn's environment, not from a bare shell.",
+      ),
+    );
+  }
+  const userId = UserId.make(rawUserId);
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  return yield* Effect.gen(function* () {
+    const integrations = yield* ExternalIntegrations;
+    yield* Console.log(
+      yield* run(integrations, userId).pipe(
+        Effect.mapError(
+          (cause) => new Error(cause instanceof Error ? cause.message : "Publish command failed."),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.provideService(References.MinimumLogLevel, "Error" as const),
+    Effect.provide(
+      ExternalIntegrationsLive.pipe(
+        Layer.provide(ExternalConnectionRepositoryLive),
+        Layer.provide(SqlitePersistenceLayerLive),
+      ).pipe(
+        Layer.provide(Layer.succeed(ServerConfig, config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
+      ),
+    ),
+  );
+});
+
+const publishGithubRepoCommand = Command.make("github-repo", {
+  baseDir: baseDirFlag,
+  name: Argument.string("name").pipe(Argument.withDescription("Repository name to create.")),
+  isPrivate: Flag.boolean("private").pipe(
+    Flag.withDefault(true),
+    Flag.withDescription("Create it private. Defaults to true."),
+  ),
+}).pipe(
+  Command.withDescription(
+    "Create a GitHub repo and push the current project to it. Requires the user to have " +
+      "connected GitHub in Settings > Connections first — if they have not, this fails with a " +
+      "clear 'not connected' error rather than a confusing API failure, so agent code that calls " +
+      "this should ask the user to connect it and try again on that failure.",
+  ),
+  Command.withHandler((flags) =>
+    runPublishCommand(flags, (integrations, userId) =>
+      integrations.githubCreateRepo(userId, flags.name, flags.isPrivate).pipe(
+        Effect.map(
+          (result) => `Created ${flags.name} (default branch ${result.defaultBranch}): ${result.htmlUrl}`,
+        ),
+        Effect.mapError((cause) => new Error(cause.message)),
+      ),
+    ),
+  ),
+);
+
+const publishCloudflareDomainCommand = Command.make("cloudflare-domain", {
+  baseDir: baseDirFlag,
+  accountId: Argument.string("accountId").pipe(Argument.withDescription("Cloudflare account id.")),
+  domain: Argument.string("domain").pipe(Argument.withDescription("Domain to connect, e.g. example.com.")),
+}).pipe(
+  Command.withDescription(
+    "Create a Cloudflare zone for a custom domain and report the nameservers to hand the user, " +
+      "with a best-effort guess at their current registrar (from a live DNS lookup, done before " +
+      "the zone exists) so the instructions can be specific instead of generic. This never touches " +
+      "the user's registrar account — they still make the nameserver change themselves.",
+  ),
+  Command.withHandler((flags) =>
+    runPublishCommand(flags, (integrations, userId) =>
+      integrations.cloudflareConnectDomain(userId, flags.accountId, flags.domain).pipe(
+        Effect.map(
+          (result) =>
+            `Zone ${result.zoneId} created (${result.status}). Set these nameservers at your registrar` +
+            `${result.registrarHint ? ` (looks like ${result.registrarHint})` : ""}: ${result.nameServers.join(", ")}`,
+        ),
+        Effect.mapError((cause) => new Error(cause.message)),
+      ),
+    ),
+  ),
+);
+
+// Text-vs-binary sniff, not a real MIME check: a null byte in the first 8KB
+// is what every text editor / git already use as "this file is binary", and
+// it's enough to keep an image or a font from being mangled through a UTF-8
+// decode round-trip rather than just uploaded and skipped.
+const isProbablyText = (buffer: Buffer): boolean => !buffer.subarray(0, 8192).includes(0);
+
+const publishCloudflarePagesCommand = Command.make("cloudflare-pages", {
+  baseDir: baseDirFlag,
+  accountId: Argument.string("accountId").pipe(Argument.withDescription("Cloudflare account id.")),
+  projectName: Argument.string("projectName").pipe(
+    Argument.withDescription("Pages project name — reused on redeploy, not recreated."),
+  ),
+  outputDir: Argument.string("outputDir").pipe(
+    Argument.withDescription("Built static site directory to upload, e.g. dist."),
+  ),
+}).pipe(
+  Command.withDescription(
+    "Create (if new) a Cloudflare Pages project and upload a built static site directory to it. " +
+      "Requires Cloudflare connected in Settings > Connections first. The site is live at " +
+      "<projectName>.pages.dev once this succeeds. Run this after your own build step, not instead " +
+      "of one — this only uploads what's already built.",
+  ),
+  Command.withHandler((flags) =>
+    runPublishCommand(flags, (integrations, userId) =>
+      Effect.gen(function* () {
+        const created = yield* integrations
+          .cloudflareCreatePagesProject(userId, flags.accountId, flags.projectName)
+          .pipe(Effect.mapError((cause) => new Error(cause.message)));
+        const entries = yield* Effect.tryPromise({
+          try: async () => {
+            const { readdir, readFile } = await import("node:fs/promises");
+            const { join, relative } = await import("node:path");
+            const files = new Map<string, string>();
+            const walk = async (dir: string): Promise<void> => {
+              for (const entry of await readdir(dir, { withFileTypes: true })) {
+                const fullPath = join(dir, entry.name);
+                if (entry.isDirectory()) {
+                  await walk(fullPath);
+                } else if (entry.isFile()) {
+                  // `cloudflareDeployPages` only accepts text content today —
+                  // a real gap for a general static site (binary assets like
+                  // images/fonts would need a Map<string, Uint8Array> variant
+                  // and a matching change to the manifest-hashing code).
+                  // Skipped rather than silently corrupted by a bad UTF-8
+                  // decode of binary data.
+                  const buffer = await readFile(fullPath);
+                  if (isProbablyText(buffer)) {
+                    files.set(relative(flags.outputDir, fullPath), buffer.toString("utf8"));
+                  }
+                }
+              }
+            };
+            await walk(flags.outputDir);
+            return files;
+          },
+          catch: (cause) => new Error(`Failed to read ${flags.outputDir}: ${String(cause)}`),
+        });
+        if (entries.size === 0) {
+          return yield* Effect.fail(
+            new Error(`${flags.outputDir} has no (text) files — build the site before publishing it.`),
+          );
+        }
+        const deployed = yield* integrations
+          .cloudflareDeployPages(userId, flags.accountId, flags.projectName, entries)
+          .pipe(Effect.mapError((cause) => new Error(cause.message)));
+        return `Deployed ${entries.size} files to ${created.subdomain}.pages.dev: ${deployed.deploymentUrl}`;
+      }),
+    ),
+  ),
+);
+
+const publishCommand = Command.make("publish").pipe(
+  Command.withDescription(
+    "Publish a project's code and its deployed site to accounts the user connected in " +
+      "Settings > Connections (GitHub, Cloudflare). Pair with `deploy` for where the thing runs " +
+      "and `analytics` for what it reports once it does.",
+  ),
+  Command.withSubcommands([
+    publishGithubRepoCommand,
+    publishCloudflareDomainCommand,
+    publishCloudflarePagesCommand,
+  ]),
 );
 
 const deployCommand = Command.make("deploy").pipe(
@@ -3007,6 +3242,7 @@ export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     envCommand,
     boxCommand,
     deployCommand,
+    publishCommand,
     secretCommand,
     analyticsCommand,
     packCommand,

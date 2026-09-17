@@ -9,6 +9,7 @@ import type {
   DeployTarget,
   DeployTargetId,
   ProjectId,
+  UserId,
 } from "@t3tools/contracts";
 
 export interface DeployActor {
@@ -41,6 +42,15 @@ export interface DeployServiceShape {
     readonly actor: DeployActor;
     readonly workspaceRoot: string;
     readonly analytics?: DeployAnalyticsInjection | undefined;
+    /**
+     * Whose Cloudflare connection a `cloudflare-pages` target deploys
+     * through — required only for that kind, since every other kind needs no
+     * per-user credential. Comes from `T3_USER_ID`, the same env var every
+     * provider's launch environment already carries, not from the target
+     * itself: a target is shared project configuration, an OAuth connection
+     * is one person's.
+     */
+    readonly userId?: UserId | undefined;
   }) => Effect.Effect<DeployRun, DeployError>;
 
   readonly listRuns: (input: {

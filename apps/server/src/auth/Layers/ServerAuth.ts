@@ -46,6 +46,8 @@ import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuth
 import { GatewayAccountRepositoryLive } from "../../persistence/Layers/GatewayAccounts.ts";
 import { LogicPacksGatewayLive } from "../../gateway/Layers/LogicPacksGateway.ts";
 import { LogicPacksGateway } from "../../gateway/Services/LogicPacksGateway.ts";
+import { ExternalConnectionRepositoryLive } from "../../persistence/Layers/ExternalConnections.ts";
+import { ExternalIntegrationsLive } from "../../integrations/Layers/ExternalIntegrations.ts";
 import { AuthControlPlane } from "../Services/AuthControlPlane.ts";
 import { ServerAuthPolicyLive } from "./ServerAuthPolicy.ts";
 import { BootstrapCredentialService } from "../Services/BootstrapCredentialService.ts";
@@ -1480,4 +1482,8 @@ export const ServerAuthLive = Layer.effect(ServerAuth, makeServerAuth).pipe(
   // requirement introduced by layers merged *before* it in this pipe.
   Layer.provideMerge(LocalAuthAccountRepositoryLive),
   Layer.provideMerge(GatewayAccountRepositoryLive),
+  // ExternalIntegrations only needs ExternalConnectionRepository, which nothing
+  // else consumes directly — provide it privately (Layer.provide, not
+  // provideMerge) so it's not separately exposed in ServerAuthLive's output.
+  Layer.provideMerge(ExternalIntegrationsLive.pipe(Layer.provide(ExternalConnectionRepositoryLive))),
 );

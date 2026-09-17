@@ -81,6 +81,8 @@ import Migration0065 from "./Migrations/065_GatewayAccounts.ts";
 import Migration0066 from "./Migrations/066_UserPreferences.ts";
 import Migration0067 from "./Migrations/067_ActivityNotes.ts";
 import Migration0068 from "./Migrations/068_NotificationPopups.ts";
+import Migration0069 from "./Migrations/069_ExternalConnections.ts";
+import Migration0070 from "./Migrations/070_DeployTargetsCloudflare.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -161,6 +163,8 @@ export const migrationEntries = [
   [66, "UserPreferences", Migration0066],
   [67, "ActivityNotes", Migration0067],
   [68, "NotificationPopups", Migration0068],
+  [69, "ExternalConnections", Migration0069],
+  [70, "DeployTargetsCloudflare", Migration0070],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

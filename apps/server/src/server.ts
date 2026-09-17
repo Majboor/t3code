@@ -133,6 +133,16 @@ import {
   gatewayUsageRouteLayer,
 } from "./gateway/http.ts";
 import { storageUsageRouteLayer } from "./storage/http.ts";
+import {
+  cloudflareConnectDomainRouteLayer,
+  cloudflarePagesProjectRouteLayer,
+  githubCreateRepoRouteLayer,
+  githubPushFileRouteLayer,
+  integrationsCallbackRouteLayer,
+  integrationsDisconnectRouteLayer,
+  integrationsStartRouteLayer,
+  integrationsStatusRouteLayer,
+} from "./integrations/http.ts";
 import { basicAuthMiddlewareLayer } from "./auth/basicAuth.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
@@ -645,6 +655,14 @@ export const makeRoutesLayer = Layer.mergeAll(
   gatewayRedeemRouteLayer,
   gatewayKeyRouteLayer,
   storageUsageRouteLayer,
+  integrationsStatusRouteLayer,
+  integrationsStartRouteLayer,
+  integrationsCallbackRouteLayer,
+  integrationsDisconnectRouteLayer,
+  githubCreateRepoRouteLayer,
+  githubPushFileRouteLayer,
+  cloudflarePagesProjectRouteLayer,
+  cloudflareConnectDomainRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
   desktopActivityRouteLayer,

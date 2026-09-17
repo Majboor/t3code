@@ -66,5 +66,13 @@ export {
   type GatewayUsageBySource,
   type GatewayDailyActivity,
 } from "./gateway";
+export {
+  fetchIntegrationsStatus,
+  startIntegrationAuthorize,
+  disconnectIntegration,
+  type IntegrationProvider,
+  type IntegrationConnectionStatus,
+  type IntegrationsStatus,
+} from "./integrations";
 
 export { resolvePrimaryEnvironmentHttpUrl, isLoopbackHostname } from "./target";
