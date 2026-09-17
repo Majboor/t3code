@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { promptbarQueryKeys } from "./usePromptbarResolution";
+import { promptbarQueryKeys, shouldResolvePromptbar } from "./usePromptbarResolution";
 
 // The hook itself is a thin `useDebouncedValue` + `useQuery` wrapper around
 // `resolvePromptbar` (see `usePackSuggestionSettings.test.ts` for the same
@@ -21,5 +21,34 @@ describe("promptbarQueryKeys.resolve", () => {
     expect(promptbarQueryKeys.resolve("deploy this", true)).toEqual(
       promptbarQueryKeys.resolve("deploy this", true),
     );
+  });
+});
+
+describe("shouldResolvePromptbar", () => {
+  it("resolves when the bar is enabled, Pack mode is on, and nobody is hand-searching", () => {
+    expect(
+      shouldResolvePromptbar({ barEnabled: true, packModeEnabled: true, searching: false }),
+    ).toBe(true);
+  });
+
+  it("never resolves when Pack mode is off, even though the bar itself is enabled", () => {
+    expect(
+      shouldResolvePromptbar({ barEnabled: true, packModeEnabled: false, searching: false }),
+    ).toBe(false);
+  });
+
+  it("never resolves when the bar itself is disabled, even though Pack mode is on", () => {
+    expect(
+      shouldResolvePromptbar({ barEnabled: false, packModeEnabled: true, searching: false }),
+    ).toBe(false);
+  });
+
+  it("pauses while hand-searching, independently of Pack mode", () => {
+    expect(
+      shouldResolvePromptbar({ barEnabled: true, packModeEnabled: true, searching: true }),
+    ).toBe(false);
+    expect(
+      shouldResolvePromptbar({ barEnabled: true, packModeEnabled: false, searching: true }),
+    ).toBe(false);
   });
 });
