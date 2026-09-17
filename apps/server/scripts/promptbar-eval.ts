@@ -112,12 +112,17 @@ const command = Command.make(
       }
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(
-          PromptbarTestSetRepositoryLive.pipe(
-            Layer.provideMerge(db === ":memory:" ? SqlitePersistenceMemory : makeSqlitePersistenceLive(db)),
-          ),
-          PromptbarClientLive,
-        ),
+        (() => {
+          // Same Layer *value* reused below so Effect's layer memoization
+          // shares one SqlClient/connection between the test-set repo and
+          // PromptbarClient, rather than two independent `:memory:` DBs that
+          // can never see each other's tables.
+          const sql = db === ":memory:" ? SqlitePersistenceMemory : makeSqlitePersistenceLive(db);
+          return Layer.mergeAll(
+            PromptbarTestSetRepositoryLive.pipe(Layer.provideMerge(sql)),
+            PromptbarClientLive.pipe(Layer.provideMerge(sql)),
+          );
+        })(),
       ),
     ),
 ).pipe(
