@@ -760,6 +760,7 @@ export class GlmAcpManager extends EventEmitter {
       return ctx;
     };
     app.onRequest("terminal/create", async ({ params }) => {
+      console.error(`[glm-acp] terminal/create invoked by opencode, thread=${input.threadId}, command=${JSON.stringify(params.command)}`);
       const ctx = requireGlmSession(params.sessionId);
       const terminalId = ctx.terminals.create({
         command: params.command,
@@ -789,6 +790,7 @@ export class GlmAcpManager extends EventEmitter {
       return {};
     });
     app.onRequest("session/request_permission", async ({ params }) => {
+      console.error(`[glm-acp] session/request_permission invoked by opencode, thread=${input.threadId}, toolCallKind=${params.toolCall.kind}`);
       const requestId = ApprovalRequestId.make(randomUUID());
       const outcome = await new Promise<{ kind: "selected"; optionId: string } | { kind: "cancelled" }>((resolve) => {
         pendingApprovals.set(requestId, { requestId, options: params.options, resolve });
@@ -811,12 +813,14 @@ export class GlmAcpManager extends EventEmitter {
     // same closure-over-`input`/session-variables pattern the
     // `session/request_permission` handler above already uses.
     app.onRequest("fs/read_text_file", async ({ params }) => {
+      console.error(`[glm-acp] fs/read_text_file invoked by opencode, thread=${input.threadId}, path=${params.path}`);
       if (params.sessionId !== activeSession.sessionId) {
         throw RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown GLM ACP session id.");
       }
       return readSessionTextFile(input.cwd, params.path, { line: params.line, limit: params.limit });
     });
     app.onRequest("fs/write_text_file", async ({ params }) => {
+      console.error(`[glm-acp] fs/write_text_file invoked by opencode, thread=${input.threadId}, path=${params.path}`);
       if (params.sessionId !== activeSession.sessionId) {
         throw RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown GLM ACP session id.");
       }
@@ -832,6 +836,7 @@ export class GlmAcpManager extends EventEmitter {
     // recognizes are actually wired to T3's user-input UI — everything else
     // (url mode, custom modes, unmappable form schemas) is declined cleanly.
     app.onRequest("elicitation/create", async ({ params }) => {
+      console.error(`[glm-acp] elicitation/create invoked by opencode, thread=${input.threadId}, mode=${params.mode}, message=${JSON.stringify(params.message)}`);
       const plan = planElicitationRequest(params);
       if (plan.kind === "decline") {
         this.emitEvent({
