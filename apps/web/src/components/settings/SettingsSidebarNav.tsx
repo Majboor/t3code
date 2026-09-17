@@ -5,6 +5,7 @@ import {
   Building2Icon,
   CreditCardIcon,
   GaugeIcon,
+  HardDriveIcon,
   Link2Icon,
   Settings2Icon,
   UserIcon,
@@ -41,6 +42,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/api-usage": GaugeIcon,
   "/settings/usage-activity": ActivityIcon,
   "/settings/billing": CreditCardIcon,
+  "/settings/storage": HardDriveIcon,
   "/settings/archived": ArchiveIcon,
 };
 

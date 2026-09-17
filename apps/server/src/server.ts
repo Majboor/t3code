@@ -135,6 +135,7 @@ import {
   gatewayRedeemRouteLayer,
   gatewayUsageRouteLayer,
 } from "./gateway/http.ts";
+import { storageUsageRouteLayer } from "./storage/http.ts";
 import { basicAuthMiddlewareLayer } from "./auth/basicAuth.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
@@ -637,6 +638,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   gatewayUsageRouteLayer,
   gatewayRedeemRouteLayer,
   gatewayKeyRouteLayer,
+  storageUsageRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,
   desktopActivityRouteLayer,

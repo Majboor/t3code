@@ -19,6 +19,7 @@ import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsUsageActivityRouteImport } from './routes/settings.usage-activity'
+import { Route as SettingsStorageRouteImport } from './routes/settings.storage'
 import { Route as SettingsOrganizationRouteImport } from './routes/settings.organization'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
@@ -80,6 +81,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
 const SettingsUsageActivityRoute = SettingsUsageActivityRouteImport.update({
   id: '/usage-activity',
   path: '/usage-activity',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsStorageRoute = SettingsStorageRouteImport.update({
+  id: '/storage',
+  path: '/storage',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsOrganizationRoute = SettingsOrganizationRouteImport.update({
@@ -166,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/organization': typeof SettingsOrganizationRoute
+  '/settings/storage': typeof SettingsStorageRoute
   '/settings/usage-activity': typeof SettingsUsageActivityRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/analytics/$projectId': typeof ChatAnalyticsProjectIdRoute
@@ -189,6 +196,7 @@ export interface FileRoutesByTo {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/organization': typeof SettingsOrganizationRoute
+  '/settings/storage': typeof SettingsStorageRoute
   '/settings/usage-activity': typeof SettingsUsageActivityRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -215,6 +223,7 @@ export interface FileRoutesById {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/organization': typeof SettingsOrganizationRoute
+  '/settings/storage': typeof SettingsStorageRoute
   '/settings/usage-activity': typeof SettingsUsageActivityRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -242,6 +251,7 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/general'
     | '/settings/organization'
+    | '/settings/storage'
     | '/settings/usage-activity'
     | '/$environmentId/$threadId'
     | '/analytics/$projectId'
@@ -265,6 +275,7 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/general'
     | '/settings/organization'
+    | '/settings/storage'
     | '/settings/usage-activity'
     | '/'
     | '/$environmentId/$threadId'
@@ -290,6 +301,7 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/general'
     | '/settings/organization'
+    | '/settings/storage'
     | '/settings/usage-activity'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
@@ -381,6 +393,13 @@ declare module '@tanstack/react-router' {
       path: '/usage-activity'
       fullPath: '/settings/usage-activity'
       preLoaderRoute: typeof SettingsUsageActivityRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/storage': {
+      id: '/settings/storage'
+      path: '/storage'
+      fullPath: '/settings/storage'
+      preLoaderRoute: typeof SettingsStorageRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/organization': {
@@ -508,6 +527,7 @@ interface SettingsRouteChildren {
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsOrganizationRoute: typeof SettingsOrganizationRoute
+  SettingsStorageRoute: typeof SettingsStorageRoute
   SettingsUsageActivityRoute: typeof SettingsUsageActivityRoute
 }
 
@@ -519,6 +539,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsOrganizationRoute: SettingsOrganizationRoute,
+  SettingsStorageRoute: SettingsStorageRoute,
   SettingsUsageActivityRoute: SettingsUsageActivityRoute,
 }
 
