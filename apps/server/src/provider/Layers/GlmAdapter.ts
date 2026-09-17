@@ -19,6 +19,7 @@ import {
   type CanonicalRequestType,
   type ProviderEvent,
   type ProviderRuntimeEvent,
+  type UserInputQuestion,
 } from "@t3tools/contracts";
 
 import { LogicPacksGateway } from "../../gateway/Services/LogicPacksGateway.ts";
@@ -141,6 +142,35 @@ export function mapToRuntimeEvents(event: ProviderEvent): ReadonlyArray<Provider
           requestType: canonicalRequestTypeFromRequestKind(event.requestKind),
           decision: (event.payload as { decision?: string } | undefined)?.decision,
         },
+      }),
+    ];
+  }
+
+  // ACP `elicitation/create` (mode: "form"), already mapped by
+  // `glmAcpManager.ts`'s `mapElicitationFormSchema` to a single
+  // `UserInputQuestion` — mirrors Codex's `item/tool/requestUserInput` ->
+  // `user-input.requested` mapping in `CodexAdapter.ts`. There is no
+  // confirmed live evidence `opencode acp` ever sends this (see this file's
+  // prior `respondToUserInput` comment, kept below for context); this case
+  // exists so that IF it ever is sent and the schema is mappable, it reaches
+  // the same UI Codex's structured questions use, instead of silently
+  // erroring or being dropped.
+  if (event.kind === "request" && event.method === "elicitation/create") {
+    const payload = event.payload as { questions?: ReadonlyArray<UserInputQuestion> } | undefined;
+    const questions = payload?.questions;
+    if (!questions || questions.length === 0) {
+      return [];
+    }
+    return [asRuntimeEvent({ ...base, type: "user-input.requested", payload: { questions } })];
+  }
+
+  if (event.method === "elicitation/create/answered") {
+    const payload = event.payload as { answers?: Record<string, unknown> } | undefined;
+    return [
+      asRuntimeEvent({
+        ...base,
+        type: "user-input.resolved",
+        payload: { answers: payload?.answers ?? {} },
       }),
     ];
   }
@@ -410,26 +440,30 @@ const makeGlmAdapter = Effect.fn("makeGlmAdapter")(function* () {
       catch: (cause) => toRequestError(threadId, "session/request_permission", cause),
     });
 
-  const respondToUserInput: GlmAdapterShape["respondToUserInput"] = () =>
-    // ACP does define a distinct mechanism for this — `elicitation/create`
-    // (a real client-side RPC, confirmed in the SDK's schema, tied to a
-    // session and optionally a tool call) — but live testing against
-    // `opencode acp` (three prompts, including one explicitly instructing it
-    // to "ask me a clarifying question") never invoked it: OpenCode's own
-    // agent loop always asks clarifying questions as plain
-    // `agent_message_chunk` text and ends the turn with `stopReason:
-    // "end_turn"`, indistinguishable from a normal answer. `elicitation/create`
-    // exists for forwarding elicitations from a connected MCP server, not for
-    // the agent's own conversational questions, so there is nothing to map to
-    // `user-input.requested`/`user-input.resolved` here. This is a genuine
-    // gap in this agent's behavior, confirmed live, not an oversight.
-    Effect.fail(
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "respondToUserInput",
-        detail: "GLM (ACP) does not support structured user-input requests.",
-      }),
-    );
+  // ACP does define a distinct mechanism for the agent to ask the user a
+  // structured question mid-turn — `elicitation/create` (a real client-side
+  // RPC, confirmed in the SDK's schema, tied to a session and optionally a
+  // tool call) — but live testing against `opencode acp` (three prompts,
+  // including one explicitly instructing it to "ask me a clarifying
+  // question") never invoked it: OpenCode's own agent loop always asks
+  // clarifying questions as plain `agent_message_chunk` text and ends the
+  // turn with `stopReason: "end_turn"`, indistinguishable from a normal
+  // answer. `elicitation/create` is documented as existing for forwarding
+  // elicitations from a connected MCP server, not necessarily for the
+  // agent's own conversational questions, so there is no confirmed live
+  // evidence this path is ever exercised in production.
+  //
+  // `glmAcpManager.ts`'s `elicitation/create` handler nonetheless maps the
+  // narrow "single boolean/enum-string/enum-array form field" case onto
+  // T3's existing `user-input.requested`/`user-input.resolved` machinery
+  // (see `mapElicitationFormSchema`'s docstring for the exact scope; url
+  // mode and everything else is declined cleanly instead), so this now
+  // actually resolves the pending elicitation rather than always failing.
+  const respondToUserInput: GlmAdapterShape["respondToUserInput"] = (threadId, requestId, answers) =>
+    Effect.tryPromise({
+      try: () => manager.respondToElicitation(threadId, requestId, answers),
+      catch: (cause) => toRequestError(threadId, "elicitation/create", cause),
+    });
 
   const stopSession: GlmAdapterShape["stopSession"] = (threadId) =>
     Effect.tryPromise({

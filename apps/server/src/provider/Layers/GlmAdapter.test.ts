@@ -66,3 +66,73 @@ it("falls back to command_execution_approval (ask, don't silently allow) when re
   const payload = events[0]!.payload as { requestType: string };
   assert.equal(payload.requestType, "command_execution_approval");
 });
+
+/**
+ * `glmAcpManager.ts`'s `elicitation/create` handler already shapes its
+ * "request" event's payload as `{questions: [UserInputQuestion]}` — these
+ * tests only cover this file's own job of relaying that payload into a
+ * `user-input.requested`/`user-input.resolved` `ProviderRuntimeEvent`,
+ * mirroring `CodexAdapter.ts`'s `item/tool/requestUserInput` mapping. See
+ * `glmAcpManager.test.ts` for the actual schema->question mapping logic.
+ */
+it("maps a raw elicitation/create request event to user-input.requested with its questions intact", () => {
+  const question = {
+    id: "color",
+    header: "Which color should I use?",
+    question: "Favorite color",
+    options: [
+      { label: "red", description: "red" },
+      { label: "green", description: "green" },
+    ],
+    multiSelect: false,
+  };
+  const event: ProviderEvent = {
+    id: EventId.make("event-2"),
+    kind: "request",
+    provider: "glm",
+    threadId,
+    createdAt,
+    method: "elicitation/create",
+    requestId: "req-2" as ProviderEvent["requestId"],
+    payload: { questions: [question] },
+  };
+
+  const events = mapToRuntimeEvents(event);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.type, "user-input.requested");
+  const payload = events[0]!.payload as { questions: ReadonlyArray<unknown> };
+  assert.deepEqual(payload.questions, [question]);
+});
+
+it("drops an elicitation/create request event with no questions instead of emitting an empty prompt", () => {
+  const event: ProviderEvent = {
+    id: EventId.make("event-3"),
+    kind: "request",
+    provider: "glm",
+    threadId,
+    createdAt,
+    method: "elicitation/create",
+    requestId: "req-3" as ProviderEvent["requestId"],
+    payload: {},
+  };
+
+  assert.deepEqual(mapToRuntimeEvents(event), []);
+});
+
+it("maps an elicitation/create/answered notification to user-input.resolved with the answer map", () => {
+  const event: ProviderEvent = {
+    id: EventId.make("event-4"),
+    kind: "notification",
+    provider: "glm",
+    threadId,
+    createdAt,
+    method: "elicitation/create/answered",
+    requestId: "req-4" as ProviderEvent["requestId"],
+    payload: { answers: { color: "green" } },
+  };
+
+  const events = mapToRuntimeEvents(event);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.type, "user-input.resolved");
+  assert.deepEqual(events[0]!.payload, { answers: { color: "green" } });
+});
