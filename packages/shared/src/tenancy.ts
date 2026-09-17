@@ -1085,7 +1085,13 @@ const BUILT_IN_PUBLIC_ACCESS_LIMITS = {
   maxRpcRequestsPerMinutePerTenant: 6_000,
   maxRpcRequestBytes: 12 * 1024 * 1024,
   maxFileUploadBytes: 10 * 1024 * 1024,
-  maxFileReadBytes: 2 * 1024 * 1024,
+  // Was 2MB, which a real zip under 3MB already blew past ("File read exceeds
+  // public read limit: 2625986 bytes requested, 2097152 bytes allowed") with
+  // no way around it short of downloading outside the app. Real workspace
+  // files (zips, built assets, larger docs) routinely land in the 2-20MB
+  // range; kept comfortably under `maxRpcRequestBytes` so a read that clears
+  // this limit doesn't just fail the RPC envelope limit instead.
+  maxFileReadBytes: 10 * 1024 * 1024,
   maxDirectoryEntries: 1_000,
   maxDiffBytes: 2 * 1024 * 1024,
   maxActiveTurnsPerUser: 4,

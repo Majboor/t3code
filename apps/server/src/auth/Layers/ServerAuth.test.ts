@@ -652,6 +652,50 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
     ),
   );
 
+  it.effect(
+    "provisions exactly one personal tenant even when several requests race the same brand-new user",
+    () =>
+      Effect.gen(function* () {
+        const fixture = makeSignedSupabaseFixture();
+        const fetchSpy = mockSupabaseJwksFetch(fixture.jwks);
+        try {
+          const serverAuth = yield* ServerAuth;
+          const tenancyRepository = yield* TenancyRepository;
+          // Several refreshes fired in quick succession each authenticate
+          // before any of them has provisioned a tenant, so this fires the
+          // same brand-new user's authentication concurrently rather than one
+          // at a time - the exact shape of the reported bug ("if u refresh
+          // continuously and now try to create a project it says ownership
+          // permission error").
+          const sessions = yield* Effect.all(
+            Array.from({ length: 8 }, () =>
+              serverAuth.authenticateHttpRequest(makeBearerRequest(fixture.jwt)),
+            ),
+            { concurrency: "unbounded" },
+          );
+
+          const tenantIds = new Set(sessions.map((session) => session.tenantSessionContext?.tenantId));
+          expect(tenantIds.size).toBe(1);
+
+          const organizations = yield* tenancyRepository.loadOrganizations();
+          const collaboration = yield* tenancyRepository.loadCollaboration();
+          const memberships = [...organizations.memberships, ...collaboration.memberships].filter(
+            (membership) => membership.userId === SUPABASE_USER_ID,
+          );
+          expect(memberships).toHaveLength(1);
+        } finally {
+          fetchSpy.mockRestore();
+        }
+      }).pipe(
+        Effect.provide(
+          makeServerAuthLayer({
+            supabaseProjectUrl: new URL(SUPABASE_PROJECT_URL),
+            supabaseJwtAudience: "authenticated",
+          }),
+        ),
+      ),
+  );
+
   it.effect("denies Supabase bearer tokens without an active tenant membership", () =>
     Effect.gen(function* () {
       const fixture = makeSignedSupabaseFixture();

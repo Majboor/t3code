@@ -31,7 +31,7 @@ import {
 } from "@t3tools/contracts";
 import { randomBytes, scrypt as nodeScrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import { DateTime, Effect, Layer, Option } from "effect";
+import { DateTime, Effect, Layer, Option, Semaphore, SynchronizedRef } from "effect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 import { ServerConfig } from "../../config.ts";
@@ -126,6 +126,31 @@ export const makeServerAuth = Effect.gen(function* () {
   const sessions = yield* SessionCredentialService;
   const tenancyRepository = yield* TenancyRepository;
   const userProfiles = yield* AuthUserProfileRepository;
+  // `provisionPersonalTenant` is a check-then-create: load memberships, see
+  // none, then write a brand-new personal tenant. Several refreshes fired in
+  // quick succession each start that sequence before any of them has written
+  // back, so each one sees "no tenant yet" and creates its own — only the
+  // last write survives, leaving earlier requests (and anything already
+  // rendered from their response, like a workspace's ownership) pointing at a
+  // tenant that no longer exists ("Project workspace ownership must belong to
+  // the active tenant." on the next project-create). Serializing per user id
+  // makes every request after the first just see the one the first created.
+  const personalTenantLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+  const getPersonalTenantLock = (userId: string) =>
+    SynchronizedRef.modifyEffect(personalTenantLocksRef, (current) => {
+      const existing = Option.fromNullishOr(current.get(userId));
+      return Option.match(existing, {
+        onNone: () =>
+          Semaphore.make(1).pipe(
+            Effect.map((semaphore) => {
+              const next = new Map(current);
+              next.set(userId, semaphore);
+              return [semaphore, next] as const;
+            }),
+          ),
+        onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
+      });
+    });
   const userPreferences = yield* UserPreferencesRepository;
   const localAccounts = yield* LocalAuthAccountRepository;
   const logicPacksGateway = yield* LogicPacksGateway;
@@ -179,6 +204,14 @@ export const makeServerAuth = Effect.gen(function* () {
     });
 
   const provisionPersonalTenant = (input: {
+    readonly userId: UserId;
+    readonly displayName: string;
+  }): Effect.Effect<TenantMembership, AuthError> =>
+    getPersonalTenantLock(input.userId).pipe(
+      Effect.flatMap((semaphore) => semaphore.withPermit(provisionPersonalTenantUnlocked(input))),
+    );
+
+  const provisionPersonalTenantUnlocked = (input: {
     readonly userId: UserId;
     readonly displayName: string;
   }): Effect.Effect<TenantMembership, AuthError> =>
