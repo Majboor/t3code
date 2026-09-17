@@ -161,6 +161,60 @@ const WORKSPACE_DIFF_REVIEW_STORAGE_PREFIX = "t3code:workspace-diff-review:v1";
  * tree did not, so one person wore two colours. Prefer `memberColorByUserId`
  * and come here only for somebody the roster does not list.
  */
+/**
+ * `fetch` has no upload-progress signal and, on failure, no reliable way to
+ * tell a JSON/plain-text error body from an HTML one — a large enough upload
+ * can fail at a layer in front of this app entirely (a proxy's own size
+ * limit, a gateway timeout) and hand back a full HTML error page, which used
+ * to get shown to the user verbatim as the "error message". `XMLHttpRequest`
+ * still has real `upload.onprogress` events, and its response content-type
+ * lets a non-text body be turned into a clean message instead of dumped raw.
+ */
+function uploadFileWithProgress(
+  url: string,
+  file: File,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(event.loaded, event.total);
+      }
+    };
+    xhr.onerror = () => {
+      reject(new Error("Upload failed. Check your connection and try again."));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      const contentType = xhr.getResponseHeader("content-type") ?? "";
+      if (contentType.includes("text/html")) {
+        reject(
+          new Error(
+            xhr.status === 413
+              ? "This file is too large to upload."
+              : `Upload failed (${xhr.status}).`,
+          ),
+        );
+        return;
+      }
+      reject(new Error(xhr.responseText || `Upload failed (${xhr.status}).`));
+    };
+    xhr.send(file);
+  });
+}
+
+function formatUploadedBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function authorColor(userId: string): string {
   let hash = 0;
   for (let index = 0; index < userId.length; index += 1) {
@@ -3072,34 +3126,46 @@ export default function WorkspacePanel({
       }
 
       setUploadingDirectoryPath(directoryPath);
+      const multiple = files.length > 1;
+      const toastId = toastManager.add({
+        type: "loading",
+        title: multiple ? `Uploading ${files.length} files` : `Uploading ${files[0]!.name}`,
+        description: "Starting…",
+        timeout: 0,
+      });
 
       try {
-        for (const file of files) {
+        for (const [index, file] of files.entries()) {
           const relativePath = joinRelativePath(directoryPath, file.name);
-          const response = await fetch(workspaceFileUrl(activeWorkspaceRoot, relativePath), {
-            method: "POST",
-            credentials: "same-origin",
-            body: file,
-          });
-          if (!response.ok) {
-            throw new Error(
-              (await response.text().catch(() => "")) || `Upload failed (${response.status}).`,
-            );
-          }
+          await uploadFileWithProgress(
+            workspaceFileUrl(activeWorkspaceRoot, relativePath),
+            file,
+            (loaded, total) => {
+              const sizeText =
+                total > 0
+                  ? `${formatUploadedBytes(loaded)} / ${formatUploadedBytes(total)}`
+                  : formatUploadedBytes(loaded);
+              toastManager.update(toastId, {
+                description: multiple ? `${file.name} (${index + 1}/${files.length}) — ${sizeText}` : sizeText,
+              });
+            },
+          );
         }
 
         await loadDirectory(directoryPath);
-        toastManager.add({
+        toastManager.update(toastId, {
           type: "success",
           title: files.length === 1 ? "File uploaded" : "Files uploaded",
           description:
             files.length === 1 ? (files[0]?.name ?? "Upload complete") : `${files.length} files`,
+          timeout: 4000,
         });
       } catch (error) {
-        toastManager.add({
+        toastManager.update(toastId, {
           type: "error",
           title: "Could not upload files",
           description: error instanceof Error ? error.message : "An unexpected error occurred.",
+          timeout: 6000,
         });
       } finally {
         setUploadingDirectoryPath(null);
