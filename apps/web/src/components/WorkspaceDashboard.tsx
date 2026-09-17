@@ -5,6 +5,7 @@ import {
   ArchiveX,
   Building2Icon,
   ChartNoAxesColumnIcon,
+  CompassIcon,
   PackagePlusIcon,
   ServerIcon,
   ClockIcon,
@@ -503,6 +504,14 @@ function DashboardActions({
         </p>
       </div>
       <div className="flex shrink-0 flex-wrap gap-2">
+        <Link
+          to="/packs"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none"
+          data-testid="dashboard-browse-packs"
+        >
+          <CompassIcon className="size-3.5" />
+          <span>Browse Packs</span>
+        </Link>
         <button
           type="button"
           className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-muted-foreground"

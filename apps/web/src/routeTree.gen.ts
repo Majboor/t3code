@@ -27,6 +27,7 @@ import { Route as SettingsBillingRouteImport } from './routes/settings.billing'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsApiUsageRouteImport } from './routes/settings.api-usage'
 import { Route as SettingsAccountRouteImport } from './routes/settings.account'
+import { Route as ChatPacksRouteImport } from './routes/_chat.packs'
 import { Route as ChatPackPackIdRouteImport } from './routes/_chat.pack.$packId'
 import { Route as ChatInfraProjectIdRouteImport } from './routes/_chat.infra.$projectId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -123,6 +124,11 @@ const SettingsAccountRoute = SettingsAccountRouteImport.update({
   path: '/account',
   getParentRoute: () => SettingsRoute,
 } as any)
+const ChatPacksRoute = ChatPacksRouteImport.update({
+  id: '/packs',
+  path: '/packs',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatPackPackIdRoute = ChatPackPackIdRouteImport.update({
   id: '/pack/$packId',
   path: '/pack/$packId',
@@ -165,6 +171,7 @@ export interface FileRoutesByFullPath {
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/share': typeof ShareRoute
+  '/packs': typeof ChatPacksRoute
   '/settings/account': typeof SettingsAccountRoute
   '/settings/api-usage': typeof SettingsApiUsageRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -189,6 +196,7 @@ export interface FileRoutesByTo {
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/share': typeof ShareRoute
+  '/packs': typeof ChatPacksRoute
   '/settings/account': typeof SettingsAccountRoute
   '/settings/api-usage': typeof SettingsApiUsageRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -216,6 +224,7 @@ export interface FileRoutesById {
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/share': typeof ShareRoute
+  '/_chat/packs': typeof ChatPacksRoute
   '/settings/account': typeof SettingsAccountRoute
   '/settings/api-usage': typeof SettingsApiUsageRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -244,6 +253,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/settings'
     | '/share'
+    | '/packs'
     | '/settings/account'
     | '/settings/api-usage'
     | '/settings/archived'
@@ -268,6 +278,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/settings'
     | '/share'
+    | '/packs'
     | '/settings/account'
     | '/settings/api-usage'
     | '/settings/archived'
@@ -294,6 +305,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/settings'
     | '/share'
+    | '/_chat/packs'
     | '/settings/account'
     | '/settings/api-usage'
     | '/settings/archived'
@@ -451,6 +463,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsAccountRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/_chat/packs': {
+      id: '/_chat/packs'
+      path: '/packs'
+      fullPath: '/packs'
+      preLoaderRoute: typeof ChatPacksRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/pack/$packId': {
       id: '/_chat/pack/$packId'
       path: '/pack/$packId'
@@ -497,6 +516,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface ChatRouteChildren {
+  ChatPacksRoute: typeof ChatPacksRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
   ChatAnalyticsProjectIdRoute: typeof ChatAnalyticsProjectIdRoute
@@ -507,6 +527,7 @@ interface ChatRouteChildren {
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
+  ChatPacksRoute: ChatPacksRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
   ChatAnalyticsProjectIdRoute: ChatAnalyticsProjectIdRoute,
