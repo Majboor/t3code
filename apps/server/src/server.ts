@@ -76,6 +76,8 @@ import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter.ts";
 import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter.ts";
 import { GlmAdapterLive } from "./provider/Layers/GlmAdapter.ts";
 import { LogicPacksGatewayLive } from "./gateway/Layers/LogicPacksGateway.ts";
+import { PromptbarClientLive } from "./promptbar/Layers/PromptbarClient.ts";
+import { promptbarResolveRouteLayer } from "./promptbar/http.ts";
 import { GatewayAccountRepositoryLive } from "./persistence/Layers/GatewayAccounts.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService.ts";
@@ -453,6 +455,14 @@ const AnalyticsRepositoryLayerLive = AnalyticsRepositoryLive.pipe(
 
 const AnalyticsLayerLive = AnalyticsStoreLive.pipe(Layer.provide(AnalyticsRepositoryLayerLive));
 
+/**
+ * The smart-promptbar retrieval index: SQLite FTS5 lives on the same
+ * database as everything else, so it rides the same `PersistenceLayerLive`
+ * repositories do, even though (unlike them) it owns no repository of its
+ * own — just the `pack_fts` table this Layer rebuilds at startup.
+ */
+const PromptbarLayerLive = PromptbarClientLive.pipe(Layer.provide(PersistenceLayerLive));
+
 // The registry sits across both directories on purpose: it is the only thing
 // that knows a deployment's streams were actually declared on its project.
 const DeploymentRegistryLayerLive = DeploymentRegistryLive.pipe(
@@ -496,6 +506,7 @@ const PersistenceServicesLayerLive = Layer.mergeAll(
   DeploymentRegistryLayerLive,
   ServiceRegistryLayerLive,
   PromptbarTelemetryRepositoryLayerLive,
+  PromptbarLayerLive,
 );
 
 const TenantRuntimeLifecycleOwnerLayerLive = TenantRuntimeLifecycleOwnerLive.pipe(
@@ -673,9 +684,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   cloudflarePagesProjectRouteLayer,
   cloudflareConnectDomainRouteLayer,
   cloudflareZoneAnalyticsRouteLayer,
-  // The write side of the promptbar eval loop. `/api/promptbar/resolve` (the
-  // hybrid retrieval read side) is wired in separately by the service that
-  // implements it.
+  promptbarResolveRouteLayer,
   promptbarTelemetryRouteLayer,
   attachmentsRouteLayer,
   analyticsIngestRouteLayer,

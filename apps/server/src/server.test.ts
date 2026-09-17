@@ -118,6 +118,7 @@ import {
 import { PromptbarTelemetryRepositoryLive } from "./persistence/Layers/PromptbarTelemetry.ts";
 import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
 import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
+import { PromptbarClientLive } from "./promptbar/Layers/PromptbarClient.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
 import { DeployServiceLive } from "./deploy/Layers/DeployService.ts";
 import { DeploymentRegistryLive } from "./deploy/Layers/DeploymentRegistry.ts";
@@ -365,6 +366,17 @@ const packRegistryTestLayer = PackRegistryServiceLive.pipe(
   Layer.provide(collaborationTestLayer),
   Layer.provide(tenancyRepositoryTestLayer),
 );
+
+/**
+ * `promptbarResolveRouteLayer` (in `makeRoutesLayer`) needs `PromptbarClient`
+ * like every other route here needs its own service test layer. Real Layer
+ * body (loads the real `packs/*\/promptbar.json` files and builds the real
+ * `pack_fts` index against in-memory SQLite at layer-build time) rather than
+ * a `Layer.mock`, since nothing in this file's tests actually calls
+ * `/api/promptbar/resolve` (which would need network to the classifier) -
+ * only its unconditional startup indexing runs here.
+ */
+const promptbarTestLayer = PromptbarClientLive.pipe(Layer.provide(SqlitePersistenceMemory));
 
 const threadPreferenceTestLayer = ProjectionThreadPreferenceRepositoryLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
@@ -875,6 +887,7 @@ const buildAppUnderTest = (options?: {
           deploymentRegistryTestLayer,
           serviceRegistryTestLayer,
           promptbarTelemetryRepositoryTestLayer,
+          promptbarTestLayer,
         ),
       ),
       Layer.provideMerge(packEnablementTestLayer),
