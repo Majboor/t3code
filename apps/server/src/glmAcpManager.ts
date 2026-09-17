@@ -16,17 +16,18 @@
  *
  * @module glmAcpManager
  */
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessByStdio, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { Readable, Writable } from "node:stream";
 
 import {
   client,
   ndJsonStream,
+  RequestError,
   type ClientConnection,
   type ClientContext,
   type ActiveSession,
@@ -88,6 +89,7 @@ interface GlmSessionContext {
   readonly clientContext: ClientContext;
   activeSession: ActiveSession;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
+  readonly terminals: GlmTerminalRegistry;
   readonly configDir: string;
   stopping: boolean;
   /**
@@ -144,6 +146,230 @@ function decisionToOptionId(decision: ProviderApprovalDecision, options: Readonl
   return match?.optionId ?? null;
 }
 
+/** Returns whether `candidate` is `root` itself or a path underneath it (string-prefix check on normalized separators, matching the `isPathInsideRoot` convention already used in `ws.ts`/`ProviderCommandReactor.ts`). */
+function isPathInsideRoot(candidate: string, root: string): boolean {
+  const normalizedCandidate = candidate.replaceAll("\\", "/").replace(/\/+$/, "");
+  const normalizedRoot = root.replaceAll("\\", "/").replace(/\/+$/, "");
+  return (
+    normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}/`)
+  );
+}
+
+/**
+ * Trims `text` from the front to fit within `limitBytes` (UTF-8), matching
+ * `CreateTerminalRequest.outputByteLimit`'s doc comment: "the Client MUST
+ * ensure truncation happens at a character boundary." Single pass over the
+ * UTF-8 byte buffer, walking forward from the cut point past any leftover
+ * continuation bytes (`0b10xxxxxx`) so a multi-byte character is never split.
+ */
+function truncateToByteLimit(text: string, limitBytes: number): { text: string; truncated: boolean } {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.byteLength <= limitBytes) return { text, truncated: false };
+  let sliceStart = buf.byteLength - limitBytes;
+  while (sliceStart < buf.byteLength && (buf[sliceStart]! & 0xc0) === 0x80) {
+    sliceStart++;
+  }
+  return { text: buf.subarray(sliceStart).toString("utf8"), truncated: true };
+}
+
+interface GlmTerminalCreateOptions {
+  readonly command: string;
+  readonly args?: ReadonlyArray<string> | undefined;
+  readonly env?: ReadonlyArray<{ readonly name: string; readonly value: string }> | undefined;
+  readonly cwd?: string | null | undefined;
+  readonly outputByteLimit?: number | null | undefined;
+}
+
+interface GlmTerminalExitStatus {
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+}
+
+interface GlmTerminalOutputResult {
+  readonly output: string;
+  readonly truncated: boolean;
+  readonly exitStatus: GlmTerminalExitStatus | null;
+}
+
+interface GlmTerminalEntry {
+  readonly child: ChildProcessByStdio<null, Readable, Readable>;
+  readonly outputByteLimit: number | null;
+  output: string;
+  truncated: boolean;
+  exitStatus: GlmTerminalExitStatus | null;
+  readonly exitWaiters: Array<(status: GlmTerminalExitStatus) => void>;
+  killGraceTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/**
+ * Tracks agent-initiated, one-shot command executions for ACP's
+ * `terminal/*` client methods (`terminal/create`, `terminal/output`,
+ * `terminal/release`, `terminal/wait_for_exit`, `terminal/kill`).
+ *
+ * Deliberately NOT built on the existing `apps/server/src/terminal/`
+ * PTY manager (`Services/Manager.ts` + `PTY.ts`): that manager models T3's
+ * own thread-scoped, resizable, **interactive** PTY terminal UI feature — a
+ * person typing live into a persistent shell, with `cols`/`rows`, persisted
+ * scrollback `history` replayed on reconnect, `restart`, and raw keystroke
+ * `write`. ACP's `terminal/*` methods model something simpler and different:
+ * the *agent* (opencode) spawns one `command` + `args` in a `cwd`, polls the
+ * accumulated output, waits for exit or kills it, then releases it — a
+ * single-shot `child_process.spawn` with a growing output buffer, not a PTY
+ * a human interacts with. There's no cols/rows/resize/restart concept, no
+ * persisted-across-reconnect history, and `terminal/output` always returns
+ * the full accumulated buffer (bounded by `outputByteLimit`) rather than an
+ * incremental diff. Bridging the Effect-based, single-persistent-shell PTY
+ * manager onto this one-shot-per-call model would mean fighting its shape at
+ * every step for no shared benefit, so this is instead a small,
+ * self-contained tracker scoped to one GLM session — mirroring the
+ * `pendingApprovals: Map<...>` pattern this file already uses for
+ * `session/request_permission`.
+ */
+export class GlmTerminalRegistry {
+  private readonly terminals = new Map<string, GlmTerminalEntry>();
+  private readonly sessionCwd: string;
+
+  constructor(sessionCwd: string) {
+    this.sessionCwd = sessionCwd;
+  }
+
+  /** Spawns `options.command`, returning a new terminal id. Throws `RequestError.invalidParams` if `options.cwd` resolves outside the session's own cwd. */
+  create(options: GlmTerminalCreateOptions): string {
+    const cwd = this.resolveCwd(options.cwd);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const variable of options.env ?? []) {
+      env[variable.name] = variable.value;
+    }
+    const child = spawn(options.command, [...(options.args ?? [])], {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const terminalId = randomUUID();
+    const entry: GlmTerminalEntry = {
+      child,
+      outputByteLimit: options.outputByteLimit ?? null,
+      output: "",
+      truncated: false,
+      exitStatus: null,
+      exitWaiters: [],
+      killGraceTimer: null,
+    };
+    const appendChunk = (chunk: Buffer) => {
+      entry.output += chunk.toString("utf8");
+      if (entry.outputByteLimit !== null) {
+        const trimmed = truncateToByteLimit(entry.output, entry.outputByteLimit);
+        entry.output = trimmed.text;
+        entry.truncated = entry.truncated || trimmed.truncated;
+      }
+    };
+    // ACP models one merged `output` stream (like a terminal), not separate
+    // stdout/stderr channels, so both are appended to the same buffer as
+    // they arrive.
+    child.stdout.on("data", appendChunk);
+    child.stderr.on("data", appendChunk);
+    const settleExit = (status: GlmTerminalExitStatus) => {
+      if (entry.exitStatus !== null) return;
+      entry.exitStatus = status;
+      if (entry.killGraceTimer) {
+        clearTimeout(entry.killGraceTimer);
+        entry.killGraceTimer = null;
+      }
+      for (const waiter of entry.exitWaiters.splice(0)) waiter(status);
+    };
+    child.on("error", (err) => {
+      // Spawn failure (e.g. command not found) — surface it as a terminated
+      // process rather than leaving `waitForExit` hanging forever.
+      appendChunk(Buffer.from(`\n[terminal] failed to start '${options.command}': ${err.message}\n`));
+      settleExit({ exitCode: null, signal: null });
+    });
+    child.on("exit", (code, signal) => settleExit({ exitCode: code, signal }));
+    this.terminals.set(terminalId, entry);
+    return terminalId;
+  }
+
+  /** Current accumulated output and exit status (`null` while still running). Throws `RequestError.resourceNotFound` for an unknown/already-released id. */
+  output(terminalId: string): GlmTerminalOutputResult {
+    const entry = this.require(terminalId);
+    return { output: entry.output, truncated: entry.truncated, exitStatus: entry.exitStatus };
+  }
+
+  /** Resolves once the command exits (immediately if it already has). */
+  waitForExit(terminalId: string): Promise<GlmTerminalExitStatus> {
+    const entry = this.require(terminalId);
+    if (entry.exitStatus) return Promise.resolve(entry.exitStatus);
+    return new Promise((resolve) => entry.exitWaiters.push(resolve));
+  }
+
+  /**
+   * Kills the command but keeps the terminal tracked, per the SDK's own
+   * `TerminalHandle.kill()` doc comment (verified in
+   * `@agentclientprotocol/sdk`'s `dist/acp.js`): "The terminal remains valid
+   * after killing" so callers can still read final output / exit status and
+   * `release()` it themselves. Sends SIGTERM, escalating to SIGKILL after a
+   * short grace period if the process ignores it.
+   */
+  kill(terminalId: string): void {
+    const entry = this.require(terminalId);
+    if (entry.exitStatus !== null || entry.child.killed) return;
+    entry.child.kill("SIGTERM");
+    const pid = entry.child.pid;
+    entry.killGraceTimer = setTimeout(() => {
+      entry.killGraceTimer = null;
+      if (entry.exitStatus === null && pid !== undefined) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }, 2000);
+    entry.killGraceTimer.unref?.();
+  }
+
+  /**
+   * Releases a terminal and frees its resources. Per the SDK's own
+   * `TerminalHandle.release()` doc comment (verified in `dist/acp.js`, NOT
+   * assumed): "If the command is still running, it will be killed" — release
+   * is not merely "stop tracking", a still-running process is killed too.
+   */
+  release(terminalId: string): void {
+    const entry = this.require(terminalId);
+    if (entry.exitStatus === null && !entry.child.killed) entry.child.kill("SIGTERM");
+    if (entry.killGraceTimer) clearTimeout(entry.killGraceTimer);
+    entry.child.stdout.removeAllListeners("data");
+    entry.child.stderr.removeAllListeners("data");
+    this.terminals.delete(terminalId);
+  }
+
+  /** Kills and forgets every still-tracked terminal. Called from `disposeSession` so a closed thread never leaks child processes. */
+  disposeAll(): void {
+    for (const entry of this.terminals.values()) {
+      if (entry.exitStatus === null && !entry.child.killed) entry.child.kill("SIGKILL");
+      if (entry.killGraceTimer) clearTimeout(entry.killGraceTimer);
+    }
+    this.terminals.clear();
+  }
+
+  private resolveCwd(candidate: string | null | undefined): string {
+    if (candidate === null || candidate === undefined) return this.sessionCwd;
+    const resolved = resolvePath(this.sessionCwd, candidate);
+    if (!isPathInsideRoot(resolved, resolvePath(this.sessionCwd))) {
+      throw RequestError.invalidParams(
+        { cwd: candidate, sessionCwd: this.sessionCwd },
+        `terminal cwd '${candidate}' resolves outside the session's own cwd '${this.sessionCwd}'`,
+      );
+    }
+    return resolved;
+  }
+
+  private require(terminalId: string): GlmTerminalEntry {
+    const entry = this.terminals.get(terminalId);
+    if (!entry) throw RequestError.resourceNotFound(terminalId);
+    return entry;
+  }
+}
+
 export class GlmAcpManager extends EventEmitter {
   private readonly sessions = new Map<ThreadId, GlmSessionContext>();
 
@@ -163,7 +389,55 @@ export class GlmAcpManager extends EventEmitter {
     });
 
     const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
+    const terminals = new GlmTerminalRegistry(input.cwd);
     const app = client({ name: "t3-logicpacks-glm" });
+
+    /**
+     * Resolves the live session context for a terminal/* request and checks
+     * `params.sessionId` against it, mirroring how `session/request_permission`
+     * below resolves session state — except that handler never needed a
+     * sessionId check (it only ever reads `pendingApprovals`, captured by
+     * closure). This reads `this.sessions` (populated once `startSession`
+     * finishes, before any of these requests could legitimately arrive) so a
+     * stale/mismatched sessionId is rejected instead of silently touching the
+     * wrong session.
+     */
+    const requireGlmSession = (sessionId: string): GlmSessionContext => {
+      const ctx = this.sessions.get(input.threadId);
+      if (!ctx || ctx.activeSession.sessionId !== sessionId) {
+        throw RequestError.invalidParams({ sessionId }, "Unknown ACP session for terminal request");
+      }
+      return ctx;
+    };
+    app.onRequest("terminal/create", async ({ params }) => {
+      const ctx = requireGlmSession(params.sessionId);
+      const terminalId = ctx.terminals.create({
+        command: params.command,
+        args: params.args,
+        env: params.env,
+        cwd: params.cwd,
+        outputByteLimit: params.outputByteLimit,
+      });
+      return { terminalId };
+    });
+    app.onRequest("terminal/output", async ({ params }) => {
+      const ctx = requireGlmSession(params.sessionId);
+      return ctx.terminals.output(params.terminalId);
+    });
+    app.onRequest("terminal/release", async ({ params }) => {
+      const ctx = requireGlmSession(params.sessionId);
+      ctx.terminals.release(params.terminalId);
+      return {};
+    });
+    app.onRequest("terminal/wait_for_exit", async ({ params }) => {
+      const ctx = requireGlmSession(params.sessionId);
+      return ctx.terminals.waitForExit(params.terminalId);
+    });
+    app.onRequest("terminal/kill", async ({ params }) => {
+      const ctx = requireGlmSession(params.sessionId);
+      ctx.terminals.kill(params.terminalId);
+      return {};
+    });
     app.onRequest("session/request_permission", async ({ params }) => {
       const requestId = ApprovalRequestId.make(randomUUID());
       const outcome = await new Promise<{ kind: "selected"; optionId: string } | { kind: "cancelled" }>((resolve) => {
@@ -249,6 +523,7 @@ export class GlmAcpManager extends EventEmitter {
       clientContext: connection.agent,
       activeSession,
       pendingApprovals,
+      terminals,
       configDir,
       stopping: false,
       currentTurnId: null,
@@ -384,6 +659,11 @@ export class GlmAcpManager extends EventEmitter {
       pending.resolve({ kind: "cancelled" });
     }
     ctx.pendingApprovals.clear();
+    // Terminals created via `terminal/create` are child processes of this
+    // Node server, not of the opencode subprocess — killing `ctx.child`
+    // below would not reap them. Without this, an ended thread would leak a
+    // running command indefinitely.
+    ctx.terminals.disposeAll();
     // Real ACP method (verified live: opencode advertises `sessionCapabilities.close`
     // and the RPC cancels in-flight work + frees resources on its side before we
     // tear down the subprocess). Best-effort with a short timeout — if the agent
