@@ -7,7 +7,7 @@ import type {
   OnboardingRole,
 } from "@t3tools/contracts";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
-import { Building2Icon, GaugeIcon, LayersIcon, type LucideIcon } from "lucide-react";
+import { Building2Icon, CheckIcon, GaugeIcon, LayersIcon, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 
 import { APP_BASE_NAME } from "../../branding";
@@ -136,10 +136,13 @@ export function OnboardingModal({ onDone }: { readonly onDone: () => void }) {
   return (
     <DialogPrimitive.Root open modal>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Backdrop className="fixed inset-0 z-50 bg-black/60" />
+        {/* z-[110]: above ProductTourOverlay's z-[100] - onboarding gates the
+            whole app, including the tour, so it must never render underneath
+            a tour tooltip that started before this account had answered it. */}
+        <DialogPrimitive.Backdrop className="fixed inset-0 z-[110] bg-black/60" />
         <DialogPrimitive.Popup
           aria-label="Welcome questionnaire"
-          className="fixed inset-0 z-50 flex flex-col overflow-y-auto bg-background text-foreground outline-none lg:flex-row"
+          className="fixed inset-0 z-[110] flex flex-col overflow-y-auto bg-background text-foreground outline-none lg:flex-row"
         >
           {/* Left: dark visual panel. Deliberately fixed-dark regardless of
               the app's own light/dark setting, same way the reference
@@ -204,18 +207,26 @@ export function OnboardingModal({ onDone }: { readonly onDone: () => void }) {
               </DialogPrimitive.Title>
 
               <div className="mt-6 flex flex-col gap-2">
-                {current.options.map((option) => (
-                  <Button
-                    key={option.value}
-                    type="button"
-                    variant={selected === option.value ? "secondary" : "outline"}
-                    className="justify-start"
-                    disabled={submitting}
-                    onClick={() => choose(option.value)}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
+                {current.options.map((option) => {
+                  const isSelected = selected === option.value;
+                  return (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      variant="outline"
+                      className={
+                        isSelected
+                          ? "justify-between border-primary bg-primary/10 text-foreground ring-1 ring-primary"
+                          : "justify-between"
+                      }
+                      disabled={submitting}
+                      onClick={() => choose(option.value)}
+                    >
+                      {option.label}
+                      {isSelected ? <CheckIcon className="size-4 text-primary" /> : null}
+                    </Button>
+                  );
+                })}
               </div>
 
               <div className="mt-8 flex items-center justify-between">
