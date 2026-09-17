@@ -9,7 +9,9 @@ import {
   AuthRevokePairingLinkInput,
   AuthUpdateUserProfileInput,
   type AuthWebSocketTokenResult,
+  CompleteOnboardingInput,
   type ServerAuthPolicy,
+  UpdateUserPreferencesInput,
 } from "@t3tools/contracts";
 import { DateTime, Effect, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -316,6 +318,55 @@ export const authOnboardingRouteLayer = HttpRouter.add(
       } satisfies AuthOnboardingState,
       { status: 200 },
     );
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+/**
+ * The one-time product-personalization questionnaire (role/experience/focus)
+ * shown once after signup — distinct from `authOnboardingRouteLayer` above,
+ * which tracks workspace/invite setup, not product personalization.
+ */
+export const userPreferencesRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/user-preferences",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const preferences = yield* serverAuth.getUserPreferences(request);
+    return HttpServerResponse.jsonUnsafe(preferences, { status: 200 });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+export const updateUserPreferencesRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/user-preferences",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const payload = yield* HttpServerRequest.schemaBodyJson(UpdateUserPreferencesInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AuthError({ message: "Invalid preferences payload.", status: 400, cause }),
+      ),
+    );
+    const preferences = yield* serverAuth.updateUserPreferences(request, payload);
+    return HttpServerResponse.jsonUnsafe(preferences, { status: 200 });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
+export const completeOnboardingRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/onboarding/complete",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const payload = yield* HttpServerRequest.schemaBodyJson(CompleteOnboardingInput).pipe(
+      Effect.mapError(
+        (cause) => new AuthError({ message: "Invalid onboarding payload.", status: 400, cause }),
+      ),
+    );
+    const preferences = yield* serverAuth.completeOnboarding(request, payload);
+    return HttpServerResponse.jsonUnsafe(preferences, { status: 200 });
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
