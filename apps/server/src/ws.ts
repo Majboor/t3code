@@ -4656,6 +4656,81 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "collaboration" },
           ),
+        [WS_METHODS.collaborationSharedPromptCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationSharedPromptCreate,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "session.prompt").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.createSharedPrompt(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationSharedPromptList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationSharedPromptList,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listSharedPrompts(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationNoteCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationNoteCreate,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "session.prompt").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.createNote(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationNoteList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationNoteList,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listNotesForTarget(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationNoteResolve]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationNoteResolve,
+            withRateLimit(
+              // The service checks that the caller is the sharing prompt's own
+              // author; this gate only keeps non-members out of the workspace
+              // entirely, same as collaborationApprovalsDecide.
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.resolveNote(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
+        [WS_METHODS.collaborationDirectMessageList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.collaborationDirectMessageList,
+            withRateLimit(
+              ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listDirectMessages(actor, input)),
+              ),
+              (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
+            ),
+            { "rpc.aggregate": "collaboration" },
+          ),
         [WS_METHODS.collaborationViewGet]: (input) =>
           observeRpcEffect(
             WS_METHODS.collaborationViewGet,
