@@ -17,6 +17,7 @@ import { useServerKeybindings } from "../rpc/serverState";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
+import { OnboardingGate } from "./onboarding/OnboardingGate";
 import ThreadSidebar from "./Sidebar";
 import {
   cancelActiveSidebarResizeInteractions,
@@ -190,13 +191,15 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   );
 
   return (
-    <SidebarProvider
-      data-app-layout-mode={desktopLayoutMode}
-      data-app-layout-layout={desktopLayoutDefinition.layout}
-      onOpenChange={setProjectSidebarOpen}
-      open={projectSidebarOpen}
-    >
-      {desktopLayoutDefinition.layout === "dev" ? children : projectSidebarShell}
+    <>
+      <OnboardingGate />
+      <SidebarProvider
+        data-app-layout-mode={desktopLayoutMode}
+        data-app-layout-layout={desktopLayoutDefinition.layout}
+        onOpenChange={setProjectSidebarOpen}
+        open={projectSidebarOpen}
+      >
+        {desktopLayoutDefinition.layout === "dev" ? children : projectSidebarShell}
       {desktopLayoutDefinition.layout === "dev" ? projectSidebarShell : children}
       {!isMobile && (
         <ProjectSidebarDesktopToggle
@@ -206,7 +209,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           onToggle={() => toggleProjectSidebar((open) => !open)}
         />
       )}
-    </SidebarProvider>
+      </SidebarProvider>
+    </>
   );
 }
 

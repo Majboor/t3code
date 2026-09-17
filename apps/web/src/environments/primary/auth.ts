@@ -13,7 +13,10 @@ import type {
   AuthUpdateUserProfileInput,
   AuthUserProfile,
   AuthWebSocketTokenResult,
+  CompleteOnboardingInput,
   SupabasePublicAuthConfig,
+  UpdateUserPreferencesInput,
+  UserPreferences,
   WorkspaceSource,
 } from "@t3tools/contracts";
 import { resolveWorkspaceSource } from "@t3tools/contracts";
@@ -687,6 +690,74 @@ export async function fetchOnboardingState(
     );
   }
   return (await response.json()) as AuthOnboardingState;
+}
+
+/**
+ * The one-time product-personalization questionnaire (role/experience/focus)
+ * — distinct from `fetchOnboardingState` above, which tracks workspace/invite
+ * setup, not product personalization.
+ */
+export async function fetchUserPreferences(
+  input?: BearerAuthenticatedRequestInput,
+): Promise<UserPreferences> {
+  const headers = bearerAuthorizationHeaders(currentBearerAuthenticatedRequestInput(input));
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/user-preferences"), {
+    credentials: "include",
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  });
+  if (!response.ok) {
+    throw new Error(
+      await readErrorMessage(response, `Failed to load account preferences (${response.status}).`),
+    );
+  }
+  return (await response.json()) as UserPreferences;
+}
+
+/**
+ * Submitted once, whether every question was answered or the user hit "Skip
+ * for now" (skip is sent as all-null fields; the server applies the same
+ * defaults a "Full-stack, some experience, individual" answer would).
+ */
+export async function submitOnboarding(
+  input: CompleteOnboardingInput,
+  requestInput?: BearerAuthenticatedRequestInput,
+): Promise<UserPreferences> {
+  const headers = bearerAuthorizationHeaders(currentBearerAuthenticatedRequestInput(requestInput));
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/onboarding/complete"), {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(
+      await readErrorMessage(response, `Failed to save onboarding (${response.status}).`),
+    );
+  }
+  return (await response.json()) as UserPreferences;
+}
+
+/**
+ * Every field independently optional — flips one setting at a time from
+ * Settings, unrelated to the other two or to what onboarding originally set.
+ */
+export async function updateUserPreferences(
+  input: UpdateUserPreferencesInput,
+  requestInput?: BearerAuthenticatedRequestInput,
+): Promise<UserPreferences> {
+  const headers = bearerAuthorizationHeaders(currentBearerAuthenticatedRequestInput(requestInput));
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/user-preferences"), {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(
+      await readErrorMessage(response, `Failed to save account preferences (${response.status}).`),
+    );
+  }
+  return (await response.json()) as UserPreferences;
 }
 
 async function readErrorMessage(response: Response, fallbackMessage: string): Promise<string> {
