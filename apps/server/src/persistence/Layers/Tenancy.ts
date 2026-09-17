@@ -733,6 +733,29 @@ const makeTenancyRepository = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(toSqlError("TenancyRepository.saveCollaboration:query")));
 
+  const createPersonalTenant: TenancyRepositoryShape["createPersonalTenant"] = (input) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`
+            INSERT INTO tenants VALUES (
+              ${input.tenant.id}, ${input.tenant.slug}, ${input.tenant.displayName}, ${input.tenant.kind},
+              ${input.tenant.organizationId}, ${input.tenant.runtimeId}, ${input.tenant.createdAt},
+              ${input.tenant.archivedAt}
+            )
+          `;
+          yield* persistMemberships([input.membership]);
+          yield* sql`
+            INSERT INTO tenant_workspaces VALUES (
+              ${input.workspace.id}, ${input.workspace.tenantId}, ${input.workspace.organizationId},
+              ${input.workspace.ownerUserId}, ${input.workspace.kind}, ${input.workspace.accessMode},
+              ${input.workspace.title}, ${input.workspace.createdAt}, ${input.workspace.archivedAt}
+            )
+          `;
+        }),
+      )
+      .pipe(Effect.mapError(toSqlError("TenancyRepository.createPersonalTenant:query")));
+
   const appendCollaborationUsageSamples: NonNullable<
     TenancyRepositoryShape["appendCollaborationUsageSamples"]
   > = (samples) =>
@@ -1035,6 +1058,7 @@ const makeTenancyRepository = Effect.gen(function* () {
     saveOrganizations,
     loadCollaboration,
     saveCollaboration,
+    createPersonalTenant,
     appendCollaborationUsageSamples,
     readCollaborationUsageBuckets,
     loadWorkspaces,

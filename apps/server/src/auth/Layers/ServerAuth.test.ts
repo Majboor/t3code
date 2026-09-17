@@ -324,6 +324,79 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
     }).pipe(Effect.provide(makeServerAuthLayer({ localPasswordAuth: true }))),
   );
 
+  /**
+   * The real incident this guards against: a live account
+   * (`ajmalwaleed108@gmail.com` on CT2005, 2026-09-17) got THREE different
+   * personal tenants minted within about three minutes of signing up, each
+   * time orphaning the project it had just created under the previous one,
+   * until sending its first message failed outright with "Forbidden:
+   * authenticated session does not have session.create."
+   *
+   * The existing "races the same brand-new user" test above only ever
+   * exercises ONE userId, so the per-user semaphore in `provisionPersonalTenant`
+   * trivially covers it — that test would pass even with the bug this test
+   * catches, because the bug is not about the same user racing itself. Real
+   * traffic has many DIFFERENT brand-new users signing up around the same
+   * time, and the per-user lock does nothing to serialize two DIFFERENT
+   * users' provisioning against each other — yet before the fix, both ended
+   * up reading and rewriting the very same `collaboration.memberships`
+   * snapshot via `saveCollaboration`, which persists by deleting every
+   * `organization_id IS NULL` row and reinserting exactly the list it was
+   * handed. Whichever of two concurrent signups finished last would silently
+   * erase every other brand-new user's just-created membership.
+   */
+  it.effect(
+    "provisions a personal tenant for every one of many different users signing up at once",
+    () =>
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const tenancyRepository = yield* TenancyRepository;
+
+        const userCount = 40;
+        const signups = yield* Effect.all(
+          Array.from({ length: userCount }, (_, i) =>
+            serverAuth.authenticatePassword(
+              {
+                email: `many-signups-${i}@example.test`,
+                password: "CorrectHorseBatteryStaple1!",
+                mode: "signup",
+                displayName: `Many Signups ${i}`,
+              },
+              requestMetadata,
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+
+        const sessions = yield* Effect.all(
+          signups.map((signup) =>
+            serverAuth.authenticateHttpRequest(makeCookieRequest(signup.sessionToken)),
+          ),
+          { concurrency: "unbounded" },
+        );
+
+        // Every one of these brand-new users must have its own active
+        // personal-tenant membership — none may have been silently wiped out
+        // by another user's concurrent provisioning landing at the same time.
+        for (const session of sessions) {
+          expect(session.tenantSessionContext).toBeDefined();
+        }
+
+        const [organizations, collaboration] = yield* Effect.all([
+          tenancyRepository.loadOrganizations(),
+          tenancyRepository.loadCollaboration(),
+        ]);
+        const activeUserIds = new Set(
+          [...organizations.memberships, ...collaboration.memberships]
+            .filter((membership) => membership.disabledAt === null)
+            .map((membership) => membership.userId),
+        );
+        const expectedUserIds = new Set(sessions.map((session) => session.userId));
+
+        expect(activeUserIds.size).toBe(expectedUserIds.size);
+      }).pipe(Effect.provide(makeServerAuthLayer({ localPasswordAuth: true }))),
+  );
+
   it.effect("persists account profile updates by authenticated subject", () =>
     Effect.gen(function* () {
       const serverAuth = yield* ServerAuth;

@@ -218,10 +218,9 @@ export const makeServerAuth = Effect.gen(function* () {
     readonly displayName: string;
   }): Effect.Effect<TenantMembership, AuthError> =>
     Effect.gen(function* () {
-      const [organizations, collaboration, workspaces] = yield* Effect.all([
+      const [organizations, collaboration] = yield* Effect.all([
         tenancyRepository.loadOrganizations(),
         tenancyRepository.loadCollaboration(),
-        tenancyRepository.loadWorkspaces(),
       ]).pipe(Effect.mapError(tenancyLoadError));
       const existing = [...organizations.memberships, ...collaboration.memberships].find(
         (membership) => membership.userId === input.userId && membership.disabledAt === null,
@@ -269,22 +268,18 @@ export const makeServerAuth = Effect.gen(function* () {
           status: 500,
           cause,
         });
+      // A single targeted insert of just these three rows, not a
+      // read-modify-write of the whole `organizations`/`collaboration`/
+      // `workspaces` snapshots: those are saved by rewriting their tables
+      // wholesale from whatever this caller loaded above, so two of these
+      // calls racing for two DIFFERENT brand-new users (the per-user
+      // semaphore above only ever serializes the SAME user) would have the
+      // second caller's write silently delete the first caller's
+      // just-created membership — orphaning their tenant and forcing it to
+      // be reprovisioned (and reorphaned) on every subsequent session. See
+      // `TenancyRepository.createPersonalTenant`.
       yield* tenancyRepository
-        .saveOrganizations({
-          ...organizations,
-          tenants: [...organizations.tenants, tenant],
-        })
-        .pipe(Effect.mapError(persistError));
-      yield* tenancyRepository
-        .saveCollaboration({
-          ...collaboration,
-          memberships: [...collaboration.memberships, membership],
-        })
-        .pipe(Effect.mapError(persistError));
-      yield* tenancyRepository
-        .saveWorkspaces({
-          workspaces: [...workspaces.workspaces, workspace],
-        })
+        .createPersonalTenant({ tenant, membership, workspace })
         .pipe(Effect.mapError(persistError));
       yield* Effect.logInfo("auth.onboarding.personal-tenant-provisioned").pipe(
         Effect.annotateLogs({

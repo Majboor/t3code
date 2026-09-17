@@ -366,6 +366,7 @@ describe("ProviderCommandReactor", () => {
           activities: [],
         }),
       saveCollaboration: () => Effect.void,
+      createPersonalTenant: () => Effect.void,
       loadWorkspaces: () =>
         Effect.succeed({
           workspaces: [],

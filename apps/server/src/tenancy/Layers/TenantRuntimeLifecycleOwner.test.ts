@@ -82,6 +82,7 @@ function makeRepositoryLayer(
         activities: [],
       }),
     saveCollaboration: () => Effect.void,
+    createPersonalTenant: () => Effect.void,
     loadWorkspaces: () =>
       Effect.succeed({
         workspaces: [],
