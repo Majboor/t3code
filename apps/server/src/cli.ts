@@ -154,6 +154,9 @@ import {
   formatBoxUnit,
 } from "./box/cliOutput.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import { ExternalConnectionRepositoryLive } from "./persistence/Layers/ExternalConnections.ts";
+import { ExternalIntegrations, type ExternalIntegrationsShape } from "./integrations/Services/ExternalIntegrations.ts";
+import { ExternalIntegrationsLive } from "./integrations/Layers/ExternalIntegrations.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
 import { getAutoBootstrapDefaultModelSelection } from "./serverRuntimeStartup.ts";
 import {
@@ -2099,6 +2102,114 @@ const secretCommand = Command.make("secret").pipe(
   Command.withSubcommands([secretSetCommand, secretListCommand, secretRemoveCommand]),
 );
 
+/**
+ * Publishes to GitHub/Cloudflare on behalf of whichever user the running
+ * turn belongs to — `T3_USER_ID` is already in every provider's launch
+ * environment (`deriveProviderLaunchEnvironment`, `packages/shared/src/tenancy.ts`),
+ * so there is nothing new to inject: an agent invoking this from inside a
+ * session already has it set. A bare CLI invocation with no `T3_USER_ID`
+ * (nobody's turn, just a shell) fails with a clear message rather than
+ * silently acting as no one.
+ */
+const runPublishCommand = Effect.fn("runPublishCommand")(function* (
+  flags: { readonly baseDir: Option.Option<string> },
+  run: (integrations: ExternalIntegrationsShape, userId: UserId) => Effect.Effect<string, Error>,
+) {
+  const rawUserId = process.env.T3_USER_ID;
+  if (!rawUserId) {
+    return yield* Effect.fail(
+      new Error(
+        "T3_USER_ID is not set. This command acts on behalf of a specific user and only runs " +
+          "inside a live turn's environment, not from a bare shell.",
+      ),
+    );
+  }
+  const userId = UserId.make(rawUserId);
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  return yield* Effect.gen(function* () {
+    const integrations = yield* ExternalIntegrations;
+    yield* Console.log(
+      yield* run(integrations, userId).pipe(
+        Effect.mapError(
+          (cause) => new Error(cause instanceof Error ? cause.message : "Publish command failed."),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.provideService(References.MinimumLogLevel, "Error" as const),
+    Effect.provide(
+      ExternalIntegrationsLive.pipe(
+        Layer.provide(ExternalConnectionRepositoryLive),
+        Layer.provide(SqlitePersistenceLayerLive),
+      ).pipe(
+        Layer.provide(Layer.succeed(ServerConfig, config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error" as const)),
+      ),
+    ),
+  );
+});
+
+const publishGithubRepoCommand = Command.make("github-repo", {
+  baseDir: baseDirFlag,
+  name: Argument.string("name").pipe(Argument.withDescription("Repository name to create.")),
+  isPrivate: Flag.boolean("private").pipe(
+    Flag.withDefault(true),
+    Flag.withDescription("Create it private. Defaults to true."),
+  ),
+}).pipe(
+  Command.withDescription(
+    "Create a GitHub repo and push the current project to it. Requires the user to have " +
+      "connected GitHub in Settings > Connections first — if they have not, this fails with a " +
+      "clear 'not connected' error rather than a confusing API failure, so agent code that calls " +
+      "this should ask the user to connect it and try again on that failure.",
+  ),
+  Command.withHandler((flags) =>
+    runPublishCommand(flags, (integrations, userId) =>
+      integrations.githubCreateRepo(userId, flags.name, flags.isPrivate).pipe(
+        Effect.map(
+          (result) => `Created ${flags.name} (default branch ${result.defaultBranch}): ${result.htmlUrl}`,
+        ),
+        Effect.mapError((cause) => new Error(cause.message)),
+      ),
+    ),
+  ),
+);
+
+const publishCloudflareDomainCommand = Command.make("cloudflare-domain", {
+  baseDir: baseDirFlag,
+  accountId: Argument.string("accountId").pipe(Argument.withDescription("Cloudflare account id.")),
+  domain: Argument.string("domain").pipe(Argument.withDescription("Domain to connect, e.g. example.com.")),
+}).pipe(
+  Command.withDescription(
+    "Create a Cloudflare zone for a custom domain and report the nameservers to hand the user, " +
+      "with a best-effort guess at their current registrar (from a live DNS lookup, done before " +
+      "the zone exists) so the instructions can be specific instead of generic. This never touches " +
+      "the user's registrar account — they still make the nameserver change themselves.",
+  ),
+  Command.withHandler((flags) =>
+    runPublishCommand(flags, (integrations, userId) =>
+      integrations.cloudflareConnectDomain(userId, flags.accountId, flags.domain).pipe(
+        Effect.map(
+          (result) =>
+            `Zone ${result.zoneId} created (${result.status}). Set these nameservers at your registrar` +
+            `${result.registrarHint ? ` (looks like ${result.registrarHint})` : ""}: ${result.nameServers.join(", ")}`,
+        ),
+        Effect.mapError((cause) => new Error(cause.message)),
+      ),
+    ),
+  ),
+);
+
+const publishCommand = Command.make("publish").pipe(
+  Command.withDescription(
+    "Publish a project's code and its deployed site to accounts the user connected in " +
+      "Settings > Connections (GitHub, Cloudflare). Pair with `deploy` for where the thing runs " +
+      "and `analytics` for what it reports once it does.",
+  ),
+  Command.withSubcommands([publishGithubRepoCommand, publishCloudflareDomainCommand]),
+);
+
 const deployCommand = Command.make("deploy").pipe(
   Command.withDescription("Manage and run deploy targets."),
   Command.withSubcommands([
@@ -3007,6 +3118,7 @@ export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     envCommand,
     boxCommand,
     deployCommand,
+    publishCommand,
     secretCommand,
     analyticsCommand,
     packCommand,
