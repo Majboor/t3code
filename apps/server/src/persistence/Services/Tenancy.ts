@@ -210,6 +210,32 @@ export interface TenancyRepositoryShape {
     snapshot: CollaborationPersistenceSnapshot,
   ) => Effect.Effect<void, TenancyRepositoryError>;
   /**
+   * Adds one brand-new personal tenant, its owning membership, and its
+   * workspace, atomically, without touching any row this caller did not
+   * itself just create.
+   *
+   * `saveOrganizations`/`saveCollaboration`/`saveWorkspaces` each persist by
+   * rewriting a whole table from a snapshot the caller loaded earlier — fine
+   * for a caller that owns the whole table's contents (an org's roster editor,
+   * a workspace's settings screen), but wrong for personal-tenant
+   * provisioning, which only ever wants to add its own three rows. Loading
+   * `collaboration.memberships`, appending one entry, and calling
+   * `saveCollaboration` with the result is a check-then-overwrite: any OTHER
+   * membership added by a concurrent provision (a different brand-new user
+   * signing up around the same time, say) between this caller's read and its
+   * write is silently deleted, because `saveCollaboration` deletes every
+   * `organization_id IS NULL` row before reinserting exactly what it was
+   * handed. This method never reads the existing tables at all, so it cannot
+   * lose a concurrent writer's row, and it commits the tenant, membership, and
+   * workspace together so a failure partway through can never leave a tenant
+   * that exists with no membership able to use it.
+   */
+  readonly createPersonalTenant: (input: {
+    readonly tenant: Tenant;
+    readonly membership: TenantMembership;
+    readonly workspace: Workspace;
+  }) => Effect.Effect<void, TenancyRepositoryError>;
+  /**
    * Appends to the usage series. Deliberately not part of the collaboration
    * snapshot: that is saved by rewriting whole tables, which an append-only
    * history cannot survive and would not fit in memory for long.

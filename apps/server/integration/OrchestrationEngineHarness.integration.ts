@@ -368,6 +368,7 @@ export const makeOrchestrationIntegrationHarness = (
           activities: [],
         }),
       saveCollaboration: () => Effect.void,
+      createPersonalTenant: () => Effect.void,
       loadWorkspaces: () =>
         Effect.succeed({
           workspaces: [],
