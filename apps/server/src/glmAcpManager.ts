@@ -19,14 +19,15 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
 
 import {
   client,
   ndJsonStream,
+  RequestError,
   type ClientConnection,
   type ClientContext,
   type ActiveSession,
@@ -144,6 +145,69 @@ function decisionToOptionId(decision: ProviderApprovalDecision, options: Readonl
   return match?.optionId ?? null;
 }
 
+/**
+ * String-based containment check for "is `candidate` inside (or equal to)
+ * `root`". Mirrors `ws.ts`'s `isPathInsideRoot` helper (same normalization/
+ * comparison semantics) used for the analogous workspace-root containment
+ * check elsewhere in this codebase. Duplicated here rather than imported:
+ * `ws.ts` is a large, unrelated top-level websocket/RPC module that this
+ * low-level provider manager has never depended on, and reaching into it
+ * from here would be a new, backwards coupling for a two-line helper.
+ */
+function isPathInsideRoot(candidate: string, root: string): boolean {
+  const normalizedCandidate = candidate.replaceAll("\\", "/").replace(/\/+$/, "");
+  const normalizedRoot = root.replaceAll("\\", "/").replace(/\/+$/, "");
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}/`);
+}
+
+/**
+ * Resolves an ACP `fs/read_text_file` / `fs/write_text_file` request's
+ * `path` (absolute, but entirely agent-supplied - opencode decides what to
+ * read/write) against the session's own `cwd` and enforces containment
+ * before any handler touches the filesystem. `path.resolve` normalizes any
+ * `..` traversal segments first, so the containment check below only ever
+ * sees a fully-normalized absolute path.
+ *
+ * The whole point of scoping a GLM session's `opencode acp` subprocess to
+ * `cwd` (the project's `workspaceRoot`) is that the agent should never touch
+ * files outside it - throws a `RequestError` (a real ACP-level JSON-RPC
+ * error the SDK sends back to opencode, not a silent no-op) when the
+ * resolved path escapes `cwd`.
+ */
+function resolveSessionFsPath(cwd: string, requestedPath: string): string {
+  const resolvedPath = resolve(requestedPath);
+  if (!isPathInsideRoot(resolvedPath, cwd)) {
+    throw RequestError.invalidParams(
+      { path: requestedPath, cwd },
+      `Path is outside the session's working directory: ${requestedPath}`,
+    );
+  }
+  return resolvedPath;
+}
+
+/** Implements `fs/read_text_file`'s containment check + optional 1-based `line`/`limit` slicing. */
+export async function readSessionTextFile(
+  cwd: string,
+  path: string,
+  options?: { readonly line?: number | null | undefined; readonly limit?: number | null | undefined },
+): Promise<{ content: string }> {
+  const resolvedPath = resolveSessionFsPath(cwd, path);
+  let content = await readFile(resolvedPath, "utf8");
+  if (options?.line != null || options?.limit != null) {
+    const lines = content.split("\n");
+    const startIndex = options?.line != null ? Math.max(0, options.line - 1) : 0;
+    const endIndex = options?.limit != null ? startIndex + options.limit : lines.length;
+    content = lines.slice(startIndex, endIndex).join("\n");
+  }
+  return { content };
+}
+
+/** Implements `fs/write_text_file`'s containment check + the actual write. */
+export async function writeSessionTextFile(cwd: string, path: string, content: string): Promise<void> {
+  const resolvedPath = resolveSessionFsPath(cwd, path);
+  await writeFile(resolvedPath, content, "utf8");
+}
+
 export class GlmAcpManager extends EventEmitter {
   private readonly sessions = new Map<ThreadId, GlmSessionContext>();
 
@@ -179,6 +243,25 @@ export class GlmAcpManager extends EventEmitter {
       });
       if (outcome.kind === "cancelled") return { outcome: { outcome: "cancelled" } };
       return { outcome: { outcome: "selected", optionId: outcome.optionId } };
+    });
+    // Fill two previously-dead ACP request methods (opencode would otherwise
+    // get a hard "Method not found" if it ever called either): both are
+    // scoped to this specific session's own `input.cwd` (never "whatever
+    // session happens to be active") via the `params.sessionId` check below,
+    // same closure-over-`input`/session-variables pattern the
+    // `session/request_permission` handler above already uses.
+    app.onRequest("fs/read_text_file", async ({ params }) => {
+      if (params.sessionId !== activeSession.sessionId) {
+        throw RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown GLM ACP session id.");
+      }
+      return readSessionTextFile(input.cwd, params.path, { line: params.line, limit: params.limit });
+    });
+    app.onRequest("fs/write_text_file", async ({ params }) => {
+      if (params.sessionId !== activeSession.sessionId) {
+        throw RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown GLM ACP session id.");
+      }
+      await writeSessionTextFile(input.cwd, params.path, params.content);
+      return {};
     });
 
     let connection: ClientConnection;
