@@ -1,0 +1,12 @@
+{"id":"cloudflare_deploy","name":"Deploy via Cloudflare",
+ "description":"Publish a project through a Cloudflare quick tunnel (no account needed) or to Cloudflare Pages using your connected Cloudflare account, instead of a raw SSH host",
+ "phrasings":["deploy this to cloudflare","publish this to cloudflare pages","ship this to cloudflare",
+   "put this on cloudflare pages","deploy via cloudflare tunnel","cloudflare pe deploy karo",
+   "host this on cloudflare","publish this to pages.dev","cloudflare tunnel this project",
+   "expose this over a cloudflare tunnel","get this live on cloudflare","deploy this as a static site to cloudflare",
+   "quick tunnel this app","use cloudflare instead of ssh to deploy","cloudflare deploy this",
+   "publish this through cloudflare pages"],
+ "params":[{"name":"project","type":"string","required":true,"desc":"which project to deploy"},
+           {"name":"kind","type":"string","required":false,"desc":"cloudflare-tunnel (no account) or cloudflare-pages (needs Cloudflare connected)"}],
+ "prompt":"Deploy {project} using the cloudflare-deploy pack. Run `t3 deploy list --project {project}` first; if no targets exist, ask whether to use a cloudflare-tunnel (no account needed, address changes on restart) or cloudflare-pages (needs Cloudflare connected under Settings → Connections, stable pages.dev address) target before doing anything.",
+ "packId":"pack_380221aa574070fe3fbe"}
