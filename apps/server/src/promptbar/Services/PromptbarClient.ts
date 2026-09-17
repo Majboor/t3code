@@ -41,7 +41,6 @@ export interface PromptbarClientShape {
   readonly resolve: (text: string, k?: number) => Effect.Effect<PromptbarResolution, PromptbarError>;
 }
 
-export class PromptbarClient extends Context.Tag("t3/promptbar/Services/PromptbarClient")<
-  PromptbarClient,
-  PromptbarClientShape
->() {}
+export class PromptbarClient extends Context.Service<PromptbarClient, PromptbarClientShape>()(
+  "t3/promptbar/Services/PromptbarClient",
+) {}

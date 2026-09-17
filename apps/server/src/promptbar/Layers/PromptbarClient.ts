@@ -11,7 +11,7 @@ const PromptbarEnvConfig = Config.all({
   baseUrl: Config.url("T3CODE_PROMPTBAR_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
 });
 
-const make: Effect.Effect<PromptbarClientShape> = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const { baseUrl } = yield* PromptbarEnvConfig;
 
   const resolve: PromptbarClientShape["resolve"] = (text, k = 5) =>
