@@ -460,6 +460,19 @@ function isApprover(settings: CollaborationWorkspaceSettings, userId: UserId): b
   return settings.approverUserIds.includes(userId);
 }
 
+/**
+ * Whether anyone OTHER than the requester could ever decide a queued
+ * approval. A solo workspace, or one where the lead removed themselves
+ * without naming a replacement, has none — queuing a prompt there would
+ * block its author forever with nobody able to help them.
+ */
+function hasEligibleApprover(settings: CollaborationWorkspaceSettings, requesterId: UserId): boolean {
+  if (settings.leadUserId !== null && settings.leadUserId !== requesterId) {
+    return true;
+  }
+  return settings.approverUserIds.some((id) => id !== requesterId);
+}
+
 function inviteAcceptUrlPath(inviteId: string): string {
   const search = new URLSearchParams([["invite", inviteId]]);
   return `/invite?${search.toString()}`;
@@ -1192,6 +1205,15 @@ const makeCollaborationService = Effect.gen(function* () {
       // Approvers never queue behind themselves, and an open workspace queues
       // nobody, so both cases skip the record entirely.
       if (settings.approvalMode === "open" || isApprover(settings, actor.userId)) {
+        return { approval: null, mayRun: true };
+      }
+
+      // Queuing a prompt nobody can ever decide would block its author
+      // permanently — a solo workspace, or one where the lead left without
+      // naming a replacement. Fail open here for the same reason an open
+      // workspace queues nobody: a governance gate that cannot be exercised
+      // is worse than no gate at all.
+      if (!hasEligibleApprover(settings, actor.userId)) {
         return { approval: null, mayRun: true };
       }
 
