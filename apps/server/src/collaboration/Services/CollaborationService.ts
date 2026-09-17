@@ -67,6 +67,18 @@ import type {
   TenantInvite,
   TenantMembership,
   UserId,
+  CollaborationDirectMessageListInput,
+  CollaborationDirectMessageListResult,
+  CollaborationNoteCreateInput,
+  CollaborationNoteCreateResult,
+  CollaborationNoteListInput,
+  CollaborationNoteListResult,
+  CollaborationNoteResolveInput,
+  CollaborationNoteResolveResult,
+  CollaborationSharedPromptCreateInput,
+  CollaborationSharedPromptCreateResult,
+  CollaborationSharedPromptListInput,
+  CollaborationSharedPromptListResult,
 } from "@t3tools/contracts";
 import { Context, type Effect, type Stream } from "effect";
 
@@ -125,6 +137,43 @@ export interface CollaborationServiceShape {
     actor: CollaborationActor,
     input: CollaborationActivityVisibilityInput,
   ) => Effect.Effect<CollaborationActivityVisibilityResult, CollaborationError>;
+
+  /**
+   * Shares a prompt as a durable, commentable post — distinct from
+   * `recordSharedPrompt`, which only appends an ephemeral audit-log entry
+   * with no id a note could reference.
+   */
+  readonly createSharedPrompt: (
+    actor: CollaborationActor,
+    input: CollaborationSharedPromptCreateInput,
+  ) => Effect.Effect<CollaborationSharedPromptCreateResult, CollaborationError>;
+
+  readonly listSharedPrompts: (
+    actor: CollaborationActor,
+    input: CollaborationSharedPromptListInput,
+  ) => Effect.Effect<CollaborationSharedPromptListResult, CollaborationError>;
+
+  /** A note on a shared prompt (`targetType: "prompt"`) or a direct message (`targetType: "user"`). */
+  readonly createNote: (
+    actor: CollaborationActor,
+    input: CollaborationNoteCreateInput,
+  ) => Effect.Effect<CollaborationNoteCreateResult, CollaborationError>;
+
+  readonly listNotesForTarget: (
+    actor: CollaborationActor,
+    input: CollaborationNoteListInput,
+  ) => Effect.Effect<CollaborationNoteListResult, CollaborationError>;
+
+  /** Only the shared prompt's own author may resolve a note on it. */
+  readonly resolveNote: (
+    actor: CollaborationActor,
+    input: CollaborationNoteResolveInput,
+  ) => Effect.Effect<CollaborationNoteResolveResult, CollaborationError>;
+
+  readonly listDirectMessages: (
+    actor: CollaborationActor,
+    input: CollaborationDirectMessageListInput,
+  ) => Effect.Effect<CollaborationDirectMessageListResult, CollaborationError>;
 
   readonly stream: (
     input: CollaborationStreamInput,

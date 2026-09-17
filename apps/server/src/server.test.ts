@@ -111,6 +111,10 @@ import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResol
 import { CollaborationServiceLive } from "./collaboration/Layers/CollaborationService.ts";
 import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
+import {
+  ActivityNoteRepositoryLive,
+  SharedPromptRepositoryLive,
+} from "./persistence/Layers/ActivityNotes.ts";
 import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
 import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
@@ -337,8 +341,18 @@ const tenancyRepositoryTestLayer = TenancyRepositoryLive.pipe(
   Layer.provide(SqlitePersistenceMemory),
 );
 
+const activityNoteRepositoryTestLayer = ActivityNoteRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
+);
+
+const sharedPromptRepositoryTestLayer = SharedPromptRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
+);
+
 const collaborationTestLayer = CollaborationServiceLive.pipe(
   Layer.provide(tenancyRepositoryTestLayer),
+  Layer.provide(activityNoteRepositoryTestLayer),
+  Layer.provide(sharedPromptRepositoryTestLayer),
 );
 
 const organizationTestLayer = OrganizationServiceLive.pipe(

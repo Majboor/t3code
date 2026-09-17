@@ -18,19 +18,21 @@ import {
   type CollaborationViewPreferences,
   type CollaborationWorkspaceSettings,
   type ProviderKind,
-  type TenantId,
+  TenantId,
   type TenantInvite,
   type TenantMembership,
   type TenantRole,
-  type UserId,
-  type WorkspaceId,
+  ThreadId,
+  TurnId,
+  UserId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import {
   isFilePresenceLive,
   peopleHoldingFiles,
   type FilePresenceEntry,
 } from "@t3tools/shared/filePresence";
-import { Effect, Layer, PubSub, Ref, Stream } from "effect";
+import { DateTime, Effect, Layer, PubSub, Ref, Stream } from "effect";
 
 import {
   type CollaborationActor,
@@ -43,6 +45,12 @@ import {
   type CollaborationUsageBucketRecord,
   TenancyRepository,
 } from "../../persistence/Services/Tenancy.ts";
+import {
+  ActivityNoteRepository,
+  SharedPromptRepository,
+  type ActivityNoteRecord,
+  type SharedPromptRecord,
+} from "../../persistence/Services/ActivityNotes.ts";
 
 const DEFAULT_ACTIVITY_LIMIT = 100;
 const MAX_ACTIVITY_LIMIT = 500;
@@ -571,6 +579,8 @@ function sourceOf(input: { readonly sourceId?: string | undefined }, fallback: s
 
 const makeCollaborationService = Effect.gen(function* () {
   const repository = yield* TenancyRepository;
+  const activityNotes = yield* ActivityNoteRepository;
+  const sharedPrompts = yield* SharedPromptRepository;
   const persisted = yield* repository.loadCollaboration().pipe(
     Effect.mapError(
       (cause) =>
@@ -1042,6 +1052,181 @@ const makeCollaborationService = Effect.gen(function* () {
       return { activity: updated };
     });
 
+  // Persistence stores ids as plain strings (storage stays dumb, same
+  // reasoning as `ShareLinks.ts`); the contract layer brands them, so every
+  // id gets re-branded here on the one boundary where a plain string becomes
+  // a `TenantId`/`WorkspaceId`/`UserId` again. Safe: the value only ever got
+  // into this row by having already satisfied the brand on the way in.
+  function toContractNote(record: ActivityNoteRecord) {
+    return {
+      id: record.id,
+      authorId: UserId.make(record.authorId),
+      targetType: record.targetType,
+      targetId: record.targetId,
+      parentNoteId: record.parentNoteId,
+      body: record.body,
+      status: record.status,
+      visibility: record.visibility,
+      createdAt: DateTime.formatIso(record.createdAt),
+      resolvedAt: record.resolvedAt ? DateTime.formatIso(record.resolvedAt) : null,
+      resolvedByUserId: record.resolvedByUserId ? UserId.make(record.resolvedByUserId) : null,
+    };
+  }
+
+  function toContractSharedPrompt(record: SharedPromptRecord) {
+    return {
+      id: record.id,
+      tenantId: TenantId.make(record.tenantId),
+      workspaceId: WorkspaceId.make(record.workspaceId),
+      sharedByUserId: UserId.make(record.sharedByUserId),
+      promptText: record.promptText,
+      sourceThreadId: record.sourceThreadId ? ThreadId.make(record.sourceThreadId) : null,
+      sourceTurnId: record.sourceTurnId ? TurnId.make(record.sourceTurnId) : null,
+      createdAt: DateTime.formatIso(record.createdAt),
+    };
+  }
+
+  const mapPersistenceError = (message: string) => (cause: unknown) =>
+    new CollaborationError({ code: "invalid-membership-rule", message, cause });
+
+  const createSharedPrompt: CollaborationServiceShape["createSharedPrompt"] = (actor, input) =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const record = yield* sharedPrompts
+        .create({
+          id: `shared-prompt:${crypto.randomUUID()}`,
+          tenantId: input.tenantId,
+          workspaceId: input.workspaceId,
+          sharedByUserId: actor.userId,
+          promptText: input.promptText,
+          sourceThreadId: input.sourceThreadId ?? null,
+          sourceTurnId: input.sourceTurnId ?? null,
+          createdAt: now,
+        })
+        .pipe(Effect.mapError(mapPersistenceError("Failed to share prompt.")));
+      const sharedPrompt = toContractSharedPrompt(record);
+      yield* PubSub.publish(events, { type: "shared-prompt-created", sharedPrompt });
+      return { sharedPrompt };
+    });
+
+  const listSharedPrompts: CollaborationServiceShape["listSharedPrompts"] = (_actor, input) =>
+    Effect.gen(function* () {
+      const records = yield* sharedPrompts
+        .listForWorkspace({ tenantId: input.tenantId, workspaceId: input.workspaceId })
+        .pipe(Effect.mapError(mapPersistenceError("Failed to list shared prompts.")));
+      return { sharedPrompts: records.map(toContractSharedPrompt) };
+    });
+
+  /**
+   * `tenantId`/`workspaceId` on the created note-event: resolved from the
+   * shared prompt for a prompt note (so the workspace stream can filter
+   * correctly), `null` for a direct message (not workspace-scoped — see the
+   * event schema's own doc comment for why that means no live delivery yet).
+   */
+  const createNote: CollaborationServiceShape["createNote"] = (actor, input) =>
+    Effect.gen(function* () {
+      if (input.targetType === "prompt") {
+        const prompt = yield* sharedPrompts
+          .getById({ id: input.targetId })
+          .pipe(Effect.mapError(mapPersistenceError("Failed to look up shared prompt.")));
+        if (prompt._tag === "None") {
+          return yield* new CollaborationError({
+            code: "shared-prompt-not-found",
+            message: "That shared prompt no longer exists.",
+          });
+        }
+      }
+
+      const now = yield* DateTime.now;
+      const record = yield* activityNotes
+        .create({
+          id: `note:${crypto.randomUUID()}`,
+          authorId: actor.userId,
+          targetType: input.targetType,
+          targetId: input.targetId,
+          parentNoteId: input.parentNoteId ?? null,
+          body: input.body,
+          visibility: input.targetType === "prompt" ? "public" : "direct",
+          createdAt: now,
+        })
+        .pipe(Effect.mapError(mapPersistenceError("Failed to create note.")));
+
+      const note = toContractNote(record);
+      yield* PubSub.publish(events, {
+        type: "note-created",
+        note,
+        tenantId: input.targetType === "prompt" ? input.tenantId : null,
+        workspaceId: input.targetType === "prompt" ? input.workspaceId : null,
+      });
+      return { note };
+    });
+
+  const listNotesForTarget: CollaborationServiceShape["listNotesForTarget"] = (_actor, input) =>
+    Effect.gen(function* () {
+      const records = yield* activityNotes
+        .listForTarget({ targetType: input.targetType, targetId: input.targetId })
+        .pipe(Effect.mapError(mapPersistenceError("Failed to list notes.")));
+      return { notes: records.map(toContractNote) };
+    });
+
+  const resolveNote: CollaborationServiceShape["resolveNote"] = (actor, input) =>
+    Effect.gen(function* () {
+      const existing = yield* activityNotes
+        .getById({ id: input.noteId })
+        .pipe(Effect.mapError(mapPersistenceError("Failed to look up note.")));
+      if (existing._tag === "None") {
+        return yield* new CollaborationError({
+          code: "note-not-found",
+          message: "That note was not found.",
+        });
+      }
+      if (existing.value.targetType !== "prompt") {
+        return yield* new CollaborationError({
+          code: "note-not-found",
+          message: "Only a note on a shared prompt can be resolved.",
+        });
+      }
+      const prompt = yield* sharedPrompts
+        .getById({ id: existing.value.targetId })
+        .pipe(Effect.mapError(mapPersistenceError("Failed to look up shared prompt.")));
+      // Only the prompt's own author may resolve feedback on it -- the same
+      // "your own history is yours to curate" rule setActivityVisibility uses.
+      if (prompt._tag === "None" || prompt.value.sharedByUserId !== actor.userId) {
+        return yield* new CollaborationError({
+          code: "not-an-approver",
+          message: "Only the person who shared this prompt can resolve notes on it.",
+        });
+      }
+
+      const now = yield* DateTime.now;
+      const resolved = yield* activityNotes
+        .resolve({ id: input.noteId, resolvedByUserId: actor.userId, resolvedAt: now })
+        .pipe(Effect.mapError(mapPersistenceError("Failed to resolve note.")));
+      if (resolved._tag === "None") {
+        return yield* new CollaborationError({
+          code: "note-not-found",
+          message: "That note was not found.",
+        });
+      }
+
+      const note = toContractNote(resolved.value);
+      yield* PubSub.publish(events, {
+        type: "note-resolved",
+        note,
+        tenantId: TenantId.make(prompt.value.tenantId),
+        workspaceId: WorkspaceId.make(prompt.value.workspaceId),
+      });
+      return { note };
+    });
+
+  const listDirectMessages: CollaborationServiceShape["listDirectMessages"] = (actor, input) =>
+    Effect.gen(function* () {
+      const records = yield* activityNotes
+        .listDirectMessagesBetween({ userIdA: actor.userId, userIdB: input.withUserId })
+        .pipe(Effect.mapError(mapPersistenceError("Failed to list direct messages.")));
+      return { messages: records.map(toContractNote) };
+    });
+
   const stream: CollaborationServiceShape["stream"] = (input) =>
     Stream.fromPubSub(events).pipe(
       Stream.filter((event) => {
@@ -1111,6 +1296,19 @@ const makeCollaborationService = Effect.gen(function* () {
             // whole point is that somebody in a different thread — or in no
             // thread at all — is the one about to lose work.
             return event.tenantId === input.tenantId && event.workspaceId === input.workspaceId;
+          case "note-created":
+          case "note-resolved":
+            // `null` tenant/workspace means a direct message, which is not
+            // workspace-scoped and is never delivered through this stream.
+            return (
+              event.tenantId === input.tenantId &&
+              event.workspaceId === input.workspaceId
+            );
+          case "shared-prompt-created":
+            return (
+              event.sharedPrompt.tenantId === input.tenantId &&
+              event.sharedPrompt.workspaceId === input.workspaceId
+            );
         }
       }),
     );
@@ -2560,6 +2758,12 @@ const makeCollaborationService = Effect.gen(function* () {
     queryUsage,
     getConsent,
     updateConsent,
+    createSharedPrompt,
+    listSharedPrompts,
+    createNote,
+    listNotesForTarget,
+    resolveNote,
+    listDirectMessages,
   } satisfies CollaborationServiceShape;
 });
 

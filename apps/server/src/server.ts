@@ -150,6 +150,10 @@ import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
 import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { OrganizationServiceLive } from "./organizations/Layers/OrganizationService.ts";
 import { TenancyRepositoryLive } from "./persistence/Layers/Tenancy.ts";
+import {
+  ActivityNoteRepositoryLive,
+  SharedPromptRepositoryLive,
+} from "./persistence/Layers/ActivityNotes.ts";
 import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderSharing.ts";
 import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
@@ -360,6 +364,12 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
 );
 
 const TenancyRepositoryLayerLive = TenancyRepositoryLive.pipe(Layer.provide(PersistenceLayerLive));
+const ActivityNoteRepositoryLayerLive = ActivityNoteRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const SharedPromptRepositoryLayerLive = SharedPromptRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
 const ThreadPreferenceLayerLive = ProjectionThreadPreferenceRepositoryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
@@ -475,6 +485,8 @@ const TenantRuntimeLifecycleOwnerLayerLive = TenantRuntimeLifecycleOwnerLive.pip
 
 const CollaborationLayerLive = CollaborationServiceLive.pipe(
   Layer.provide(TenancyRepositoryLayerLive),
+  Layer.provide(ActivityNoteRepositoryLayerLive),
+  Layer.provide(SharedPromptRepositoryLayerLive),
 );
 
 const OrganizationLayerLive = OrganizationServiceLive.pipe(
