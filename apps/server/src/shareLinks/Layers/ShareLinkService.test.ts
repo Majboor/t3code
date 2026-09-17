@@ -21,6 +21,10 @@ import {
 } from "../../persistence/Services/ShareLinks.ts";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
+import {
+  ActivityNoteRepositoryLive,
+  SharedPromptRepositoryLive,
+} from "../../persistence/Layers/ActivityNotes.ts";
 
 const tenantId = TenantId.make("tenant-share-links");
 const workspaceId = WorkspaceId.make("workspace-share-links");
@@ -48,6 +52,8 @@ function makeLayer() {
     Layer.provideMerge(ShareLinkRepositoryLive),
     Layer.provideMerge(ProjectionProjectRepositoryLive),
     Layer.provideMerge(TenancyRepositoryLive),
+    Layer.provideMerge(ActivityNoteRepositoryLive),
+    Layer.provideMerge(SharedPromptRepositoryLive),
     Layer.provideMerge(makeSqlitePersistenceLive(path.join(tempDir, "state.sqlite"))),
     Layer.provideMerge(ServerConfig.layerTest(tempDir, tempDir)),
     Layer.provideMerge(NodeServices.layer),

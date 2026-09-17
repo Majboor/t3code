@@ -662,6 +662,8 @@ export class CollaborationError extends Schema.TaggedErrorClass<CollaborationErr
       "approval-already-decided",
       "not-an-approver",
       "branch-claim-not-found",
+      "shared-prompt-not-found",
+      "note-not-found",
     ]),
     cause: Schema.optional(Schema.Defect),
   },
@@ -1394,6 +1396,129 @@ export const CollaborationStreamInput = Schema.Struct({
 });
 export type CollaborationStreamInput = typeof CollaborationStreamInput.Type;
 
+/**
+ * One entity serving both a direct message between two users
+ * (`targetType: "user"`, `targetId` is the recipient) and a note/comment on a
+ * shared prompt (`targetType: "prompt"`, `targetId` is the `SharedPrompt.id`).
+ * `parentNoteId` threads a reply under either kind the same way. `status`
+ * only ever leaves `"open"` for a prompt note; a direct message has no
+ * reader-visible "resolved" concept and stays open forever.
+ */
+export const ActivityNoteTargetType = Schema.Literals(["user", "prompt"]);
+export type ActivityNoteTargetType = typeof ActivityNoteTargetType.Type;
+
+export const ActivityNoteStatus = Schema.Literals(["open", "resolved"]);
+export type ActivityNoteStatus = typeof ActivityNoteStatus.Type;
+
+export const ActivityNoteVisibility = Schema.Literals(["direct", "public"]);
+export type ActivityNoteVisibility = typeof ActivityNoteVisibility.Type;
+
+export const ActivityNote = Schema.Struct({
+  id: Schema.String,
+  authorId: UserId,
+  targetType: ActivityNoteTargetType,
+  targetId: Schema.String,
+  parentNoteId: Schema.NullOr(Schema.String),
+  body: TrimmedNonEmptyString,
+  status: ActivityNoteStatus,
+  visibility: ActivityNoteVisibility,
+  createdAt: IsoDateTime,
+  resolvedAt: Schema.NullOr(IsoDateTime),
+  resolvedByUserId: Schema.NullOr(UserId),
+});
+export type ActivityNote = typeof ActivityNote.Type;
+
+export const CollaborationNoteCreateInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  targetType: ActivityNoteTargetType,
+  targetId: Schema.String,
+  parentNoteId: Schema.optional(Schema.NullOr(Schema.String)),
+  body: TrimmedNonEmptyString,
+});
+export type CollaborationNoteCreateInput = typeof CollaborationNoteCreateInput.Type;
+
+export const CollaborationNoteCreateResult = Schema.Struct({ note: ActivityNote });
+export type CollaborationNoteCreateResult = typeof CollaborationNoteCreateResult.Type;
+
+export const CollaborationNoteListInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  targetType: ActivityNoteTargetType,
+  targetId: Schema.String,
+});
+export type CollaborationNoteListInput = typeof CollaborationNoteListInput.Type;
+
+export const CollaborationNoteListResult = Schema.Struct({ notes: Schema.Array(ActivityNote) });
+export type CollaborationNoteListResult = typeof CollaborationNoteListResult.Type;
+
+export const CollaborationNoteResolveInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  noteId: Schema.String,
+});
+export type CollaborationNoteResolveInput = typeof CollaborationNoteResolveInput.Type;
+
+export const CollaborationNoteResolveResult = Schema.Struct({ note: ActivityNote });
+export type CollaborationNoteResolveResult = typeof CollaborationNoteResolveResult.Type;
+
+/** Send is just `CollaborationNoteCreateInput` with `targetType: "user"` pinned at the call site; list is keyed by the other party. */
+export const CollaborationDirectMessageListInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  withUserId: UserId,
+});
+export type CollaborationDirectMessageListInput = typeof CollaborationDirectMessageListInput.Type;
+
+export const CollaborationDirectMessageListResult = Schema.Struct({
+  messages: Schema.Array(ActivityNote),
+});
+export type CollaborationDirectMessageListResult =
+  typeof CollaborationDirectMessageListResult.Type;
+
+/**
+ * A durable "post" a public prompt-note thread attaches to — independent of
+ * `recordSharedPrompt`'s ephemeral, in-memory activity-log entry, which has
+ * no stable id a note could reference.
+ */
+export const SharedPrompt = Schema.Struct({
+  id: Schema.String,
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  sharedByUserId: UserId,
+  promptText: TrimmedNonEmptyString,
+  sourceThreadId: Schema.NullOr(ThreadId),
+  sourceTurnId: Schema.NullOr(TurnId),
+  createdAt: IsoDateTime,
+});
+export type SharedPrompt = typeof SharedPrompt.Type;
+
+export const CollaborationSharedPromptCreateInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+  promptText: TrimmedNonEmptyString,
+  sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  sourceTurnId: Schema.optional(Schema.NullOr(TurnId)),
+});
+export type CollaborationSharedPromptCreateInput =
+  typeof CollaborationSharedPromptCreateInput.Type;
+
+export const CollaborationSharedPromptCreateResult = Schema.Struct({ sharedPrompt: SharedPrompt });
+export type CollaborationSharedPromptCreateResult =
+  typeof CollaborationSharedPromptCreateResult.Type;
+
+export const CollaborationSharedPromptListInput = Schema.Struct({
+  tenantId: TenantId,
+  workspaceId: WorkspaceId,
+});
+export type CollaborationSharedPromptListInput = typeof CollaborationSharedPromptListInput.Type;
+
+export const CollaborationSharedPromptListResult = Schema.Struct({
+  sharedPrompts: Schema.Array(SharedPrompt),
+});
+export type CollaborationSharedPromptListResult =
+  typeof CollaborationSharedPromptListResult.Type;
+
 export const CollaborationStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("presence-upserted"),
@@ -1468,6 +1593,32 @@ export const CollaborationStreamEvent = Schema.Union([
     tenantId: TenantId,
     workspaceId: WorkspaceId,
     userId: UserId,
+  }),
+  /**
+   * One kind for both a new direct message and a new/replied prompt note —
+   * `note.targetType` tells the client which. `tenantId`/`workspaceId` are
+   * the shared prompt's for a prompt note (so the workspace-scoped stream
+   * this event travels on can filter correctly); both `null` for a direct
+   * message, which is not workspace-scoped at all and is not deliverable
+   * through this stream today — the client's DM view has to poll
+   * `listDirectMessages` rather than expect a live push, until a
+   * user-scoped (not workspace-scoped) delivery channel exists.
+   */
+  Schema.Struct({
+    type: Schema.Literal("note-created"),
+    note: ActivityNote,
+    tenantId: Schema.NullOr(TenantId),
+    workspaceId: Schema.NullOr(WorkspaceId),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("note-resolved"),
+    note: ActivityNote,
+    tenantId: Schema.NullOr(TenantId),
+    workspaceId: Schema.NullOr(WorkspaceId),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("shared-prompt-created"),
+    sharedPrompt: SharedPrompt,
   }),
 ]);
 export type CollaborationStreamEvent = typeof CollaborationStreamEvent.Type;

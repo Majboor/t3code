@@ -22,6 +22,10 @@ import { CollaborationService } from "../../collaboration/Services/Collaboration
 import { CollaborationServiceLive } from "../../collaboration/Layers/CollaborationService.ts";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
+import {
+  ActivityNoteRepositoryLive,
+  SharedPromptRepositoryLive,
+} from "../../persistence/Layers/ActivityNotes.ts";
 
 const tenantId = TenantId.make("tenant-packs");
 const workspaceId = WorkspaceId.make("workspace-packs");
@@ -128,6 +132,8 @@ function makeLayer() {
     Layer.provide(PackRepositoryLive),
     Layer.provideMerge(CollaborationServiceLive),
     Layer.provide(TenancyRepositoryLive),
+    Layer.provide(ActivityNoteRepositoryLive),
+    Layer.provide(SharedPromptRepositoryLive),
     Layer.provide(makeSqlitePersistenceLive(path.join(tempDir, "packs.sqlite"))),
     Layer.provideMerge(NodeServices.layer),
   );

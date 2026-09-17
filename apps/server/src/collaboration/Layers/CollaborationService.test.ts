@@ -17,6 +17,10 @@ import { CollaborationService } from "../Services/CollaborationService.ts";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
 import type { CollaborationMemberUsageRecord } from "../../persistence/Services/Tenancy.ts";
+import {
+  ActivityNoteRepositoryLive,
+  SharedPromptRepositoryLive,
+} from "../../persistence/Layers/ActivityNotes.ts";
 
 const tenantId = TenantId.make("tenant-collab");
 const workspaceId = WorkspaceId.make("workspace-collab");
@@ -37,6 +41,8 @@ function makeLayer() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-collab-governance-"));
   return CollaborationServiceLive.pipe(
     Layer.provide(TenancyRepositoryLive),
+    Layer.provide(ActivityNoteRepositoryLive),
+    Layer.provide(SharedPromptRepositoryLive),
     Layer.provide(makeSqlitePersistenceLive(path.join(tempDir, "tenancy.sqlite"))),
     Layer.provideMerge(NodeServices.layer),
   );

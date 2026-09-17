@@ -16,6 +16,10 @@ import { CloudSyncRepositoryLive } from "../../persistence/Layers/CloudSync.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
+import {
+  ActivityNoteRepositoryLive,
+  SharedPromptRepositoryLive,
+} from "../../persistence/Layers/ActivityNotes.ts";
 import { CloudSyncRepository } from "../../persistence/Services/CloudSync.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 
@@ -32,6 +36,8 @@ const layer = CloudSyncServiceLive.pipe(
   Layer.provideMerge(CollaborationServiceLive),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
   Layer.provideMerge(TenancyRepositoryLive),
+    Layer.provideMerge(ActivityNoteRepositoryLive),
+    Layer.provideMerge(SharedPromptRepositoryLive),
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-cloud-sync-" })),
   Layer.provideMerge(NodeServices.layer),

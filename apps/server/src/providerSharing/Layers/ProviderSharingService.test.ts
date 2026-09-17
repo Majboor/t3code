@@ -16,6 +16,10 @@ import { ProviderSharingRepositoryLive } from "../../persistence/Layers/Provider
 import { ProviderSharingRepository } from "../../persistence/Services/ProviderSharing.ts";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
+import {
+  ActivityNoteRepositoryLive,
+  SharedPromptRepositoryLive,
+} from "../../persistence/Layers/ActivityNotes.ts";
 import { createProviderAccount, writeClaudeToken } from "../../providerAuth/store.ts";
 
 const tenantId = TenantId.make("tenant-sharing");
@@ -37,6 +41,8 @@ function makeLayer() {
     Layer.provideMerge(CollaborationServiceLive),
     Layer.provideMerge(ProviderSharingRepositoryLive),
     Layer.provideMerge(TenancyRepositoryLive),
+    Layer.provideMerge(ActivityNoteRepositoryLive),
+    Layer.provideMerge(SharedPromptRepositoryLive),
     Layer.provideMerge(makeSqlitePersistenceLive(path.join(tempDir, "state.sqlite"))),
     Layer.provideMerge(ServerConfig.layerTest(tempDir, tempDir)),
     Layer.provideMerge(NodeServices.layer),

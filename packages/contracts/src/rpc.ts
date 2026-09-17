@@ -196,6 +196,18 @@ import {
   ProviderAccountOpenAuthTerminalResult,
   WorkspaceCreateInput,
   WorkspaceCreateResult,
+  CollaborationSharedPromptCreateInput,
+  CollaborationSharedPromptCreateResult,
+  CollaborationSharedPromptListInput,
+  CollaborationSharedPromptListResult,
+  CollaborationNoteCreateInput,
+  CollaborationNoteCreateResult,
+  CollaborationNoteListInput,
+  CollaborationNoteListResult,
+  CollaborationNoteResolveInput,
+  CollaborationNoteResolveResult,
+  CollaborationDirectMessageListInput,
+  CollaborationDirectMessageListResult,
 } from "./tenancy.ts";
 import {
   ClientOrchestrationCommand,
@@ -426,6 +438,12 @@ export const WS_METHODS = {
   collaborationApprovalsSubmit: "collaboration.approvals.submit",
   collaborationApprovalsList: "collaboration.approvals.list",
   collaborationApprovalsDecide: "collaboration.approvals.decide",
+  collaborationSharedPromptCreate: "collaboration.sharedPrompt.create",
+  collaborationSharedPromptList: "collaboration.sharedPrompt.list",
+  collaborationNoteCreate: "collaboration.note.create",
+  collaborationNoteList: "collaboration.note.list",
+  collaborationNoteResolve: "collaboration.note.resolve",
+  collaborationDirectMessageList: "collaboration.directMessage.list",
   collaborationViewGet: "collaboration.view.get",
   collaborationViewUpdate: "collaboration.view.update",
   collaborationBranchClaim: "collaboration.branch.claim",
@@ -1141,6 +1159,51 @@ export const WsCollaborationApprovalsSubmitRpc = Rpc.make(WS_METHODS.collaborati
   error: CollaborationError,
 });
 
+export const WsCollaborationSharedPromptCreateRpc = Rpc.make(
+  WS_METHODS.collaborationSharedPromptCreate,
+  {
+    payload: CollaborationSharedPromptCreateInput,
+    success: CollaborationSharedPromptCreateResult,
+    error: CollaborationError,
+  },
+);
+
+export const WsCollaborationSharedPromptListRpc = Rpc.make(
+  WS_METHODS.collaborationSharedPromptList,
+  {
+    payload: CollaborationSharedPromptListInput,
+    success: CollaborationSharedPromptListResult,
+    error: CollaborationError,
+  },
+);
+
+export const WsCollaborationNoteCreateRpc = Rpc.make(WS_METHODS.collaborationNoteCreate, {
+  payload: CollaborationNoteCreateInput,
+  success: CollaborationNoteCreateResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationNoteListRpc = Rpc.make(WS_METHODS.collaborationNoteList, {
+  payload: CollaborationNoteListInput,
+  success: CollaborationNoteListResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationNoteResolveRpc = Rpc.make(WS_METHODS.collaborationNoteResolve, {
+  payload: CollaborationNoteResolveInput,
+  success: CollaborationNoteResolveResult,
+  error: CollaborationError,
+});
+
+export const WsCollaborationDirectMessageListRpc = Rpc.make(
+  WS_METHODS.collaborationDirectMessageList,
+  {
+    payload: CollaborationDirectMessageListInput,
+    success: CollaborationDirectMessageListResult,
+    error: CollaborationError,
+  },
+);
+
 export const WsCollaborationApprovalsListRpc = Rpc.make(WS_METHODS.collaborationApprovalsList, {
   payload: CollaborationApprovalListInput,
   success: CollaborationApprovalListResult,
@@ -1671,6 +1734,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsCollaborationApprovalsSubmitRpc,
   WsCollaborationApprovalsListRpc,
   WsCollaborationApprovalsDecideRpc,
+  WsCollaborationSharedPromptCreateRpc,
+  WsCollaborationSharedPromptListRpc,
+  WsCollaborationNoteCreateRpc,
+  WsCollaborationNoteListRpc,
+  WsCollaborationNoteResolveRpc,
+  WsCollaborationDirectMessageListRpc,
   WsCollaborationViewGetRpc,
   WsCollaborationViewUpdateRpc,
   WsCollaborationBranchClaimRpc,

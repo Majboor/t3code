@@ -25,6 +25,7 @@ const UserPreferencesRow = Schema.Struct({
   orgSettingsVisible: Schema.Int,
   vibeModeEnabled: Schema.Int,
   apiUsageTabVisible: Schema.Int,
+  notificationPopupsEnabled: Schema.Int,
   updatedAt: Schema.DateTimeUtcFromString,
 });
 
@@ -38,6 +39,7 @@ function toUserPreferences(row: typeof UserPreferencesRow.Type): UserPreferences
     orgSettingsVisible: row.orgSettingsVisible !== 0,
     vibeModeEnabled: row.vibeModeEnabled !== 0,
     apiUsageTabVisible: row.apiUsageTabVisible !== 0,
+    notificationPopupsEnabled: row.notificationPopupsEnabled !== 0,
     updatedAt: row.updatedAt,
   };
 }
@@ -58,6 +60,7 @@ const makeUserPreferencesRepository = Effect.gen(function* () {
           org_settings_visible,
           vibe_mode_enabled,
           api_usage_tab_visible,
+          notification_popups_enabled,
           updated_at
         )
         VALUES (
@@ -69,6 +72,7 @@ const makeUserPreferencesRepository = Effect.gen(function* () {
           ${input.orgSettingsVisible ? 1 : 0},
           ${input.vibeModeEnabled ? 1 : 0},
           ${input.apiUsageTabVisible ? 1 : 0},
+          ${input.notificationPopupsEnabled ? 1 : 0},
           ${input.updatedAt}
         )
         ON CONFLICT (subject)
@@ -80,6 +84,7 @@ const makeUserPreferencesRepository = Effect.gen(function* () {
           org_settings_visible = excluded.org_settings_visible,
           vibe_mode_enabled = excluded.vibe_mode_enabled,
           api_usage_tab_visible = excluded.api_usage_tab_visible,
+          notification_popups_enabled = excluded.notification_popups_enabled,
           updated_at = excluded.updated_at
       `,
   });
@@ -98,6 +103,7 @@ const makeUserPreferencesRepository = Effect.gen(function* () {
           org_settings_visible AS "orgSettingsVisible",
           vibe_mode_enabled AS "vibeModeEnabled",
           api_usage_tab_visible AS "apiUsageTabVisible",
+          notification_popups_enabled AS "notificationPopupsEnabled",
           updated_at AS "updatedAt"
         FROM user_preferences
         WHERE subject = ${subject}
