@@ -25,6 +25,25 @@ export const promptbarQueryKeys = {
     ["promptbar", "resolve", text, isFirstMessageInSession] as const,
 };
 
+/**
+ * Whether the automatic, debounced resolve call should run at all.
+ *
+ * Pack mode (`packMode.logic.ts`'s `enabled`) is the master switch for this:
+ * off means the bar must not fetch or show anything, however good a match
+ * would have been — the same "off means never render" rule the bar's own
+ * `enabled` prop already follows. The hand-search box is a separate,
+ * deliberate action and is never gated by Pack mode; `searching` is here only
+ * so the automatic fetch pauses while that box is in use, which is a UX
+ * choice unrelated to whether Pack mode itself is on.
+ */
+export function shouldResolvePromptbar(input: {
+  readonly barEnabled: boolean;
+  readonly packModeEnabled: boolean;
+  readonly searching: boolean;
+}): boolean {
+  return input.barEnabled && input.packModeEnabled && !input.searching;
+}
+
 export function usePromptbarResolution(
   text: string,
   isFirstMessageInSession: boolean,

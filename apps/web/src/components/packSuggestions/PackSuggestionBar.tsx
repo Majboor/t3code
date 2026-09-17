@@ -13,10 +13,27 @@
  *
  * The main-prompt suggestions come from the backend hybrid retrieval pipeline
  * (`POST /api/promptbar/resolve`, via `usePromptbarResolution`), debounced as
- * you type. The hand-search box (`query`) is a different, deliberate flow —
- * "look up a pack by hand" — and keeps using the local, static
- * `suggestPacks` heuristic against whatever packs are already enabled, since
- * the resolve endpoint isn't for that.
+ * you type, and only ever run while Pack mode (`packMode.logic.ts`) is on —
+ * Pack mode is the composer's existing "look for a proven capability before
+ * writing one" setting, and this bar is that same idea surfaced to the
+ * person instead of left to the agent alone, so it should not act without
+ * the same switch. The hand-search box (`query`) is a different, deliberate
+ * flow — "look up a pack by hand" — and keeps using the local, static
+ * `suggestPacks` heuristic against whatever packs are already enabled,
+ * since the resolve endpoint isn't for that; it is unaffected by Pack mode
+ * being off, since asking for a pack by hand is explicitly always allowed
+ * (see `PackModeControl`'s own description: "You can ask it for a pack at
+ * any time too").
+ *
+ * Pack mode's other knobs — "Where to look" (workspace/ecosystem scope) and
+ * the minimum-deployments/time-in-service/author-only requirements — are
+ * deliberately NOT applied here. Those filter `PackModeControl`'s own
+ * agent-facing search (`packDirectory.searchPacks`, a local heuristic over
+ * the workspace's known packs); the promptbar's `/api/promptbar/resolve`
+ * request shape (`PromptbarResolveInput`) is frozen to `{ text,
+ * isFirstMessageInSession, k? }` and has no room for them, so wiring them
+ * through here is out of scope until the backend contract grows to accept
+ * them.
  *
  * Zone-aware rendering follows the spec verbatim: `attach` (confidence
  * >= 0.60) shows plainly; `suggest` (0.35-0.60) shows dimmed with a "Tab to
@@ -45,7 +62,7 @@ import {
   isAbstained,
   resolveTabAcceptCandidate,
 } from "./promptbarZone.logic";
-import { usePromptbarResolution } from "./usePromptbarResolution";
+import { shouldResolvePromptbar, usePromptbarResolution } from "./usePromptbarResolution";
 
 /**
  * A registry entry, reduced to what matching needs.
@@ -91,6 +108,14 @@ export const PackSuggestionBar = forwardRef<
     readonly onOpenPack?: (packId: string, packName: string) => void;
     /** Off means never render, however good the match. */
     readonly enabled?: boolean;
+    /**
+     * Whether Pack mode (the composer's own "look for a proven capability"
+     * setting, `packMode.logic.ts`) is turned on. Off means the automatic,
+     * as-you-type resolve call never fires and nothing from it is shown —
+     * the hand-search box (`query`) is unaffected, since looking a pack up
+     * by hand is a separate, deliberate action Pack mode does not gate.
+     */
+    readonly packModeEnabled: boolean;
     readonly layout?: "inline" | "stacked";
     readonly onChangeSettings?: (next: { enabled?: boolean; layout?: "inline" | "stacked" }) => void;
     /**
@@ -108,6 +133,7 @@ export const PackSuggestionBar = forwardRef<
     onUsePack,
     onOpenPack,
     enabled = true,
+    packModeEnabled,
     layout = "inline",
     onChangeSettings,
     isFirstMessageInSession,
@@ -128,8 +154,13 @@ export const PackSuggestionBar = forwardRef<
 
   // The main-prompt path: a debounced call to the backend hybrid retrieval
   // pipeline. Disabled while hand-searching, since that flow does not touch
-  // the prompt at all and the resolution would go unused.
-  const resolution = usePromptbarResolution(prompt, isFirstMessageInSession, enabled && !searching);
+  // the prompt at all and the resolution would go unused — and disabled
+  // whenever Pack mode itself is off, full stop.
+  const resolution = usePromptbarResolution(
+    prompt,
+    isFirstMessageInSession,
+    shouldResolvePromptbar({ barEnabled: enabled, packModeEnabled, searching }),
+  );
 
   const localSuggestions = useMemo<ReadonlyArray<PackSuggestion>>(() => {
     if (!enabled || query === null || query.trim().length === 0) return [];

@@ -83,6 +83,7 @@ import {
 } from "./composerProviderRegistry";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { PackModeControl } from "../packs/PackModeControl";
+import { usePackModeSettings } from "../packs/packMode.logic";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../vscode-icons";
 import { cn, randomUUID } from "~/lib/utils";
@@ -685,6 +686,7 @@ export const ChatComposer = memo(
       (activeProjectId ? WorkspaceId.make(activeProjectId) : null);
     const workspacePacks = useWorkspacePacks(environmentId, packTenantId, packWorkspaceId);
     const { settings: packSettings, update: updatePackSettings } = usePackSuggestionSettings();
+    const [packModeSettings] = usePackModeSettings();
     const [quickViewPack, setQuickViewPack] = useState<{ id: string; name: string } | null>(null);
     const packSuggestionBarRef = useRef<PackSuggestionBarHandle>(null);
     // No thread yet (a fresh draft) or a thread that has never sent a turn both
@@ -1952,6 +1954,7 @@ export const ChatComposer = memo(
                 prompt={prompt}
                 packs={workspacePacks}
                 enabled={packSettings.enabled}
+                packModeEnabled={packModeSettings.enabled}
                 layout={packSettings.layout}
                 isFirstMessageInSession={isFirstMessageInSession}
                 onChangeSettings={updatePackSettings}
