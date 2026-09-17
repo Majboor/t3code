@@ -10,20 +10,42 @@
  * It never changes the prompt on its own. A bar that quietly edited what you
  * typed would be worse than no bar, and the entire point is that you can see
  * what was added.
+ *
+ * The main-prompt suggestions come from the backend hybrid retrieval pipeline
+ * (`POST /api/promptbar/resolve`, via `usePromptbarResolution`), debounced as
+ * you type. The hand-search box (`query`) is a different, deliberate flow —
+ * "look up a pack by hand" — and keeps using the local, static
+ * `suggestPacks` heuristic against whatever packs are already enabled, since
+ * the resolve endpoint isn't for that.
+ *
+ * Zone-aware rendering follows the spec verbatim: `attach` (confidence
+ * >= 0.60) shows plainly; `suggest` (0.35-0.60) shows dimmed with a "Tab to
+ * accept" hint, and Tab accepts it exactly like clicking "Use"; `silent`
+ * (< 0.35) and any non-ACTION intent (QUESTION/STATEMENT/CONTINUATION) show
+ * nothing. A resolve failure or an endpoint that isn't live yet also shows
+ * nothing — never a broken composer.
  */
 import { BookOpenIcon, SearchIcon, SettingsIcon, XIcon } from "lucide-react";
 import type { PackRegistryEntry } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { cn } from "../../lib/utils";
+import { sendPromptbarTelemetry } from "../../environments/primary/promptbar";
 import {
   suggestPacks,
   withPackMention,
   type PackSuggestion,
   type SuggestablePack,
 } from "./matchPrompt.logic";
+import {
+  candidateToSuggestablePack,
+  deriveZoneDecision,
+  isAbstained,
+  resolveTabAcceptCandidate,
+} from "./promptbarZone.logic";
+import { usePromptbarResolution } from "./usePromptbarResolution";
 
 /**
  * A registry entry, reduced to what matching needs.
@@ -49,24 +71,49 @@ export function toSuggestablePack(entry: PackRegistryEntry): SuggestablePack {
   };
 }
 
-export function PackSuggestionBar({
-  prompt,
-  packs,
-  onUsePack,
-  onOpenPack,
-  enabled = true,
-  layout = "inline",
-  onChangeSettings,
-}: {
-  readonly prompt: string;
-  readonly packs: ReadonlyArray<PackRegistryEntry>;
-  readonly onUsePack: (nextPrompt: string) => void;
-  readonly onOpenPack?: (packId: string, packName: string) => void;
-  /** Off means never render, however good the match. */
-  readonly enabled?: boolean;
-  readonly layout?: "inline" | "stacked";
-  readonly onChangeSettings?: (next: { enabled?: boolean; layout?: "inline" | "stacked" }) => void;
-}) {
+/** Imperative surface for the composer's own Tab handling — see `resolveTabAcceptCandidate`. */
+export interface PackSuggestionBarHandle {
+  /**
+   * Called when the composer editor receives Tab. Returns `true` (and
+   * behaves exactly like clicking "Use") when a `suggest`-zone candidate was
+   * showing and worth accepting; `false` means Tab has nothing to do here and
+   * the composer should fall through to its normal Tab handling.
+   */
+  readonly acceptTabSuggestion: () => boolean;
+}
+
+export const PackSuggestionBar = forwardRef<
+  PackSuggestionBarHandle,
+  {
+    readonly prompt: string;
+    readonly packs: ReadonlyArray<PackRegistryEntry>;
+    readonly onUsePack: (nextPrompt: string) => void;
+    readonly onOpenPack?: (packId: string, packName: string) => void;
+    /** Off means never render, however good the match. */
+    readonly enabled?: boolean;
+    readonly layout?: "inline" | "stacked";
+    readonly onChangeSettings?: (next: { enabled?: boolean; layout?: "inline" | "stacked" }) => void;
+    /**
+     * Whether this is the first message of the current thread/session.
+     * Passed through verbatim to `POST /api/promptbar/resolve` on every call
+     * — the classifier has no session memory, so this is the only place that
+     * knows.
+     */
+    readonly isFirstMessageInSession: boolean;
+  }
+>(function PackSuggestionBar(
+  {
+    prompt,
+    packs,
+    onUsePack,
+    onOpenPack,
+    enabled = true,
+    layout = "inline",
+    onChangeSettings,
+    isFirstMessageInSession,
+  },
+  ref,
+) {
   // Dismissal is per prompt text, not forever: waving away a suggestion for
   // one sentence should not silence it for the next thing you type.
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
@@ -76,19 +123,65 @@ export function PackSuggestionBar({
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const suggestable = useMemo(() => packs.map(toSuggestablePack), [packs]);
-
-  const suggestions = useMemo<ReadonlyArray<PackSuggestion>>(() => {
-    if (!enabled) return [];
-    // A typed query wins over the prompt: somebody searching has said what
-    // they want more plainly than anything inferred.
-    if (query !== null && query.trim().length > 0) {
-      return suggestPacks(query, suggestable, { limit: 5, minScore: 1 });
-    }
-    return suggestPacks(prompt, suggestable);
-  }, [enabled, prompt, query, suggestable]);
-
   const searching = query !== null;
   const dismissed = dismissedFor === prompt.trim();
+
+  // The main-prompt path: a debounced call to the backend hybrid retrieval
+  // pipeline. Disabled while hand-searching, since that flow does not touch
+  // the prompt at all and the resolution would go unused.
+  const resolution = usePromptbarResolution(prompt, isFirstMessageInSession, enabled && !searching);
+
+  const localSuggestions = useMemo<ReadonlyArray<PackSuggestion>>(() => {
+    if (!enabled || query === null || query.trim().length === 0) return [];
+    return suggestPacks(query, suggestable, { limit: 5, minScore: 1 });
+  }, [enabled, query, suggestable]);
+
+  // Only ACTION intent with a non-silent zone and real candidates produces
+  // anything to show — see `deriveZoneDecision` for the full rule table.
+  const zoneDecision = useMemo(() => deriveZoneDecision(resolution), [resolution]);
+
+  const backendSuggestions = useMemo<ReadonlyArray<PackSuggestion>>(() => {
+    if (!zoneDecision) return [];
+    return zoneDecision.candidates.map((candidate) => ({
+      pack: candidateToSuggestablePack(candidate, suggestable),
+      score: candidate.retrievalScore,
+      matched: [],
+    }));
+  }, [zoneDecision, suggestable]);
+
+  const suggestions = searching ? localSuggestions : backendSuggestions;
+  const showTabHint = !searching && zoneDecision?.zone === "suggest";
+
+  // "Abstained": the resolve call came back ACTION but nothing good enough
+  // survived to show. Fired once per distinct resolution, not once per
+  // render — the eval harness wants one row per outcome.
+  const lastAbstainedSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (searching || !resolution || !isAbstained(resolution)) return;
+    const signature = `${prompt.trim()}::${resolution.intent}::${resolution.zone}`;
+    if (lastAbstainedSignatureRef.current === signature) return;
+    lastAbstainedSignatureRef.current = signature;
+    void sendPromptbarTelemetry({ event: "abstained", query: prompt.trim() });
+  }, [resolution, searching, prompt]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      acceptTabSuggestion: () => {
+        const candidate = resolveTabAcceptCandidate({ resolution, searching, dismissed });
+        if (!candidate) return false;
+        void sendPromptbarTelemetry({
+          event: "accepted",
+          packId: candidate.packId,
+          query: prompt.trim(),
+        });
+        onUsePack(withPackMention(prompt, candidateToSuggestablePack(candidate, suggestable)));
+        return true;
+      },
+    }),
+    [resolution, searching, dismissed, prompt, onUsePack, suggestable],
+  );
+
   if (!enabled) {
     return null;
   }
@@ -114,6 +207,14 @@ export function PackSuggestionBar({
           : suggestions.length === 1
             ? "There's a pack for this"
             : "Packs for this"}
+        {showTabHint ? (
+          <span
+            className="italic text-muted-foreground/80"
+            data-testid="pack-suggestion-tab-hint"
+          >
+            — Tab to accept
+          </span>
+        ) : null}
       </span>
 
       {searching ? (
@@ -135,10 +236,21 @@ export function PackSuggestionBar({
           <Button
             size="xs"
             variant="outline"
+            className={showTabHint ? "border-dashed opacity-70" : undefined}
             data-testid="pack-suggestion-use"
             data-pack={suggestion.pack.name}
+            data-zone={searching ? undefined : (zoneDecision?.zone ?? undefined)}
             title={suggestion.pack.summary}
-            onClick={() => onUsePack(withPackMention(prompt, suggestion.pack))}
+            onClick={() => {
+              if (!searching) {
+                void sendPromptbarTelemetry({
+                  event: "accepted",
+                  packId: suggestion.pack.id,
+                  query: prompt.trim(),
+                });
+              }
+              onUsePack(withPackMention(prompt, suggestion.pack));
+            }}
           >
             {suggestion.pack.name}
           </Button>
@@ -191,6 +303,14 @@ export function PackSuggestionBar({
           aria-label="Hide these suggestions"
           data-testid="pack-suggestion-dismiss"
           onClick={() => {
+            if (!searching && zoneDecision) {
+              const topPackId = zoneDecision.candidates[0]?.packId;
+              void sendPromptbarTelemetry({
+                event: "dismissed",
+                ...(topPackId !== undefined ? { packId: topPackId } : {}),
+                query: prompt.trim(),
+              });
+            }
             setQuery(null);
             setSettingsOpen(false);
             setDismissedFor(prompt.trim());
@@ -228,4 +348,4 @@ export function PackSuggestionBar({
       ) : null}
     </div>
   );
-}
+});

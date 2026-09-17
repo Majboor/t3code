@@ -63,7 +63,7 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { PackQuickView } from "../packSuggestions/PackQuickView";
-import { PackSuggestionBar } from "../packSuggestions/PackSuggestionBar";
+import { PackSuggestionBar, type PackSuggestionBarHandle } from "../packSuggestions/PackSuggestionBar";
 import { usePackSuggestionSettings } from "../packSuggestions/usePackSuggestionSettings";
 import { useWorkspacePacks } from "../packSuggestions/useWorkspacePacks";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./ProviderModelPicker";
@@ -686,6 +686,12 @@ export const ChatComposer = memo(
     const workspacePacks = useWorkspacePacks(environmentId, packTenantId, packWorkspaceId);
     const { settings: packSettings, update: updatePackSettings } = usePackSuggestionSettings();
     const [quickViewPack, setQuickViewPack] = useState<{ id: string; name: string } | null>(null);
+    const packSuggestionBarRef = useRef<PackSuggestionBarHandle>(null);
+    // No thread yet (a fresh draft) or a thread that has never sent a turn both
+    // count as "first message" — `activeThread.messages.length` is the same
+    // signal `ChatView.tsx`'s `envLocked` already uses to mean "this thread has
+    // history now".
+    const isFirstMessageInSession = !activeThread || activeThread.messages.length === 0;
     const composerFormRef = useRef<HTMLFormElement>(null);
     const composerFormHeightRef = useRef(0);
     const composerSelectLockRef = useRef(false);
@@ -1534,6 +1540,12 @@ export const ChatComposer = memo(
           return true;
         }
       }
+      // A `suggest`-zone pack chip claims a bare Tab before falling through —
+      // the composer's own `@`/`/` menu above already took its Tab if one was
+      // open, so this only ever fires when neither menu wants it.
+      if (key === "Tab" && !event.shiftKey && packSuggestionBarRef.current?.acceptTabSuggestion()) {
+        return true;
+      }
       if (key === "Enter" && !event.shiftKey) {
         void onSend();
         return true;
@@ -1936,10 +1948,12 @@ export const ChatComposer = memo(
               ) : null}
 
               <PackSuggestionBar
+                ref={packSuggestionBarRef}
                 prompt={prompt}
                 packs={workspacePacks}
                 enabled={packSettings.enabled}
                 layout={packSettings.layout}
+                isFirstMessageInSession={isFirstMessageInSession}
                 onChangeSettings={updatePackSettings}
                 onUsePack={(nextPrompt) => {
                   // Cursor to the end: the mention is appended, so that is

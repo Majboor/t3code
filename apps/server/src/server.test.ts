@@ -115,6 +115,7 @@ import {
   ActivityNoteRepositoryLive,
   SharedPromptRepositoryLive,
 } from "./persistence/Layers/ActivityNotes.ts";
+import { PromptbarTelemetryRepositoryLive } from "./persistence/Layers/PromptbarTelemetry.ts";
 import { PackRegistryServiceLive } from "./packs/Layers/PackRegistryService.ts";
 import { PackRepositoryLive } from "./packs/Layers/PackRepository.ts";
 import { DeployRepositoryLive } from "./persistence/Layers/DeployTargets.ts";
@@ -444,6 +445,12 @@ const deployTestLayer = DeployServiceLive.pipe(
 
 const analyticsTestLayer = AnalyticsStoreLive.pipe(
   Layer.provide(AnalyticsRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+);
+
+// The write side of the promptbar eval loop. The telemetry route talks to
+// this repository directly, same as the device-enrollment routes do above.
+const promptbarTelemetryRepositoryTestLayer = PromptbarTelemetryRepositoryLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
 );
 
 /**
@@ -863,7 +870,13 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(analyticsTestLayer),
       // Merged rather than piped: `pipe` takes twenty arguments and this chain
       // is at the limit, so anything new joins an existing entry.
-      Layer.provideMerge(Layer.mergeAll(deploymentRegistryTestLayer, serviceRegistryTestLayer)),
+      Layer.provideMerge(
+        Layer.mergeAll(
+          deploymentRegistryTestLayer,
+          serviceRegistryTestLayer,
+          promptbarTelemetryRepositoryTestLayer,
+        ),
+      ),
       Layer.provideMerge(packEnablementTestLayer),
       Layer.provideMerge(
         Layer.mergeAll(
