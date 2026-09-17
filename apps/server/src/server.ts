@@ -112,6 +112,7 @@ import {
   authClientsRevokeRouteLayer,
   authClientsRouteLayer,
   authOnboardingRouteLayer,
+  completeOnboardingRouteLayer,
   authPasswordRouteLayer,
   authPairingLinksRevokeRouteLayer,
   authPairingLinksRouteLayer,
@@ -125,6 +126,8 @@ import {
   authSessionRouteLayer,
   authSessionSignOutRouteLayer,
   authWebSocketTokenRouteLayer,
+  updateUserPreferencesRouteLayer,
+  userPreferencesRouteLayer,
 } from "./auth/http.ts";
 import { authQuickLoginRouteLayer } from "./auth/quickLogin.ts";
 import {
@@ -614,8 +617,11 @@ export const makeRoutesLayer = Layer.mergeAll(
   authClientsRevokeRouteLayer,
   authClientsRouteLayer,
   authOnboardingRouteLayer,
+  completeOnboardingRouteLayer,
   authPasswordRouteLayer,
   authQuickLoginRouteLayer,
+  updateUserPreferencesRouteLayer,
+  userPreferencesRouteLayer,
   authPairingLinksRevokeRouteLayer,
   authPairingLinksRouteLayer,
   authPairingCredentialRouteLayer,

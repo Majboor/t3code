@@ -11,7 +11,9 @@ import {
   CompleteOnboardingInput,
   UpdateUserPreferencesInput,
   type AuthWebSocketTokenResult,
+  CompleteOnboardingInput,
   type ServerAuthPolicy,
+  UpdateUserPreferencesInput,
 } from "@t3tools/contracts";
 import { DateTime, Effect, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -321,9 +323,14 @@ export const authOnboardingRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authPreferencesRouteLayer = HttpRouter.add(
+/**
+ * The one-time product-personalization questionnaire (role/experience/focus)
+ * shown once after signup — distinct from `authOnboardingRouteLayer` above,
+ * which tracks workspace/invite setup, not product personalization.
+ */
+export const userPreferencesRouteLayer = HttpRouter.add(
   "GET",
-  "/api/auth/preferences",
+  "/api/user-preferences",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const serverAuth = yield* ServerAuth;
@@ -332,20 +339,16 @@ export const authPreferencesRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authPreferencesUpdateRouteLayer = HttpRouter.add(
-  "PATCH",
-  "/api/auth/preferences",
+export const updateUserPreferencesRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/user-preferences",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const serverAuth = yield* ServerAuth;
     const payload = yield* HttpServerRequest.schemaBodyJson(UpdateUserPreferencesInput).pipe(
       Effect.mapError(
         (cause) =>
-          new AuthError({
-            message: "Invalid account preferences update.",
-            status: 400,
-            cause,
-          }),
+          new AuthError({ message: "Invalid preferences payload.", status: 400, cause }),
       ),
     );
     const preferences = yield* serverAuth.updateUserPreferences(request, payload);
@@ -353,20 +356,15 @@ export const authPreferencesUpdateRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
-export const authCompleteOnboardingRouteLayer = HttpRouter.add(
+export const completeOnboardingRouteLayer = HttpRouter.add(
   "POST",
-  "/api/auth/preferences/onboarding",
+  "/api/onboarding/complete",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const serverAuth = yield* ServerAuth;
     const payload = yield* HttpServerRequest.schemaBodyJson(CompleteOnboardingInput).pipe(
       Effect.mapError(
-        (cause) =>
-          new AuthError({
-            message: "Invalid onboarding answers.",
-            status: 400,
-            cause,
-          }),
+        (cause) => new AuthError({ message: "Invalid onboarding payload.", status: 400, cause }),
       ),
     );
     const preferences = yield* serverAuth.completeOnboarding(request, payload);

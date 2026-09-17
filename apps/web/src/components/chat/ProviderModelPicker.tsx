@@ -24,6 +24,7 @@ import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Ico
 import { cn } from "~/lib/utils";
 import { getProviderSnapshot } from "../../providerModels";
 import { useProviderConnections } from "../../hooks/useProviderConnections";
+import { useUserPreferences } from "../../hooks/useUserPreferences";
 import { GlmEffortSlider } from "./GlmEffortSlider";
 
 const ACCOUNT_PROVIDER_NAME_OF: Partial<Record<ProviderKind, "codex" | "claude">> = {
@@ -75,6 +76,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const connections = useProviderConnections(isMenuOpen && props.lockedProvider === null);
+  const { preferences } = useUserPreferences();
+  const vibeModeEnabled = preferences?.vibeModeEnabled ?? false;
   const activeProvider = props.lockedProvider ?? props.provider;
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
@@ -101,6 +104,16 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 
   function renderModelChoices(provider: ProviderKind, currentModel: string) {
     if (provider === "glm") {
+      // Vibe mode's only effect: no model choice to make, ever - it always
+      // uses the default. This must never hide status/rate-limit info
+      // elsewhere, only this picker.
+      if (vibeModeEnabled) {
+        return (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            Using the best available model automatically.
+          </div>
+        );
+      }
       return (
         <GlmEffortSlider
           model={currentModel}
