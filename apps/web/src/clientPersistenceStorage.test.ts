@@ -1,4 +1,8 @@
-import { EnvironmentId, type PersistedSavedEnvironmentRecord } from "@t3tools/contracts";
+import {
+  DEFAULT_CLIENT_SETTINGS,
+  EnvironmentId,
+  type PersistedSavedEnvironmentRecord,
+} from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const testEnvironmentId = EnvironmentId.make("environment-1");
@@ -102,5 +106,34 @@ describe("clientPersistenceStorage", () => {
     expect(readBrowserSavedEnvironmentRegistry()).toEqual([relayedRecord]);
     writeBrowserSavedEnvironmentRegistry([relayedRecord]);
     expect(readBrowserSavedEnvironmentRegistry()).toEqual([relayedRecord]);
+  });
+
+  it("survives a fresh 'page just loaded' read after hasSeenProductTour is set to true", async () => {
+    // Root-causing the "product tour reappears on refresh" report: this is
+    // the actual write-then-read round trip through real localStorage and
+    // the real ClientSettingsSchema codec (not a mock of either), simulating
+    // a reload by re-importing the module between the write and the read.
+    // If flipped, this would prove a persistence/schema gap; it doesn't —
+    // the field round-trips correctly, so the real bug is elsewhere (see
+    // productTourAutoStart.logic.test.ts for the actual root cause: an
+    // effect that raced ahead of async settings hydration).
+    getTestWindow();
+    const { writeBrowserClientSettings } = await import("./clientPersistenceStorage");
+
+    writeBrowserClientSettings({ ...DEFAULT_CLIENT_SETTINGS, hasSeenProductTour: true });
+
+    vi.resetModules();
+    const { readBrowserClientSettings: readAfterReload } = await import(
+      "./clientPersistenceStorage"
+    );
+
+    expect(readAfterReload()).toEqual({ ...DEFAULT_CLIENT_SETTINGS, hasSeenProductTour: true });
+  });
+
+  it("defaults hasSeenProductTour to false when nothing has been persisted yet", async () => {
+    getTestWindow();
+    const { readBrowserClientSettings } = await import("./clientPersistenceStorage");
+
+    expect(readBrowserClientSettings()).toBeNull();
   });
 });
