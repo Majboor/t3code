@@ -1,3 +1,6 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { DateTime, Effect, Layer, Option } from "effect";
 
 import {
@@ -16,6 +19,72 @@ import { DeployRepository } from "../../persistence/Services/DeployTargets.ts";
 import { runProcess } from "../../processRunner.ts";
 import { DeploymentRegistry } from "../Services/DeploymentRegistry.ts";
 import { DeployService, type DeployServiceShape } from "../Services/DeployService.ts";
+
+/**
+ * The file a `cloudflare-tunnel` target's command is expected to redirect
+ * `cloudflared`'s stdout/stderr into, so its quick-tunnel URL can be read back
+ * after the command itself exits (per this platform's existing convention —
+ * shared with `ssh`/`command` targets — that the command backgrounds the
+ * service and returns quickly, it does not stay attached). Injected as an env
+ * var rather than hardcoded so a target's command can build the exact
+ * `cloudflared tunnel --url http://127.0.0.1:$PORT >> "$T3_TUNNEL_LOG_PATH" 2>&1 &`
+ * invocation without guessing the path.
+ */
+export const TUNNEL_LOG_ENV_VAR = "T3_TUNNEL_LOG_PATH";
+// KNOWN OPEN ISSUE, not yet fixed here: a `cloudflare-tunnel` command that
+// backgrounds cloudflared with `(nohup cloudflared ... </dev/null >>"$T3_TUNNEL_LOG_PATH"
+// 2>&1 &)` still does not make `run()` return quickly when cloudflared itself
+// is slow to fail — measured at 2m21s wall-clock for a run whose foreground
+// script (`echo started`) finishes in ~1s. Cause, confirmed by reading
+// processRunner.ts: `runProcess` uses `spawn(..., { stdio: "pipe" })` and
+// resolves on the child's `close` event, which Node only fires once every fd
+// referencing those pipes is closed. A background job started with plain `&`
+// inside a non-interactive `sh -c` stays in the same process group/session as
+// that `sh`, even with full `</dev/null >>file 2>&1` redirection — `nohup`
+// only ignores SIGHUP, it does not start a new session. So `close` wound up
+// waiting on cloudflared's own lifetime (here, its ~2 minute internal
+// deadline for a failed quick-tunnel request), not on the launcher script
+// finishing. `command`/`ssh` targets that background a fast, well-behaved
+// service rarely hit this because the parent shell still exits almost
+// immediately and nothing else holds the pipe open — cloudflared specifically
+// keeps running (and keeps the fd) until it gives up. Current advice for a
+// `cloudflare-tunnel` command: wrap the background invocation in `setsid`
+// (e.g. `setsid cloudflared tunnel --url http://127.0.0.1:$PORT </dev/null
+// >>"$T3_TUNNEL_LOG_PATH" 2>&1 &`), which puts it in a new session and should
+// detach it from `run()`'s wait — not yet re-verified end-to-end after this
+// change, flagging rather than claiming fixed.
+const TUNNEL_LOG_FILE_NAME = ".t3-tunnel.log";
+// Excludes `api.trycloudflare.com` deliberately: that is cloudflared's own
+// control-plane host, and it appears verbatim in a real failure line
+// ('failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel"')
+// — a real tunnel's subdomain is always a random word sequence, never
+// literally `api`. Found by testing, not by inspection: a stale failed-attempt
+// line from a PREVIOUS run, still sitting in the append-mode log file, matched
+// a naive pattern and got registered as the deployment's URL while the real
+// tunnel (created seconds later, same run) was ignored. Truncating the log
+// before each run (below) closes the same hole from the other side.
+const TRYCLOUDFLARE_URL_PATTERN = /https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/;
+
+/**
+ * `cloudflared` needs a moment after starting to register the tunnel with
+ * Cloudflare's edge and print its URL — polling beats a single read, which
+ * would race a tunnel that backgrounded a heartbeat behind it.
+ */
+async function readTunnelUrl(logPath: string): Promise<string | null> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      const contents = await readFile(logPath, "utf8");
+      const match = TRYCLOUDFLARE_URL_PATTERN.exec(contents);
+      if (match) return match[0];
+    } catch {
+      // Not written yet, or the command never started a tunnel — either way,
+      // keep polling until the budget below runs out rather than fail the
+      // whole deploy over a log file that just hasn't appeared yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return null;
+}
 
 const DEPLOY_TIMEOUT_MS = 10 * 60_000;
 const MAX_OUTPUT_BYTES = 512 * 1024;
@@ -186,6 +255,18 @@ const makeDeployService = Effect.gen(function* () {
           message: "SSH deploy targets require host and user configuration.",
         });
       }
+      if (input.kind === "cloudflare-tunnel" && !input.cloudflareTunnel) {
+        return yield* new DeployError({
+          code: "invalid-target",
+          message: "cloudflare-tunnel deploy targets require a port.",
+        });
+      }
+      if (input.kind === "cloudflare-pages" && !input.cloudflarePages) {
+        return yield* new DeployError({
+          code: "invalid-target",
+          message: "cloudflare-pages deploy targets require an account id, project name and build output directory.",
+        });
+      }
       const now = yield* DateTime.now;
       const timestamp = DateTime.formatIso(DateTime.toUtc(now));
 
@@ -209,6 +290,8 @@ const makeDeployService = Effect.gen(function* () {
         kind: input.kind,
         command: input.command,
         ssh: input.ssh ?? null,
+        cloudflareTunnel: input.cloudflareTunnel ?? null,
+        cloudflarePages: input.cloudflarePages ?? null,
         createdAt: existing?.createdAt ?? timestamp,
         updatedAt: timestamp,
         archivedAt: null,
@@ -306,6 +389,17 @@ const makeDeployService = Effect.gen(function* () {
             })
           : { command: "/bin/sh", args: ["-lc", target.command] };
 
+      const tunnelLogPath =
+        target.kind === "cloudflare-tunnel" ? join(input.workspaceRoot, TUNNEL_LOG_FILE_NAME) : null;
+      // Truncated before the command runs, not just excluded-by-pattern at
+      // read time: a redeploy appends to the same path (the command's own
+      // `>>` redirect, declared in its integration prompt), so a stale
+      // success or failure line from the PREVIOUS run is otherwise still in
+      // the file when this run's tunnel starts.
+      if (tunnelLogPath !== null) {
+        yield* Effect.promise(() => writeFile(tunnelLogPath, "").catch(() => undefined));
+      }
+
       const result = yield* Effect.tryPromise({
         try: () =>
           runProcess(invocation.command, invocation.args, {
@@ -317,6 +411,7 @@ const makeDeployService = Effect.gen(function* () {
             env: {
               ...process.env,
               ...(password !== undefined ? { SSHPASS: password } : {}),
+              ...(tunnelLogPath !== null ? { [TUNNEL_LOG_ENV_VAR]: tunnelLogPath } : {}),
               // The only place this key exists outside the deployment. Nothing
               // writes it down, here or anywhere downstream.
               ...(ingestKey !== undefined
@@ -333,6 +428,12 @@ const makeDeployService = Effect.gen(function* () {
             cause,
           }),
       });
+
+      // Read after the command exits, matching the same "command backgrounds
+      // it and returns" contract ssh/command targets already rely on — the
+      // tunnel is expected to still be running, only the launcher has exited.
+      const tunnelUrl =
+        tunnelLogPath !== null && result.code === 0 ? yield* Effect.promise(() => readTunnelUrl(tunnelLogPath)) : null;
 
       const completedAtInstant = yield* DateTime.now;
       const captured = [result.stdout, result.stderr].filter((part) => part.length > 0).join("\n");
@@ -361,11 +462,19 @@ const makeDeployService = Effect.gen(function* () {
       // for numbers — left nothing recorded to attach those numbers to, so the
       // infrastructure page had nothing to show for a project that was live.
       if (completed.status === "succeeded") {
+        // `tunnelUrl` (discovered from the run itself) takes priority over a
+        // caller-supplied `analytics.url`: for a cloudflare-tunnel target the
+        // real address is only known after the tunnel actually starts, so a
+        // caller could not have supplied the right one up front even if it tried.
         yield* deploymentRegistry.register({
           projectId: target.projectId,
           targetId: target.id,
           name: deploymentName,
-          ...(input.analytics?.url !== undefined ? { url: input.analytics.url } : {}),
+          ...(tunnelUrl !== null
+            ? { url: tunnelUrl }
+            : input.analytics?.url !== undefined
+              ? { url: input.analytics.url }
+              : {}),
           status: "live",
           lastRunId: completed.id,
           // Omitted, not empty, when this run wired nothing: `register` reads an

@@ -29,7 +29,7 @@ export type DeployTargetId = typeof DeployTargetId.Type;
 export const DeployRunId = Schema.String.pipe(Schema.brand("DeployRunId"));
 export type DeployRunId = typeof DeployRunId.Type;
 
-export const DeployTargetKind = Schema.Literals(["command", "ssh"]);
+export const DeployTargetKind = Schema.Literals(["command", "ssh", "cloudflare-tunnel", "cloudflare-pages"]);
 export type DeployTargetKind = typeof DeployTargetKind.Type;
 
 /**
@@ -46,6 +46,34 @@ export const DeploySshConfig = Schema.Struct({
 });
 export type DeploySshConfig = typeof DeploySshConfig.Type;
 
+/**
+ * `command` is expected to start the service bound to `port` and keep
+ * running — the same "start it, don't exit" contract `ssh` already expects
+ * of its command. The tunnel itself is a Cloudflare quick tunnel (anonymous,
+ * no Cloudflare account needed, same mechanism `ssh-deploy`'s `local` mode
+ * already documents) rather than a named tunnel tied to the OAuth
+ * connection, because a quick tunnel needs nothing the user has to set up
+ * first and a named tunnel's extra step (reserving a hostname, routing DNS)
+ * belongs to `cloudflare-pages`'s custom-domain path instead, not this one.
+ */
+export const DeployCloudflareTunnelConfig = Schema.Struct({
+  port: NonNegativeInt,
+});
+export type DeployCloudflareTunnelConfig = typeof DeployCloudflareTunnelConfig.Type;
+
+/**
+ * `command`, if set, is a build step run before the upload (e.g. `npm run
+ * build`) — optional because some projects have nothing to build and ship
+ * `buildOutputDir` as-is. `accountId` is the Cloudflare account the OAuth
+ * connection resolved, not asked of the user again.
+ */
+export const DeployCloudflarePagesConfig = Schema.Struct({
+  accountId: TrimmedNonEmptyString,
+  projectName: TrimmedNonEmptyString,
+  buildOutputDir: TrimmedNonEmptyString,
+});
+export type DeployCloudflarePagesConfig = typeof DeployCloudflarePagesConfig.Type;
+
 export const DeployTarget = Schema.Struct({
   id: DeployTargetId,
   projectId: ProjectId,
@@ -54,6 +82,8 @@ export const DeployTarget = Schema.Struct({
   kind: DeployTargetKind,
   command: TrimmedNonEmptyString,
   ssh: Schema.NullOr(DeploySshConfig),
+  cloudflareTunnel: Schema.NullOr(DeployCloudflareTunnelConfig),
+  cloudflarePages: Schema.NullOr(DeployCloudflarePagesConfig),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime),
@@ -123,6 +153,8 @@ export const DeployCreateTargetInput = Schema.Struct({
   kind: DeployTargetKind,
   command: TrimmedNonEmptyString,
   ssh: Schema.optional(DeploySshConfig),
+  cloudflareTunnel: Schema.optional(DeployCloudflareTunnelConfig),
+  cloudflarePages: Schema.optional(DeployCloudflarePagesConfig),
 });
 export type DeployCreateTargetInput = typeof DeployCreateTargetInput.Type;
 

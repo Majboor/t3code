@@ -1515,6 +1515,27 @@ const deployAddCommand = Command.make("add", {
     Flag.withDescription("Path to an SSH private key."),
     Flag.optional,
   ),
+  tunnelPort: Flag.integer("tunnel-port").pipe(
+    Flag.withDescription(
+      "Expose the command's service on this port via a Cloudflare quick tunnel. The command " +
+        "must start the service AND a `cloudflared tunnel --url http://127.0.0.1:$PORT` " +
+        "redirected to `$T3_TUNNEL_LOG_PATH`, then return — same 'start it in the background " +
+        "and exit' contract every deploy target already expects.",
+    ),
+    Flag.optional,
+  ),
+  pagesAccountId: Flag.string("pages-account-id").pipe(
+    Flag.withDescription("Cloudflare account id (with --pages-project) to deploy a Pages site."),
+    Flag.optional,
+  ),
+  pagesProject: Flag.string("pages-project").pipe(
+    Flag.withDescription("Cloudflare Pages project name."),
+    Flag.optional,
+  ),
+  pagesBuildDir: Flag.string("pages-build-dir").pipe(
+    Flag.withDescription("Directory (relative to the workspace) to upload — usually your build output."),
+    Flag.optional,
+  ),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Add a deploy target."),
@@ -1531,6 +1552,15 @@ const deployAddCommand = Command.make("add", {
         const remotePath = Option.getOrUndefined(flags.sshPath);
         const passwordSecretName = Option.getOrUndefined(flags.sshPasswordSecret);
         const identityFile = Option.getOrUndefined(flags.sshIdentityFile);
+        const tunnelPort = Option.getOrUndefined(flags.tunnelPort);
+        const pagesAccountId = Option.getOrUndefined(flags.pagesAccountId);
+        const pagesProject = Option.getOrUndefined(flags.pagesProject);
+        const pagesBuildDir = Option.getOrUndefined(flags.pagesBuildDir);
+        if ((pagesAccountId !== undefined) !== (pagesProject !== undefined) || (pagesAccountId !== undefined) !== (pagesBuildDir !== undefined)) {
+          return yield* Effect.fail(
+            new Error("--pages-account-id, --pages-project and --pages-build-dir must all be given together."),
+          );
+        }
         const projectId = ProjectId.make(flags.project);
 
         // Read before writing purely so the output can say "updated" rather
@@ -1542,12 +1572,21 @@ const deployAddCommand = Command.make("add", {
           .pipe(Effect.mapError((error) => new Error(error.message)));
         const reused = siblings.some((candidate) => candidate.name === flags.name);
 
+        const kind =
+          pagesAccountId !== undefined
+            ? ("cloudflare-pages" as const)
+            : tunnelPort !== undefined
+              ? ("cloudflare-tunnel" as const)
+              : host !== undefined
+                ? ("ssh" as const)
+                : ("command" as const);
+
         const target = yield* deploy
           .createTarget({
             projectId,
             name: flags.name,
             command: flags.command,
-            kind: host !== undefined ? "ssh" : "command",
+            kind,
             ...(host !== undefined && user !== undefined
               ? {
                   ssh: {
@@ -1556,6 +1595,16 @@ const deployAddCommand = Command.make("add", {
                     ...(remotePath !== undefined ? { remotePath } : {}),
                     ...(passwordSecretName !== undefined ? { passwordSecretName } : {}),
                     ...(identityFile !== undefined ? { identityFile } : {}),
+                  },
+                }
+              : {}),
+            ...(tunnelPort !== undefined ? { cloudflareTunnel: { port: tunnelPort } } : {}),
+            ...(pagesAccountId !== undefined && pagesProject !== undefined && pagesBuildDir !== undefined
+              ? {
+                  cloudflarePages: {
+                    accountId: pagesAccountId,
+                    projectName: pagesProject,
+                    buildOutputDir: pagesBuildDir,
                   },
                 }
               : {}),

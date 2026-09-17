@@ -79,6 +79,7 @@ import Migration0063 from "./Migrations/063_EnvironmentServiceRegistry.ts";
 import Migration0064 from "./Migrations/064_BoxCommandJournal.ts";
 import Migration0065 from "./Migrations/065_GatewayAccounts.ts";
 import Migration0067 from "./Migrations/067_ExternalConnections.ts";
+import Migration0068 from "./Migrations/068_DeployTargetsCloudflare.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -157,6 +158,7 @@ export const migrationEntries = [
   [64, "BoxCommandJournal", Migration0064],
   [65, "GatewayAccounts", Migration0065],
   [67, "ExternalConnections", Migration0067],
+  [68, "DeployTargetsCloudflare", Migration0068],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
