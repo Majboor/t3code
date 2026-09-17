@@ -27,6 +27,8 @@ export const UserPreferencesRecord = Schema.Struct({
   orgSettingsVisible: Schema.Boolean,
   vibeModeEnabled: Schema.Boolean,
   apiUsageTabVisible: Schema.Boolean,
+  /** Gates whether a new note/DM shows an interrupting toast at all; either way it still lands in the normal activity/inbox view. */
+  notificationPopupsEnabled: Schema.Boolean,
   updatedAt: Schema.DateTimeUtcFromString,
 });
 export type UserPreferencesRecord = typeof UserPreferencesRecord.Type;

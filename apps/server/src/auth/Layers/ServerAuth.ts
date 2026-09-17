@@ -719,6 +719,9 @@ export const makeServerAuth = Effect.gen(function* () {
             onboardingExperience: input.experience,
             onboardingFocus: input.focus,
             ...defaults,
+            // Not one of onboarding's own three defaults -- nothing asked at
+            // signup decides this, it just starts on.
+            notificationPopupsEnabled: true,
             updatedAt: DateTime.toUtc(updatedAt),
           };
           yield* userPreferences.upsert(record);
@@ -752,6 +755,8 @@ export const makeServerAuth = Effect.gen(function* () {
             orgSettingsVisible: input.orgSettingsVisible ?? current?.orgSettingsVisible ?? false,
             vibeModeEnabled: input.vibeModeEnabled ?? current?.vibeModeEnabled ?? false,
             apiUsageTabVisible: input.apiUsageTabVisible ?? current?.apiUsageTabVisible ?? true,
+            notificationPopupsEnabled:
+              input.notificationPopupsEnabled ?? current?.notificationPopupsEnabled ?? true,
             updatedAt: DateTime.toUtc(updatedAt),
           };
           yield* userPreferences.upsert(record);
@@ -1251,6 +1256,7 @@ function toUserPreferences(record?: {
   readonly orgSettingsVisible: boolean;
   readonly vibeModeEnabled: boolean;
   readonly apiUsageTabVisible: boolean;
+  readonly notificationPopupsEnabled: boolean;
 }): UserPreferences {
   return {
     onboardingCompleted: record?.onboardingCompletedAt != null,
@@ -1260,6 +1266,7 @@ function toUserPreferences(record?: {
     orgSettingsVisible: record?.orgSettingsVisible ?? false,
     vibeModeEnabled: record?.vibeModeEnabled ?? false,
     apiUsageTabVisible: record?.apiUsageTabVisible ?? true,
+    notificationPopupsEnabled: record?.notificationPopupsEnabled ?? true,
   };
 }
 

@@ -529,6 +529,8 @@ export const UserPreferences = Schema.Struct({
   orgSettingsVisible: Schema.Boolean,
   vibeModeEnabled: Schema.Boolean,
   apiUsageTabVisible: Schema.Boolean,
+  /** Gates whether a new note/DM shows an interrupting toast; either way it still lands in the normal activity/inbox view. */
+  notificationPopupsEnabled: Schema.Boolean,
 });
 export type UserPreferences = typeof UserPreferences.Type;
 
@@ -554,5 +556,6 @@ export const UpdateUserPreferencesInput = Schema.Struct({
   orgSettingsVisible: Schema.optional(Schema.Boolean),
   vibeModeEnabled: Schema.optional(Schema.Boolean),
   apiUsageTabVisible: Schema.optional(Schema.Boolean),
+  notificationPopupsEnabled: Schema.optional(Schema.Boolean),
 });
 export type UpdateUserPreferencesInput = typeof UpdateUserPreferencesInput.Type;
