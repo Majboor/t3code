@@ -21,6 +21,7 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/Utils.ts";
+import { closeAbandonedTurn, interruptAbandonedTurn } from "../abandonedTurnClosure.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderRuntimeIngestionService,
@@ -883,6 +884,12 @@ const make = Effect.fn("make")(function* () {
     const now = event.createdAt;
     const eventTurnId = toTurnId(event.turnId);
     const activeTurnId = thread.session?.activeTurnId ?? null;
+    // Captured *before* this event's session-set is dispatched below: the
+    // turn that was running on this session prior to whatever transition
+    // `event` is about to cause. Used to detect a session leaving "running"
+    // while a turn was still in flight (see abandonedTurnClosure.ts).
+    const abandonedTurnIdIfSessionEnds: TurnId | null =
+      thread.session?.status === "running" && activeTurnId !== null ? activeTurnId : null;
 
     const conflictsWithActiveTurn =
       activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
@@ -993,6 +1000,27 @@ const make = Effect.fn("make")(function* () {
           },
           createdAt: now,
         });
+
+        // The session just left "running" (crash/exit, an interruption, or
+        // any other non-running state report) while a turn was still active
+        // on it. `turn.completed` is excluded: it closes the turn itself via
+        // finalizeAssistantMessage/thread.message-sent below, and dispatching
+        // an interrupt on top of that would incorrectly flip an already-
+        // completed turn back to "interrupted". Also skipped if this event
+        // names a *different* turn than the one that was active, so a
+        // mistagged event can never close out an unrelated turn.
+        if (
+          abandonedTurnIdIfSessionEnds !== null &&
+          status !== "running" &&
+          event.type !== "turn.completed" &&
+          (eventTurnId === undefined || sameId(abandonedTurnIdIfSessionEnds, eventTurnId))
+        ) {
+          yield* closeAbandonedTurn(orchestrationEngine, {
+            threadId: thread.id,
+            turnId: abandonedTurnIdIfSessionEnds,
+            nowIso: now,
+          });
+        }
       }
     }
 
@@ -1163,6 +1191,31 @@ const make = Effect.fn("make")(function* () {
           },
           createdAt: now,
         });
+
+        // Session status just moved to "error" (not "running"), so the
+        // turns projector's thread.session-set handling won't touch
+        // projection_turns for it (see abandonedTurnClosure.ts). The
+        // runtime.error activity itself is already appended below via
+        // runtimeEventToActivities with the real provider error message, so
+        // only the turn-interrupt half is needed here -- appending another
+        // activity would duplicate that error in the thread's timeline.
+        //
+        // Only ever the turn that was genuinely the active/running one
+        // before this event (never some other turnId the event happens to
+        // carry) -- otherwise an error tagged with a stale/unrelated turnId
+        // could incorrectly flip an already-completed turn to "interrupted".
+        const erroredTurnId =
+          abandonedTurnIdIfSessionEnds !== null &&
+          (eventTurnId === undefined || sameId(abandonedTurnIdIfSessionEnds, eventTurnId))
+            ? abandonedTurnIdIfSessionEnds
+            : null;
+        if (erroredTurnId !== null) {
+          yield* interruptAbandonedTurn(orchestrationEngine, {
+            threadId: thread.id,
+            turnId: erroredTurnId,
+            nowIso: now,
+          });
+        }
       }
     }
 

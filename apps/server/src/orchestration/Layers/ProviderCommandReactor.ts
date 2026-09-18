@@ -40,6 +40,7 @@ import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { TenancyRepository } from "../../persistence/Services/Tenancy.ts";
+import { closeAbandonedTurn } from "../abandonedTurnClosure.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderCommandReactor,
@@ -1098,6 +1099,16 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
+    // Captured before the session is stopped below: an explicit stop
+    // request (user disconnect / API stop) ends the session unconditionally,
+    // regardless of whether a turn was still `running` on it. Without this,
+    // that turn's `projection_turns` row is left `running` forever -- the
+    // session-set dispatched below moves status to "stopped", and the turns
+    // projector only ever touches a turn's row on a `"running"` status (see
+    // abandonedTurnClosure.ts).
+    const abandonedTurnId =
+      thread.session?.status === "running" ? thread.session.activeTurnId : null;
+
     if (thread.session && thread.session.status !== "stopped") {
       yield* providerService.stopSession({ threadId: thread.id });
     }
@@ -1115,6 +1126,14 @@ const make = Effect.gen(function* () {
       },
       createdAt: now,
     });
+
+    if (abandonedTurnId !== null) {
+      yield* closeAbandonedTurn(orchestrationEngine, {
+        threadId: thread.id,
+        turnId: abandonedTurnId,
+        nowIso: now,
+      });
+    }
   });
 
   /**
