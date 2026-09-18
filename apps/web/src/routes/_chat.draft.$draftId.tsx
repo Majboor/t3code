@@ -1,8 +1,8 @@
 import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, useCallback, useEffect, useMemo } from "react";
 import ChatView from "../components/ChatView";
-import { threadHasStarted } from "../components/ChatView.logic";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
+import { resolveCanonicalThreadRef } from "../draftThreadPromotion.logic";
 import { SidebarInset } from "../components/ui/sidebar";
 import { createThreadSelectorAcrossEnvironments } from "../storeSelectors";
 import { type AppState, selectEnvironmentState, useStore } from "../store";
@@ -75,20 +75,9 @@ function DraftChatThreadRouteView() {
       [draftSession?.threadId],
     ),
   );
-  const serverThreadStarted = threadHasStarted(serverThread);
   const canonicalThreadRef = useMemo(
-    () =>
-      draftSession?.promotedTo
-        ? serverThreadStarted
-          ? draftSession.promotedTo
-          : null
-        : serverThread
-          ? {
-              environmentId: serverThread.environmentId,
-              threadId: serverThread.id,
-            }
-          : null,
-    [draftSession?.promotedTo, serverThread, serverThreadStarted],
+    () => resolveCanonicalThreadRef({ promotedTo: draftSession?.promotedTo, serverThread }),
+    [draftSession?.promotedTo, serverThread],
   );
 
   useEffect(() => {

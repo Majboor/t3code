@@ -26,6 +26,7 @@ import { readLocalApi } from "../localApi";
 import { useSettings } from "../hooks/useSettings";
 import { useProductTourStore } from "../productTourStore";
 import { ProductTourOverlay } from "../components/ProductTourOverlay";
+import { scheduleProductTourAutoStart } from "../productTourAutoStart.logic";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKeyFromPath,
@@ -150,21 +151,34 @@ function ProductTourAutoStart() {
   const startTour = useProductTourStore((state) => state.start);
   const tourActive = useProductTourStore((state) => state.active);
 
-  useEffect(() => {
-    if (hasSeenProductTour || tourActive) {
-      return;
-    }
-    // A brief delay so the shell has actually finished mounting (sidebar,
-    // header) before the first spotlight tries to anchor on it.
-    const timeoutId = window.setTimeout(() => {
-      startTour();
-    }, 1_200);
-    return () => window.clearTimeout(timeoutId);
+  // Client settings (including `hasSeenProductTour`) hydrate from
+  // localStorage asynchronously — `useSettings` reports `false` on the very
+  // first render regardless of what was persisted, since the read hasn't
+  // resolved yet. Reading through `useEffectEvent` means the scheduler below
+  // sees whatever value hydration has settled on by the time its timer
+  // actually fires, instead of the stale `false` captured when the effect
+  // was set up.
+  const getHasSeenProductTour = useEffectEvent(() => hasSeenProductTour);
+  const getTourActive = useEffectEvent(() => tourActive);
+  const runStartTour = useEffectEvent(() => startTour());
+
+  useEffect(
+    () =>
+      // A brief delay so the shell has actually finished mounting (sidebar,
+      // header) before the first spotlight tries to anchor on it.
+      scheduleProductTourAutoStart({
+        getHasSeenProductTour,
+        getTourActive,
+        startTour: runStartTour,
+        setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clearTimeout: (id) => window.clearTimeout(id),
+      }),
     // Deliberately runs once per mount: re-firing on every settings change
     // would restart the tour mid-tour once `hasSeenProductTour` flips false
-    // some other way.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // some other way. The `useEffectEvent` refs above are intentionally
+    // excluded — that's what makes them safe to omit.
+    [],
+  );
 
   return null;
 }
