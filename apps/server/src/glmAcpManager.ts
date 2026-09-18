@@ -51,6 +51,7 @@ import {
   type ProviderSession,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 
 const GLM_MODEL_ID = "z-ai/glm-5.3-flash-uncensored";
@@ -405,6 +406,28 @@ export interface GlmSessionStartInput {
   readonly opencodeBinaryPath: string;
   readonly gatewayBaseUrl: string;
   readonly apiKey: string;
+  readonly runtimeMode: RuntimeMode;
+}
+
+/**
+ * Whether a `session/request_permission` of this kind should be auto-accepted
+ * without ever surfacing a pending approval, given the thread's runtime mode.
+ * Mirrors `codexAppServerManager.ts`'s `mapCodexRuntimeMode` semantics (the
+ * same three-way `RuntimeMode` contract), adapted to GLM's shape: unlike
+ * Codex, opencode has no sandbox flag to pass at spawn time that makes it
+ * stop asking on its own — ACP's `session/request_permission` always fires,
+ * so this decision has to be made here, at the point T3 would otherwise turn
+ * that request into a pending approval the user has to click through.
+ */
+export function autoAcceptsRequestKind(runtimeMode: RuntimeMode, requestKind: ProviderRequestKind): boolean {
+  switch (runtimeMode) {
+    case "full-access":
+      return true;
+    case "auto-accept-edits":
+      return requestKind === "file-change" || requestKind === "file-read";
+    case "approval-required":
+      return false;
+  }
 }
 
 /**
@@ -791,6 +814,25 @@ export class GlmAcpManager extends EventEmitter {
     });
     app.onRequest("session/request_permission", async ({ params }) => {
       console.error(`[glm-acp] session/request_permission invoked by opencode, thread=${input.threadId}, toolCallKind=${params.toolCall.kind}`);
+      const requestKind = toolCallKindToRequestKind(params.toolCall.kind);
+      // Mirrors Codex's sandbox-driven auto-approval (`mapCodexRuntimeMode`):
+      // unlike Codex, opencode has no flag T3 can pass at spawn time that
+      // makes it stop asking on its own, so a "full-access"/"auto-accept-edits"
+      // thread has to be honored here, at the point this would otherwise
+      // become a pending approval the user has to click through. Without
+      // this, GLM always asked for every tool call regardless of the
+      // runtime mode selected in the composer - confirmed live (a
+      // "Full access" thread's write sat as a real pending approval for
+      // over 5 minutes until the turn watchdog killed the turn).
+      if (autoAcceptsRequestKind(ctx.session.runtimeMode, requestKind)) {
+        const optionId = decisionToOptionId("acceptForSession", params.options);
+        if (optionId) {
+          return { outcome: { outcome: "selected", optionId } };
+        }
+        // No matching "allow" option was offered for this request - fall
+        // through to asking rather than silently doing nothing, since that
+        // would leave the agent's request unanswered either way.
+      }
       const requestId = ApprovalRequestId.make(randomUUID());
       const outcome = await new Promise<{ kind: "selected"; optionId: string } | { kind: "cancelled" }>((resolve) => {
         pendingApprovals.set(requestId, { requestId, options: params.options, resolve });
@@ -952,7 +994,7 @@ export class GlmAcpManager extends EventEmitter {
     const session: ProviderSession = {
       provider: "glm",
       status: "ready",
-      runtimeMode: "full-access",
+      runtimeMode: input.runtimeMode,
       cwd: input.cwd,
       // Bare model id (matches `ModelSelection.model`/`BUILT_IN_MODELS` slugs
       // used everywhere else in this codebase) — NOT the ACP/opencode

@@ -8,6 +8,7 @@ import { it } from "@effect/vitest";
 import { RequestError, type CreateElicitationRequest, type ElicitationSchema } from "@agentclientprotocol/sdk";
 
 import {
+  autoAcceptsRequestKind,
   buildElicitationAcceptResponse,
   GlmTerminalRegistry,
   mapElicitationFormSchema,
@@ -15,6 +16,33 @@ import {
   readSessionTextFile,
   writeSessionTextFile,
 } from "./glmAcpManager.ts";
+
+/**
+ * Regression test for a real live bug: GLM's `runtimeMode` used to be
+ * hardcoded to `"full-access"` as a cosmetic session-metadata label, never
+ * actually threaded into the `session/request_permission` handler - so a
+ * thread genuinely running in "Full access" mode still asked for approval on
+ * every write, exactly like "Approval required" would. Confirmed live: a
+ * write sat as a real pending approval for over 5 minutes until the turn
+ * watchdog killed the turn, even though the composer showed "Full access".
+ */
+it("autoAcceptsRequestKind: full-access auto-accepts every request kind", () => {
+  assert.equal(autoAcceptsRequestKind("full-access", "command"), true);
+  assert.equal(autoAcceptsRequestKind("full-access", "file-change"), true);
+  assert.equal(autoAcceptsRequestKind("full-access", "file-read"), true);
+});
+
+it("autoAcceptsRequestKind: auto-accept-edits only auto-accepts file kinds, still asks for commands", () => {
+  assert.equal(autoAcceptsRequestKind("auto-accept-edits", "file-change"), true);
+  assert.equal(autoAcceptsRequestKind("auto-accept-edits", "file-read"), true);
+  assert.equal(autoAcceptsRequestKind("auto-accept-edits", "command"), false);
+});
+
+it("autoAcceptsRequestKind: approval-required never auto-accepts anything", () => {
+  assert.equal(autoAcceptsRequestKind("approval-required", "command"), false);
+  assert.equal(autoAcceptsRequestKind("approval-required", "file-change"), false);
+  assert.equal(autoAcceptsRequestKind("approval-required", "file-read"), false);
+});
 
 /**
  * Covers the containment check backing this file's `fs/read_text_file` /

@@ -395,6 +395,7 @@ const makeGlmAdapter = Effect.fn("makeGlmAdapter")(function* () {
           opencodeBinaryPath: OPENCODE_BINARY,
           gatewayBaseUrl,
           apiKey: apiKeyOption.value,
+          runtimeMode: input.runtimeMode,
         }),
       catch: (cause) =>
         new ProviderAdapterProcessError({
