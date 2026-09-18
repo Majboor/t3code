@@ -1,5 +1,5 @@
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { ChevronDownIcon, PackageIcon } from "lucide-react";
+import { ChevronDownIcon, Maximize2Icon, PackageIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -14,63 +14,18 @@ import {
   selectSuggestedPack,
   usePackModeSettings,
 } from "./packMode.logic";
+import { PackBrowseModal } from "./PackBrowseModal";
+import { PackFilterOptionRow as OptionRow } from "./PackFilterOptionRow";
 import { PackSuggestionCard } from "./PackSuggestionCard";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Separator } from "../ui/separator";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
-import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 
 const PACK_QUERY_DEBOUNCE_MS = 400;
 /** Below this a draft is still a fragment, and anything matched is a coincidence. */
 const PACK_QUERY_MIN_LENGTH = 12;
-
-function OptionRow<T extends number | string>({
-  label,
-  options,
-  value,
-  testId,
-  onChange,
-}: {
-  label: string;
-  options: ReadonlyArray<{ readonly value: T; readonly label: string; readonly hint: string }>;
-  value: T;
-  testId: string;
-  onChange: (next: T) => void;
-}) {
-  return (
-    <div>
-      <div className="mb-1.5 text-[11px] text-muted-foreground">{label}</div>
-      {/* Single-choice, so the group owns the selection: clicking the pressed
-          option must not clear it, which is why an empty change is ignored. */}
-      <ToggleGroup
-        className="grid w-full grid-cols-3"
-        data-testid={testId}
-        onValueChange={(next) => {
-          const [selected] = next;
-          const option = options.find((candidate) => String(candidate.value) === selected);
-          if (option && option.value !== value) {
-            onChange(option.value);
-          }
-        }}
-        value={[String(value)]}
-        variant="segmented"
-      >
-        {options.map((option) => (
-          <ToggleGroupItem
-            className="px-2 text-[11px]"
-            key={String(option.value)}
-            title={option.hint}
-            value={String(option.value)}
-          >
-            {option.label}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
-    </div>
-  );
-}
 
 /**
  * Pack mode: the agent may look through the pack ecosystem for something
@@ -91,6 +46,11 @@ export function PackModeControl({
 }) {
   const [settings, setSettings] = usePackModeSettings();
   const [isOpen, setIsOpen] = useState(false);
+  // Its own state, not folded into `isOpen`: the popover stays open and
+  // visible underneath while this is open, the same "small popup stays put,
+  // a larger one opens over it" layering `ShareProjectButton` already uses
+  // for its confirm dialog.
+  const [isBrowseOpen, setIsBrowseOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<readonly Pack[]>([]);
   // Dismissals are about the task in front of the person, not a standing
   // preference, so they die with the session rather than being persisted.
@@ -181,7 +141,20 @@ export function PackModeControl({
           <div className="grid gap-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-xs font-medium">Pack mode</div>
+                <div className="flex items-center gap-1.5">
+                  <div className="text-xs font-medium">Pack mode</div>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                    data-testid="pack-mode-browse-all"
+                    title="Open the full pack marketplace to search and filter every pack"
+                    onClick={() => setIsBrowseOpen(true)}
+                  >
+                    <Maximize2Icon className="size-3" aria-hidden />
+                    Browse all
+                  </Button>
+                </div>
                 <div className="text-[11px] leading-4 text-muted-foreground">
                   The agent looks for a capability that already works in production before writing
                   one. You can ask it for a pack at any time too.
@@ -269,6 +242,13 @@ export function PackModeControl({
           </div>
         </PopoverPopup>
       </Popover>
+
+      <PackBrowseModal
+        open={isBrowseOpen}
+        onOpenChange={setIsBrowseOpen}
+        settings={settings}
+        onSettingsChange={setSettings}
+      />
     </>
   );
 }

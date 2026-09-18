@@ -19,17 +19,18 @@
 import { resolve as resolvePath } from "node:path";
 
 import type { PackManifest, PackRegistryEntry, TenantId, WorkspaceId } from "@t3tools/contracts";
-import { PackId } from "@t3tools/contracts";
+import { PackId, VERIFIED_PACK_ID_PREFIX, isVerifiedPackId } from "@t3tools/contracts";
 import { makeDirectoryRegistry, type PackRecord } from "@t3tools/pack-cli/registry";
 import { resolveRegistryRoot } from "@t3tools/pack-cli/registryRoot";
 import { makeNodePackStore } from "@t3tools/pack-cli/store";
 
-/** Marks an entry as shipped rather than published by a tenant. */
-export const VERIFIED_PACK_ID_PREFIX = "verified:";
-
-export function isVerifiedPackId(packId: string): boolean {
-  return packId.startsWith(VERIFIED_PACK_ID_PREFIX);
-}
+/**
+ * Re-exported for the existing callers in this directory (`packLinks.ts`, the
+ * registry layer, and this file's own test) — the definition itself now lives
+ * in the contract, alongside `PackId`, so a browser bundle can check "is this
+ * shipped" without importing this file's Node filesystem registry reads.
+ */
+export { VERIFIED_PACK_ID_PREFIX, isVerifiedPackId };
 
 let cached: ReadonlyArray<Omit<PackRegistryEntry, "tenantId" | "workspaceId">> | undefined;
 

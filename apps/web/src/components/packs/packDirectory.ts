@@ -23,8 +23,27 @@ export interface PackSearchRequest {
   readonly requirements: PackRequirements;
 }
 
+/**
+ * Every candidate the registry will hand back for a query, or for no query at
+ * all — "browse everything this scope can see" is a real request the small
+ * suggestion box never had to make, since it only ever searched for what the
+ * draft in front of someone described.
+ */
+export interface PackBrowseRequest {
+  /** Empty or omitted browses everything the scope can see. */
+  readonly query?: string;
+  readonly limit: number;
+}
+
 export interface PackDirectory {
   searchPacks(request: PackSearchRequest): Promise<readonly Pack[]>;
+  /**
+   * Unfiltered by scope or requirements, unlike `searchPacks`: the "Browse all
+   * packs" modal lets someone flip those toggles live and re-render instantly,
+   * which only works if filtering happens after the fetch rather than inside
+   * it.
+   */
+  browsePacks(request: PackBrowseRequest): Promise<readonly Pack[]>;
 }
 
 /**
@@ -87,7 +106,8 @@ function independentOperators(manifest: PackManifest): number {
   ).length;
 }
 
-function toPack(entry: PackRegistryEntry, manifest: PackManifest): Pack {
+/** Exported so the browse modal's tests can build fixtures the same way this file does. */
+export function toPack(entry: PackRegistryEntry, manifest: PackManifest): Pack {
   const { record } = manifest.verification;
   const requiredEnvironment = (manifest.requirements.environment ?? [])
     .filter((variable) => variable.required)
@@ -116,6 +136,35 @@ function toPack(entry: PackRegistryEntry, manifest: PackManifest): Pack {
 }
 
 /**
+ * Opens every candidate's manifest to attach its signals, the shared work
+ * behind both `searchPacks` and `browsePacks` — they differ only in how many
+ * candidates they ask for and in whether they filter what comes back.
+ */
+async function fetchPacksWithSignals(
+  scope: PackViewerScope,
+  request: { readonly query?: string; readonly limit: number },
+): Promise<readonly Pack[]> {
+  const query = request.query?.trim();
+  const { packs } = await scope.api.packs.search({
+    tenantId: scope.tenantId,
+    workspaceId: scope.workspaceId,
+    limit: request.limit,
+    ...(query ? { query } : {}),
+  });
+
+  return Promise.all(
+    packs.map(async (entry) => {
+      const found = await scope.api.packs.get({
+        tenantId: scope.tenantId,
+        workspaceId: scope.workspaceId,
+        packId: entry.packId,
+      });
+      return toPack(entry, found.manifest);
+    }),
+  );
+}
+
+/**
  * The seam, bound to the served registry. Requirements are applied here rather
  * than on the server because the numbers behind them live in the manifest and
  * the registry index does not carry them.
@@ -128,28 +177,18 @@ export const packDirectory: PackDirectory = {
     const scope = await resolveViewerScope();
     if (!scope) return [];
 
-    const { packs } = await scope.api.packs.search({
-      tenantId: scope.tenantId,
-      workspaceId: scope.workspaceId,
-      query,
-      limit: SEARCH_CANDIDATE_LIMIT,
-    });
-
-    const candidates = await Promise.all(
-      packs.map(async (entry) => {
-        const found = await scope.api.packs.get({
-          tenantId: scope.tenantId,
-          workspaceId: scope.workspaceId,
-          packId: entry.packId,
-        });
-        return toPack(entry, found.manifest);
-      }),
-    );
+    const candidates = await fetchPacksWithSignals(scope, { query, limit: SEARCH_CANDIDATE_LIMIT });
 
     return candidates.filter(
       (pack) =>
         (request.scope === "ecosystem" || pack.scope === "workspace") &&
         packMeetsRequirements(pack, request.requirements),
     );
+  },
+
+  async browsePacks(request: PackBrowseRequest): Promise<readonly Pack[]> {
+    const scope = await resolveViewerScope();
+    if (!scope) return [];
+    return fetchPacksWithSignals(scope, request);
   },
 };

@@ -200,6 +200,20 @@ export const PackId = TrimmedNonEmptyString.pipe(Schema.brand("PackId"));
 export type PackId = typeof PackId.Type;
 
 /**
+ * Marks an id as one of the packs shipped with the product rather than one a
+ * tenant published for itself — see `apps/server/src/packs/verifiedPacks.ts`,
+ * which is what actually assembles the shipped set and is the source of truth
+ * this predicate mirrors. Living here, in the contract, is what lets a browser
+ * bundle ask "is this the blue-tick kind of pack" without pulling in that
+ * file's Node filesystem registry reads.
+ */
+export const VERIFIED_PACK_ID_PREFIX = "verified:";
+
+export function isVerifiedPackId(packId: string): boolean {
+  return packId.startsWith(VERIFIED_PACK_ID_PREFIX);
+}
+
+/**
  * Names the publisher's signing keypair. The private half never leaves the
  * publisher; the public half is registered once with the marketplace so a
  * consumer can check a release really came from that account.

@@ -32,6 +32,7 @@ import {
 import { PACK_VISIBILITY_DESCRIPTIONS } from "../packDashboard/packDetail.logic";
 import { readEnvironmentApi } from "../../environmentApi";
 import { usePrimaryEnvironmentId } from "../../environments/primary/context";
+import { VerifiedPackBadge } from "../packs/VerifiedPackBadge";
 import { Badge } from "../ui/badge";
 import { Card, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
@@ -76,6 +77,7 @@ function PackCard({ pack }: { pack: PackRegistryEntry }) {
         </p>
 
         <div className="mt-2.5 flex flex-wrap items-center gap-1">
+          <VerifiedPackBadge packId={pack.packId} />
           <Badge size="sm" variant="outline">
             {visibility.label}
           </Badge>
