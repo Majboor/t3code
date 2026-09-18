@@ -19,7 +19,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
+import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -30,6 +30,9 @@ import {
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
 import { RepositoryIdentityResolverLive } from "../../project/Layers/RepositoryIdentityResolver.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ABANDONED_TURN_MESSAGE } from "../abandonedTurnClosure.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -170,7 +173,7 @@ type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][nu
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService,
+    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionTurnRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -211,6 +214,12 @@ describe("ProviderRuntimeIngestion", () => {
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(SqlitePersistenceMemory),
+      // Reuses the exact same `SqlitePersistenceMemory` layer *value* already
+      // threaded through `orchestrationLayer` above, so Effect's layer
+      // memoization shares one in-memory db/connection instead of standing
+      // up a second, disconnected `:memory:` database that could never see
+      // the turns the orchestration engine actually persisted.
+      Layer.provideMerge(ProjectionTurnRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -219,6 +228,17 @@ describe("ProviderRuntimeIngestion", () => {
     runtime = ManagedRuntime.make(layer);
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const projectionTurnRepository = await runtime.runPromise(
+      Effect.service(ProjectionTurnRepository),
+    );
+    const getTurn = (turnId: TurnId, threadId: ThreadId = asThreadId("thread-1")) =>
+      runtime === null
+        ? Promise.reject(new Error("runtime disposed"))
+        : runtime.runPromise(
+            projectionTurnRepository
+              .getByTurnId({ threadId, turnId })
+              .pipe(Effect.map(Option.getOrNull)),
+          );
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
@@ -286,6 +306,7 @@ describe("ProviderRuntimeIngestion", () => {
       engine,
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      getTurn,
       drain,
     };
   }
@@ -1757,6 +1778,121 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(activity?.kind).toBe("runtime.error");
     expect(activityPayload?.message).toBe("runtime activity exploded");
+  });
+
+  it("closes out a turn left running when its session exits mid-turn (process crash/dispose)", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const turnId = asTurnId("turn-crashed");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-crash-turn-started"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId,
+    });
+    await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "running" && entry.session?.activeTurnId === turnId,
+    );
+
+    // Real-world reproduction of the reported bug: the provider process
+    // exits (crash or an explicit dispose) while a turn is still `running`
+    // on its session, with no turn.completed/interrupt ever emitted first.
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-crash-session-exited"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      payload: {},
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "stopped" && entry.session?.activeTurnId === null,
+    );
+    expect(thread.session?.status).toBe("stopped");
+
+    // Before the fix this turn stayed `running`/`completedAt: null` forever
+    // in `projection_turns`, with no live session left to ever finish it.
+    let turnRow = await harness.getTurn(turnId);
+    for (let attempt = 0; attempt < 100 && turnRow?.state !== "interrupted"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      turnRow = await harness.getTurn(turnId);
+    }
+    expect(turnRow?.state).toBe("interrupted");
+    expect(turnRow?.completedAt).not.toBeNull();
+
+    const abandonedActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.turnId === turnId &&
+        activity.kind === "runtime.error" &&
+        typeof activity.payload === "object" &&
+        activity.payload !== null &&
+        (activity.payload as Record<string, unknown>).message === ABANDONED_TURN_MESSAGE,
+    );
+    expect(abandonedActivity).toBeDefined();
+  });
+
+  it("closes out the errored turn on runtime.error without duplicating its error activity", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const turnId = asTurnId("turn-runtime-error-close");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-error-close-turn-started"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId,
+    });
+    await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "running" && entry.session?.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-error-close-runtime-error"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        message: "provider crashed mid-turn",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "error" && entry.session?.lastError !== null,
+    );
+    expect(thread.session?.lastError).toBe("provider crashed mid-turn");
+
+    let turnRow = await harness.getTurn(turnId);
+    for (let attempt = 0; attempt < 100 && turnRow?.state !== "interrupted"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      turnRow = await harness.getTurn(turnId);
+    }
+    expect(turnRow?.state).toBe("interrupted");
+    expect(turnRow?.completedAt).not.toBeNull();
+
+    // Exactly the one genuine runtime.error activity -- the turn-interrupt
+    // half of closeAbandonedTurn must not append a second, redundant one.
+    const errorActivities = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.turnId === turnId && activity.kind === "runtime.error",
+    );
+    expect(errorActivities).toHaveLength(1);
+    expect(
+      typeof errorActivities[0]?.payload === "object" && errorActivities[0]?.payload !== null
+        ? (errorActivities[0]?.payload as Record<string, unknown>).message
+        : undefined,
+    ).toBe("provider crashed mid-turn");
   });
 
   it("keeps the session running when a runtime.warning arrives during an active turn", async () => {

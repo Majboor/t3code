@@ -35,6 +35,9 @@ import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ABANDONED_TURN_MESSAGE } from "../abandonedTurnClosure.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -138,7 +141,7 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor,
+    OrchestrationEngineService | ProviderCommandReactor | ProjectionTurnRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -393,6 +396,11 @@ describe("ProviderCommandReactor", () => {
     );
     const layer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
+      // Same `SqlitePersistenceMemory` layer value already threaded through
+      // `orchestrationLayer` above -- Effect's layer memoization shares the
+      // one in-memory db/connection rather than standing up a second,
+      // disconnected `:memory:` database.
+      Layer.provideMerge(ProjectionTurnRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
       Layer.provideMerge(Layer.succeed(TenancyRepository, tenancyRepository)),
       Layer.provideMerge(providerSharingLayer),
@@ -420,6 +428,17 @@ describe("ProviderCommandReactor", () => {
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
+    const projectionTurnRepository = await runtime.runPromise(
+      Effect.service(ProjectionTurnRepository),
+    );
+    const getTurn = (turnId: TurnId, threadId: ThreadId = ThreadId.make("thread-1")) =>
+      runtime === null
+        ? Promise.reject(new Error("runtime disposed"))
+        : runtime.runPromise(
+            projectionTurnRepository
+              .getByTurnId({ threadId, turnId })
+              .pipe(Effect.map(Option.getOrNull)),
+          );
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(reactor.drain);
@@ -466,6 +485,7 @@ describe("ProviderCommandReactor", () => {
       generateThreadTitle,
       stateDir,
       touchedAccounts,
+      getTurn,
       drain,
     };
   }
@@ -2109,5 +2129,70 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.status).toBe("stopped");
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.activeTurnId).toBeNull();
+  });
+
+  it("closes out a turn left running when an explicit session stop ends it mid-turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const turnId = asTurnId("turn-explicit-stop");
+
+    // Seeds a session genuinely `running` with an active turn -- this also
+    // creates the turn's `projection_turns` row via the turns projector's
+    // `thread.session-set` handling (it only opens/keeps a row `running`
+    // when the incoming status *is* `"running"`).
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-running-for-stop"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    // A user disconnect / API stop while that turn is still running -- the
+    // reported bug: this ends the session unconditionally, leaving the
+    // turn's `projection_turns` row `running` forever with no live session
+    // left to ever finish it.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-stop-mid-turn"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session?.status).toBe("stopped");
+    expect(thread?.session?.activeTurnId).toBeNull();
+
+    let turnRow = await harness.getTurn(turnId);
+    for (let attempt = 0; attempt < 100 && turnRow?.state !== "interrupted"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      turnRow = await harness.getTurn(turnId);
+    }
+    expect(turnRow?.state).toBe("interrupted");
+    expect(turnRow?.completedAt).not.toBeNull();
+
+    const abandonedActivity = thread?.activities.find(
+      (activity) =>
+        activity.turnId === turnId &&
+        activity.kind === "runtime.error" &&
+        typeof activity.payload === "object" &&
+        activity.payload !== null &&
+        (activity.payload as Record<string, unknown>).message === ABANDONED_TURN_MESSAGE,
+    );
+    expect(abandonedActivity).toBeDefined();
   });
 });
