@@ -1,29 +1,48 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
 import {
+  EventId,
+  ProjectId,
+  ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
-  ProjectId,
-  ThreadId,
-  TurnId,
+  type OrchestrationThreadActivityTone,
 } from "@t3tools/contracts";
-import { Effect, Layer, ManagedRuntime, Stream } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Clock, Duration, Effect, Layer, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
-import { OrchestrationEngineService, type OrchestrationEngineShape } from "../Services/OrchestrationEngine.ts";
-import { ProviderService, type ProviderServiceShape } from "../../provider/Services/ProviderService.ts";
+import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import {
+  ProviderService,
+  type ProviderServiceShape,
+} from "../../provider/Services/ProviderService.ts";
 import { TurnWatchdog } from "../Services/TurnWatchdog.ts";
 import { makeTurnWatchdogLive } from "./TurnWatchdog.ts";
 
-const defaultModelSelection = {
-  provider: "codex",
-  model: "gpt-5-codex",
-} as const;
-
 const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
 
+const defaultModelSelection = { provider: "codex", model: "gpt-5-codex" } as const;
 const STALE_ACTIVITY_THRESHOLD_MS = 5 * 60 * 1000;
+
+function makeActivity(input: {
+  readonly kind: string;
+  readonly tone: OrchestrationThreadActivityTone;
+  readonly turnId: TurnId;
+  readonly createdAt: string;
+  readonly payload?: unknown;
+}): OrchestrationThreadActivity {
+  return {
+    id: EventId.make(`activity-${crypto.randomUUID()}`),
+    tone: input.tone,
+    kind: input.kind,
+    summary: "Test activity",
+    payload: input.payload ?? {},
+    turnId: input.turnId,
+    createdAt: input.createdAt,
+  };
+}
 
 function makeThread(input: {
   readonly id: ThreadId;
@@ -77,245 +96,301 @@ function makeThread(input: {
 }
 
 function makeReadModel(threads: ReadonlyArray<OrchestrationThread>): OrchestrationReadModel {
+  const now = new Date().toISOString();
   return {
     snapshotSequence: 0,
-    projects: [],
+    projects: [
+      {
+        id: ProjectId.make("project-turn-watchdog"),
+        title: "Turn Watchdog Project",
+        workspaceRoot: "/tmp/turn-watchdog-project",
+        defaultModelSelection,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      },
+    ],
     threads,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   };
 }
 
-describe("TurnWatchdog", () => {
-  let runtime: ManagedRuntime.ManagedRuntime<TurnWatchdog, unknown> | null = null;
+/**
+ * Test harness: captures dispatched commands and stopSession calls via plain
+ * closures, and lets each test swap in a new read-model snapshot (mutating
+ * `currentReadModel`) between `sweepOnce` calls.
+ */
+function makeHarness(initialThread: OrchestrationThread) {
+  let currentReadModel = makeReadModel([initialThread]);
+  const dispatched: OrchestrationCommand[] = [];
+  const stoppedThreadIds: ThreadId[] = [];
 
-  afterEach(async () => {
-    if (runtime) {
-      await runtime.dispose();
-    }
-    runtime = null;
+  const setThread = (thread: OrchestrationThread) => {
+    currentReadModel = makeReadModel([thread]);
+  };
+
+  const engineLayer = Layer.succeed(OrchestrationEngineService, {
+    getReadModel: () => Effect.succeed(currentReadModel),
+    readEvents: () => Stream.empty,
+    dispatch: (command: OrchestrationCommand) => {
+      dispatched.push(command);
+      return Effect.succeed({ sequence: dispatched.length });
+    },
+    streamDomainEvents: Stream.empty,
   });
 
-  function createHarness(readModel: OrchestrationReadModel) {
-    const dispatchedCommands: OrchestrationCommand[] = [];
-    const dispatch: OrchestrationEngineShape["dispatch"] = (command) => {
-      dispatchedCommands.push(command);
-      return Effect.succeed({ sequence: dispatchedCommands.length });
-    };
+  const providerService: ProviderServiceShape = {
+    startSession: () => unsupported(),
+    sendTurn: () => unsupported(),
+    interruptTurn: () => unsupported(),
+    respondToRequest: () => unsupported(),
+    respondToUserInput: () => unsupported(),
+    stopSession: (input) =>
+      Effect.sync(() => {
+        stoppedThreadIds.push(input.threadId);
+      }),
+    listSessions: () => Effect.succeed([]),
+    getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    rollbackConversation: () => unsupported(),
+    streamEvents: Stream.empty,
+  };
+  const providerServiceLayer = Layer.succeed(ProviderService, providerService);
 
-    const orchestrationEngine: OrchestrationEngineShape = {
-      getReadModel: () => Effect.succeed(readModel),
-      readEvents: () => Stream.empty,
-      dispatch,
-      streamDomainEvents: Stream.empty,
-    };
+  const watchdogLayer = makeTurnWatchdogLive({
+    staleActivityThresholdMs: STALE_ACTIVITY_THRESHOLD_MS,
+    // Only `sweepOnce` is exercised directly in these tests; the scheduled
+    // loop's own interval is irrelevant.
+    sweepIntervalMs: 60_000,
+  }).pipe(Layer.provideMerge(engineLayer), Layer.provideMerge(providerServiceLayer));
 
-    const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void as never);
-    const providerService: ProviderServiceShape = {
-      startSession: () => unsupported(),
-      sendTurn: () => unsupported(),
-      interruptTurn: () => unsupported(),
-      respondToRequest: () => unsupported(),
-      respondToUserInput: () => unsupported(),
-      stopSession,
-      listSessions: () => Effect.succeed([]),
-      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
-      rollbackConversation: () => unsupported(),
-      streamEvents: Stream.empty,
-    };
+  return { watchdogLayer, dispatched, stoppedThreadIds, setThread };
+}
 
-    const layer = makeTurnWatchdogLive({
-      staleActivityThresholdMs: STALE_ACTIVITY_THRESHOLD_MS,
-      // Only `sweepOnce` is exercised directly in these tests; the scheduled
-      // loop's own interval is irrelevant.
-      sweepIntervalMs: 60_000,
-    }).pipe(
-      Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
-      Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
-      Layer.provideMerge(NodeServices.layer),
-    );
+it.effect(
+  "transitions a turn with no activity for longer than the threshold to a terminal, honestly-labeled failure",
+  () => {
+    const threadId = ThreadId.make("thread-watchdog-stuck");
+    const turnId = TurnId.make("turn-watchdog-stuck");
+    const requestedAtIso = new Date(0).toISOString();
+    const thread = makeThread({
+      id: threadId,
+      turnId,
+      sessionStatus: "running",
+      turnStartedAtIso: requestedAtIso,
+      activities: [],
+    });
+    const harness = makeHarness(thread);
 
-    runtime = ManagedRuntime.make(layer);
-    return { dispatchedCommands, stopSession };
-  }
+    return Effect.gen(function* () {
+      const watchdog = yield* TurnWatchdog;
 
-  it("marks a turn stuck and recovers it when there is no activity past the threshold", async () => {
-    const threadId = ThreadId.make("thread-stuck");
-    const turnId = TurnId.make("turn-stuck");
-    const staleTurnStartedAt = new Date(Date.now() - STALE_ACTIVITY_THRESHOLD_MS - 60_000).toISOString();
+      // Real-world reported case: turn stuck `running` with zero activity
+      // rows and zero pending approvals for hours. 6 minutes exceeds the
+      // 5-minute default threshold used by this harness.
+      yield* TestClock.adjust(Duration.minutes(6));
+      yield* watchdog.sweepOnce;
 
-    const harness = createHarness(
-      makeReadModel([
-        makeThread({
-          id: threadId,
-          turnId,
-          sessionStatus: "running",
-          turnStartedAtIso: staleTurnStartedAt,
-          activities: [],
-        }),
-      ]),
-    );
+      expect(harness.dispatched.map((command) => command.type)).toEqual([
+        "thread.session.set",
+        "thread.activity.append",
+        "thread.turn.interrupt",
+      ]);
 
-    const watchdog = await runtime!.runPromise(Effect.service(TurnWatchdog));
-    await runtime!.runPromise(watchdog.sweepOnce);
-
-    expect(harness.stopSession).toHaveBeenCalledWith({ threadId });
-
-    const sessionSetCommand = harness.dispatchedCommands.find(
-      (command) => command.type === "thread.session.set",
-    );
-    expect(sessionSetCommand).toBeDefined();
-    if (sessionSetCommand?.type === "thread.session.set") {
+      const sessionSetCommand = harness.dispatched[0];
+      if (sessionSetCommand?.type !== "thread.session.set") throw new Error("unreachable");
       expect(sessionSetCommand.session.status).toBe("error");
       expect(sessionSetCommand.session.activeTurnId).toBeNull();
-      expect(sessionSetCommand.session.lastError).toContain("stopped responding");
-      expect(sessionSetCommand.session.lastError).toContain("automatically ended");
-    }
+      expect(sessionSetCommand.session.lastError).toBe(
+        "This turn stopped responding for over 5 minutes with no activity and was automatically ended. You can send your message again.",
+      );
 
-    const activityCommand = harness.dispatchedCommands.find(
-      (command) => command.type === "thread.activity.append",
-    );
-    expect(activityCommand).toBeDefined();
-    if (activityCommand?.type === "thread.activity.append") {
-      expect(activityCommand.activity.tone).toBe("error");
-      expect(activityCommand.activity.turnId).toBe(turnId);
-    }
-
-    const interruptCommand = harness.dispatchedCommands.find(
-      (command) => command.type === "thread.turn.interrupt",
-    );
-    expect(interruptCommand).toBeDefined();
-    if (interruptCommand?.type === "thread.turn.interrupt") {
-      expect(interruptCommand.turnId).toBe(turnId);
-    }
-  });
-
-  it("does not fire for a turn with a pending approval waiting on the person", async () => {
-    const threadId = ThreadId.make("thread-pending-approval");
-    const turnId = TurnId.make("turn-pending-approval");
-    const staleTurnStartedAt = new Date(Date.now() - STALE_ACTIVITY_THRESHOLD_MS - 60_000).toISOString();
-
-    const harness = createHarness(
-      makeReadModel([
-        makeThread({
-          id: threadId,
-          turnId,
-          sessionStatus: "running",
-          turnStartedAtIso: staleTurnStartedAt,
-          activities: [
-            {
-              id: "evt-approval-requested" as OrchestrationThreadActivity["id"],
-              tone: "approval",
-              kind: "approval.requested",
-              summary: "Command approval requested",
-              payload: { requestId: "req-1" },
-              turnId,
-              createdAt: staleTurnStartedAt,
-            },
-          ],
-        }),
-      ]),
-    );
-
-    const watchdog = await runtime!.runPromise(Effect.service(TurnWatchdog));
-    await runtime!.runPromise(watchdog.sweepOnce);
-
-    expect(harness.stopSession).not.toHaveBeenCalled();
-    expect(harness.dispatchedCommands).toHaveLength(0);
-  });
-
-  it("does not fire for a turn that has recent activity", async () => {
-    const threadId = ThreadId.make("thread-recent-activity");
-    const turnId = TurnId.make("turn-recent-activity");
-    const staleTurnStartedAt = new Date(Date.now() - STALE_ACTIVITY_THRESHOLD_MS - 60_000).toISOString();
-    const recentActivityAt = new Date(Date.now() - 5_000).toISOString();
-
-    const harness = createHarness(
-      makeReadModel([
-        makeThread({
-          id: threadId,
-          turnId,
-          sessionStatus: "running",
-          turnStartedAtIso: staleTurnStartedAt,
-          activities: [
-            {
-              id: "evt-recent-tool" as OrchestrationThreadActivity["id"],
-              tone: "tool",
-              kind: "tool.completed",
-              summary: "Ran a tool",
-              payload: {},
-              turnId,
-              createdAt: recentActivityAt,
-            },
-          ],
-        }),
-      ]),
-    );
-
-    const watchdog = await runtime!.runPromise(Effect.service(TurnWatchdog));
-    await runtime!.runPromise(watchdog.sweepOnce);
-
-    expect(harness.stopSession).not.toHaveBeenCalled();
-    expect(harness.dispatchedCommands).toHaveLength(0);
-  });
-
-  it("never kills a turn that keeps producing activity every ~30s, even long past the cumulative threshold", async () => {
-    const threadId = ThreadId.make("thread-long-running-progressing");
-    const turnId = TurnId.make("turn-long-running-progressing");
-    // The turn itself started well over an hour ago (far past the stale
-    // threshold on a cumulative-runtime basis), but activity keeps landing
-    // every ~30s, so it must never be treated as stuck.
-    const turnStartedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const activities: OrchestrationThreadActivity[] = [];
-    for (let secondsAgo = 25; secondsAgo <= 24 * 30; secondsAgo += 30) {
-      activities.push({
-        id: `evt-progress-${secondsAgo}` as OrchestrationThreadActivity["id"],
-        tone: "tool",
-        kind: "tool.completed",
-        summary: "Ran a tool",
-        payload: {},
-        turnId,
-        createdAt: new Date(Date.now() - secondsAgo * 1000).toISOString(),
+      const activityAppendCommand = harness.dispatched[1];
+      if (activityAppendCommand?.type !== "thread.activity.append") throw new Error("unreachable");
+      expect(activityAppendCommand.activity.tone).toBe("error");
+      expect(activityAppendCommand.activity.kind).toBe("runtime.error");
+      expect(activityAppendCommand.activity.turnId).toBe(turnId);
+      expect(activityAppendCommand.activity.payload).toEqual({
+        message: sessionSetCommand.session.lastError,
       });
-    }
 
-    const harness = createHarness(
-      makeReadModel([
-        makeThread({
-          id: threadId,
+      const turnInterruptCommand = harness.dispatched[2];
+      if (turnInterruptCommand?.type !== "thread.turn.interrupt") throw new Error("unreachable");
+      expect(turnInterruptCommand.threadId).toBe(threadId);
+      expect(turnInterruptCommand.turnId).toBe(turnId);
+
+      expect(harness.stoppedThreadIds).toEqual([threadId]);
+    }).pipe(Effect.provide(Layer.merge(harness.watchdogLayer, TestClock.layer())));
+  },
+);
+
+it.effect("does not touch a turn that has recent activity inside the threshold window", () => {
+  const threadId = ThreadId.make("thread-watchdog-fresh");
+  const turnId = TurnId.make("turn-watchdog-fresh");
+  const requestedAtIso = new Date(0).toISOString();
+  const thread = makeThread({
+    id: threadId,
+    turnId,
+    sessionStatus: "running",
+    turnStartedAtIso: requestedAtIso,
+    activities: [
+      makeActivity({
+        kind: "tool.completed",
+        tone: "tool",
+        turnId,
+        createdAt: new Date(4 * 60_000).toISOString(),
+      }),
+    ],
+  });
+  const harness = makeHarness(thread);
+
+  return Effect.gen(function* () {
+    const watchdog = yield* TurnWatchdog;
+
+    // Now = 4 minutes, matching the activity's timestamp exactly: idle = 0.
+    yield* TestClock.adjust(Duration.minutes(4));
+    yield* watchdog.sweepOnce;
+
+    expect(harness.dispatched).toEqual([]);
+    expect(harness.stoppedThreadIds).toEqual([]);
+  }).pipe(Effect.provide(Layer.merge(harness.watchdogLayer, TestClock.layer())));
+});
+
+it.effect(
+  "does not touch a turn with an unresolved approval request even after the threshold elapses",
+  () => {
+    const threadId = ThreadId.make("thread-watchdog-pending-approval");
+    const turnId = TurnId.make("turn-watchdog-pending-approval");
+    const requestedAtIso = new Date(0).toISOString();
+    const thread = makeThread({
+      id: threadId,
+      turnId,
+      sessionStatus: "running",
+      turnStartedAtIso: requestedAtIso,
+      activities: [
+        makeActivity({
+          kind: "approval.requested",
+          tone: "approval",
           turnId,
-          sessionStatus: "running",
-          turnStartedAtIso: turnStartedAt,
-          activities,
+          createdAt: requestedAtIso,
+          payload: { requestId: "req-1" },
         }),
-      ]),
-    );
+      ],
+    });
+    const harness = makeHarness(thread);
 
-    const watchdog = await runtime!.runPromise(Effect.service(TurnWatchdog));
-    await runtime!.runPromise(watchdog.sweepOnce);
+    return Effect.gen(function* () {
+      const watchdog = yield* TurnWatchdog;
 
-    expect(harness.stopSession).not.toHaveBeenCalled();
-    expect(harness.dispatchedCommands).toHaveLength(0);
-  });
+      // Well past the 5-minute threshold, but the turn is blocked on a human
+      // decision, not stuck: it must not be force-failed.
+      yield* TestClock.adjust(Duration.minutes(30));
+      yield* watchdog.sweepOnce;
 
-  it("skips threads with no active turn", async () => {
-    const threadId = ThreadId.make("thread-idle");
-    const now = new Date().toISOString();
+      expect(harness.dispatched).toEqual([]);
+      expect(harness.stoppedThreadIds).toEqual([]);
+    }).pipe(Effect.provide(Layer.merge(harness.watchdogLayer, TestClock.layer())));
+  },
+);
 
-    const harness = createHarness(
-      makeReadModel([
-        makeThread({
-          id: threadId,
-          turnId: null,
-          sessionStatus: "ready",
-          turnStartedAtIso: now,
+it.effect(
+  "does not touch a turn with an unresolved user-input request even after the threshold elapses",
+  () => {
+    const threadId = ThreadId.make("thread-watchdog-pending-user-input");
+    const turnId = TurnId.make("turn-watchdog-pending-user-input");
+    const requestedAtIso = new Date(0).toISOString();
+    const thread = makeThread({
+      id: threadId,
+      turnId,
+      sessionStatus: "running",
+      turnStartedAtIso: requestedAtIso,
+      activities: [
+        makeActivity({
+          kind: "user-input.requested",
+          tone: "info",
+          turnId,
+          createdAt: requestedAtIso,
+          payload: { requestId: "req-user-input-1" },
         }),
-      ]),
-    );
+      ],
+    });
+    const harness = makeHarness(thread);
 
-    const watchdog = await runtime!.runPromise(Effect.service(TurnWatchdog));
-    await runtime!.runPromise(watchdog.sweepOnce);
+    return Effect.gen(function* () {
+      const watchdog = yield* TurnWatchdog;
 
-    expect(harness.stopSession).not.toHaveBeenCalled();
-    expect(harness.dispatchedCommands).toHaveLength(0);
+      yield* TestClock.adjust(Duration.minutes(30));
+      yield* watchdog.sweepOnce;
+
+      expect(harness.dispatched).toEqual([]);
+      expect(harness.stoppedThreadIds).toEqual([]);
+    }).pipe(Effect.provide(Layer.merge(harness.watchdogLayer, TestClock.layer())));
+  },
+);
+
+it.effect(
+  "never kills a turn that keeps producing new activity every 30s, even past the threshold cumulatively",
+  () => {
+    const threadId = ThreadId.make("thread-watchdog-progressing");
+    const turnId = TurnId.make("turn-watchdog-progressing");
+    const requestedAtIso = new Date(0).toISOString();
+    const thread = makeThread({
+      id: threadId,
+      turnId,
+      sessionStatus: "running",
+      turnStartedAtIso: requestedAtIso,
+      activities: [],
+    });
+    const harness = makeHarness(thread);
+
+    return Effect.gen(function* () {
+      const watchdog = yield* TurnWatchdog;
+
+      // 12 ticks * 30s = 6 minutes of cumulative runtime, comfortably past
+      // the 5-minute threshold, but activity never goes stale for longer
+      // than 30s at a time.
+      for (let tick = 0; tick < 12; tick += 1) {
+        const nowMs = yield* Clock.currentTimeMillis;
+        const nowIso = new Date(nowMs).toISOString();
+        harness.setThread(
+          makeThread({
+            id: threadId,
+            turnId,
+            sessionStatus: "running",
+            turnStartedAtIso: requestedAtIso,
+            activities: [
+              makeActivity({ kind: "tool.completed", tone: "tool", turnId, createdAt: nowIso }),
+            ],
+          }),
+        );
+        yield* watchdog.sweepOnce;
+        yield* TestClock.adjust(Duration.seconds(30));
+      }
+
+      expect(harness.dispatched).toEqual([]);
+      expect(harness.stoppedThreadIds).toEqual([]);
+    }).pipe(Effect.provide(Layer.merge(harness.watchdogLayer, TestClock.layer())));
+  },
+);
+
+it.effect("skips threads with no active turn", () => {
+  const threadId = ThreadId.make("thread-watchdog-idle");
+  const nowIso = new Date(0).toISOString();
+  const thread = makeThread({
+    id: threadId,
+    turnId: null,
+    sessionStatus: "ready",
+    turnStartedAtIso: nowIso,
   });
+  const harness = makeHarness(thread);
+
+  return Effect.gen(function* () {
+    const watchdog = yield* TurnWatchdog;
+
+    yield* TestClock.adjust(Duration.hours(2));
+    yield* watchdog.sweepOnce;
+
+    expect(harness.dispatched).toEqual([]);
+    expect(harness.stoppedThreadIds).toEqual([]);
+  }).pipe(Effect.provide(Layer.merge(harness.watchdogLayer, TestClock.layer())));
 });

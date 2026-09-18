@@ -150,7 +150,9 @@ const makeTurnWatchdog = (options?: TurnWatchdogLiveOptions) =>
     );
     const sweepIntervalMs = Math.max(
       1,
-      options?.sweepIntervalMs ?? readPositiveIntEnv(ENV_SWEEP_INTERVAL_MS) ?? DEFAULT_SWEEP_INTERVAL_MS,
+      options?.sweepIntervalMs ??
+        readPositiveIntEnv(ENV_SWEEP_INTERVAL_MS) ??
+        DEFAULT_SWEEP_INTERVAL_MS,
     );
 
     // Reuses the exact recovery path a user-initiated Stop already goes
