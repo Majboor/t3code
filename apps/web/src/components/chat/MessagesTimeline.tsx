@@ -332,22 +332,40 @@ function TimelineRowContent({ row }: { row: TimelineRow }) {
           const terminalContexts = displayedUserMessage.contexts;
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
           const author = resolveMessageAuthor(row.message, ctx.collaborationMembers);
+          // Side says who without needing to be read. Your own words sit where
+          // they always have; somebody else's move to the other side, which is
+          // the one distinction a person takes in at a glance and the reason a
+          // missing nametag used to make a colleague's message look like your
+          // own. No author at all is a solo thread, where "mine" is the only
+          // possibility and the old placement is still right.
+          const fromSomebodyElse = author !== null && !author.isViewer;
+          // Named once per run, not once per message. Three messages in a row
+          // from one person is one person talking.
+          const showAuthorHeader = author !== null && row.startsAuthorRun;
           return (
-            <div className="flex justify-end">
+            <div className={fromSomebodyElse ? "flex justify-start" : "flex justify-end"}>
               <div
-                className="group relative max-w-[80%] rounded-2xl rounded-br-sm border border-border bg-secondary px-4 py-3"
+                className={cn(
+                  "group relative max-w-[80%] rounded-2xl border border-border bg-secondary px-4 py-3",
+                  fromSomebodyElse ? "rounded-bl-sm" : "rounded-br-sm",
+                )}
                 data-author-color={author?.color}
                 style={
                   author
                     ? {
                         borderColor: author.color,
-                        boxShadow: `inset 3px 0 0 0 ${author.color}`,
+                        // The colour bar sits on the side the message came
+                        // from, so it reads as an edge of the conversation
+                        // rather than a decoration.
+                        boxShadow: fromSomebodyElse
+                          ? `inset 3px 0 0 0 ${author.color}`
+                          : `inset -3px 0 0 0 ${author.color}`,
                         backgroundColor: `color-mix(in srgb, ${author.color} 10%, var(--secondary))`,
                       }
                     : undefined
                 }
               >
-                {author ? (
+                {showAuthorHeader && author ? (
                   <div
                     className="mb-1.5 flex items-center gap-1.5"
                     data-testid="message-author"

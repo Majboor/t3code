@@ -148,6 +148,17 @@ export type MessagesTimelineRow =
       showAssistantCopyButton: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
+      /**
+       * First user message of a run by one person, so it is the one that wears
+       * the name.
+       *
+       * Computed here rather than in the row component because the list
+       * renders each row through a memo boundary with no index and no view of
+       * its neighbours — deliberately, so a streaming delta does not re-render
+       * the whole timeline. Grouping needs the previous row, so it has to be
+       * decided while the rows are being built.
+       */
+      startsAuthorRun: boolean;
     }
   | {
       kind: "proposed-plan";
@@ -277,11 +288,25 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    // The previous row, if it was also somebody's message. An assistant reply
+    // or a work log between two of your messages ends the run: they are no
+    // longer consecutive on screen, so the name is worth repeating.
+    const previousRow = nextRows.at(-1);
+    const previousUserAuthor =
+      previousRow?.kind === "message" && previousRow.message.role === "user"
+        ? (previousRow.message.authorUserId ?? null)
+        : undefined;
+    const startsAuthorRun =
+      timelineEntry.message.role !== "user" ||
+      previousUserAuthor === undefined ||
+      previousUserAuthor !== (timelineEntry.message.authorUserId ?? null);
+
     nextRows.push({
       kind: "message",
       id: timelineEntry.id,
       createdAt: timelineEntry.createdAt,
       message: timelineEntry.message,
+      startsAuthorRun,
       durationStart:
         durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
       showCompletionDivider:

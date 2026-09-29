@@ -208,6 +208,73 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
+  // Consecutive messages from one person are one person talking, so only the
+  // first of a run wears their name. Anything in between — an assistant reply,
+  // a work log — ends the run, because the messages are no longer adjacent on
+  // screen and the name is worth repeating.
+  it("marks the first message of each author's run", () => {
+    const userMessage = (id: string, author: string | null, at: string) => ({
+      id: `${id}-entry`,
+      kind: "message" as const,
+      createdAt: at,
+      message: {
+        id: id as never,
+        role: "user" as const,
+        text: id,
+        turnId: null,
+        authorUserId: author as never,
+        createdAt: at,
+        streaming: false,
+      },
+    });
+
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        userMessage("a-1", "user-a", "2026-01-01T00:00:00Z"),
+        userMessage("a-2", "user-a", "2026-01-01T00:00:01Z"),
+        userMessage("b-1", "user-b", "2026-01-01T00:00:02Z"),
+        userMessage("b-2", "user-b", "2026-01-01T00:00:03Z"),
+        {
+          id: "assistant-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:04Z",
+          message: {
+            id: "assistant-1" as never,
+            role: "assistant" as const,
+            text: "Working on it.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:04Z",
+            completedAt: "2026-01-01T00:00:05Z",
+            streaming: false,
+          },
+        },
+        userMessage("b-3", "user-b", "2026-01-01T00:00:06Z"),
+      ],
+      completionDividerBeforeEntryId: null,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      sessionOrchestrationStatus: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const runs = rows
+      .filter(
+        (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+          row.kind === "message" && row.message.role === "user",
+      )
+      .map((row) => [row.message.id, row.startsAuthorRun]);
+
+    expect(runs).toEqual([
+      ["a-1", true],
+      ["a-2", false],
+      ["b-1", true],
+      ["b-2", false],
+      // The assistant reply broke the run, so B is named again.
+      ["b-3", true],
+    ]);
+  });
+
   it("only enables assistant copy for the terminal assistant message in a turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
