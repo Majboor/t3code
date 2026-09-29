@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useState, useCallback } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { XIcon } from "lucide-react";
 import { Button } from "./ui/button";
@@ -50,10 +50,10 @@ export const ProductTourOverlay = memo(function ProductTourOverlay() {
   const [rect, setRect] = useState<AnchorRect | null>(null);
   const [skipping, setSkipping] = useState(false);
 
-  const finish = () => {
+  const finish = useCallback(() => {
     updateSettings({ hasSeenProductTour: true });
     stop();
-  };
+  }, [stop, updateSettings]);
 
   // Navigate to the step's route once, if we're not already there.
   useEffect(() => {
@@ -120,6 +120,27 @@ export const ProductTourOverlay = memo(function ProductTourOverlay() {
     next(PRODUCT_TOUR_STEPS.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skipping]);
+
+  // Escape ends the tour.
+  //
+  // It had a Skip button and nothing else — no Escape, no click-away. Step one
+  // anchors to the sidebar and places its card to the right, which is directly
+  // over the dashboard's "Add project" button, so a brand-new account's very
+  // first action was covered by a panel whose only exit was a control they had
+  // to find first. The card is the one part of this overlay that takes pointer
+  // events, so "covered" is literal: the click lands on the tour.
+  useEffect(() => {
+    if (!active || skipping) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        finish();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, finish, skipping]);
 
   if (!active || !step || skipping) {
     return null;

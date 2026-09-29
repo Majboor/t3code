@@ -168,7 +168,23 @@ export function createHarness({
   const signUp = (session, email) => authenticate(session, email, "signup");
   const logIn = (session, email) => authenticate(session, email, "login");
 
+  /**
+   * Get the first-run product tour out of the way.
+   *
+   * A fresh account auto-starts an eleven-step tour 1.2s after the shell
+   * mounts, and its first step anchors to the sidebar with the callout placed
+   * to the right — directly over the dashboard's "Add project" button. The
+   * callout is the one part of that overlay that takes pointer events, so the
+   * click lands on the tour and times out waiting for actionability. A real
+   * person dismisses it; so does this.
+   */
+  async function dismissProductTour(page) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await sleep(300);
+  }
+
   async function addProject(page, workspaceRoot) {
+    await dismissProductTour(page);
     await page.locator('button:has-text("Add project")').first().click();
     await sleep(uiSettleMs);
     await page.locator("[data-base-ui-portal] input").first().fill(workspaceRoot);
@@ -610,6 +626,7 @@ export function createHarness({
     signUp,
     logIn,
     addProject,
+    dismissProductTour,
     openProject,
     ensureWorkspacePanelOpen,
     closeWorkspacePanel,
