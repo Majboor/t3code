@@ -593,28 +593,55 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+/**
+ * How many activity rows this query reads for one thread.
+ *
+ * The response was already bounded — `SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD`
+ * is applied after the fact — but the *read* was not: every row a thread had
+ * ever accumulated was fetched from SQLite and schema-decoded, and all but the
+ * newest 200 were then thrown away. On a long-lived thread that is thousands of
+ * rows of work per open, and this is the query behind the endpoint traced in
+ * the 2026-09-14 incident, where a caller re-reading orchestration state every
+ * 15-20 seconds put ~9Mbps of continuous outbound on the uplink until the
+ * WebSocket collapsed.
+ *
+ * Deliberately the same number as the cap rather than a larger one: any excess
+ * read here is read only to be discarded. A send limit, never a retention
+ * policy — every row stays on disk, so nothing is destroyed and a later reader
+ * with a reason to want the whole log can still have it.
+ */
+const THREAD_ACTIVITY_ROW_LIMIT = SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD;
+
   const listThreadActivityRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadActivityDbRowSchema,
     execute: ({ threadId }) =>
       sql`
-        SELECT
-          activity_id AS "activityId",
-          thread_id AS "threadId",
-          turn_id AS "turnId",
-          tone,
-          kind,
-          summary,
-          payload_json AS "payload",
-          sequence,
-          created_at AS "createdAt"
-        FROM projection_thread_activities
-        WHERE thread_id = ${threadId}
+        SELECT * FROM (
+          SELECT
+            activity_id AS "activityId",
+            thread_id AS "threadId",
+            turn_id AS "turnId",
+            tone,
+            kind,
+            summary,
+            payload_json AS "payload",
+            sequence,
+            created_at AS "createdAt"
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+          ORDER BY
+            CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+            sequence DESC,
+            created_at DESC,
+            activity_id DESC
+          LIMIT ${THREAD_ACTIVITY_ROW_LIMIT}
+        )
         ORDER BY
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
           sequence ASC,
-          created_at ASC,
-          activity_id ASC
+          "createdAt" ASC,
+          "activityId" ASC
       `,
   });
 

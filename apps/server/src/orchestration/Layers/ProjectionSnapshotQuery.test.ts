@@ -754,6 +754,71 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  // The response was always capped at 200; the READ was not, so a long-lived
+  // thread fetched and schema-decoded thousands of rows per open only to throw
+  // all but the newest 200 away. This pins both halves: the cap holds, and the
+  // newest end is what survives.
+  it.effect("reads only the activity rows it is going to keep", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-1', 'Project', '/tmp/project-1', NULL, '[]',
+          '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count, pending_user_input_count,
+          has_actionable_proposed_plan, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-1', 'project-1', 'Thread',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          NULL, NULL, NULL, NULL, 0, 0, 0,
+          '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:00.000Z', NULL
+        )
+      `;
+
+      // Comfortably past the send limit.
+      for (let index = 0; index < 1_200; index += 1) {
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            ${`activity-${String(index).padStart(5, "0")}`}, 'thread-1', NULL,
+            'info', 'runtime.note', ${`entry ${index}`}, '{"source":"bulk"}', ${index},
+            '2026-02-24T00:00:00.000Z'
+          )
+        `;
+      }
+
+      const threadDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.equal(threadDetail._tag, "Some");
+      if (threadDetail._tag === "Some") {
+        const activities = threadDetail.value.activities;
+        assert.ok(
+          activities.length <= 200,
+          `a single thread carried ${activities.length} activity rows`,
+        );
+        // The newest end is what is kept, and in its original order.
+        assert.equal(activities.at(-1)?.summary, "entry 1199");
+        assert.ok((activities[0]?.summary ?? "") < (activities.at(-1)?.summary ?? ""));
+      }
+    }),
+  );
+
   it.effect("keeps thread detail activity ordering consistent with shell snapshot ordering", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
