@@ -1,15 +1,24 @@
 /**
- * Authenticated notebook execution endpoints. Same guard as every other
- * `/api/*` read (`authenticateHttpRequest`): a caller runs cells only in a
- * project directory, under their own kernel, once the session says who they
- * are. Kept as HTTP rather than an RPC because it drives long-lived kernel
- * processes (see `kernelManager.ts`) that must outlive any one socket.
+ * Authenticated notebook execution endpoints: a caller runs cells only in a
+ * project directory they are allowed to reach, under their own kernel, once
+ * the session says who they are. Kept as HTTP rather than an RPC because it
+ * drives long-lived kernel processes (see `kernelManager.ts`) that must
+ * outlive any one socket.
+ *
+ * "A project directory" was a claim this file made and did not check.
+ * `authenticateHttpRequest` says who is calling; the `cwd` in the body is the
+ * caller's own choice, and a kernel started there runs as the server process.
+ * Scoping the kernel id per user isolates the namespace, never the filesystem,
+ * so an unchecked `cwd` made this general remote code execution against every
+ * other tenant's workspace for anyone who could sign up. The permission check
+ * is the same one the equivalent WS RPCs run.
  */
 import { Effect, Option, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { respondToAuthError } from "../auth/http.ts";
 import { ServerAuth } from "../auth/Services/ServerAuth.ts";
+import { sessionMayReachWorkspacePath } from "../workspace/fileHttp.ts";
 import { executeCell, restartKernel } from "./kernelManager.ts";
 
 export const NOTEBOOK_EXECUTE_PATH = "/api/notebook/execute";
@@ -50,7 +59,20 @@ export const notebookExecuteRouteLayer = HttpRouter.add(
     }
     const { kernelId, cwd, code } = body.value;
     if (!kernelId || !isSafeCwd(cwd)) {
-      return HttpServerResponse.jsonUnsafe({ error: "Invalid kernel id or working directory." }, { status: 400 });
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Invalid kernel id or working directory." },
+        { status: 400 },
+      );
+    }
+    // `file.write` rather than `file.read`: a cell is arbitrary code running
+    // as the server process in this directory, so the bar is what it can do,
+    // not what it was asked to do. A viewer-role member reads a project; they
+    // do not get to execute in it.
+    if (!(yield* sessionMayReachWorkspacePath(session, cwd, "file.write"))) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "You do not have access to that working directory." },
+        { status: 403 },
+      );
     }
     const result = yield* Effect.tryPromise({
       try: () => executeCell(scopedKernelId(userKey, kernelId), cwd, code),

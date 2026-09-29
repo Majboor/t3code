@@ -51,6 +51,7 @@ function makeSecretStorage(available: boolean): DesktopSecretStorage {
 const clientSettings: ClientSettings = {
   confirmThreadArchive: true,
   confirmThreadDelete: false,
+  hasSeenProductTour: false,
   desktopLayoutMode: "dev",
   desktopLayoutModesJson: "",
   desktopLayoutAutoOpenToast: true,
