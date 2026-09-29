@@ -91,6 +91,15 @@ export interface CollaborationActor {
   readonly userId: UserId;
   readonly displayName: string;
   readonly avatarInitials?: string;
+  /**
+   * The address this account can be proved to own, when the server knows one.
+   *
+   * Resolved server-side from the account record, never taken from the client,
+   * so "absent" means this install cannot prove an address for this session —
+   * not that the caller declined to send one. `acceptInvite` is the only thing
+   * that reads it, and only to refuse a mismatch.
+   */
+  readonly email?: string | null;
 }
 
 export interface CollaborationServiceShape {

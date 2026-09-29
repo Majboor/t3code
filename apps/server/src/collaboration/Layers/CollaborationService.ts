@@ -858,6 +858,28 @@ const makeCollaborationService = Effect.gen(function* () {
         });
       }
 
+      // An invite names a person. Nothing used to check that the person
+      // redeeming it was that person, so an accept URL forwarded, pasted into a
+      // shared channel, or simply opened on a machine signed in as somebody
+      // else granted that somebody else a membership in the tenant — and with
+      // it file.read and file.write on every project root the tenant owns.
+      //
+      // Refused only on a positive mismatch. An actor with no provable address
+      // is let through deliberately: `email` is resolved from the account
+      // record and a hosted account may not have one on this install, so
+      // refusing the absent case would lock every such member out of every
+      // invite. That leaves a real gap for installs that cannot prove an
+      // address, and closing it means giving those accounts a provable one
+      // rather than tightening the test here.
+      const invitedEmail = invite.email?.trim().toLowerCase();
+      const actorEmail = actor.email?.trim().toLowerCase();
+      if (invitedEmail && actorEmail && invitedEmail !== actorEmail) {
+        return yield* new CollaborationError({
+          code: "invalid-invite",
+          message: "This invite was sent to a different account.",
+        });
+      }
+
       const acceptedAt = nowIso();
       const acceptedInvite = {
         ...invite,

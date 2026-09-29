@@ -412,6 +412,39 @@ it.effect("takes a member's write access away and gives it back", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
+// An invite names a person. Redeeming one addressed to somebody else used to
+// grant a membership in their tenant — and with it read and write on every
+// project root that tenant owns — to whoever happened to open the link.
+it.effect("refuses an invite addressed to somebody else", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    const invite = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "member@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const mallory = {
+      userId: UserId.make("user-mallory"),
+      displayName: "Mallory",
+      email: "mallory@example.com",
+    };
+    const refused = yield* Effect.flip(
+      collaboration.acceptInvite(mallory, { inviteId: invite.invite.id }),
+    );
+    assert.strictEqual(refused.code, "invalid-invite");
+
+    // Still redeemable by the person it was actually sent to.
+    const accepted = yield* collaboration.acceptInvite(
+      { ...member, email: "Member@Example.com " },
+      { inviteId: invite.invite.id },
+    );
+    assert.ok(accepted);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
 it.effect("refuses to make the lead read-only", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;
