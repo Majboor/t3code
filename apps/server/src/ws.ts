@@ -5846,10 +5846,6 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                           if (!account || !project) {
                             return Effect.void;
                           }
-                          const providerHomeSegment = result.membership.userId.replaceAll(
-                            /[^a-zA-Z0-9._-]+/g,
-                            "-",
-                          );
                           const providerSession = {
                             id: ProviderSessionId.make(
                               `provider-session:${result.membership.id}:${account.provider}`,
@@ -5858,7 +5854,27 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                             userId: result.membership.userId,
                             providerAccountId: account.id,
                             provider: account.provider,
-                            providerHomeDir: `${account.authHomeDir}/${providerHomeSegment}`,
+                            // The account's own home, not a per-user subdirectory of it.
+                            //
+                            // This used to append a segment derived from the
+                            // member's user id, and nothing anywhere creates
+                            // that directory — not this handler, not the
+                            // provider-auth flow, not the runtime. So accepting
+                            // an organization invite pinned the member to a
+                            // path that does not exist, and every Codex turn
+                            // they ran in that project failed with the login
+                            // missing, while the same account worked everywhere
+                            // else. The sibling that mints a provider session
+                            // for a connected account (the provider-auth
+                            // terminal above) has always used the home
+                            // directly; this is the odd one out, and being the
+                            // odd one out is the whole defect.
+                            //
+                            // Per-member isolation under a shared account is a
+                            // real thing to want, but it has to be built —
+                            // seeded credentials and all — rather than implied
+                            // by a path.
+                            providerHomeDir: account.authHomeDir,
                             cwd: project.workspaceRoot,
                             createdAt: new Date().toISOString(),
                             endedAt: null,
