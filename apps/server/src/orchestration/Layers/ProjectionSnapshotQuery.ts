@@ -292,6 +292,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  /**
+   * Every message of every thread, deliberately uncapped.
+   *
+   * The obvious next move after bounding activity is to bound this the same
+   * way, and it would be wrong. `OrchestrationEngine` builds its in-memory read
+   * model from `getSnapshot()`, and things downstream reason over the whole
+   * list — `ProviderCommandReactor` resolves `actingUserId` from the thread's
+   * last authored message, which decides whose provider account a turn runs on.
+   * A per-thread window here would silently change that answer on any thread
+   * longer than the window, which is a far worse bug than a large response.
+   *
+   * What made the 2026-09-14 incident's response 21MB was activity history,
+   * which is unbounded per thread and is now trimmed in SQL. Messages are
+   * bounded by what people actually type, and the endpoint that serves them is
+   * owner-only and rate limited.
+   *
+   * Bounding this properly means giving the engine a narrower read than the
+   * HTTP endpoint gets, rather than narrowing both at once.
+   */
   const listThreadMessageRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadMessageDbRowSchema,
