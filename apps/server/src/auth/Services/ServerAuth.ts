@@ -106,16 +106,34 @@ export const LOCAL_ACCOUNT_SUBJECT_PREFIX = "local-user:";
  * guest they get the rationing written for strangers sharing a host — 120 RPCs
  * a minute, and a workspace panel that cannot finish listing its own files.
  *
- * Two things have to be true, and loopback is deliberately not one of them: a
+ * Three things have to be true, and loopback is deliberately not one of them: a
  * proxy connects from 127.0.0.1 exactly like the owner's browser does. This
- * server has to be the one holding the projects, and whoever started it has to
- * have declared that nothing in front of it carries strangers here.
+ * server has to be the one holding the projects, whoever started it has to have
+ * declared that nothing in front of it carries strangers here, and there has to
+ * be nobody else who could sign in.
+ *
+ * That last one used to be missing, and its absence was the whole bug: the
+ * predicate asked whether the INSTALL looked single-occupant and never whether
+ * the ACCOUNT was alone on it. `publishedBeyondLoopback` defaults to false and
+ * is only ever set by an opt-in env var, so on an ordinary `bun run dev` with
+ * local password auth every account satisfied it at once. Each of them then
+ * read as the machine's owner: tenant filtering skipped entirely, permission
+ * checks returning immediately, and two people signed up on one server each
+ * seeing and writing all of the other's projects.
+ *
+ * `localAccountCount` is required rather than optional on purpose. An optional
+ * count is one a caller can forget, and a caller that forgets it gets the old
+ * behaviour silently — the failure mode this function exists to prevent,
+ * reintroduced by omission. Required, the typechecker names every site that
+ * has to answer the question.
  */
 export function isSoleOccupantSession(
   session: AuthenticatedSession,
   install: {
     readonly workspaceSource: "this-server" | "paired-environment";
     readonly publishedBeyondLoopback: boolean;
+    /** Local password accounts that can currently sign in. */
+    readonly localAccountCount: number;
   },
 ): boolean {
   if (isMachineOwnerSession(session)) {
@@ -124,7 +142,10 @@ export function isSoleOccupantSession(
   return (
     session.subject.startsWith(LOCAL_ACCOUNT_SUBJECT_PREFIX) &&
     install.workspaceSource === "this-server" &&
-    !install.publishedBeyondLoopback
+    !install.publishedBeyondLoopback &&
+    // One account is the desktop case this allowance was written for. Two is a
+    // server with guests on it, whatever it was started as.
+    install.localAccountCount <= 1
   );
 }
 

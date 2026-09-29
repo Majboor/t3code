@@ -19,6 +19,7 @@ import nodePath from "node:path";
 import { AuthError, ServerAuth, type AuthenticatedSession } from "../auth/Services/ServerAuth.ts";
 import { ServerConfig } from "../config.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { LocalAuthAccountRepository } from "../persistence/Services/LocalAuthAccounts.ts";
 import { TenancyRepository } from "../persistence/Services/Tenancy.ts";
 import { WorkspaceEntries } from "./Services/WorkspaceEntries.ts";
 import { workspaceFileRouteLayer, workspaceFileUploadRouteLayer } from "./fileHttp.ts";
@@ -92,6 +93,13 @@ const makeReadModel = (workspaceRoot: string): OrchestrationReadModel => ({
 });
 
 /** Memberships as the tables hold them: only the ones passed in exist. */
+// Two enabled accounts, so `isSoleOccupantSession` never short-circuits the
+// authorization chain these tests exist to exercise. A single-account install
+// is the desktop case and is covered by soleOccupant.test.ts.
+const localAuthAccountsLayer = Layer.mock(LocalAuthAccountRepository)({
+  countEnabled: () => Effect.succeed(2),
+});
+
 const makeTenancyLayer = (memberships: ReadonlyArray<{ userId: UserId; tenantId: TenantId }>) =>
   Layer.mock(TenancyRepository)({
     loadOrganizations: () =>
@@ -161,6 +169,7 @@ const buildAppUnderTest = (options: {
         }),
       ),
       Layer.provide(makeTenancyLayer(options.memberships)),
+      Layer.provide(localAuthAccountsLayer),
       Layer.provide(Layer.mock(WorkspaceEntries)({ invalidate: () => Effect.void })),
     ),
   );

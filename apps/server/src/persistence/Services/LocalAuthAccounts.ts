@@ -41,6 +41,16 @@ export interface LocalAuthAccountRepositoryShape {
   readonly getByUserId: (
     input: GetLocalAuthAccountByUserIdInput,
   ) => Effect.Effect<Option.Option<LocalAuthAccountRecord>, AuthSessionRepositoryError>;
+  /**
+   * How many local password accounts can currently sign in.
+   *
+   * Exists for one question — "is the person on this session the only person
+   * who could be here" — which is why disabled rows are excluded: an account
+   * that cannot sign in is not a second occupant. A count rather than a list
+   * because no caller needs to know who they are, and reading the whole table
+   * to find out would be a password hash loaded per request.
+   */
+  readonly countEnabled: () => Effect.Effect<number, AuthSessionRepositoryError>;
 }
 
 export class LocalAuthAccountRepository extends Context.Service<

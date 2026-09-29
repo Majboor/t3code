@@ -38,6 +38,7 @@ import {
 } from "../auth/Services/ServerAuth.ts";
 import { ServerConfig } from "../config.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { LocalAuthAccountRepository } from "../persistence/Services/LocalAuthAccounts.ts";
 import { TenancyRepository } from "../persistence/Services/Tenancy.ts";
 import { WorkspaceEntries } from "./Services/WorkspaceEntries.ts";
 
@@ -196,7 +197,11 @@ export const sessionMayReachWorkspacePath = (
   session: AuthenticatedSession,
   cwd: string,
   permission: TenantPermission,
-): Effect.Effect<boolean, never, ServerConfig | OrchestrationEngineService | TenancyRepository> =>
+): Effect.Effect<
+  boolean,
+  never,
+  ServerConfig | OrchestrationEngineService | TenancyRepository | LocalAuthAccountRepository
+> =>
   Effect.gen(function* () {
     const config = yield* ServerConfig;
     const engine = yield* OrchestrationEngineService;
@@ -216,10 +221,17 @@ export const sessionMayReachWorkspacePath = (
     // Owning the install means owning every path on it: the quotas and the
     // isolation exist to keep strangers apart on a shared host, and the
     // machine's own owner is a guest of nobody.
+    const localAuthAccounts = yield* LocalAuthAccountRepository;
+    // Fail closed: a count we could not read must not promote a guest to the
+    // owner of every path on the machine.
+    const localAccountCount = yield* localAuthAccounts
+      .countEnabled()
+      .pipe(Effect.catch(() => Effect.succeed(Number.POSITIVE_INFINITY)));
     if (
       isSoleOccupantSession(session, {
         workspaceSource: config.workspaceSource,
         publishedBeyondLoopback: config.publishedBeyondLoopback,
+        localAccountCount,
       })
     ) {
       return true;

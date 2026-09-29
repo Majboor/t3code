@@ -15,6 +15,7 @@ import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { AuthError, ServerAuth, type AuthenticatedSession } from "../auth/Services/ServerAuth.ts";
 import { ServerConfig } from "../config.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { LocalAuthAccountRepository } from "../persistence/Services/LocalAuthAccounts.ts";
 import { TenancyRepository } from "../persistence/Services/Tenancy.ts";
 import { notebookExecuteRouteLayer } from "./http.ts";
 
@@ -85,6 +86,13 @@ const readModel: OrchestrationReadModel = {
     },
   ],
 };
+
+// Two enabled accounts, so `isSoleOccupantSession` never short-circuits the
+// authorization chain these tests exist to exercise. A single-account install
+// is the desktop case and is covered by soleOccupant.test.ts.
+const localAuthAccountsLayer = Layer.mock(LocalAuthAccountRepository)({
+  countEnabled: () => Effect.succeed(2),
+});
 
 const tenancyLayer = Layer.mock(TenancyRepository)({
   loadOrganizations: () =>
@@ -158,6 +166,7 @@ const buildAppUnderTest = (session: AuthenticatedSession) =>
         Layer.mock(OrchestrationEngineService)({ getReadModel: () => Effect.succeed(readModel) }),
       ),
       Layer.provide(tenancyLayer),
+      Layer.provide(localAuthAccountsLayer),
     ),
   );
 

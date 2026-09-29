@@ -110,10 +110,17 @@ const makeLocalAuthAccountRepository = Effect.gen(function* () {
       Effect.map((account) => (Option.isSome(account) ? Option.some(account.value) : account)),
     );
 
+  const countEnabled: LocalAuthAccountRepositoryShape["countEnabled"] = () =>
+    sql`SELECT COUNT(*) AS "count" FROM auth_local_accounts WHERE disabled_at IS NULL`.pipe(
+      Effect.map((rows) => Number((rows[0] as { count: number } | undefined)?.count ?? 0)),
+      Effect.mapError(toPersistenceSqlError("LocalAuthAccountRepository.countEnabled:query")),
+    );
+
   return {
     upsert,
     getByEmail,
     getByUserId,
+    countEnabled,
   } satisfies LocalAuthAccountRepositoryShape;
 });
 

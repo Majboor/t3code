@@ -159,6 +159,7 @@ import { DeploymentRegistry } from "./deploy/Services/DeploymentRegistry.ts";
 import { AnalyticsStore } from "./analytics/Services/AnalyticsStore.ts";
 import { PackEnablementService } from "./packEnablement/Services/PackEnablementService.ts";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
+import { LocalAuthAccountRepository } from "./persistence/Services/LocalAuthAccounts.ts";
 import { ProjectionThreadPreferenceRepository } from "./persistence/Services/ProjectionThreadPreferences.ts";
 
 const WS_RPC_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -837,6 +838,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       const serviceRegistry = yield* ServiceRegistry;
       const packEnablement = yield* PackEnablementService;
       const threadPreferences = yield* ProjectionThreadPreferenceRepository;
+      const localAuthAccounts = yield* LocalAuthAccountRepository;
       const rateLimitRef = yield* Ref.make({
         windowStartedAt: Date.now(),
         count: 0,
@@ -844,9 +846,17 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       // Token reports reach every watcher of a thread, so only the connection
       // that asked for the turn is allowed to attribute them to its own user.
       const turnsStartedHereRef = yield* Ref.make(new Set<string>());
+      // Read once per connection rather than per call: it decides how this
+      // whole connection is metered and scoped, and a number that changed
+      // underneath a live session would move the boundary mid-conversation.
+      // Fail closed — a count we could not read must not promote a guest.
+      const localAccountCount = yield* localAuthAccounts
+        .countEnabled()
+        .pipe(Effect.catch(() => Effect.succeed(Number.POSITIVE_INFINITY)));
       const machineOwnerSession = isSoleOccupantSession(session, {
         workspaceSource: config.workspaceSource,
         publishedBeyondLoopback: config.publishedBeyondLoopback,
+        localAccountCount,
       });
       /**
        * The tenant this connection is a *guest* of, which is not the same
