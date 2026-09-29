@@ -332,28 +332,58 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  /**
+   * The newest activity rows per thread, for every thread at once.
+   *
+   * This used to select the entire table — every row every thread had ever
+   * accumulated — and the caller then trimmed each thread to
+   * `SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD` in memory. The trim was real
+   * but it happened after the cost: on the box where the 2026-09-14 incident
+   * was traced, that was ~12,000 rows fetched and schema-decoded on every
+   * snapshot read, to send a couple of thousand. Something re-reading this
+   * every 15-20 seconds is what put ~9Mbps of continuous outbound on a home
+   * uplink until the WebSocket collapsed.
+   *
+   * The window does the trimming in SQLite, so the rows are never read. The
+   * inner ordering is the outer ordering reversed, which is how "newest N"
+   * is expressed; the outer query restores the order callers expect.
+   */
   const listThreadActivityRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadActivityDbRowSchema,
     execute: () =>
       sql`
         SELECT
-          activity_id AS "activityId",
-          thread_id AS "threadId",
-          turn_id AS "turnId",
-          tone,
-          kind,
-          summary,
-          payload_json AS "payload",
-          sequence,
-          created_at AS "createdAt"
-        FROM projection_thread_activities
+          "activityId", "threadId", "turnId", tone, kind, summary, "payload",
+          sequence, "createdAt"
+        FROM (
+          SELECT
+            activity_id AS "activityId",
+            thread_id AS "threadId",
+            turn_id AS "turnId",
+            tone,
+            kind,
+            summary,
+            payload_json AS "payload",
+            sequence,
+            created_at AS "createdAt",
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC,
+                created_at DESC,
+                activity_id DESC
+            ) AS "rowNumber"
+          FROM projection_thread_activities
+        )
+        WHERE "rowNumber" <= ${SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD}
         ORDER BY
-          thread_id ASC,
+          "threadId" ASC,
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
           sequence ASC,
-          created_at ASC,
-          activity_id ASC
+          "createdAt" ASC,
+          "activityId" ASC
       `,
   });
 
