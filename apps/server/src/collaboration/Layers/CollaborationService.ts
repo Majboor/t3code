@@ -514,13 +514,48 @@ function newActivityId() {
   return CollaborationActivityId.make(`activity:${crypto.randomUUID()}`);
 }
 
-function appendActivity(
+/**
+ * How much shared history one tenant keeps in memory.
+ *
+ * Per tenant, because the cap used to be global: the newest 999 rows on the
+ * whole instance, whoever they belonged to. One busy workspace therefore
+ * pushed every other workspace's history out, and since persistence rewrites
+ * the table from this state, what fell out of memory was deleted from disk —
+ * another tenant's audit trail destroyed by activity they cannot see and did
+ * not cause.
+ */
+const ACTIVITIES_PER_TENANT_LIMIT = 200;
+
+/**
+ * And how much the instance keeps in total, whatever the split.
+ *
+ * A per-tenant cap alone is not a bound: the number of tenants is not bounded,
+ * and every mutation persists the whole array, so "200 each" on a thousand
+ * tenants is a two-hundred-thousand-row write on every keystroke of presence.
+ * This is the backstop that keeps that arithmetic finite. It is deliberately
+ * far above the per-tenant limit so that in ordinary use it never binds and the
+ * per-tenant rule is what people actually experience.
+ */
+const ACTIVITIES_TOTAL_LIMIT = 10_000;
+
+export function appendActivity(
   state: CollaborationState,
   activity: CollaborationState["activities"][number],
 ): CollaborationState {
+  const appended = [...state.activities, activity];
+
+  // Only the tenant that just grew can be over its limit, so only its rows are
+  // considered. Oldest-first within that tenant; identity comparison is safe
+  // because these are the very objects held in state.
+  const ownRows = appended.filter((entry) => entry.tenantId === activity.tenantId);
+  const excess = ownRows.length - ACTIVITIES_PER_TENANT_LIMIT;
+  const dropped = excess > 0 ? new Set(ownRows.slice(0, excess)) : null;
+  const trimmed = dropped ? appended.filter((entry) => !dropped.has(entry)) : appended;
+
   return {
     ...state,
-    activities: [...state.activities.slice(-999), activity],
+    activities:
+      trimmed.length > ACTIVITIES_TOTAL_LIMIT ? trimmed.slice(-ACTIVITIES_TOTAL_LIMIT) : trimmed,
   };
 }
 
