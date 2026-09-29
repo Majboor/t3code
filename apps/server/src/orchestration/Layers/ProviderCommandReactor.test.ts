@@ -721,6 +721,77 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
+  // The defect this guards: a live session was matched on tenant, path and
+  // provider but never on the person. In a shared workspace the second member
+  // to take a turn inherited the first member's provider session, so their
+  // turn ran on — and was billed to — an account they never connected. One
+  // borrowed Claude account was found live across four separate instances
+  // this way.
+  it("does not hand one member's private provider session to another member", async () => {
+    const now = new Date().toISOString();
+    const providerAccount: ProviderAccount = {
+      id: ProviderAccountId.make("provider-account-1"),
+      provider: "codex",
+      tenantId: TenantId.make("tenant-acme"),
+      owner: { type: "user", userId: UserId.make("user-1") },
+      sharing: "private",
+      authHomeDir: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+      configDir: "/srv/t3/tenants/acme/provider-homes/user-1/codex/config",
+      secretsDir: "/srv/t3/tenants/acme/data/userdata/secrets/provider-accounts/user-1/codex",
+      createdAt: now,
+      disabledAt: null,
+    };
+    const providerSession: ProviderSessionIsolation = {
+      id: ProviderSessionId.make("provider-session-1"),
+      tenantId: TenantId.make("tenant-acme"),
+      userId: UserId.make("user-1"),
+      providerAccountId: providerAccount.id,
+      provider: "codex",
+      providerHomeDir: providerAccount.authHomeDir,
+      cwd: "/tmp/provider-project",
+      createdAt: now,
+      endedAt: null,
+    };
+    const harness = await createHarness({
+      providerIsolation: {
+        providerAccounts: [providerAccount],
+        providerSessions: [providerSession],
+      },
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        packModeEnabled: false,
+        commandId: CommandId.make("cmd-turn-start-other-member"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-other-member"),
+          role: "user",
+          // A different member of the same tenant, in the same workspace.
+          authorUserId: UserId.make("user-2"),
+          text: "hello from the other member",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    // No session is launched at all. user-2 has no credential of their own, and
+    // the no-fallback rule refuses rather than quietly spending user-1's — which
+    // is the whole point: the refusal is visible and names what to do about it,
+    // where the old behaviour was an invisible transfer of somebody's quota.
+    // No session is launched at all. user-2 has no credential of their own, and
+    // the no-fallback rule refuses rather than quietly spending user-1's — which
+    // is the point: the refusal is visible and says what to do about it, where
+    // the old behaviour was an invisible transfer of somebody else's quota.
+    const detail = await waitForTurnStartFailure(harness);
+    expect(detail).toContain("No Codex account is connected for you");
+    expect(harness.startSession.mock.calls.length).toBe(0);
+  });
+
   it("attaches isolated provider launch environment from persisted provider session", async () => {
     const now = new Date().toISOString();
     const providerAccount: ProviderAccount = {
@@ -765,7 +836,11 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-provider-env"),
           role: "user",
-          authorUserId: HARNESS_USER_ID,
+          // The session below belongs to user-1, so the turn has to be user-1's
+          // too. A persisted session is only reused by the member it belongs
+          // to; a mismatch here would be asserting that one member may spend
+          // another's provider account.
+          authorUserId: UserId.make("user-1"),
           text: "hello isolated provider",
           attachments: [],
         },

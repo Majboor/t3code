@@ -546,13 +546,40 @@ const make = Effect.gen(function* () {
           (project) =>
             project.ownership !== undefined && isPathInsideRoot(input.cwd!, project.workspaceRoot),
         )?.ownership?.tenantId;
+        // A tenant is not a person. Matching a live session on tenant alone
+        // reuses whichever member happened to open one first, so in a shared
+        // workspace the second person's turn runs on — and is billed to — the
+        // first person's provider account. That is not hypothetical: one
+        // borrowed Claude account was found connected across four separate
+        // instances, drained by members who never connected an account of
+        // their own and had no way to tell whose they were spending.
+        //
+        // The exception is an account whose owner deliberately shared it with
+        // the tenant. That is the provider-sharing feature working as
+        // designed, and the roster tells everyone whose it is, so it stays.
+        const isTenantShared = (session: (typeof snapshot.providerSessions)[number]) => {
+          const account = snapshot.providerAccounts.find(
+            (candidate) => candidate.id === session.providerAccountId,
+          );
+          return account !== undefined && account.sharing === "tenant-shared";
+        };
         const providerSession = snapshot.providerSessions
           .filter(
             (session) =>
               session.endedAt === null &&
               session.provider === input.provider &&
               isPathInsideRoot(input.cwd!, session.cwd) &&
-              (owningTenantId === undefined || session.tenantId === owningTenantId),
+              (owningTenantId === undefined || session.tenantId === owningTenantId) &&
+              // An unknown actor keeps the old tenant-scoped behaviour rather
+              // than being refused. `actingUserId` falls back to the last
+              // message author, so it is absent only on a thread nobody has
+              // spoken in — the CLI and automation path. There is no second
+              // identified member to leak to in that case, and refusing would
+              // break reuse that has always been correct. Every cross-member
+              // leak this guards runs on a thread that has an author.
+              (actingUserId == null ||
+                session.userId === actingUserId ||
+                isTenantShared(session)),
           )
           .toSorted((left, right) => {
             const leftAccount = snapshot.providerAccounts.find(
