@@ -6,6 +6,18 @@ export function percentUsed(used: number, limit: number): number {
   return Math.max(0, Math.min(100, Math.round((used / limit) * 100)));
 }
 
+/**
+ * True once usage has actually reached (or passed) the limit. `percentUsed`
+ * alone can't answer this: it clamps to 100 the same way at exactly-the-limit
+ * and while merely close to it, so a bar rendered from percent alone looks
+ * identical in both cases — the one situation a person actually needs called
+ * out (their next request is refused right now) reads as "almost full,
+ * probably fine."
+ */
+export function isLimitReached(used: number, limit: number): boolean {
+  return limit > 0 && used >= limit;
+}
+
 /** "resets in 3h 42m" / "resets in 12d" — never the raw timestamp or token counts. */
 export function formatResetsIn(resetsAt: string | null, nowMs: number = Date.now()): string {
   if (resetsAt === null) return "starts on your next request";

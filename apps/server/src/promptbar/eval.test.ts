@@ -351,6 +351,7 @@ it.effect("resolveTestSetCases: maps a successful resolution's zone and candidat
               name: "Send mail",
               description: "desc",
               retrievalScore: 0.95,
+              decisionRelevance: null,
               params: [],
             },
           ],

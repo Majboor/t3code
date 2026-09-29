@@ -1,4 +1,9 @@
-import { type EnvironmentId, type MessageId, type TurnId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type MessageId,
+  type OrchestrationSessionStatus,
+  type TurnId,
+} from "@t3tools/contracts";
 import {
   createContext,
   memo,
@@ -88,6 +93,8 @@ interface TimelineRowSharedState {
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onRetryStuckTurn: () => void;
+  isRetryingStuckTurn: boolean;
 }
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
@@ -101,6 +108,7 @@ interface MessagesTimelineProps {
   activeTurnInProgress: boolean;
   activeTurnId?: TurnId | null;
   activeTurnStartedAt: string | null;
+  sessionOrchestrationStatus: OrchestrationSessionStatus | null;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   completionDividerBeforeEntryId: string | null;
@@ -119,6 +127,8 @@ interface MessagesTimelineProps {
   workspaceRoot: string | undefined;
   collaborationMembers: CollaborationMembers;
   onIsAtEndChange: (isAtEnd: boolean) => void;
+  onRetryStuckTurn: () => void;
+  isRetryingStuckTurn: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +140,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnInProgress,
   activeTurnId,
   activeTurnStartedAt,
+  sessionOrchestrationStatus,
   listRef,
   timelineEntries,
   completionDividerBeforeEntryId,
@@ -148,6 +159,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   workspaceRoot,
   collaborationMembers,
   onIsAtEndChange,
+  onRetryStuckTurn,
+  isRetryingStuckTurn,
 }: MessagesTimelineProps) {
   const rawRows = useMemo(
     () =>
@@ -156,6 +169,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         completionDividerBeforeEntryId,
         isWorking,
         activeTurnStartedAt,
+        sessionOrchestrationStatus,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
       }),
@@ -164,6 +178,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       completionDividerBeforeEntryId,
       isWorking,
       activeTurnStartedAt,
+      sessionOrchestrationStatus,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
     ],
@@ -214,6 +229,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onRetryStuckTurn,
+      isRetryingStuckTurn,
     }),
     [
       activeTurnInProgress,
@@ -231,6 +248,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onRetryStuckTurn,
+      isRetryingStuckTurn,
     ],
   );
 
@@ -499,15 +518,16 @@ function TimelineRowContent({ row }: { row: TimelineRow }) {
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
             </span>
-            <span>
-              {row.createdAt ? (
-                <>
-                  Working for <WorkingTimer createdAt={row.createdAt} />
-                </>
-              ) : (
-                "Working..."
-              )}
-            </span>
+            {row.createdAt ? (
+              <WorkingStatus
+                createdAt={row.createdAt}
+                isSessionStarting={row.isSessionStarting}
+                onRetry={ctx.onRetryStuckTurn}
+                isRetrying={ctx.isRetryingStuckTurn}
+              />
+            ) : (
+              <span>Working...</span>
+            )}
           </div>
         </div>
       )}
@@ -529,6 +549,67 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
     return () => clearInterval(id);
   }, [createdAt]);
   return <>{formatWorkingTimer(createdAt, new Date(nowMs).toISOString()) ?? "0s"}</>;
+}
+
+// Past this many seconds with no visible progress, some providers (slow
+// upstream nodes, not a queue on our side) are genuinely just slow — offer an
+// escape hatch instead of leaving the person guessing whether it's frozen.
+const SLOW_TURN_RETRY_THRESHOLD_SECONDS = 20;
+
+/** Live "Working for Xs" text that, past a threshold, switches to an honest
+ *  "still waiting" message and offers a one-click retry. */
+function WorkingStatus({
+  createdAt,
+  isSessionStarting,
+  onRetry,
+  isRetrying,
+}: {
+  createdAt: string;
+  isSessionStarting: boolean;
+  onRetry: () => void;
+  isRetrying: boolean;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [createdAt]);
+  const startedAtMs = Date.parse(createdAt);
+  const elapsedSeconds = Number.isFinite(startedAtMs)
+    ? Math.max(0, Math.floor((nowMs - startedAtMs) / 1000))
+    : 0;
+  const isSlow = elapsedSeconds >= SLOW_TURN_RETRY_THRESHOLD_SECONDS;
+
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span>
+        {isRetrying
+          ? "Retrying…"
+          : isSlow
+            ? "Still waiting on the LLM provider — this can happen occasionally"
+            : isSessionStarting
+              ? (
+                  <>
+                    Starting AI session… <WorkingTimer createdAt={createdAt} />
+                  </>
+                )
+              : (
+                  <>
+                    Working for <WorkingTimer createdAt={createdAt} />
+                  </>
+                )}
+      </span>
+      {isSlow && !isRetrying && (
+        <button
+          type="button"
+          className="text-muted-foreground/70 underline decoration-dotted underline-offset-2 transition-colors duration-150 hover:text-foreground/80"
+          onClick={onRetry}
+        >
+          Retry
+        </button>
+      )}
+    </span>
+  );
 }
 
 /** Live timestamp + elapsed duration for a streaming assistant message. */

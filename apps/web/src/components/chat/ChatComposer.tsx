@@ -345,6 +345,8 @@ export interface ChatComposerHandle {
     selectedProvider: ProviderKind;
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
+    /** Whether Pack Mode was on at send time — carried onto the dispatched turn so the server can label it for the workspace pack draft. */
+    packModeEnabled: boolean;
   };
 }
 
@@ -694,6 +696,22 @@ export const ChatComposer = memo(
     // signal `ChatView.tsx`'s `envLocked` already uses to mean "this thread has
     // history now".
     const isFirstMessageInSession = !activeThread || activeThread.messages.length === 0;
+    // Last few turns as context for the promptbar's stage-3 decision model —
+    // "user asked X, then Y" disambiguates a terse follow-up ("do the ssh one
+    // instead") that the bare current prompt alone can't. System messages are
+    // skipped (that's instructions, not conversational history); truncated
+    // per-message so one long turn can't crowd out the others in a small
+    // context budget.
+    const recentPromptbarContext = useMemo(() => {
+      const messages = activeThread?.messages ?? [];
+      return messages
+        .filter((message) => message.role === "user" || message.role === "assistant")
+        .slice(-3)
+        .map((message) => ({
+          role: message.role as "user" | "assistant",
+          text: message.text.length > 500 ? `${message.text.slice(0, 500)}…` : message.text,
+        }));
+    }, [activeThread?.messages]);
     const composerFormRef = useRef<HTMLFormElement>(null);
     const composerFormHeightRef = useRef(0);
     const composerSelectLockRef = useRef(false);
@@ -1755,6 +1773,7 @@ export const ChatComposer = memo(
           selectedProvider,
           selectedModel,
           selectedProviderModels,
+          packModeEnabled: packModeSettings.enabled,
         }),
       }),
       [
@@ -1773,6 +1792,7 @@ export const ChatComposer = memo(
         selectedPromptEffort,
         selectedProvider,
         selectedProviderModels,
+        packModeSettings.enabled,
       ],
     );
 
@@ -1957,6 +1977,7 @@ export const ChatComposer = memo(
                 packModeEnabled={packModeSettings.enabled}
                 layout={packSettings.layout}
                 isFirstMessageInSession={isFirstMessageInSession}
+                recentContext={recentPromptbarContext}
                 onChangeSettings={updatePackSettings}
                 onUsePack={(nextPrompt) => {
                   // Cursor to the end: the mention is appended, so that is

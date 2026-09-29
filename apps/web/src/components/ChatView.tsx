@@ -13,6 +13,7 @@ import {
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
+  type UploadChatAttachment,
   type TurnId,
   type KeybindingCommand,
   OrchestrationThreadActivity,
@@ -621,6 +622,8 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
 });
 
 export default function ChatView(props: ChatViewProps) {
+  // TEMP DIAGNOSTIC — unconditional, fires on every single render, no deps.
+  console.log("[chatview-mount-diag]", { threadId: props.threadId, at: new Date().toISOString() });
   const {
     environmentId,
     threadId,
@@ -722,6 +725,7 @@ export default function ChatView(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  const [isRetryingStuckTurn, setIsRetryingStuckTurn] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
@@ -761,6 +765,12 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
+  const lastSentTurnRef = useRef<{
+    text: string;
+    modelSelection: ModelSelection;
+    attachments: UploadChatAttachment[];
+    packModeEnabled: boolean;
+  } | null>(null);
 
   const terminalState = useTerminalStateStore((state) =>
     selectThreadTerminalState(state.terminalStateByThreadKey, routeThreadRef),
@@ -1234,6 +1244,37 @@ export default function ChatView(props: ChatViewProps) {
     activeThread?.session ?? null,
     localDispatchStartedAt,
   );
+  // TEMP DIAGNOSTIC — remove once the "Working" indicator gap is confirmed fixed.
+  useEffect(() => {
+    console.log("[working-diag]", {
+      isWorking,
+      isSendBusy,
+      phase,
+      isConnecting,
+      isRevertingCheckpoint,
+      activeWorkStartedAt,
+      localDispatchStartedAt,
+      sessionOrchestrationStatus: activeThread?.session?.orchestrationStatus ?? null,
+      sessionUpdatedAt: activeThread?.session?.updatedAt ?? null,
+      latestTurnTurnId: activeLatestTurn?.turnId ?? null,
+      latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
+      latestTurnCompletedAt: activeLatestTurn?.completedAt ?? null,
+      now: new Date().toISOString(),
+    });
+  }, [
+    isWorking,
+    isSendBusy,
+    phase,
+    isConnecting,
+    isRevertingCheckpoint,
+    activeWorkStartedAt,
+    localDispatchStartedAt,
+    activeThread?.session?.orchestrationStatus,
+    activeThread?.session?.updatedAt,
+    activeLatestTurn?.turnId,
+    activeLatestTurn?.startedAt,
+    activeLatestTurn?.completedAt,
+  ]);
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
@@ -2721,6 +2762,7 @@ export default function ChatView(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
+      packModeEnabled: ctxPackModeEnabled,
     } = sendCtx;
     const promptForSend = promptRef.current;
     const {
@@ -2966,6 +3008,12 @@ export default function ChatView(props: ChatViewProps) {
       }
       await capturePendingWorkspaceLiveDiffBaseline(threadIdForSend, activeWorkspaceRoot);
       beginLocalDispatch({ preparingWorktree: false });
+      lastSentTurnRef.current = {
+        text: outgoingMessageText,
+        modelSelection: ctxSelectedModelSelection,
+        attachments: turnAttachments,
+        packModeEnabled: ctxPackModeEnabled,
+      };
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -2980,6 +3028,7 @@ export default function ChatView(props: ChatViewProps) {
         titleSeed: title,
         runtimeMode,
         interactionMode,
+        packModeEnabled: ctxPackModeEnabled,
         ...(bootstrap ? { bootstrap } : {}),
         createdAt: messageCreatedAt,
       });
@@ -3050,6 +3099,73 @@ export default function ChatView(props: ChatViewProps) {
       createdAt: new Date().toISOString(),
     });
   };
+
+  // A one-click escape hatch for a turn that's taking a while — interrupts
+  // the stalled turn and resends the same prompt (text, images, and terminal
+  // contexts — the latter are already baked into `text` by the original send)
+  // as a fresh one.
+  const onRetryStuckTurn = useCallback(async () => {
+    // Guards against mashing the button: without this, each click fires its
+    // own interrupt+resend, racing itself and piling up duplicate turns.
+    if (isRetryingStuckTurn) return;
+    const api = readEnvironmentApi(environmentId);
+    const lastSentTurn = lastSentTurnRef.current;
+    if (!api || !activeThread || !lastSentTurn) return;
+    setIsRetryingStuckTurn(true);
+    try {
+      // Best-effort: a turn that's actually stuck (no provider resume state,
+      // an already-closed session) can make this reject. The goal is a fresh
+      // working turn either way, so a failed interrupt should not block the
+      // resend below.
+      await api.orchestration
+        .dispatchCommand({
+          type: "thread.turn.interrupt",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          createdAt: new Date().toISOString(),
+        })
+        .catch(() => undefined);
+      const messageId = newMessageId();
+      const createdAt = new Date().toISOString();
+      const optimisticAttachments = lastSentTurn.attachments.map((attachment) => ({
+        type: "image" as const,
+        id: randomUUID(),
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        previewUrl: attachment.dataUrl,
+      }));
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageId,
+          role: "user",
+          text: lastSentTurn.text,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          createdAt,
+          streaming: false,
+        },
+      ]);
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.start",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        message: {
+          messageId,
+          role: "user",
+          text: lastSentTurn.text,
+          attachments: lastSentTurn.attachments,
+        },
+        modelSelection: lastSentTurn.modelSelection,
+        runtimeMode,
+        interactionMode,
+        packModeEnabled: lastSentTurn.packModeEnabled,
+        createdAt,
+      });
+    } finally {
+      setIsRetryingStuckTurn(false);
+    }
+  }, [environmentId, activeThread, runtimeMode, interactionMode, isRetryingStuckTurn]);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -3248,6 +3364,7 @@ export default function ChatView(props: ChatViewProps) {
         selectedProviderModels: ctxSelectedProviderModels,
         selectedPromptEffort: ctxSelectedPromptEffort,
         selectedModelSelection: ctxSelectedModelSelection,
+        packModeEnabled: ctxPackModeEnabled,
       } = sendCtx;
 
       const threadIdForSend = activeThread.id;
@@ -3313,6 +3430,7 @@ export default function ChatView(props: ChatViewProps) {
           titleSeed: activeThread.title,
           runtimeMode,
           interactionMode: nextInteractionMode,
+          packModeEnabled: ctxPackModeEnabled,
           ...(nextInteractionMode === "default" && activeProposedPlan
             ? {
                 sourceProposedPlan: {
@@ -3388,6 +3506,7 @@ export default function ChatView(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
+      packModeEnabled: ctxPackModeEnabled,
     } = sendCtx;
 
     const createdAt = new Date().toISOString();
@@ -3441,6 +3560,7 @@ export default function ChatView(props: ChatViewProps) {
             titleSeed: nextThreadTitle,
             runtimeMode,
             interactionMode: "default",
+            packModeEnabled: ctxPackModeEnabled,
             sourceProposedPlan: {
               threadId: activeThread.id,
               planId: activeProposedPlan.id,
@@ -3849,6 +3969,7 @@ export default function ChatView(props: ChatViewProps) {
               activeTurnInProgress={isWorking || !latestTurnSettled}
               activeTurnId={activeLatestTurn?.turnId ?? null}
               activeTurnStartedAt={activeWorkStartedAt}
+              sessionOrchestrationStatus={activeThread.session?.orchestrationStatus ?? null}
               listRef={legendListRef}
               timelineEntries={timelineEntries}
               completionDividerBeforeEntryId={completionDividerBeforeEntryId}
@@ -3867,6 +3988,8 @@ export default function ChatView(props: ChatViewProps) {
               workspaceRoot={activeWorkspaceRoot}
               collaborationMembers={collaborationMembers}
               onIsAtEndChange={onIsAtEndChange}
+              onRetryStuckTurn={onRetryStuckTurn}
+              isRetryingStuckTurn={isRetryingStuckTurn}
             />
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}

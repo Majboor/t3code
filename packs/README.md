@@ -14,6 +14,7 @@ works on another machine if the pack travels with the code.
 | `analytics-core`         | Reporting events from a deployment: declare before you send, post with the key alone, and never let a failed report break the page.                                                                                 |
 | `pdf-delivery`           | Serving a generated PDF and reporting how far readers get.                                                                                                                                                          |
 | `gmail-apps-script-mail` | Sending mail through a Google Apps Script web app, including the `text/plain` requirement and the per-mailbox daily caps.                                                                                           |
+| `publish-workspace-pack` | Turning a workspace's Pack Mode draft (`.t3pack/draft.pack.json`, labeled turn by turn by Jev) into a real pack, through this same init/validate/sign/publish pipeline.                                             |
 
 ## Signing
 

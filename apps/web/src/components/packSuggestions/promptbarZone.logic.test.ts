@@ -14,6 +14,7 @@ const candidate = (overrides: Partial<PromptbarCandidate> = {}): PromptbarCandid
   name: "ssh-deploy",
   description: "Ships a project to a host over SSH.",
   retrievalScore: 0.9,
+  decisionRelevance: null,
   params: [],
   ...overrides,
 });

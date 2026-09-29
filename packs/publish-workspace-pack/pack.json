@@ -1,0 +1,151 @@
+{
+  "formatVersion": "2.0",
+  "identity": {
+    "id": "pack_06f254faaead594cdce3",
+    "name": "publish-workspace-pack",
+    "version": "0.1.0",
+    "displayName": "publish-workspace-pack",
+    "summary": "Turn a workspace's Pack Mode draft (.t3pack/draft.pack.json) into a real, signed pack",
+    "publisher": {
+      "type": "user",
+      "handle": "t3demo",
+      "displayName": "t3demo"
+    },
+    "license": "UNLICENSED",
+    "tags": [
+      "pack-authoring",
+      "jev",
+      "pack-mode",
+      "meta"
+    ]
+  },
+  "provenance": {
+    "workspace": {
+      "workspaceKeyId": "wsk_7f2c3cde0f4a8888ce25"
+    },
+    "extractedAt": "2026-09-19T00:00:00.000Z",
+    "extractedBy": {
+      "type": "agent",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5"
+    },
+    "handover": {
+      "path": "handover.md",
+      "summary": "Written in the same change as Pack Mode's draft-writing pipeline (PackDraftWriter.ts, TurnLabeling.ts, PackDraft.ts) before any real draft had accumulated enough entries to exercise it. Gives an agent a procedure for turning .t3pack/draft.pack.json into a real pack.json/README.md/handover.md through the existing pack-cli init/validate/sign/publish pipeline, because Jev can only emit typed classifications, never the prose a pack's knowledge entries need. No live run yet — see handover.md for what the first one should confirm.",
+      "generatedAt": "2026-09-19T00:00:00.000Z"
+    }
+  },
+  "capability": {
+    "does": "Turns a workspace's Pack Mode draft (.t3pack/draft.pack.json) into a real pack: writes knowledge entries citing specific turns, then runs pack-cli init/validate/sign/publish.",
+    "nonGoals": [
+      "Does not itself generate pack prose — Jev is a typed classifier and cannot output free text; the actual writing is the agent's generative pass, this pack only sequences it.",
+      "Does not clear or archive .t3pack/draft.pack.json after publishing — the draft keeps accumulating and a later publish is defined as a merge against the existing manifest.",
+      "Does not make a published pack public — packages/pack-cli publish always makes it private to the workspace, same as every other pack; listing it is a separate, deliberate act."
+    ]
+  },
+  "knowledge": {
+    "failureModes": [],
+    "integration": [
+      {
+        "id": "jev-labels-are-typed-not-prose",
+        "title": "Draft entries carry classifications, not sentences — the agent has to write the sentences",
+        "detail": {
+          "kind": "pattern",
+          "rule": "Never copy a draft entry's outcome/findingCategory fields directly into a knowledge entry's prose. Read the entry's userPrompt, assistantSummary, activitySummaries and changedFiles, and write the symptom/trigger/rationale sentences from what actually happened in that turn.",
+          "rationale": "Jev (typesafe/jev-1.13) answers only noul/choice/score questions — every field in a PackDraftEntry is a label, not text a person wrote. A failureModes[].symptom that just reads back 'outcome: failed, findingCategory: error_resolution' tells a future reader nothing they couldn't get from the draft file itself.",
+          "example": "outcome: \"failed\", findingCategory: \"gotcha\", userPrompt: \"deploy to CT2004\" -> symptom: \"Direct root SSH to CT2004 (192.168.18.154) does not work\", trigger: \"CT2004 is a Proxmox container; it must be reached via `pct exec 2004 -- <command>` from the Proxmox host, not a direct SSH session.\""
+        },
+        "conditions": {
+          "observedAt": "2026-09-19T00:00:00.000Z",
+          "other": []
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-09-19T00:00:00.000Z"
+        }
+      },
+      {
+        "id": "republishing-is-a-merge-not-a-rewrite",
+        "title": "A second publish against the same pack name reads the existing manifest first",
+        "detail": {
+          "kind": "wiring",
+          "prompt": "The draft file is never cleared by publishing, so a later run of this pack's prompt against packs/<name>/ that already exists will see entries it already turned into knowledge last time, mixed in with genuinely new ones. Read the existing pack.json's knowledge arrays before writing anything, keep every entry already there, and only add entries for turns not yet reflected — then bump the version (t3-pack version --bump patch|minor) rather than starting the manifest over.",
+          "touches": []
+        },
+        "conditions": {
+          "observedAt": "2026-09-19T00:00:00.000Z",
+          "other": []
+        },
+        "origin": {
+          "introducedIn": "0.1.0",
+          "source": {
+            "kind": "human-report"
+          },
+          "recordedAt": "2026-09-19T00:00:00.000Z"
+        }
+      }
+    ]
+  },
+  "requirements": {
+    "environment": [],
+    "toolchain": [
+      {
+        "name": "node"
+      }
+    ],
+    "preflightCommand": "test -f .t3pack/draft.pack.json"
+  },
+  "runtime": {
+    "target": "none",
+    "commands": {}
+  },
+  "permissions": {
+    "acceptsInboundNetwork": false,
+    "secrets": []
+  },
+  "verification": {
+    "record": {
+      "measuredAt": "2026-09-19T00:00:00.000Z",
+      "installsAttempted": 0,
+      "installsSucceeded": 0,
+      "deploymentsAttempted": 0,
+      "deploymentsSurviving": 0,
+      "cumulativeServiceDays": 0,
+      "breakagesCaught": 0,
+      "breakagesFixed": 0
+    }
+  },
+  "visibility": {
+    "scope": "workspace",
+    "workspaceKeyId": "wsk_7f2c3cde0f4a8888ce25"
+  },
+  "integration": {
+    "prompt": "The person wants their workspace's Pack Mode draft turned into (or merged into) a real, publishable pack. The draft lives at .t3pack/draft.pack.json and only exists if Pack Mode was turned on for at least one turn — if the file is missing, say so and stop rather than inventing content.\n\n1. Read .t3pack/draft.pack.json. It has `entries: PackDraftEntry[]`, each with `turnId`, `labeledAt`, `outcome` (succeeded/partial/failed), `findingCategory` (fix/gotcha/config/error_resolution/none), `userPrompt`, `assistantSummary`, `activitySummaries`, `changedFiles`, `workspaceCwd`. Every entry already cleared Jev's worth-keeping threshold, so treat all of them as signal, not noise to filter further.\n\n2. Decide the pack's name and scope. Ask the person if it isn't obvious from the entries' content (e.g. a draft mixing three unrelated deploy targets probably wants either one pack per target or a person's explicit steer on which to keep). Do not guess a scope wider than what the entries actually cover.\n\n3. If packs/<name>/pack.json does not exist yet: `node packages/pack-cli/src/bin.ts init <name> --dir packs/<name> --publisher <handle> --summary '<one line>' --does '<one line>'` to scaffold it with a valid, empty knowledge section. If it already exists, read it fully first — this run is a merge (see the `republishing-is-a-merge-not-a-rewrite` integration entry below), not a fresh write.\n\n4. Group entries by findingCategory and outcome, then write real knowledge:\n   - `outcome: \"failed\"` or `\"partial\"` entries with findingCategory `error_resolution`/`gotcha` become `knowledge.failureModes[]` entries — write the `symptom`/`trigger` from the entry's actual userPrompt/assistantSummary/activitySummaries, not from the label names themselves (see `jev-labels-are-typed-not-prose` below). Cite the entry's changedFiles under `detection`/`resolution` where relevant, and use `labeledAt` for `conditions.observedAt`/`firstSeenAt`/`lastSeenAt`.\n   - `outcome: \"succeeded\"` entries with findingCategory `fix`/`config` become `knowledge.integration[]` entries — the pattern or wiring that worked, written as a rule and rationale a future agent could follow without re-deriving it.\n   - Entries with findingCategory `none`, or that are too thin to support a standalone knowledge entry, fold into `capability.does`/`nonGoals` prose instead of forcing a weak entry.\n\n5. Write `capability.does` (what this pack actually lets an agent do, in one or two sentences) and `capability.nonGoals` (what it explicitly does not cover) from the aggregate of what the entries show was actually built and tested — not aspirationally.\n\n6. Write README.md (the format/how-it-works explanation, following the pattern of README.md in sibling packs under packs/) and handover.md (what was tried and rejected, what was verified and how, what is left undone — again following the sibling packs' pattern). Cite specific entries/turns, not vague summaries.\n\n7. `node packages/pack-cli/src/bin.ts validate --dir packs/<name>` and fix whatever it reports missing before continuing.\n\n8. `node packages/pack-cli/src/bin.ts sign --dir packs/<name>` then `node packages/pack-cli/src/bin.ts publish --dir packs/<name>`. Publishing always makes the pack private to the workspace — tell the person that plainly; making it visible to anyone else is a separate, deliberate act on the pack's own page, not something this step does.\n\n9. Tell the person what was published, point them at the README, and mention that .t3pack/draft.pack.json is untouched and will keep accumulating — asking to 'improve' or 'add more to' this pack later is just asking the agent to edit packs/<name>/pack.json, README.md or handover.md directly (they are plain files), or to re-run this same prompt once more turns have landed in the draft."
+  },
+  "contents": {
+    "readmePath": "README.md",
+    "files": [
+      {
+        "path": "README.md",
+        "sha256": "4ef9ba44934a7c371afa011ea8d142eaab55042f398f4206022e7ad253a327a6",
+        "bytes": 3246
+      },
+      {
+        "path": "handover.md",
+        "sha256": "d4fa7b365c22b96b7255c77ec67386c0fe26c3a96ae6219e71b267a0ebb200cd",
+        "bytes": 3761
+      }
+    ]
+  },
+  "signature": {
+    "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
+    "algorithm": "ed25519",
+    "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
+    "manifestSha256": "281b2725b5431089d565d436398349ede8a419cbeff0734f6aab22f3a49436fd",
+    "signature": "4QnDxzXTLVrD3xOLghlx7cZZYwfnKGv2a3a/glUPBm+8ByMKlXw5oVSmxd5xcXJFGqIc2p7k1DuQZBZDL2V1CQ==",
+    "signedAt": "2026-09-19T10:29:59.587Z"
+  }
+}

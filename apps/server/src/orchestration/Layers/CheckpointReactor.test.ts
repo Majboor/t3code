@@ -659,6 +659,7 @@ describe("CheckpointReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-for-baseline"),
         threadId: ThreadId.make("thread-1"),
         message: {

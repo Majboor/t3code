@@ -30,7 +30,21 @@ export interface PromptbarCandidate {
   readonly description: string;
   /** Fused BM25+dense rank score (Reciprocal Rank Fusion), not a probability. */
   readonly retrievalScore: number;
+  /**
+   * A calibrated relevance probability (0..1) from the stage-3 decision
+   * model, present only when retrieval's top candidates were too close to
+   * call and the decision model actually ran; `candidates` is already
+   * re-sorted by this when present. Null otherwise.
+   */
+  readonly decisionRelevance: number | null;
   readonly params: ReadonlyArray<PromptbarCandidateParam>;
+}
+
+export type PromptbarRecentContextRole = "user" | "assistant" | "tool";
+
+export interface PromptbarRecentContextEntry {
+  readonly role: PromptbarRecentContextRole;
+  readonly text: string;
 }
 
 export interface PromptbarResolution {
@@ -47,6 +61,12 @@ export interface PromptbarResolveInput {
   /** The caller (composer/session state) must set this accurately every call — the classifier has no session memory of its own. */
   readonly isFirstMessageInSession: boolean;
   readonly k?: number;
+  /**
+   * A handful of recent turns (oldest first) fed to the stage-3 decision
+   * model as context — entirely optional, retrieval and the intent
+   * classifier never see or need it.
+   */
+  readonly recentContext?: ReadonlyArray<PromptbarRecentContextEntry>;
 }
 
 export type PromptbarTelemetryEventKind = "accepted" | "dismissed" | "abstained";

@@ -20,9 +20,11 @@ import { type ChildProcessByStdio, type ChildProcessWithoutNullStreams, spawn } 
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
+
+import { ensureAgentCliShim, withShimOnPath } from "./agentCliShim.ts";
 
 import {
   client,
@@ -54,7 +56,7 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 
-const GLM_MODEL_ID = "z-ai/glm-5.3-flash-uncensored";
+const GLM_MODEL_ID = "z-ai/glm-5.3";
 const GLM_MODEL_SELECTOR = `logicpacks/${GLM_MODEL_ID}`;
 
 /**
@@ -754,10 +756,51 @@ export class GlmAcpManager extends EventEmitter {
     const configDir = await mktempConfigDir();
     await writeSessionConfig(configDir, input.gatewayBaseUrl, input.apiKey);
 
+    // So `t3 pack search`/`t3 deploy run` are commands the agent can actually
+    // run — see agentCliShim.ts. Codex/Claude already wire this; GLM did not,
+    // which left every pack whose prompt assumes a bare `t3` command dead on
+    // arrival for GLM sessions specifically.
+    const t3Home = process.env["T3CODE_HOME"];
+    const shimDir = ensureAgentCliShim(
+      join(t3Home !== undefined && t3Home.length > 0 ? t3Home : join(homedir(), ".t3code"), "bin"),
+    );
+    const shimmedPath = withShimOnPath(process.env["PATH"], shimDir);
+
     const child = spawn(input.opencodeBinaryPath, ["acp", "--pure", "--cwd", input.cwd], {
       cwd: input.cwd,
-      env: { ...process.env, XDG_CONFIG_HOME: configDir },
+      env: {
+        ...process.env,
+        XDG_CONFIG_HOME: configDir,
+        ...(shimmedPath !== undefined ? { PATH: shimmedPath } : {}),
+      },
       stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    // Attached immediately, before any `await` — verified live via a real
+    // crash: `spawn` reports a failure (e.g. ENOENT, if `input.cwd` was
+    // removed since an old thread's workspace was created, or the opencode
+    // binary is missing/unreadable) asynchronously, and Node throws an
+    // unlistened 'error' event as an uncaught exception, which crashes this
+    // *entire* server process for every user, not just this one session. The
+    // `await connection.agent.buildSession(...)` a little further down is
+    // more than enough of a gap for that to fire before a handler attached
+    // after it ever exists.
+    child.on("error", (err) => {
+      const ctx = this.sessions.get(input.threadId);
+      if (ctx) ctx.session = { ...ctx.session, status: "error", lastError: err.message };
+      this.emitEvent({ threadId: input.threadId, kind: "error", method: "process/error", message: err.message });
+    });
+    child.on("exit", (code, signal) => {
+      const ctx = this.sessions.get(input.threadId);
+      if (!ctx || ctx.stopping) return;
+      ctx.session = { ...ctx.session, status: "closed" };
+      this.emitEvent({
+        threadId: input.threadId,
+        kind: "notification",
+        method: "session/exited",
+        message: `opencode acp exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"}).`,
+      });
+      this.sessions.delete(input.threadId);
     });
 
     const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
@@ -970,24 +1013,13 @@ export class GlmAcpManager extends EventEmitter {
     child.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8").trim();
       if (!text) return;
+      // Always into the server's own log, independent of whether
+      // GlmAdapter's mapToRuntimeEvents decides this specific line (e.g.
+      // opencode's own internal ACP/JSON-RPC noise) is worth surfacing to
+      // the end user as a "Runtime warning" activity — filtering that noise
+      // out of the chat should not also mean losing it for debugging.
+      console.error(`[opencode:${input.threadId}] ${text}`);
       this.emitEvent({ threadId: input.threadId, kind: "notification", method: "process/stderr", message: text });
-    });
-    child.on("error", (err) => {
-      const ctx = this.sessions.get(input.threadId);
-      if (ctx) ctx.session = { ...ctx.session, status: "error", lastError: err.message };
-      this.emitEvent({ threadId: input.threadId, kind: "error", method: "process/error", message: err.message });
-    });
-    child.on("exit", (code, signal) => {
-      const ctx = this.sessions.get(input.threadId);
-      if (!ctx || ctx.stopping) return;
-      ctx.session = { ...ctx.session, status: "closed" };
-      this.emitEvent({
-        threadId: input.threadId,
-        kind: "notification",
-        method: "session/exited",
-        message: `opencode acp exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"}).`,
-      });
-      this.sessions.delete(input.threadId);
     });
 
     const now = new Date().toISOString();

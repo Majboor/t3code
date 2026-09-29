@@ -375,9 +375,28 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     return true;
   }
 
-  return (
-    latestTurnChanged ||
-    input.localDispatch.sessionOrchestrationStatus !== (session?.orchestrationStatus ?? null) ||
-    input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
-  );
+  // The turn record is created (with a real `startedAt`) the instant a send
+  // is dispatched — well before the provider session itself is actually
+  // running. Session status also passes through non-conclusive transitional
+  // values (e.g. "starting") on the way there. Treating either of those as
+  // "acknowledged" drops the local optimistic flag before `phase` has a
+  // chance to become "running" and pick up the slack, producing a real gap
+  // where neither signal says a turn is in flight — the "Working" indicator
+  // vanishes for however long provider/session startup takes, then reappears
+  // already several seconds old once a conclusive status finally lands.
+  // Only genuinely conclusive signals count here: the turn actually
+  // completed, or the session reached a status that is not just "on its way
+  // to running" (running itself is handled by the branch above once `phase`
+  // catches up).
+  const turnJustCompleted =
+    input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null) &&
+    latestTurn?.completedAt != null;
+  const sessionReachedConclusiveStatus =
+    input.localDispatch.sessionOrchestrationStatus !== (session?.orchestrationStatus ?? null) &&
+    (session?.orchestrationStatus === "running" ||
+      session?.orchestrationStatus === "error" ||
+      session?.orchestrationStatus === "stopped" ||
+      session?.orchestrationStatus === "interrupted");
+
+  return turnJustCompleted || sessionReachedConclusiveStatus;
 }

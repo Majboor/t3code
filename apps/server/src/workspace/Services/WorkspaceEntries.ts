@@ -52,6 +52,17 @@ export interface WorkspaceEntriesShape {
   ) => Effect.Effect<FilesystemBrowseResult, WorkspaceEntriesBrowseError>;
 
   /**
+   * Resolves the absolute directory `browse` would actually read, without
+   * reading it — so a caller can run a tenant-access check against the real
+   * target even when the request has no `cwd` (a `partialPath` like `~/`
+   * needs none to resolve, which is exactly the gap a permission check keyed
+   * only on `cwd` being present used to miss).
+   */
+  readonly resolveBrowseTarget: (
+    input: FilesystemBrowseInput,
+  ) => Effect.Effect<string, WorkspaceEntriesBrowseError>;
+
+  /**
    * Read the direct children of a workspace directory.
    */
   readonly listDirectory: (

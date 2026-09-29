@@ -17,6 +17,29 @@ export interface EnvironmentConnection {
   readonly client: WsRpcClient;
   readonly ensureBootstrapped: () => Promise<void>;
   readonly reconnect: () => Promise<void>;
+  /**
+   * Tears down and reopens the primary `subscribeShell` subscription in
+   * place, without touching the socket itself. Call this whenever the socket
+   * has (re)connected out from under this connection (see
+   * `subscribeWsConnected` in `service.ts`) — a raw reconnect does not by
+   * itself guarantee this subscription's own stream noticed the drop and
+   * resubscribed (that only reliably happens for a connection-level error
+   * `WsTransport.subscribe` itself detects, e.g. a server-signalled exit or
+   * an explicit `client.reconnect()` — not every bare 1006 socket closure).
+   * Reopening always replays a fresh snapshot, which is what repairs
+   * `session.orchestrationStatus`/`latestTurn` after having gone stale while
+   * offline — the exact same fix already applied to per-thread detail
+   * subscriptions via `threadSubscriptionEpoch`.
+   */
+  readonly resubscribeShell: () => void;
+  /**
+   * Tears down and reopens `subscribeConfig` the same way `resubscribeShell`
+   * does for the shell subscription — a fresh snapshot on every reconnect is
+   * what lets the client notice `environment.clientBuildId` changed under it
+   * (i.e. the server was redeployed while this tab was open), which it can't
+   * do from a subscription that silently keeps whatever it last received.
+   */
+  readonly resubscribeConfig: () => void;
   readonly dispose: () => Promise<void>;
 }
 
@@ -105,34 +128,43 @@ export function createEnvironmentConnection(
     },
   );
 
-  const unsubConfig = input.client.server.subscribeConfig(
-    (event: Parameters<Parameters<WsRpcClient["server"]["subscribeConfig"]>[0]>[0]) => {
-      if (event.type !== "snapshot") {
-        return;
-      }
-      observeEnvironmentIdentity(event.config.environment.environmentId, "server config snapshot");
-      input.onConfigSnapshot?.(event.config);
-    },
-  );
-
-  const unsubShell = input.client.orchestration.subscribeShell(
-    (item: Parameters<Parameters<WsRpcClient["orchestration"]["subscribeShell"]>[0]>[0]) => {
-      if (item.kind === "snapshot") {
-        input.syncShellSnapshot(item.snapshot, environmentId);
-        bootstrapGate.resolve();
-        return;
-      }
-      input.applyShellEvent(item, environmentId);
-    },
-    {
-      onResubscribe: () => {
-        if (disposed) {
+  const attachConfigSubscription = () =>
+    input.client.server.subscribeConfig(
+      (event: Parameters<Parameters<WsRpcClient["server"]["subscribeConfig"]>[0]>[0]) => {
+        if (event.type !== "snapshot") {
           return;
         }
-        bootstrapGate.reset();
+        observeEnvironmentIdentity(
+          event.config.environment.environmentId,
+          "server config snapshot",
+        );
+        input.onConfigSnapshot?.(event.config);
       },
-    },
-  );
+    );
+
+  let unsubConfig = attachConfigSubscription();
+
+  const attachShellSubscription = () =>
+    input.client.orchestration.subscribeShell(
+      (item: Parameters<Parameters<WsRpcClient["orchestration"]["subscribeShell"]>[0]>[0]) => {
+        if (item.kind === "snapshot") {
+          input.syncShellSnapshot(item.snapshot, environmentId);
+          bootstrapGate.resolve();
+          return;
+        }
+        input.applyShellEvent(item, environmentId);
+      },
+      {
+        onResubscribe: () => {
+          if (disposed) {
+            return;
+          }
+          bootstrapGate.reset();
+        },
+      },
+    );
+
+  let unsubShell = attachShellSubscription();
 
   const unsubTerminalEvent = input.client.terminal.onEvent(
     (event: Parameters<Parameters<WsRpcClient["terminal"]["onEvent"]>[0]>[0]) => {
@@ -164,6 +196,29 @@ export function createEnvironmentConnection(
         bootstrapGate.reject(error);
         throw error;
       }
+    },
+    resubscribeShell: () => {
+      if (disposed) {
+        return;
+      }
+      try {
+        unsubShell();
+      } catch {
+        // The old socket is already gone; nothing left to unsubscribe.
+      }
+      bootstrapGate.reset();
+      unsubShell = attachShellSubscription();
+    },
+    resubscribeConfig: () => {
+      if (disposed) {
+        return;
+      }
+      try {
+        unsubConfig();
+      } catch {
+        // The old socket is already gone; nothing left to unsubscribe.
+      }
+      unsubConfig = attachConfigSubscription();
     },
     dispose: async () => {
       cleanup();

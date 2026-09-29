@@ -246,4 +246,62 @@ describe("createEnvironmentConnection", () => {
 
     await connection.dispose();
   });
+
+  /**
+   * Regression coverage for a real production bug: a raw socket reconnect
+   * (a bare 1006 close, not a server-signalled exit and not an explicit
+   * `client.reconnect()` call) does not by itself guarantee this
+   * subscription's own underlying stream noticed the drop and resubscribed.
+   * Confirmed live: a turn that finished while the socket was down kept
+   * showing "Still waiting" indefinitely even though the assistant's message
+   * had already arrived correctly through the (separately-hardened)
+   * thread-detail subscription — because `session.orchestrationStatus` /
+   * `latestTurn` only ever come from this shell subscription, and nothing
+   * forced it to reopen. `resubscribeShell` (called from
+   * `subscribeWsConnected` in service.ts on every physical socket open,
+   * mirroring the existing `threadSubscriptionEpoch` fix for thread-detail
+   * subscriptions) is the fix: it must tear down the old handle and reopen
+   * so a fresh snapshot actually arrives, without requiring a full
+   * `client.reconnect()` round-trip.
+   */
+  it("resubscribeShell tears down the old subscription and replays a fresh snapshot", async () => {
+    const environmentId = EnvironmentId.make("env-1");
+    const { client } = createTestClient();
+    const syncShellSnapshot = vi.fn();
+
+    const connection = createEnvironmentConnection({
+      kind: "saved",
+      knownEnvironment: {
+        id: "env-1",
+        label: "Remote env",
+        source: "manual",
+        target: {
+          httpBaseUrl: "http://example.test",
+          wsBaseUrl: "ws://example.test",
+        },
+        environmentId,
+      },
+      client,
+      applyShellEvent: vi.fn(),
+      syncShellSnapshot,
+      applyTerminalEvent: vi.fn(),
+    });
+
+    await connection.ensureBootstrapped();
+    expect(syncShellSnapshot).toHaveBeenCalledTimes(1);
+    expect(client.orchestration.subscribeShell).toHaveBeenCalledTimes(1);
+
+    connection.resubscribeShell();
+
+    // resubscribeShell does not itself touch the socket — only client.reconnect() does.
+    expect(client.reconnect).not.toHaveBeenCalled();
+    expect(client.orchestration.subscribeShell).toHaveBeenCalledTimes(2);
+
+    // ensureBootstrapped must wait for the fresh snapshot the reopened
+    // subscription replays, not resolve immediately off the stale one.
+    await connection.ensureBootstrapped();
+    expect(syncShellSnapshot).toHaveBeenCalledTimes(2);
+
+    await connection.dispose();
+  });
 });

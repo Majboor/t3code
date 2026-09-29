@@ -10,6 +10,7 @@ import {
   useWsConnectionStatus,
   WS_RECONNECT_MAX_ATTEMPTS,
 } from "../rpc/wsConnectionState";
+import { useClientUpdateAvailable } from "../rpc/clientBuildFreshness";
 import { toastManager } from "./ui/toast";
 import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 
@@ -417,6 +418,49 @@ export function SlowRpcAckToastCoordinator() {
       toastIdRef.current = toastManager.add(nextToast);
     }
   }, [slowRequests, status]);
+
+  return null;
+}
+
+/**
+ * A tab left open across a server redeploy keeps running whatever JS it
+ * booted with — the WebSocket happily reconnects underneath it, but a fix
+ * shipped in that redeploy (including ones for "this tab looks stuck") is
+ * never picked up by already-executing code. `useClientUpdateAvailable`
+ * flips true the moment a config snapshot reports a different build than the
+ * one this page loaded with; surfacing that as a persistent, dismiss-proof
+ * toast (not an unprompted reload) respects whatever the person is in the
+ * middle of typing while still making the fix a single click away.
+ */
+export function ClientUpdateAvailableToastCoordinator() {
+  const updateAvailable = useClientUpdateAvailable();
+  const toastIdRef = useRef<ReturnType<typeof toastManager.add> | null>(null);
+
+  useEffect(() => {
+    if (!updateAvailable) {
+      return;
+    }
+
+    const toastPayload = {
+      title: "Update available",
+      description: "This tab is running an older version. Reload to pick up the latest fixes.",
+      type: "info" as const,
+      timeout: 0,
+      actionProps: {
+        children: "Reload",
+        onClick: () => window.location.reload(),
+      },
+      data: {
+        hideCopyButton: true,
+      },
+    };
+
+    if (toastIdRef.current) {
+      toastManager.update(toastIdRef.current, toastPayload);
+    } else {
+      toastIdRef.current = toastManager.add(toastPayload);
+    }
+  }, [updateAvailable]);
 
   return null;
 }

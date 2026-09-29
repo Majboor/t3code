@@ -134,6 +134,10 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 
     return {
       ...command,
+      // The client-facing schema leaves this optional; the internal one
+      // doesn't, same reasoning as runtimeMode/interactionMode having their
+      // own decode-time defaults — absent means Pack Mode was off.
+      packModeEnabled: command.packModeEnabled ?? false,
       message: {
         ...command.message,
         // Unknown until the socket stamps it from the session. Anonymous is the

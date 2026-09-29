@@ -16,7 +16,11 @@
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery } from "@tanstack/react-query";
 
-import { resolvePromptbar, type PromptbarResolution } from "../../environments/primary/promptbar";
+import {
+  resolvePromptbar,
+  type PromptbarRecentContextEntry,
+  type PromptbarResolution,
+} from "../../environments/primary/promptbar";
 
 const PROMPTBAR_RESOLVE_DEBOUNCE_MS = 350;
 
@@ -48,6 +52,7 @@ export function usePromptbarResolution(
   text: string,
   isFirstMessageInSession: boolean,
   enabled: boolean,
+  recentContext?: ReadonlyArray<PromptbarRecentContextEntry>,
 ): PromptbarResolution | null {
   const trimmed = text.trim();
   const [debouncedText] = useDebouncedValue(trimmed, {
@@ -57,8 +62,17 @@ export function usePromptbarResolution(
   const shouldFetch = enabled && debouncedText.length > 0;
 
   const query = useQuery({
+    // recentContext deliberately isn't part of the key: it's supplementary
+    // context for the stage-3 decision model, not part of what's being
+    // resolved, so a new array reference each render shouldn't force a
+    // refetch of an otherwise-identical query.
     queryKey: promptbarQueryKeys.resolve(debouncedText, isFirstMessageInSession),
-    queryFn: () => resolvePromptbar({ text: debouncedText, isFirstMessageInSession }),
+    queryFn: () =>
+      resolvePromptbar({
+        text: debouncedText,
+        isFirstMessageInSession,
+        ...(recentContext && recentContext.length > 0 ? { recentContext } : {}),
+      }),
     enabled: shouldFetch,
     staleTime: 10_000,
     retry: false,

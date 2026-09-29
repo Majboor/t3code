@@ -66,40 +66,20 @@ describe("GlmEffortSlider", () => {
     document.body.append(host);
 
     const screen = await render(
-      <GlmEffortSlider model="z-ai/glm-5.3-flash-uncensored" onModelChange={onModelChange} />,
+      <GlmEffortSlider model="z-ai/glm-5.3" onModelChange={onModelChange} />,
       { container: host },
     );
 
-    expect(document.body.textContent ?? "").toContain("GLM-5.3 Flash (Uncensored)");
+    expect(document.body.textContent ?? "").toContain("GLM-5.3");
 
     // Drag from the High (rightmost) position to the far left — Low.
     dragThumbTo(host, 0);
 
     await vi.waitFor(() => {
-      expect(onModelChange).toHaveBeenCalledWith("deepseek/deepseek-v4.1-flash");
+      expect(onModelChange).toHaveBeenCalledWith("z-ai/glm-5.3-flash");
     });
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").toContain("DeepSeek Flash");
-    });
-
-    await screen.unmount();
-    host.remove();
-  });
-
-  it("dragging to the middle position selects the Medium (DeepSeek Thinking) model", async () => {
-    const onModelChange = vi.fn();
-    const host = document.createElement("div");
-    document.body.append(host);
-
-    const screen = await render(
-      <GlmEffortSlider model="z-ai/glm-5.3-flash-uncensored" onModelChange={onModelChange} />,
-      { container: host },
-    );
-
-    dragThumbTo(host, 0.5);
-
-    await vi.waitFor(() => {
-      expect(onModelChange).toHaveBeenCalledWith("deepseek/deepseek-v4.1-flash-thinking");
+      expect(document.body.textContent ?? "").toContain("GLM-5.3 Flash");
     });
 
     await screen.unmount();

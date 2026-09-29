@@ -150,6 +150,7 @@ const startTurn = (input: {
 }) =>
   input.harness.engine.dispatch({
     type: "thread.turn.start",
+    packModeEnabled: false,
     commandId: CommandId.make(input.commandId),
     threadId: THREAD_ID,
     message: {
@@ -292,6 +293,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
 
         yield* harness.engine.dispatch({
           type: "thread.turn.start",
+          packModeEnabled: false,
           commandId: CommandId.make("cmd-turn-start-real-codex-1"),
           threadId: THREAD_ID,
           message: {
@@ -320,6 +322,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
 
         yield* harness.engine.dispatch({
           type: "thread.turn.start",
+          packModeEnabled: false,
           commandId: CommandId.make("cmd-turn-start-real-codex-2"),
           threadId: THREAD_ID,
           message: {

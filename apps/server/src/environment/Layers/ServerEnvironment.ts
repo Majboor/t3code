@@ -1,7 +1,8 @@
 import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import { createHash } from "node:crypto";
 import { Effect, FileSystem, Layer, Path, Random } from "effect";
 
-import { ServerConfig } from "../../config.ts";
+import { resolveStaticDir, ServerConfig } from "../../config.ts";
 import { ServerEnvironment, type ServerEnvironmentShape } from "../Services/ServerEnvironment.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
@@ -70,6 +71,25 @@ export const makeServerEnvironment = Effect.fn("makeServerEnvironment")(function
     cwdBaseName,
   });
 
+  // Hash the built client this process is actually serving, once at startup
+  // — see the doc comment on `clientBuildId` for why this can't just be
+  // `serverVersion`. Falls back to a per-process value (never stable across
+  // a real restart) when there's no built client to hash, e.g. local dev
+  // against `devUrl`.
+  const clientBuildId = yield* Effect.gen(function* () {
+    const staticDir = serverConfig.staticDir ?? (yield* resolveStaticDir());
+    if (!staticDir) {
+      return `dev-${Date.now()}`;
+    }
+    const indexHtml = yield* fileSystem
+      .readFile(path.join(staticDir, "index.html"))
+      .pipe(Effect.orElseSucceed(() => null));
+    if (!indexHtml) {
+      return `dev-${Date.now()}`;
+    }
+    return createHash("sha256").update(indexHtml).digest("hex").slice(0, 16);
+  });
+
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
     label,
@@ -78,6 +98,7 @@ export const makeServerEnvironment = Effect.fn("makeServerEnvironment")(function
       arch: platformArch(),
     },
     serverVersion: packageJson.version,
+    clientBuildId,
     capabilities: {
       repositoryIdentity: true,
     },

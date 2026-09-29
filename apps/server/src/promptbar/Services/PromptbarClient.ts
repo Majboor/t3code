@@ -1,17 +1,21 @@
 /**
  * PromptbarClient - resolves free-text composer input against:
- *   [1] the already-built intent classifier (external, homelab ML box,
- *       `T3CODE_PROMPTBAR_CLASSIFIER_URL`, default `http://192.168.18.201:18090`)
+ *   [1] intent classification via a typed-decision model (`T3CODE_OPENROUTER_API_KEY`,
+ *       OpenRouter's `typesafe/jev-1.13` by default — replaced the old bespoke
+ *       classifier service, whose classification quality was the reason for
+ *       the switch)
  *   [2] a hybrid pack-retrieval index owned by THIS service (SQLite FTS5 BM25
  *       + dense embeddings via `T3CODE_EMBEDDING_URL`/Qdrant `T3CODE_QDRANT_URL`,
  *       fused with Reciprocal Rank Fusion)
+ *   [3] the same typed-decision model again, disambiguating retrieval's top
+ *       candidates when they're too close to call on their own
  *
  * This is the frozen interface both the retrieval backend (PromptbarClientLive)
  * and every consumer (composer UI, agent handoff, eval harness) build against.
  * Do not change these shapes without updating all three.
  *
- * Absent classifier config means every call is a typed "not configured" error,
- * same convention as LogicPacksGateway.
+ * Absent decision-model config means every call is a typed "not configured"
+ * error, same convention as LogicPacksGateway.
  *
  * @module PromptbarClient
  */
@@ -31,6 +35,16 @@ export interface PromptbarCandidate {
   readonly description: string;
   /** Fused BM25+dense rank score (Reciprocal Rank Fusion), not a probability. */
   readonly retrievalScore: number;
+  /**
+   * A calibrated relevance probability (0..1) from the stage-3 decision
+   * model, present only when retrieval's own top candidates were too close
+   * to call (`computeSkipAgent` was false) and the decision model actually
+   * ran. `candidates` is already re-sorted by this when present — callers
+   * that only ever read `candidates[0]` need no changes. Null when the
+   * decision model wasn't invoked (retrieval alone was confident) or its
+   * call failed (retrieval's own ranking is the fallback either way).
+   */
+  readonly decisionRelevance: number | null;
   readonly params: ReadonlyArray<{
     readonly name: string;
     readonly type: string;
@@ -71,6 +85,18 @@ export interface PromptbarResolveInput {
    */
   readonly isFirstMessageInSession: boolean;
   readonly k?: number;
+  /**
+   * Recent turn history (a handful of prior user/assistant messages and tool
+   * calls) fed to the stage-3 decision model as context, oldest first — it
+   * has no session memory of its own the way `isFirstMessageInSession` also
+   * compensates for. Purely optional context: retrieval and the intent
+   * classifier never see or need it, only the decision model's `state`
+   * string does, and only when it actually runs.
+   */
+  readonly recentContext?: ReadonlyArray<{
+    readonly role: "user" | "assistant" | "tool";
+    readonly text: string;
+  }>;
 }
 
 export interface PromptbarClientShape {

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 
-import { it } from "@effect/vitest";
+import { describe, it } from "@effect/vitest";
 
 import { EventId, ThreadId, type ProviderEvent } from "@t3tools/contracts";
 
-import { mapToRuntimeEvents } from "./GlmAdapter.ts";
+import { describeResetEta, mapToRuntimeEvents } from "./GlmAdapter.ts";
 
 const threadId = ThreadId.make("thread-1");
 const createdAt = "2026-09-17T20:33:40.300Z";
@@ -119,6 +119,42 @@ it("drops an elicitation/create request event with no questions instead of emitt
   assert.deepEqual(mapToRuntimeEvents(event), []);
 });
 
+/**
+ * Regression test for a real, live-reproduced bug: opencode's own internal
+ * ACP/JSON-RPC handling failures (e.g. a `session/cancel` notification the
+ * peer rejected with an "Invalid params" error) land on the subprocess's
+ * stderr, which `GlmAdapter.ts` used to forward verbatim as a "Runtime
+ * warning" activity — surfacing raw `{jsonrpc, method, params}` protocol
+ * internals directly in the user's chat, confirmed live via a
+ * `projection_thread_activities` row reading exactly this shape. A genuine
+ * stderr line (a real crash, a missing dependency) must still pass through.
+ */
+it("filters opencode's own internal JSON-RPC handling noise out of process/stderr, but keeps real stderr", () => {
+  const noiseEvent: ProviderEvent = {
+    id: EventId.make("event-stderr-noise"),
+    kind: "notification",
+    provider: "glm",
+    threadId,
+    createdAt,
+    method: "process/stderr",
+    requestId: "req-stderr-noise" as ProviderEvent["requestId"],
+    message:
+      'Error handling notification {\n  jsonrpc: "2.0",\n  method: "session/cancel",\n  params: {\n    sessionId: "ses_abc",\n  },\n} {\n  code: -32602,\n  message: "Invalid params",\n}',
+    payload: {},
+  };
+  assert.deepEqual(mapToRuntimeEvents(noiseEvent), []);
+
+  const realStderrEvent: ProviderEvent = {
+    ...noiseEvent,
+    id: EventId.make("event-stderr-real"),
+    message: "npm ERR! missing script: build",
+  };
+  const events = mapToRuntimeEvents(realStderrEvent);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.type, "runtime.warning");
+  assert.deepEqual(events[0]!.payload, { message: "npm ERR! missing script: build" });
+});
+
 it("maps an elicitation/create/answered notification to user-input.resolved with the answer map", () => {
   const event: ProviderEvent = {
     id: EventId.make("event-4"),
@@ -135,4 +171,42 @@ it("maps an elicitation/create/answered notification to user-input.resolved with
   assert.equal(events.length, 1);
   assert.equal(events[0]!.type, "user-input.resolved");
   assert.deepEqual(events[0]!.payload, { answers: { color: "green" } });
+});
+
+/**
+ * Regression coverage for a real, live-reproduced gap: the gateway's 5-hour
+ * burst limit returns a normal HTTP 429 that opencode's own error handling
+ * did not reliably surface — confirmed via a real turn that logged
+ * "AI_APICallError: ... burst limit is used up" and then went silent for the
+ * rest of the turn, only ending ~2 minutes later via the generic turn
+ * watchdog, with no indication anywhere in the UI of the real cause. This is
+ * the message-formatting half of the fix that checks the gateway's usage
+ * before ever starting a session; the reset time is rendered as a relative
+ * duration (not a formatted clock time) because the server has no reliable
+ * way to know the viewer's timezone.
+ */
+describe("describeResetEta", () => {
+  it("renders hours and minutes when both are non-zero", () => {
+    const resetsAt = new Date(Date.now() + (2 * 60 + 15) * 60_000).toISOString();
+    assert.equal(describeResetEta(resetsAt), " — resets in about 2h 15m");
+  });
+
+  it("omits the hours part when under an hour remains", () => {
+    const resetsAt = new Date(Date.now() + 45 * 60_000).toISOString();
+    assert.equal(describeResetEta(resetsAt), " — resets in about 45m");
+  });
+
+  it("omits the minutes part when the remainder rounds to exactly on the hour", () => {
+    const resetsAt = new Date(Date.now() + 3 * 60 * 60_000).toISOString();
+    assert.equal(describeResetEta(resetsAt), " — resets in about 3h");
+  });
+
+  it("returns an empty string when there is no reset time yet", () => {
+    assert.equal(describeResetEta(null), "");
+  });
+
+  it("returns an empty string once the reset time has already passed", () => {
+    const resetsAt = new Date(Date.now() - 60_000).toISOString();
+    assert.equal(describeResetEta(resetsAt), "");
+  });
 });

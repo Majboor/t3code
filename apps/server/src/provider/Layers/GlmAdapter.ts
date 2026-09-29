@@ -36,6 +36,51 @@ import { GlmAdapter, type GlmAdapterShape } from "../Services/GlmAdapter.ts";
 const PROVIDER = "glm" as const;
 const OPENCODE_BINARY = "opencode";
 
+/**
+ * `opencode`'s own ACP transport logs its internal JSON-RPC handling failures
+ * (e.g. a peer rejecting a notification with an "Invalid params" error) to
+ * stderr, which arrives here as an ordinary `process/stderr` line — verified
+ * live: a rejected `session/cancel` produced a stderr line dumping the raw
+ * `{jsonrpc, method, params}` request object and the peer's raw error code.
+ * That is protocol-internal noise no end user chatting in this app can act
+ * on, so it is filtered out here rather than surfacing as a "Runtime
+ * warning" activity in their conversation — unlike a real stderr line (a
+ * crash, a missing dependency), which still passes through unchanged.
+ */
+function isAcpProtocolNoise(message: string): boolean {
+  return message.includes("Error handling notification");
+}
+
+/**
+ * Renders a gateway session-window `resetsAt` (an ISO timestamp, or `null`
+ * when the window hasn't started) as a short, timezone-safe suffix like
+ * " — resets in about 2h 15m" for a user-facing error message. Deliberately
+ * a relative duration rather than a formatted clock time: the server has no
+ * reliable way to know the viewer's timezone, and "resets in ~X" is correct
+ * regardless of where either side is.
+ */
+export function describeResetEta(resetsAt: string | null): string {
+  if (!resetsAt) {
+    return "";
+  }
+  const resetMs = Date.parse(resetsAt);
+  if (!Number.isFinite(resetMs)) {
+    return "";
+  }
+  const remainingMs = resetMs - Date.now();
+  if (remainingMs <= 0) {
+    return "";
+  }
+  const totalMinutes = Math.ceil(remainingMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const parts = [
+    ...(hours > 0 ? [`${hours}h`] : []),
+    ...(minutes > 0 || hours === 0 ? [`${minutes}m`] : []),
+  ];
+  return ` — resets in about ${parts.join(" ")}`;
+}
+
 function toRequestError(threadId: string, method: string, cause: unknown): ProviderAdapterError {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (message.includes("Unknown session for thread")) {
@@ -180,7 +225,11 @@ export function mapToRuntimeEvents(event: ProviderEvent): ReadonlyArray<Provider
   }
 
   if (event.method === "process/stderr") {
-    return [asRuntimeEvent({ ...base, type: "runtime.warning", payload: { message: event.message ?? "" } })];
+    const message = event.message ?? "";
+    if (isAcpProtocolNoise(message)) {
+      return [];
+    }
+    return [asRuntimeEvent({ ...base, type: "runtime.warning", payload: { message } })];
   }
 
   if (event.method === "process/error" || event.method === "session/exited") {
@@ -384,6 +433,27 @@ const makeGlmAdapter = Effect.fn("makeGlmAdapter")(function* () {
         provider: PROVIDER,
         threadId: input.threadId,
         detail: "T3CODE_GATEWAY_URL is not configured on this instance.",
+      });
+    }
+
+    // Checked up front, not just left to fail: an exhausted 5h burst window
+    // returns a normal-looking HTTP 429 from the gateway, but opencode's own
+    // error handling for it does not reliably propagate — confirmed live via
+    // a real stuck turn where opencode logged "AI_APICallError: ... burst
+    // limit is used up" and then went completely silent for the rest of the
+    // turn, only ending ~2 minutes later when the turn watchdog's generic
+    // "stopped responding" timeout finally intervened, with no indication of
+    // the real cause anywhere in the UI. Checking here means an exhausted
+    // account gets an immediate, honest, actionable message instead of an
+    // opaque multi-minute wait — a failure that would have been every bit as
+    // real without the check, just silent and slow to surface.
+    const usage = yield* gateway.fetchUsage(userId).pipe(Effect.catch(() => Effect.succeed(null)));
+    const sessionWindow = usage?.sessionWindow;
+    if (sessionWindow && sessionWindow.tokensUsed >= sessionWindow.tokensLimit) {
+      return yield* new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId: input.threadId,
+        detail: `GLM's 5-hour usage limit has been reached${describeResetEta(sessionWindow.resetsAt)}. Your monthly allowance and balance are unaffected — this resets on its own. See your usage: ${gatewayBaseUrl}`,
       });
     }
 

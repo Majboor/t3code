@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationProposedPlanId,
@@ -22,6 +23,7 @@ import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/Projectio
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/Utils.ts";
 import { closeAbandonedTurn, interruptAbandonedTurn } from "../abandonedTurnClosure.ts";
+import { labelAndRecordTurn } from "./PackDraftWriter.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderRuntimeIngestionService,
@@ -39,7 +41,15 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
+const BUFFERED_REASONING_TEXT_BY_KEY_CACHE_CAPACITY = 10_000;
+const BUFFERED_REASONING_TEXT_BY_KEY_TTL = Duration.minutes(120);
+const PACK_MODE_ENABLED_BY_THREAD_CACHE_CAPACITY = 10_000;
+const PACK_MODE_ENABLED_BY_THREAD_TTL = Duration.minutes(120);
+const ACTIVE_ASSISTANT_MESSAGE_ID_BY_THREAD_CACHE_CAPACITY = 10_000;
+const ACTIVE_ASSISTANT_MESSAGE_ID_BY_THREAD_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
+const MAX_BUFFERED_REASONING_CHARS = 20_000;
+const REASONING_PROGRESS_DETAIL_CHARS = 220;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -74,6 +84,35 @@ function sameId(left: string | null | undefined, right: string | null | undefine
 
 function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
+}
+
+// Reasoning progress shows the *live tail* of the buffer (most recent tokens),
+// not the head, so a growing row reads as active rather than frozen mid-sentence.
+function truncateTail(value: string, limit: number): string {
+  return value.length > limit ? `...${value.slice(value.length - limit + 3)}` : value;
+}
+
+function reasoningBufferKey(threadId: ThreadId, turnId: TurnId | undefined): string {
+  return `${threadId}:reasoning:${turnId ?? "no-turn"}`;
+}
+
+/**
+ * Best-effort file-path extraction from a tool-call activity's free-form
+ * payload, for the pack draft's "changed files" list — looks for the same
+ * `locations: [{ path }]` shape the file-edit tool payloads already carry
+ * (see `toolCallKindToRequestKind`/GLM's `fs/write_text_file` handling
+ * elsewhere), tolerating anything else by returning nothing rather than
+ * guessing at an unfamiliar shape.
+ */
+function extractActivityChangedFiles(payload: unknown): string[] {
+  if (typeof payload !== "object" || payload === null) return [];
+  const locations = (payload as Record<string, unknown>)["locations"];
+  if (!Array.isArray(locations)) return [];
+  return locations.flatMap((location) => {
+    if (typeof location !== "object" || location === null) return [];
+    const path = (location as Record<string, unknown>)["path"];
+    return typeof path === "string" ? [path] : [];
+  });
 }
 
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
@@ -514,6 +553,61 @@ const make = Effect.fn("make")(function* () {
     lookup: () => Effect.succeed(new Set<MessageId>()),
   });
 
+  /**
+   * Set from the `thread.turn-start-requested` domain event (the only place
+   * that still has the original command's fields once a turn is running —
+   * the domain event's own payload has no `turnId` yet at that point, so
+   * this is keyed by thread rather than by turn) and read back at
+   * `turn.completed`. Threads run one turn at a time, so "whichever turn
+   * most recently started" is always the one now completing.
+   */
+  const packModeContextByThreadId = yield* Cache.make<
+    string,
+    { readonly enabled: boolean; readonly userMessageId: MessageId } | null
+  >({
+    capacity: PACK_MODE_ENABLED_BY_THREAD_CACHE_CAPACITY,
+    timeToLive: PACK_MODE_ENABLED_BY_THREAD_TTL,
+    lookup: () => Effect.succeed(null),
+  });
+
+  /**
+   * GLM's ACP stream does not hold `itemId` stable across an assistant text
+   * segment's own consecutive deltas, and — verified live — does not carry a
+   * `turnId` on those `content.delta` events at all (only later, non-delta
+   * events like `item.completed` reliably have one). So a per-turn cache
+   * keyed on `toTurnId(event.turnId)` never engages for GLM: every delta
+   * looks turn-less and falls straight through to a fresh candidate id,
+   * which is exactly how one turn's nine chunks each became a one-word
+   * message. Threads run one turn at a time, so keying on thread id alone —
+   * "whatever assistant message is currently open for this thread" — is
+   * just as correct and doesn't depend on a field this provider omits. The
+   * entry is cleared once that segment's own completion event finalizes it,
+   * so the next turn's first delta opens a fresh one.
+   */
+  const activeAssistantMessageIdByThread = yield* Cache.make<ThreadId, MessageId | null>({
+    capacity: ACTIVE_ASSISTANT_MESSAGE_ID_BY_THREAD_CACHE_CAPACITY,
+    timeToLive: ACTIVE_ASSISTANT_MESSAGE_ID_BY_THREAD_TTL,
+    lookup: () => Effect.succeed(null),
+  });
+
+  const resolveAssistantMessageId = (
+    threadId: ThreadId,
+    candidate: MessageId,
+  ): Effect.Effect<MessageId> =>
+    Cache.get(activeAssistantMessageIdByThread, threadId).pipe(
+      Effect.flatMap((active) => {
+        if (active) {
+          return Effect.succeed(active);
+        }
+        return Cache.set(activeAssistantMessageIdByThread, threadId, candidate).pipe(
+          Effect.as(candidate),
+        );
+      }),
+    );
+
+  const clearActiveAssistantMessageId = (threadId: ThreadId) =>
+    Cache.set(activeAssistantMessageIdByThread, threadId, null);
+
   const bufferedAssistantTextByMessageId = yield* Cache.make<MessageId, string>({
     capacity: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL,
@@ -524,6 +618,12 @@ const make = Effect.fn("make")(function* () {
     capacity: BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
+  });
+
+  const bufferedReasoningTextByKey = yield* Cache.make<string, string>({
+    capacity: BUFFERED_REASONING_TEXT_BY_KEY_CACHE_CAPACITY,
+    timeToLive: BUFFERED_REASONING_TEXT_BY_KEY_TTL,
+    lookup: () => Effect.succeed(""),
   });
 
   const isGitRepoForThread = Effect.fn("isGitRepoForThread")(function* (threadId: ThreadId) {
@@ -642,6 +742,21 @@ const make = Effect.fn("make")(function* () {
 
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
+
+  const appendBufferedReasoningText = (key: string, delta: string) =>
+    Cache.getOption(bufferedReasoningTextByKey, key).pipe(
+      Effect.flatMap((existingText) => {
+        const nextText = `${Option.getOrElse(existingText, () => "")}${delta}`;
+        const cappedText =
+          nextText.length > MAX_BUFFERED_REASONING_CHARS
+            ? nextText.slice(nextText.length - MAX_BUFFERED_REASONING_CHARS)
+            : nextText;
+        return Cache.set(bufferedReasoningTextByKey, key, cappedText).pipe(Effect.as(cappedText));
+      }),
+    );
+
+  const clearBufferedReasoningText = (key: string) =>
+    Cache.invalidate(bufferedReasoningTextByKey, key);
 
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
@@ -766,10 +881,12 @@ const make = Effect.fn("make")(function* () {
   const clearTurnStateForSession = Effect.fn("clearTurnStateForSession")(function* (
     threadId: ThreadId,
   ) {
+    yield* clearActiveAssistantMessageId(threadId);
     const prefix = `${threadId}:`;
     const proposedPlanPrefix = `plan:${threadId}:`;
     const turnKeys = Array.from(yield* Cache.keys(turnMessageIdsByTurnKey));
     const proposedPlanKeys = Array.from(yield* Cache.keys(bufferedProposedPlanById));
+    const reasoningKeys = Array.from(yield* Cache.keys(bufferedReasoningTextByKey));
     yield* Effect.forEach(
       turnKeys,
       Effect.fn(function* (key) {
@@ -794,6 +911,12 @@ const make = Effect.fn("make")(function* () {
         key.startsWith(proposedPlanPrefix)
           ? Cache.invalidate(bufferedProposedPlanById, key)
           : Effect.void,
+      { concurrency: 1 },
+    ).pipe(Effect.asVoid);
+    yield* Effect.forEach(
+      reasoningKeys,
+      (key) =>
+        key.startsWith(prefix) ? Cache.invalidate(bufferedReasoningTextByKey, key) : Effect.void,
       { concurrency: 1 },
     ).pipe(Effect.asVoid);
   });
@@ -873,6 +996,66 @@ const make = Effect.fn("make")(function* () {
       });
     },
   );
+
+  /**
+   * Fires (forked, non-blocking) at the end of `turn.completed` handling
+   * when Pack Mode was on for this turn — labeling and, if worth keeping,
+   * recording it never delays or can fail the turn completion it's
+   * piggybacking on. Re-fetches the read model rather than reusing the
+   * `thread` captured at the top of `processRuntimeEvent`: that snapshot
+   * predates `finalizeAssistantMessage` above, so it wouldn't have the
+   * turn's final assistant text yet.
+   */
+  const forkPackDraftLabelingIfEnabled = (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly assistantMessageIds: ReadonlySet<MessageId>;
+    readonly now: string;
+  }) =>
+    Effect.gen(function* () {
+      const context = yield* Cache.getOption(packModeContextByThreadId, input.threadId).pipe(
+        Effect.map(Option.flatMap((value) => (value === null ? Option.none() : Option.some(value)))),
+      );
+      if (Option.isNone(context) || !context.value.enabled) {
+        return;
+      }
+
+      const readModel = yield* orchestrationEngine.getReadModel();
+      const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+      if (!thread) return;
+
+      const workspaceCwd = resolveThreadWorkspaceCwd({ thread, projects: readModel.projects });
+      if (!workspaceCwd) return;
+
+      const userPrompt =
+        thread.messages.find((message) => message.id === context.value.userMessageId)?.text ?? "";
+      const assistantSummary = thread.messages
+        .filter((message) => input.assistantMessageIds.has(message.id))
+        .map((message) => message.text)
+        .join("\n\n");
+      const turnActivities = thread.activities.filter((activity) => sameId(activity.turnId, input.turnId));
+      const activitySummaries = turnActivities.map((activity) => activity.summary);
+      const changedFiles = [
+        ...new Set(turnActivities.flatMap((activity) => extractActivityChangedFiles(activity.payload))),
+      ];
+
+      if (!userPrompt && !assistantSummary) return;
+
+      yield* Effect.forkScoped(
+        labelAndRecordTurn({
+          turnId: input.turnId,
+          projectId: thread.projectId,
+          workspaceCwd,
+          createdAt: input.now,
+          labeling: { userPrompt, assistantSummary, activitySummaries },
+          changedFiles,
+        }),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("pack_draft.fork_failed", { threadId: input.threadId, cause }),
+      ),
+    );
 
   const processRuntimeEvent = Effect.fn("processRuntimeEvent")(function* (
     event: ProviderRuntimeEvent,
@@ -1032,10 +1215,11 @@ const make = Effect.fn("make")(function* () {
       event.type === "turn.proposed.delta" ? event.payload.delta : undefined;
 
     if (assistantDelta && assistantDelta.length > 0) {
-      const assistantMessageId = MessageId.make(
-        `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
-      );
       const turnId = toTurnId(event.turnId);
+      const assistantMessageId = yield* resolveAssistantMessageId(
+        thread.id,
+        MessageId.make(`assistant:${event.itemId ?? event.turnId ?? event.eventId}`),
+      );
       if (turnId) {
         yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
       }
@@ -1075,6 +1259,37 @@ const make = Effect.fn("make")(function* () {
       yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now);
     }
 
+    const reasoningDelta =
+      event.type === "content.delta" &&
+      (event.payload.streamKind === "reasoning_text" ||
+        event.payload.streamKind === "reasoning_summary_text")
+        ? event.payload.delta
+        : undefined;
+
+    if (reasoningDelta && reasoningDelta.length > 0) {
+      const turnId = toTurnId(event.turnId);
+      const bufferKey = reasoningBufferKey(thread.id, turnId);
+      const reasoningText = yield* appendBufferedReasoningText(bufferKey, reasoningDelta);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: providerCommandId(event, "reasoning-progress"),
+        threadId: thread.id,
+        activity: {
+          id: EventId.make(bufferKey),
+          createdAt: now,
+          tone: "info",
+          kind: "task.progress",
+          summary: "Reasoning update",
+          payload: {
+            taskId: bufferKey,
+            detail: truncateTail(reasoningText, REASONING_PROGRESS_DETAIL_CHARS),
+          },
+          turnId: turnId ?? null,
+        },
+        createdAt: now,
+      });
+    }
+
     const assistantCompletion =
       event.type === "item.completed" && event.payload.itemType === "assistant_message"
         ? {
@@ -1092,8 +1307,15 @@ const make = Effect.fn("make")(function* () {
         : undefined;
 
     if (assistantCompletion) {
-      const assistantMessageId = assistantCompletion.messageId;
       const turnId = toTurnId(event.turnId);
+      // Reuses whatever id this turn's deltas actually accumulated onto
+      // (see resolveAssistantMessageId) rather than this event's own
+      // `itemId`, which is not guaranteed to match the deltas' — completing
+      // a message T3 never actually opened would silently drop its text.
+      const assistantMessageId = yield* resolveAssistantMessageId(
+        thread.id,
+        assistantCompletion.messageId,
+      );
       const existingAssistantMessage = thread.messages.find(
         (entry) => entry.id === assistantMessageId,
       );
@@ -1119,6 +1341,7 @@ const make = Effect.fn("make")(function* () {
       if (turnId) {
         yield* forgetAssistantMessageId(thread.id, turnId, assistantMessageId);
       }
+      yield* clearActiveAssistantMessageId(thread.id);
     }
 
     if (proposedPlanCompletion) {
@@ -1134,6 +1357,13 @@ const make = Effect.fn("make")(function* () {
     }
 
     if (event.type === "turn.completed") {
+      // Unconditional and independent of turnId: a turn ending is the
+      // outermost boundary an assistant reply can still be "open" across.
+      // Some providers never send an explicit item-completion event for the
+      // assistant message at all (only turn.started/.../turn.completed) —
+      // without this, the next turn's first delta would find this turn's
+      // segment still marked active and silently concatenate onto it.
+      yield* clearActiveAssistantMessageId(thread.id);
       const turnId = toTurnId(event.turnId);
       if (turnId) {
         const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
@@ -1152,6 +1382,7 @@ const make = Effect.fn("make")(function* () {
           { concurrency: 1 },
         ).pipe(Effect.asVoid);
         yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
+        yield* clearBufferedReasoningText(reasoningBufferKey(thread.id, turnId));
 
         yield* finalizeBufferedProposedPlan({
           event,
@@ -1160,6 +1391,13 @@ const make = Effect.fn("make")(function* () {
           planId: proposedPlanIdForTurn(thread.id, turnId),
           turnId,
           updatedAt: now,
+        });
+
+        yield* forkPackDraftLabelingIfEnabled({
+          threadId: thread.id,
+          turnId,
+          assistantMessageIds,
+          now,
         });
       }
     }
@@ -1274,7 +1512,11 @@ const make = Effect.fn("make")(function* () {
     ).pipe(Effect.asVoid);
   });
 
-  const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
+  const processDomainEvent = (event: TurnStartRequestedDomainEvent) =>
+    Cache.set(packModeContextByThreadId, event.payload.threadId, {
+      enabled: event.payload.packModeEnabled,
+      userMessageId: event.payload.messageId,
+    });
 
   const processInput = (input: RuntimeIngestionInput) =>
     input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);

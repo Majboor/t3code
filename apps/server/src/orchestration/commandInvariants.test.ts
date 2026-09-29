@@ -106,6 +106,7 @@ const readModel: OrchestrationReadModel = {
 
 const messageSendCommand: OrchestrationCommand = {
   type: "thread.turn.start",
+  packModeEnabled: false,
   commandId: CommandId.make("cmd-1"),
   threadId: ThreadId.make("thread-1"),
   message: {

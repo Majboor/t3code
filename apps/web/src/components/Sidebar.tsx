@@ -184,6 +184,7 @@ import {
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { CommandDialogTrigger } from "./ui/command";
 import { readEnvironmentApi } from "../environmentApi";
+import { Spinner } from "./ui/spinner";
 import { useSettings, useUpdateSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "../rpc/serverState";
 import { derivePhysicalProjectKey, deriveProjectGroupingOverrideKey } from "../logicalProject";
@@ -2510,6 +2511,13 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     projectsLength,
   } = props;
 
+  // Distinguishes "confirmed empty" from "still loading" — without this, a
+  // slow initial connection renders "No projects yet" instantly, which reads
+  // as broken/empty rather than as a page that just hasn't finished loading.
+  const isAnyEnvironmentConnecting = useSavedEnvironmentRuntimeStore((state) =>
+    Object.values(state.byId).some((runtime) => runtime.connectionState === "connecting"),
+  );
+
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
       updateSettings({ sidebarProjectSortOrder: sortOrder });
@@ -2882,7 +2890,14 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 
         {projectsLength === 0 && (
           <div className="px-2 pt-4 text-center text-xs text-muted-foreground/60">
-            No projects yet
+            {isAnyEnvironmentConnecting ? (
+              <span className="inline-flex items-center justify-center gap-1.5">
+                <Spinner className="size-3" />
+                Loading…
+              </span>
+            ) : (
+              "No projects yet"
+            )}
           </div>
         )}
         {projectsLength > 0 && sortedProjects.length === 0 ? (

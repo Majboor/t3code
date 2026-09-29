@@ -982,8 +982,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
-  const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = () =>
-    sql
+  const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = (options) => {
+    const isProjectVisible = options?.isProjectVisible ?? (() => true);
+    return sql
       .withTransaction(
         Effect.all([
           listProjectRows(undefined).pipe(
@@ -1054,9 +1055,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               updatedAt = maxIso(updatedAt, row.updatedAt);
             }
 
+            // Resolving identity shells out to `git` twice per project
+            // (RepositoryIdentityResolver) — skip it for rows the caller
+            // says are invisible or already deleted (deleted rows are
+            // dropped from `projects` below regardless), so a session with
+            // a handful of its own projects doesn't pay that cost for every
+            // other tenant's projects on the same server.
+            const rowsNeedingIdentity = projectRows.filter(
+              (row) => row.deletedAt === null && isProjectVisible(row.ownership),
+            );
             const repositoryIdentities = new Map(
               yield* Effect.forEach(
-                projectRows,
+                rowsNeedingIdentity,
                 (row) =>
                   repositoryIdentityResolver
                     .resolve(row.workspaceRoot)
@@ -1121,6 +1131,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           return toPersistenceSqlError("ProjectionSnapshotQuery.getShellSnapshot:query")(error);
         }),
       );
+  };
 
   const getCounts: ProjectionSnapshotQueryShape["getCounts"] = () =>
     readProjectionCounts(undefined).pipe(

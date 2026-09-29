@@ -29,6 +29,19 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
+  /**
+   * A hash of the built web client (`index.html`) the server is currently
+   * serving, computed once at process startup. `serverVersion` alone doesn't
+   * change on most deploys (nobody bumps `package.json` per redeploy), so a
+   * browser tab left open across a redeploy has no signal that its
+   * already-loaded, already-running JS predates a fix — the socket happily
+   * reconnects underneath it, but the code executing it never updates itself.
+   * The client compares this value across config snapshots (initial load vs.
+   * a later reconnect) to detect exactly that and prompt a reload. Optional
+   * so an older server that hasn't been redeployed to know about this field
+   * still decodes cleanly.
+   */
+  clientBuildId: Schema.optionalKey(TrimmedNonEmptyString),
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

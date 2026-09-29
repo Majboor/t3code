@@ -54,6 +54,7 @@ function buildProps() {
     activeTurnInProgress: false,
     activeTurnId: null,
     activeTurnStartedAt: null,
+    sessionOrchestrationStatus: null,
     listRef: createRef<LegendListRef | null>(),
     completionDividerBeforeEntryId: null,
     completionSummary: null,
@@ -71,6 +72,8 @@ function buildProps() {
     workspaceRoot: undefined,
     collaborationMembers: { byUserId: new Map(), viewerUserId: null },
     onIsAtEndChange: vi.fn(),
+    onRetryStuckTurn: vi.fn(),
+    isRetryingStuckTurn: false,
   };
 }
 

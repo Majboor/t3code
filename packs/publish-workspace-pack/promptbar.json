@@ -1,0 +1,11 @@
+{"id":"publish_workspace_pack","name":"Publish this workspace as a pack",
+ "description":"Turn this workspace's Pack Mode draft (.t3pack/draft.pack.json) into a real, signed pack with real knowledge entries, instead of a plain markdown writeup",
+ "phrasings":["publish this as a pack","turn this chat into a pack","package this workspace into a pack",
+   "make a pack from what we just did","publish my pack draft","turn our conversation into a pack",
+   "ship this as a pack","build a pack from this session","publish the pack draft",
+   "create a pack from this workspace","turn this into a reusable pack","pack draft ko publish karo",
+   "make this into a pack other people can use","finalize this pack","write up this pack draft",
+   "improve this pack","add more to this pack"],
+ "params":[{"name":"name","type":"string","required":false,"desc":"the pack's name, if the person already has one in mind"}],
+ "prompt":"Publish or update a pack from this workspace's Pack Mode draft using the publish-workspace-pack pack. First check .t3pack/draft.pack.json exists — if it doesn't, tell the person Pack Mode needs to be enabled and at least one turn run before there's anything to publish. Then follow that pack's integration prompt exactly.",
+ "packId":"pack_06f254faaead594cdce3"}

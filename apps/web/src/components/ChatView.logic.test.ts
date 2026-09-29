@@ -788,7 +788,17 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(true);
   });
 
-  it("clears local dispatch when the session changes without an observed running phase", () => {
+  // Regression: a bare `session.updatedAt` bump with the orchestration status
+  // still sitting on a non-conclusive value (e.g. mid-transition on the way
+  // to "running", or here just "idle" churn) used to be enough to clear
+  // local dispatch. That dropped the optimistic "Working" state before
+  // `phase` ever became "running" to pick up the slack — a real gap where
+  // the UI showed nothing for however long provider/session startup took,
+  // then popped in already several seconds "old" once a conclusive status
+  // finally landed. Confirmed via production event logs: the turn record
+  // (with a real `startedAt`) is created instantly, but the session can sit
+  // in a transitional status for multiple seconds before reaching "running".
+  it("does not clear local dispatch on a bare session update that has not reached a conclusive status", () => {
     const localDispatch = createLocalDispatchSnapshot({
       id: ThreadId.make("thread-1"),
       environmentId: localEnvironmentId,
@@ -819,6 +829,47 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         latestTurn: previousLatestTurn,
         session: {
           ...previousSession,
+          updatedAt: "2026-03-29T00:00:11.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("clears local dispatch once the session reaches a conclusive status even without phase observing running", () => {
+    const localDispatch = createLocalDispatchSnapshot({
+      id: ThreadId.make("thread-1"),
+      environmentId: localEnvironmentId,
+      codexThreadId: null,
+      projectId,
+      title: "Thread",
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      session: previousSession,
+      messages: [],
+      proposedPlans: [],
+      error: null,
+      createdAt: "2026-03-29T00:00:00.000Z",
+      archivedAt: null,
+      updatedAt: "2026-03-29T00:00:10.000Z",
+      latestTurn: previousLatestTurn,
+      branch: null,
+      worktreePath: null,
+      turnDiffSummaries: [],
+      activities: [],
+    });
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "ready",
+        latestTurn: previousLatestTurn,
+        session: {
+          ...previousSession,
+          orchestrationStatus: "error",
           updatedAt: "2026-03-29T00:00:11.000Z",
         },
         hasPendingApproval: false,

@@ -256,6 +256,7 @@ describe("deriveMessagesTimelineRows", () => {
       completionDividerBeforeEntryId: "assistant-final-entry",
       isWorking: false,
       activeTurnStartedAt: null,
+      sessionOrchestrationStatus: null,
       turnDiffSummaryByAssistantMessageId: new Map(),
       revertTurnCountByUserMessageId: new Map(),
     });
@@ -269,6 +270,45 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRows[0]?.showAssistantCopyButton).toBe(false);
     expect(assistantRows[1]?.showAssistantCopyButton).toBe(true);
     expect(assistantRows[1]?.showCompletionDivider).toBe(true);
+  });
+
+  /**
+   * Regression coverage for a real UX gap: GLM's opencode subprocess reports
+   * session status "ready" for its entire spawn + ACP-handshake window
+   * (verified live: ~6.5s with zero distinguishing signal) before it ever
+   * flips to "running" once a model call actually starts. Until the working
+   * row carried this, the UI showed the same "Working for Xs" text whether
+   * the server was still booting the session or genuinely generating, which
+   * reads identically to "stuck" during that whole cold-start window.
+   */
+  it("marks the working row as session-starting while orchestration status has not reached running", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [],
+      completionDividerBeforeEntryId: null,
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      sessionOrchestrationStatus: "ready",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const workingRow = rows.find((row) => row.kind === "working");
+    expect(workingRow).toMatchObject({ isSessionStarting: true });
+  });
+
+  it("clears the session-starting flag on the working row once orchestration status reaches running", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [],
+      completionDividerBeforeEntryId: null,
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      sessionOrchestrationStatus: "running",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const workingRow = rows.find((row) => row.kind === "working");
+    expect(workingRow).toMatchObject({ isSessionStarting: false });
   });
 
   it("projects assistant diff summaries and user revert counts onto the affected rows", () => {
@@ -313,6 +353,7 @@ describe("deriveMessagesTimelineRows", () => {
       completionDividerBeforeEntryId: null,
       isWorking: false,
       activeTurnStartedAt: null,
+      sessionOrchestrationStatus: null,
       turnDiffSummaryByAssistantMessageId: new Map([
         ["assistant-1" as never, assistantTurnDiffSummary],
       ]),
@@ -370,6 +411,7 @@ describe("computeStableMessagesTimelineRows", () => {
       completionDividerBeforeEntryId: null,
       isWorking: false,
       activeTurnStartedAt: null,
+      sessionOrchestrationStatus: null,
       turnDiffSummaryByAssistantMessageId: new Map(),
       revertTurnCountByUserMessageId: new Map(),
     });
@@ -421,6 +463,7 @@ describe("computeStableMessagesTimelineRows", () => {
       completionDividerBeforeEntryId: null,
       isWorking: false,
       activeTurnStartedAt: null,
+      sessionOrchestrationStatus: null,
       turnDiffSummaryByAssistantMessageId: new Map(),
       revertTurnCountByUserMessageId: new Map(),
     });

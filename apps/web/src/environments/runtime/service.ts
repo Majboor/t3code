@@ -70,6 +70,7 @@ import { useTerminalStateStore } from "~/terminalStateStore";
 import { useUiStateStore } from "~/uiStateStore";
 import { WsTransport } from "../../rpc/wsTransport";
 import { subscribeWsConnected } from "../../rpc/wsConnectionState";
+import { observeClientBuildId } from "../../rpc/clientBuildFreshness";
 import { createWsRpcClient, type WsRpcClient } from "../../rpc/wsRpcClient";
 import { derivePhysicalProjectKey } from "../../logicalProject";
 
@@ -869,6 +870,9 @@ function createPrimaryEnvironmentConnection(): EnvironmentConnection {
       kind: "primary",
       knownEnvironment,
       client: createPrimaryEnvironmentClient(knownEnvironment),
+      onConfigSnapshot: (config) => {
+        observeClientBuildId(config.environment.clientBuildId);
+      },
       ...createEnvironmentConnectionHandlers(),
     }),
   );
@@ -922,6 +926,7 @@ async function ensureSavedEnvironmentConnection(
       await refreshSavedEnvironmentMetadata(record, bearerToken, client);
     },
     onConfigSnapshot: (config) => {
+      observeClientBuildId(config.environment.clientBuildId);
       useSavedEnvironmentRuntimeStore.getState().patch(record.environmentId, {
         descriptor: config.environment,
         serverConfig: config,
@@ -1219,6 +1224,19 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
     threadSubscriptionEpoch += 1;
     for (const entry of [...threadDetailSubscriptions.values()]) {
       attachThreadDetailSubscription(entry);
+    }
+    // The primary `subscribeShell` subscription (session.orchestrationStatus,
+    // latestTurn, the fields the "Working…" indicator is actually keyed off)
+    // gets the exact same treatment as thread-detail subscriptions above —
+    // otherwise a raw socket reconnect that this subscription's own stream
+    // didn't independently notice leaves a turn that finished while offline
+    // showing "Still waiting" forever, even though the assistant's message
+    // itself already arrived correctly via the (already-hardened) detail
+    // subscription. Confirmed live: exactly this split was observed in
+    // production — real response persisted, banner never cleared.
+    for (const connection of [...environmentConnections.values()]) {
+      connection.resubscribeShell();
+      connection.resubscribeConfig();
     }
     needsProviderInvalidation = true;
     void queryInvalidationThrottler.maybeExecute();

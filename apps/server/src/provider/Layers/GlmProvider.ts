@@ -31,33 +31,25 @@ const DEFAULT_GLM_MODEL_CAPABILITIES: ModelCapabilities = {
 };
 
 /**
- * Only the three models backing the composer's High/Medium/Low effort tiers
- * (`glmEffortTiers.ts` on the web side) are exposed here. `z-ai/glm-5.3`
- * (flagship) and `z-ai/glm-5.3-flash` (plain) are deliberately NOT listed —
- * both were re-verified live directly against Kitani on 2026-09-17 and are
- * still returning genuine `502`s (`curl .../v1/chat/completions` with each
- * model id, bypassing this app and the gateway entirely). Exposing an
- * unreliable model as a user-facing choice just to have it fail on use is
- * worse than not offering it. Re-add them here once Kitani confirms they're
- * actually healthy again — don't just assume the mechanism still works,
- * re-check.
+ * The two models backing the composer's High/Medium/Low effort tiers
+ * (`glmEffortTiers.ts` on the web side — medium and low both currently point
+ * at the flash variant). Previously this was three models split across two
+ * families (GLM + DeepSeek), with the GLM flagship and plain-flash variants
+ * excluded for returning genuine `502`s directly from Kitani. As of the
+ * Fireworks upstream switch, all tiers are served from Fireworks and stay
+ * within the GLM-5.3 family; re-verify live before reintroducing Kitani or a
+ * mixed-family lineup.
  */
 const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
-    slug: "z-ai/glm-5.3-flash-uncensored",
-    name: "GLM-5.3 Flash (Uncensored)",
+    slug: "z-ai/glm-5.3",
+    name: "GLM-5.3",
     isCustom: false,
     capabilities: DEFAULT_GLM_MODEL_CAPABILITIES,
   },
   {
-    slug: "deepseek/deepseek-v4.1-flash-thinking",
-    name: "DeepSeek V4.1 Flash (thinking)",
-    isCustom: false,
-    capabilities: DEFAULT_GLM_MODEL_CAPABILITIES,
-  },
-  {
-    slug: "deepseek/deepseek-v4.1-flash",
-    name: "DeepSeek V4.1 Flash",
+    slug: "z-ai/glm-5.3-flash",
+    name: "GLM-5.3 Flash",
     isCustom: false,
     capabilities: DEFAULT_GLM_MODEL_CAPABILITIES,
   },

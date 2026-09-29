@@ -9,6 +9,7 @@
 import type {
   OrchestrationCheckpointSummary,
   OrchestrationProject,
+  OrchestrationProjectOwnership,
   OrchestrationProjectShell,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
@@ -53,11 +54,21 @@ export interface ProjectionSnapshotQueryShape {
    *
    * Returns only projects and thread shell summaries so clients can bootstrap
    * lightweight navigation state without hydrating every thread body.
+   *
+   * `isProjectVisible`, when given, is consulted before this instance's
+   * (potentially expensive, subprocess-backed) repository-identity resolution
+   * runs for each project row — not after — so a caller who already knows
+   * which projects the requesting session can see (e.g. a tenant-scoped `ws`
+   * session) can avoid paying that cost for every other tenant's projects on
+   * the same server. The returned snapshot still includes every non-deleted
+   * project regardless: this only skips *resolving identity for* the ones
+   * the predicate rejects, which come back with `repositoryIdentity: null`.
+   * A caller that needs those hidden anyway (every caller today does) must
+   * still filter the returned snapshot itself.
    */
-  readonly getShellSnapshot: () => Effect.Effect<
-    OrchestrationShellSnapshot,
-    ProjectionRepositoryError
-  >;
+  readonly getShellSnapshot: (options?: {
+    readonly isProjectVisible?: (ownership: OrchestrationProjectOwnership | null) => boolean;
+  }) => Effect.Effect<OrchestrationShellSnapshot, ProjectionRepositoryError>;
 
   /**
    * Read aggregate projection counts without hydrating the full read model.

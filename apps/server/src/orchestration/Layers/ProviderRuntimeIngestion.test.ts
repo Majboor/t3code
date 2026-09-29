@@ -712,6 +712,109 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("holds one assistant message together even when the provider gives each delta a different itemId and no turnId", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    // Reproduces a real GLM/ACP stream observed in production: one
+    // continuous reply arrived as nine `content.delta` events, each tagged
+    // with its own distinct itemId AND with no `turnId` at all — only the
+    // final `item.completed` event carried one. Before this fix, a per-turn
+    // cache never engaged for the deltas (they all looked turn-less), so
+    // each one became its own permanent one-word message.
+    const words = ["Hey", "!", " What", " can", " I", " help", " you", " with", " today?"];
+    for (const [index, word] of words.entries()) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-unstable-delta-${index}`),
+        provider: "codex",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        itemId: asItemId(`item-unstable-${index}`),
+        payload: {
+          streamKind: "assistant_text",
+          delta: word,
+        },
+      });
+    }
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-unstable-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-unstable"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-unstable-0" && !message.streaming,
+      ),
+    );
+    const assistantMessages = thread.messages.filter((message: ProviderRuntimeTestMessage) =>
+      message.id.startsWith("assistant:item-unstable"),
+    );
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]?.text).toBe("Hey! What can I help you with today?");
+    expect(assistantMessages[0]?.streaming).toBe(false);
+  });
+
+  it("surfaces reasoning content deltas as a live-updating task.progress activity instead of dropping them", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-delta-1"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("item-reasoning"),
+      payload: {
+        streamKind: "reasoning_text",
+        delta: "Thinking about the",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-delta-2"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("item-reasoning"),
+      payload: {
+        streamKind: "reasoning_text",
+        delta: " approach next.",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.kind === "task.progress" &&
+          typeof (activity.payload as Record<string, unknown> | undefined)?.detail === "string" &&
+          (
+            (activity.payload as Record<string, unknown>).detail as string
+          ).includes("approach next."),
+      ),
+    );
+
+    const reasoningActivities = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "task.progress",
+    );
+    // The second delta must replace the first activity in place (same id), not append a new row.
+    expect(reasoningActivities).toHaveLength(1);
+    const payload = reasoningActivities[0]?.payload as Record<string, unknown>;
+    expect(payload.detail).toBe("Thinking about the approach next.");
+  });
+
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -897,6 +1000,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-plan-target"),
         threadId: targetThreadId,
         message: {
@@ -1067,6 +1171,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-plan-target-guarded"),
         threadId: targetThreadId,
         message: {
@@ -1230,6 +1335,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-plan-target-unrelated"),
         threadId: targetThreadId,
         message: {
@@ -1423,6 +1529,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-streaming-mode"),
         threadId: ThreadId.make("thread-1"),
         message: {

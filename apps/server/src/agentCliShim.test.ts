@@ -97,10 +97,11 @@ describe("every provider that runs a turn gets the shim", () => {
   const read = (relativePath: string) =>
     fs.readFileSync(path.join(import.meta.dirname, relativePath), "utf8");
 
-  it("is applied by the Codex manager and the Claude adapter alike", () => {
+  it("is applied by the Codex manager and the Claude and GLM adapters alike", () => {
     for (const source of [
       "codexAppServerManager.ts",
       "provider/Layers/ClaudeAdapter.ts",
+      "glmAcpManager.ts",
     ] as const) {
       const text = read(source);
       expect.soft(text, `${source} must build the shim`).toContain("ensureAgentCliShim");

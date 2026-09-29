@@ -56,10 +56,16 @@ const respondToPromptbarError = (error: PromptbarError) =>
     return HttpServerResponse.jsonUnsafe({ error: error.message }, { status });
   });
 
+const PromptbarRecentContextEntry = Schema.Struct({
+  role: Schema.Literals(["user", "assistant", "tool"]),
+  text: Schema.String,
+});
+
 const PromptbarResolveRequest = Schema.Struct({
   text: Schema.String,
   isFirstMessageInSession: Schema.Boolean,
   k: Schema.optional(Schema.Number),
+  recentContext: Schema.optional(Schema.Array(PromptbarRecentContextEntry)),
 });
 
 export const promptbarResolveRouteLayer = HttpRouter.add(
@@ -79,13 +85,15 @@ export const promptbarResolveRouteLayer = HttpRouter.add(
       Effect.mapError(() => new PromptbarError({ message: "Invalid payload.", status: 400 })),
     );
     // Rebuilt rather than passed through as-is: `schemaBodyJson`'s decoded
-    // `k?: number` is really `k: number | undefined` once JSON-decoded, which
-    // `exactOptionalPropertyTypes` (on) treats as a different, incompatible
-    // shape from `PromptbarResolveInput`'s `k?: number`.
-    const input: PromptbarResolveInput =
-      body.k === undefined
-        ? { text: body.text, isFirstMessageInSession: body.isFirstMessageInSession }
-        : { text: body.text, isFirstMessageInSession: body.isFirstMessageInSession, k: body.k };
+    // optional fields are really `T | undefined` once JSON-decoded, which
+    // `exactOptionalPropertyTypes` (on) treats as different, incompatible
+    // shapes from `PromptbarResolveInput`'s `k?: number`/`recentContext?: ...`.
+    const input: PromptbarResolveInput = {
+      text: body.text,
+      isFirstMessageInSession: body.isFirstMessageInSession,
+      ...(body.k === undefined ? {} : { k: body.k }),
+      ...(body.recentContext === undefined ? {} : { recentContext: body.recentContext }),
+    };
 
     const promptbar = yield* PromptbarClient;
     const resolution = yield* promptbar.resolve(input);

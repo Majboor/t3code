@@ -15,6 +15,7 @@ import { resolveAuthGateRedirect } from "../authRouting";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import {
+  ClientUpdateAvailableToastCoordinator,
   SlowRpcAckToastCoordinator,
   WebSocketConnectionCoordinator,
   WebSocketConnectionSurface,
@@ -125,6 +126,7 @@ function RootRouteView() {
         <EventRouter />
         <WebSocketConnectionCoordinator />
         <SlowRpcAckToastCoordinator />
+        <ClientUpdateAvailableToastCoordinator />
         <ProductTourAutoStart />
         <ProductTourOverlay />
         <WebSocketConnectionSurface>

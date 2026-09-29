@@ -49,7 +49,10 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { cn } from "../../lib/utils";
-import { sendPromptbarTelemetry } from "../../environments/primary/promptbar";
+import {
+  sendPromptbarTelemetry,
+  type PromptbarRecentContextEntry,
+} from "../../environments/primary/promptbar";
 import {
   suggestPacks,
   withPackMention,
@@ -125,6 +128,12 @@ export const PackSuggestionBar = forwardRef<
      * knows.
      */
     readonly isFirstMessageInSession: boolean;
+    /**
+     * A handful of recent turns (oldest first), for the stage-3 decision
+     * model's context — entirely optional; the backend degrades gracefully
+     * without it, same as if the decision model weren't configured at all.
+     */
+    readonly recentContext?: ReadonlyArray<PromptbarRecentContextEntry>;
   }
 >(function PackSuggestionBar(
   {
@@ -137,6 +146,7 @@ export const PackSuggestionBar = forwardRef<
     layout = "inline",
     onChangeSettings,
     isFirstMessageInSession,
+    recentContext,
   },
   ref,
 ) {
@@ -160,6 +170,7 @@ export const PackSuggestionBar = forwardRef<
     prompt,
     isFirstMessageInSession,
     shouldResolvePromptbar({ barEnabled: enabled, packModeEnabled, searching }),
+    recentContext,
   );
 
   const localSuggestions = useMemo<ReadonlyArray<PackSuggestion>>(() => {

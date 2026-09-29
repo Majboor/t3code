@@ -8,18 +8,42 @@ import { useCollaborationUsage } from "../../hooks/useCollaborationUsage";
 import { UsagePanel } from "../collaboration/usage/UsagePanel";
 import { SettingsPageContainer, SettingsRow, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 import { UsageActivityHeatmap } from "./UsageActivityHeatmap";
-import { formatCompactCount, formatResetsIn, percentUsed } from "./usageActivity.logic";
+import { formatCompactCount, formatResetsIn, isLimitReached, percentUsed } from "./usageActivity.logic";
 
-function LimitBar({ label, percent, resetsLabel }: { label: string; percent: number; resetsLabel: string }) {
+/**
+ * A bar rendered from percent alone reads the same at 96% and at "actually
+ * exhausted, your next request is refused right now" — both clamp to a
+ * nearly-full bar in the same color. `reached` breaks that tie explicitly:
+ * red bar, and the reset countdown is joined by "Limit reached" instead of
+ * standing alone, so a person who just saw a rate-limit error in chat and
+ * came here to check isn't left staring at what looks like normal headroom.
+ */
+function LimitBar({
+  label,
+  percent,
+  resetsLabel,
+  reached,
+}: {
+  label: string;
+  percent: number;
+  resetsLabel: string;
+  reached: boolean;
+}) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-xs">
         <span className="font-medium text-foreground">{label}</span>
-        <span className="text-muted-foreground">{resetsLabel}</span>
+        <span className={reached ? "font-medium text-destructive" : "text-muted-foreground"}>
+          {reached ? `Limit reached · ${resetsLabel}` : resetsLabel}
+        </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-border/60">
         <div
-          className="h-full rounded-full bg-[var(--usage-accent,theme(colors.blue.500))] transition-[width]"
+          className={
+            reached
+              ? "h-full rounded-full bg-destructive transition-[width]"
+              : "h-full rounded-full bg-[var(--usage-accent,theme(colors.blue.500))] transition-[width]"
+          }
           style={{ width: `${percent}%` }}
         />
       </div>
@@ -70,9 +94,19 @@ export function UsageActivitySettings() {
   const [gatewayError, setGatewayError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchGatewayUsage()
-      .then(setGatewayUsage)
-      .catch((err: unknown) => setGatewayError(err instanceof Error ? err.message : "Failed to load usage."));
+    const load = () =>
+      fetchGatewayUsage()
+        .then(setGatewayUsage)
+        .catch((err: unknown) => setGatewayError(err instanceof Error ? err.message : "Failed to load usage."));
+
+    load();
+    // A page opened before hitting the 5-hour burst limit — or just left open
+    // in a background tab across it — would otherwise show whatever was true
+    // at mount forever. This is exactly the settings page people check right
+    // after seeing a rate-limit error in chat, so it has to reflect "right
+    // now," not "whenever this tab happened to load."
+    const intervalId = window.setInterval(load, 30_000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   return (
@@ -94,6 +128,7 @@ export function UsageActivitySettings() {
                     label="Monthly allowance"
                     percent={percentUsed(Number(gatewayUsage.plan.tokensUsed), Number(gatewayUsage.plan.includedTokens))}
                     resetsLabel={formatResetsIn(gatewayUsage.plan.periodEnd, nowMs)}
+                    reached={isLimitReached(Number(gatewayUsage.plan.tokensUsed), Number(gatewayUsage.plan.includedTokens))}
                   />
                 </div>
               ) : null}
@@ -108,6 +143,7 @@ export function UsageActivitySettings() {
                     label="Current 5h window"
                     percent={percentUsed(gatewayUsage.sessionWindow.tokensUsed, gatewayUsage.sessionWindow.tokensLimit)}
                     resetsLabel={formatResetsIn(gatewayUsage.sessionWindow.resetsAt, nowMs)}
+                    reached={isLimitReached(gatewayUsage.sessionWindow.tokensUsed, gatewayUsage.sessionWindow.tokensLimit)}
                   />
                 </div>
               ) : (

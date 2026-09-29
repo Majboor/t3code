@@ -6,7 +6,7 @@ import {
   UNKNOWN_MEMBER_INITIALS,
   UNKNOWN_MEMBER_NAME,
 } from "../collaboration/collaborationRoster.logic";
-import { type MessageId } from "@t3tools/contracts";
+import { type MessageId, type OrchestrationSessionStatus } from "@t3tools/contracts";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 
@@ -146,7 +146,7 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null };
+  | { kind: "working"; id: string; createdAt: string | null; isSessionStarting: boolean };
 
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
@@ -223,6 +223,7 @@ export function deriveMessagesTimelineRows(input: {
   completionDividerBeforeEntryId: string | null;
   isWorking: boolean;
   activeTurnStartedAt: string | null;
+  sessionOrchestrationStatus: OrchestrationSessionStatus | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
@@ -296,6 +297,14 @@ export function deriveMessagesTimelineRows(input: {
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt,
+      // GLM's opencode subprocess (and, in principle, any provider's own
+      // cold start) reports session status "ready" for the whole spawn +
+      // handshake window before it ever flips to "running" — verified live
+      // via the real event log: status sat at "ready" for ~6.5s before the
+      // model call that actually produces content began. That gap is
+      // otherwise indistinguishable from "generating a response is just
+      // taking a while," which reads as stuck rather than as progress.
+      isSessionStarting: input.sessionOrchestrationStatus !== "running",
     });
   }
 

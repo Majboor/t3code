@@ -614,6 +614,7 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
     browse,
     invalidate,
     listDirectory,
+    resolveBrowseTarget: (input) => resolveBrowseTarget(input, path),
     search,
   } satisfies WorkspaceEntriesShape;
 });

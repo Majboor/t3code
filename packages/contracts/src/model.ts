@@ -62,7 +62,11 @@ export type ModelCapabilities = typeof ModelCapabilities.Type;
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, string> = {
   codex: "gpt-6-astra",
   claudeAgent: "claude-sonnet-4-6",
-  glm: "z-ai/glm-5.3-flash-uncensored",
+  // Not "-uncensored": that id was retired (see GlmProvider.ts's
+  // BUILT_IN_MODELS) and isn't offered in the model picker — a thread left
+  // on this default could only reach it through the gateway's stale-id
+  // fallback alias instead of a real, listed model.
+  glm: "z-ai/glm-5.3-flash",
 };
 
 /**

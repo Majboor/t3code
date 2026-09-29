@@ -551,6 +551,7 @@ describe("ProviderCommandReactor", () => {
     Effect.runPromise(
       input.harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make(input.commandId),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -686,6 +687,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-1"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -757,6 +759,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-provider-env"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -807,6 +810,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-title"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -857,6 +861,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-title-preserve"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -903,6 +908,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-title-formatted"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -965,6 +971,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-branch-model"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -995,6 +1002,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-fast"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1052,6 +1060,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-claude-effort"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1106,6 +1115,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-claude-fast-mode"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1168,6 +1178,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-plan"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1199,6 +1210,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-provider-first"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1243,6 +1255,69 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  /**
+   * Regression test for a real, live-reproduced bug: when `startSession`
+   * itself rejects (verified live via a GLM rate-limit pre-flight check that
+   * now correctly rejects before ever spawning a provider process), the
+   * failure never goes through a provider's own child-process error/exit
+   * handling, which is the *only* other place a `thread.session.set` update
+   * gets dispatched. Before this fix, `appendProviderFailureActivity` was
+   * the only effect: a real, actionable error landed in the activity log,
+   * but `session.orchestrationStatus` was left exactly as it was before the
+   * turn started — so the client's "Working…"/"Still waiting" indicator,
+   * which is driven entirely by that status, never cleared, even though the
+   * server had already recorded precisely why the turn failed.
+   */
+  it("marks the session as errored when starting the provider session itself fails", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.startSession.mockImplementationOnce(
+      (_: unknown, __: unknown) =>
+        Effect.fail(new Error("GLM's 5-hour usage limit has been reached")) as never,
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        packModeEnabled: false,
+        commandId: CommandId.make("cmd-turn-start-session-start-failure"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-session-start-failure"),
+          role: "user",
+          authorUserId: HARNESS_USER_ID,
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.session?.status === "error";
+    });
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session).toMatchObject({
+      status: "error",
+      lastError: expect.stringContaining("GLM's 5-hour usage limit has been reached"),
+    });
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      summary: "Provider turn start failed",
+      payload: {
+        detail: expect.stringContaining("GLM's 5-hour usage limit has been reached"),
+      },
+    });
+  });
+
   it("preserves the active session model when in-session model switching is unsupported", async () => {
     const harness = await createHarness({ sessionModelSwitch: "unsupported" });
     const now = new Date().toISOString();
@@ -1250,6 +1325,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-unsupported-1"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1270,6 +1346,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-unsupported-2"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1303,6 +1380,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-unchanged-1"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1324,6 +1402,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-unchanged-2"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1353,6 +1432,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-claude-effort-1"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1381,6 +1461,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-claude-effort-2"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1434,6 +1515,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-runtime-mode-1"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1471,6 +1553,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-runtime-mode-2"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1516,6 +1599,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-claude-no-options"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1574,6 +1658,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-provider-switch-1"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1595,6 +1680,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-provider-switch-2"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1658,6 +1744,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-restart-failure-1"),
         threadId: ThreadId.make("thread-1"),
         message: {
@@ -1770,6 +1857,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        packModeEnabled: false,
         commandId: CommandId.make("cmd-turn-start-stale"),
         threadId: ThreadId.make("thread-1"),
         message: {

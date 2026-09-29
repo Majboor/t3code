@@ -124,8 +124,8 @@ const TEST_PROVIDERS: ReadonlyArray<ServerProvider> = [
     skills: [],
     models: [
       {
-        slug: "z-ai/glm-5.3-flash-uncensored",
-        name: "GLM-5.3 Flash (Uncensored)",
+        slug: "z-ai/glm-5.3",
+        name: "GLM-5.3",
         isCustom: false,
         capabilities: {
           reasoningEffortLevels: [],
@@ -136,20 +136,8 @@ const TEST_PROVIDERS: ReadonlyArray<ServerProvider> = [
         },
       },
       {
-        slug: "deepseek/deepseek-v4.1-flash-thinking",
-        name: "DeepSeek V4.1 Flash (thinking)",
-        isCustom: false,
-        capabilities: {
-          reasoningEffortLevels: [],
-          supportsFastMode: false,
-          supportsThinkingToggle: false,
-          contextWindowOptions: [],
-          promptInjectedEffortLevels: [],
-        },
-      },
-      {
-        slug: "deepseek/deepseek-v4.1-flash",
-        name: "DeepSeek V4.1 Flash",
+        slug: "z-ai/glm-5.3-flash",
+        name: "GLM-5.3 Flash",
         isCustom: false,
         capabilities: {
           reasoningEffortLevels: [],
@@ -323,7 +311,7 @@ describe("ProviderModelPicker", () => {
   it("shows the GLM slider (not Codex's checklist or icon-driven branch) when locked to glm mid-thread", async () => {
     const mounted = await mountPicker({
       provider: "glm",
-      model: "z-ai/glm-5.3-flash-uncensored",
+      model: "z-ai/glm-5.3",
       lockedProvider: "glm",
     });
 
@@ -334,9 +322,8 @@ describe("ProviderModelPicker", () => {
         const text = document.body.textContent ?? "";
         // The slider's tier labels and live model-name label are present...
         expect(text).toContain("Low");
-        expect(text).toContain("Medium");
         expect(text).toContain("High");
-        expect(text).toContain("GLM-5.3 Flash (Uncensored)");
+        expect(text).toContain("GLM-5.3");
         // Codex/Claude now appear as greyed-out "start a new project to
         // switch" entries below the slider (the locked-provider UX fix), but
         // still with no raw model id or Codex's own model names leaking in
@@ -344,8 +331,7 @@ describe("ProviderModelPicker", () => {
         expect(text).toContain("Codex");
         expect(text).toContain("Claude");
         expect(text).not.toContain("GPT");
-        expect(text).not.toContain("z-ai/glm-5.3-flash-uncensored");
-        expect(text).not.toContain("deepseek/deepseek-v4.1-flash");
+        expect(text).not.toContain("z-ai/glm-5.3");
       });
     } finally {
       await mounted.cleanup();

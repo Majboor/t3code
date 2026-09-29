@@ -6,10 +6,12 @@ import { join } from "node:path";
 
 import { it } from "@effect/vitest";
 import { RequestError, type CreateElicitationRequest, type ElicitationSchema } from "@agentclientprotocol/sdk";
+import { ThreadId } from "@t3tools/contracts";
 
 import {
   autoAcceptsRequestKind,
   buildElicitationAcceptResponse,
+  GlmAcpManager,
   GlmTerminalRegistry,
   mapElicitationFormSchema,
   planElicitationRequest,
@@ -554,4 +556,37 @@ it("buildElicitationAcceptResponse declines rather than fabricating a value for 
     { color: "purple" },
   );
   assert.deepEqual(response, { action: "decline" });
+});
+
+/**
+ * Regression test for a real, live-reproduced bug: `startSession` attached
+ * its `child.on("error", ...)` handler ~200 lines and one real `await`
+ * (`connection.agent.buildSession(...).start()`) after `spawn()`. Confirmed
+ * live via a real server crash: when `input.cwd` no longer exists (e.g. an
+ * old thread's `/tmp` workspace was cleaned up since it was created) or the
+ * opencode binary is missing, `spawn` reports the failure asynchronously —
+ * with plenty of time, during that await, for it to fire before any handler
+ * existed. Node's default behavior for an unlistened 'error' event is to
+ * throw it as an uncaught exception, which crashed the *entire* server
+ * process for every user, not just the one session — confirmed via the
+ * production log: "Error: spawn opencode ENOENT" followed by the whole
+ * process dying. The fix moved both listeners to immediately after `spawn`.
+ */
+it("startSession rejects instead of crashing the process when the opencode binary does not exist", async () => {
+  const manager = new GlmAcpManager();
+  const cwd = await mkdtemp(join(tmpdir(), "t3-glm-acp-crash-test-"));
+  try {
+    await assert.rejects(
+      manager.startSession({
+        threadId: ThreadId.make("thread-crash-test"),
+        cwd,
+        opencodeBinaryPath: join(cwd, "definitely-does-not-exist-opencode-binary"),
+        gatewayBaseUrl: "https://example.invalid",
+        apiKey: "test-key",
+        runtimeMode: "full-access",
+      }),
+    );
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 });

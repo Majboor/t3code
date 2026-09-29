@@ -962,14 +962,51 @@ const make = Effect.gen(function* () {
             threadId: event.payload.threadId,
             cause: Cause.pretty(cause),
           });
+          const detail = readableFailureDetail(cause);
           yield* appendProviderFailureActivity({
             threadId: event.payload.threadId,
             kind: "provider.turn.start.failed",
             summary: "Provider turn start failed",
-            detail: readableFailureDetail(cause),
+            detail,
             turnId: null,
             createdAt: event.payload.createdAt,
           });
+          // A failure here (missing config, no gateway account, or — verified
+          // live — a rate-limit check that now rejects before ever spawning a
+          // provider process) never goes through GlmAcpManager's child
+          // process at all, so the `child.on("error"/"exit")` path that
+          // normally turns a runtime failure into a `thread.session.set` has
+          // nothing to react to. Without this, the session is left exactly
+          // as it was before the turn started (session.orchestrationStatus
+          // never reaches a terminal state), so the client's "Working…" /
+          // "Still waiting" indicator — which is driven entirely by that
+          // status, not by the activity log — never clears, even though the
+          // real, actionable error above was already recorded. Confirmed
+          // live: a rate-limit rejection produced the correct activity
+          // immediately, but the UI was stuck on "Still waiting" indefinitely
+          // because this was the only piece missing.
+          //
+          // Excludes a plain `ProviderAdapterRequestError` (e.g. "this thread
+          // is bound to a different provider") — that is a validation
+          // rejection of the *request*, not an attempt at a session that
+          // failed, and a thread that never had a session before this turn
+          // should stay with no session (`null`), not gain a fabricated
+          // "error" one.
+          if (!Schema.is(ProviderAdapterRequestError)(Cause.squash(cause))) {
+            yield* setThreadSession({
+              threadId: event.payload.threadId,
+              session: {
+                threadId: event.payload.threadId,
+                status: "error",
+                providerName: thread.session?.providerName ?? null,
+                runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+                activeTurnId: null,
+                lastError: detail,
+                updatedAt: event.payload.createdAt,
+              },
+              createdAt: event.payload.createdAt,
+            });
+          }
         }),
       ),
     );

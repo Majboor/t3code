@@ -3102,6 +3102,104 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }),
         );
 
+      /**
+       * Rejects claiming, or browsing into, a path that overlaps — in either
+       * direction — with a project some OTHER tenant already owns.
+       *
+       * Deliberately narrower than routing through `ensureWorkspaceRoot`'s
+       * full tenant-permission chain: that chain's "unowned path" fallback
+       * (`ensureProviderSessionGrantsWorkspaceRoot`) only allows a path
+       * through when precisely zero provider sessions exist anywhere on the
+       * whole machine — a condition meant for a project registered before
+       * tenancy existed, not for "a brand-new tenant's first-ever project on
+       * an already-active server". Verified live: this box already has real
+       * sessions running for other tenants, so that fallback would reject
+       * every legitimate new account's very first project too, alongside
+       * the malicious case it also happens to catch. This check instead
+       * looks only at whether the path is *already claimed by someone
+       * else* — a genuinely new, unclaimed path is never gated here at all.
+       *
+       * Fixes a real, live-reproduced gap: a freshly created hosted account,
+       * with zero projects and zero memberships anywhere, could browse the
+       * server's literal home directory (see `filesystemBrowse` below) and
+       * then successfully call `project.create` against another tenant's
+       * existing project directory (or a parent of one) — ownership then got
+       * stamped to the new tenant regardless of whose files were actually at
+       * that path, handing them real, persistent read/write access.
+       *
+       * One direction of that overlap check — "the new path sits *inside* an
+       * existing other-tenant claim" — has to skip claims rooted exactly at
+       * the machine's home directory. A legacy project can end up rooted
+       * there (itself a symptom of the very leak this closes, from before it
+       * was fixed), and left unguarded that turns into every other path on
+       * the box being "inside" it — blocking every other tenant from ever
+       * creating a project again. The exact-path case is still always
+       * blocked below regardless of this exemption, so browsing or claiming
+       * the home directory itself remains forbidden either way; only a
+       * *proper descendant* of it is allowed to fall through to the
+       * per-project overlap checks instead of being vetoed by the home
+       * directory's mere existence as a claim.
+       *
+       * `mode` controls how far that overlap check reaches, because
+       * "claiming" and "merely browsing" carry very different blast radii:
+       *
+       * - `"full"` (used by `project.create`) blocks exact matches plus both
+       *   ancestor/descendant directions — claiming a path hands the caller
+       *   real, persistent read/write access, so any overlap at all with
+       *   another tenant's project must be refused.
+       * - `"exactMatchOnly"` (used by `filesystemBrowse`) blocks only an
+       *   exact match with another tenant's project root — i.e. actually
+       *   landing inside their tracked directory and seeing its real
+       *   contents. It deliberately does *not* block browsing a shared
+       *   ancestor folder just because some unrelated tenant also happens to
+       *   have a project nested somewhere underneath it. This box has years
+       *   of different tenants' projects sitting as flat, unisolated
+       *   subfolders of the same home directory (e.g. `/root/Desktop`), so
+       *   the `"full"` ancestor check applied to read-only browsing made
+       *   *every* shared parent folder permanently unbrowsable — new
+       *   accounts could not navigate anywhere to create their first
+       *   project at all. Read-only name enumeration of sibling folders is
+       *   a real but much smaller disclosure than the exact-match case, and
+       *   accepting it is what keeps onboarding working on this
+       *   already-populated, non-isolated filesystem.
+       */
+      const ensureWorkspaceRootNotClaimedByOtherTenant = <E>(
+        cwd: string,
+        permission: TenantPermission,
+        toError: (message: string) => E,
+        mode: "full" | "exactMatchOnly" = "full",
+      ): Effect.Effect<void, E> => {
+        const tenantSession = hostedTenantSession;
+        if (machineOwnerSession || !tenantSession) {
+          return Effect.void;
+        }
+        const homeDir = os.homedir();
+        return orchestrationEngine.getReadModel().pipe(
+          Effect.mapError(() => toError(forbiddenMessage(permission))),
+          Effect.flatMap((readModel) => {
+            const conflicting = readModel.projects.some((project) => {
+              if (
+                project.ownership === undefined ||
+                project.ownership.tenantId === tenantSession.tenantId
+              ) {
+                return false;
+              }
+              const isExactMatch = isPathInsideRoot(cwd, project.workspaceRoot) &&
+                isPathInsideRoot(project.workspaceRoot, cwd);
+              if (isExactMatch || mode === "exactMatchOnly") {
+                return isExactMatch;
+              }
+              const claimIsDegenerateHomeDir = project.workspaceRoot === homeDir;
+              return (
+                (!claimIsDegenerateHomeDir && isPathInsideRoot(cwd, project.workspaceRoot)) ||
+                isPathInsideRoot(project.workspaceRoot, cwd)
+              );
+            });
+            return conflicting ? Effect.fail(toError(forbiddenMessage(permission))) : Effect.void;
+          }),
+        );
+      };
+
       const resolveTurnStartProviderConnectionTarget = (
         command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
       ) =>
@@ -3574,7 +3672,17 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       ): Effect.Effect<void, OrchestrationDispatchCommandError> => {
         switch (command.type) {
           case "project.create":
-            return checkRateLimit((message) => new OrchestrationDispatchCommandError({ message }));
+            return checkRateLimit(
+              (message) => new OrchestrationDispatchCommandError({ message }),
+            ).pipe(
+              Effect.flatMap(() =>
+                ensureWorkspaceRootNotClaimedByOtherTenant(
+                  command.workspaceRoot,
+                  "project.create",
+                  (message) => new OrchestrationDispatchCommandError({ message }),
+                ),
+              ),
+            );
           case "project.meta.update":
           case "project.delete":
             return checkRateLimit(
@@ -4240,15 +4348,6 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
               yield* checkRateLimit((message) => new OrchestrationGetSnapshotError({ message }));
-              const snapshot = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationGetSnapshotError({
-                      message: "Failed to load orchestration shell snapshot",
-                      cause,
-                    }),
-                ),
-              );
               const visibleTenantIds = yield* sessionVisibleTenantIds().pipe(
                 Effect.mapError(
                   (cause) =>
@@ -4277,11 +4376,30 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               // and belongs on nobody else's dashboard: showing it handed every
               // fresh account a second project with the host's files behind it.
               const unownedProjectsAreShared = !config.publishedBeyondLoopback;
-              const isVisibleProject = (project: OrchestrationProjectShell): boolean =>
+              const isOwnershipVisible = (
+                ownership: OrchestrationProjectShell["ownership"] | null | undefined,
+              ): boolean =>
                 visibleTenantIds === null ||
-                (project.ownership === undefined || project.ownership === null
+                (ownership === undefined || ownership === null
                   ? unownedProjectsAreShared
-                  : visibleTenantIds.has(project.ownership.tenantId));
+                  : visibleTenantIds.has(ownership.tenantId));
+              const isVisibleProject = (project: OrchestrationProjectShell): boolean =>
+                isOwnershipVisible(project.ownership);
+              // Computed before the snapshot query itself so it can skip
+              // resolving repository identity (two `git` subprocess spawns
+              // each) for every project on the server this session cannot
+              // see — see ProjectionSnapshotQuery.getShellSnapshot's doc.
+              const snapshot = yield* projectionSnapshotQuery
+                .getShellSnapshot({ isProjectVisible: isOwnershipVisible })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: "Failed to load orchestration shell snapshot",
+                        cause,
+                      }),
+                  ),
+                );
               const visibleProjectIds = new Set(
                 snapshot.projects.filter(isVisibleProject).map((project) => project.id),
               );
@@ -6103,14 +6221,36 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.filesystemBrowse,
             withRateLimit(
-              (input.cwd
-                ? ensureWorkspaceRoot(
-                    input.cwd,
+              // The tenant check used to run only `if (input.cwd)` — but a
+              // `partialPath` like "~/" needs no `cwd` to resolve, so a
+              // brand-new hosted account with zero projects (and so no
+              // `cwd` to send) walked straight past the check and browsed
+              // the server's literal home directory, seeing every other
+              // tenant's project directory names. Resolving the real target
+              // first — the same resolution `browse` itself does — closes
+              // that gap regardless of whether the client happened to send
+              // a `cwd`.
+              workspaceEntries.resolveBrowseTarget(input).pipe(
+                Effect.mapError(
+                  (cause) => new FilesystemBrowseError({ message: cause.detail, cause }),
+                ),
+                Effect.flatMap((resolvedTarget) =>
+                  ensureWorkspaceRootNotClaimedByOtherTenant(
+                    resolvedTarget,
                     "file.read",
                     (message) => new FilesystemBrowseError({ message }),
-                  )
-                : Effect.void
-              ).pipe(
+                    "exactMatchOnly",
+                  ),
+                ),
+                Effect.flatMap(() =>
+                  input.cwd
+                    ? ensureWorkspaceRoot(
+                        input.cwd,
+                        "file.read",
+                        (message) => new FilesystemBrowseError({ message }),
+                      )
+                    : Effect.void,
+                ),
                 Effect.flatMap(() =>
                   workspaceEntries.browse(input).pipe(
                     Effect.mapError(

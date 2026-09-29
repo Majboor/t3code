@@ -1,6 +1,7 @@
 import { memo, useState } from "react";
 import { Slider, SliderControl, SliderIndicator, SliderThumb, SliderTrack } from "../ui/slider";
 import {
+  GLM_EFFORT_TIER_LABEL,
   GLM_EFFORT_TIER_MODEL,
   GLM_EFFORT_TIER_MODEL_LABEL,
   GLM_EFFORT_TIERS,
@@ -13,13 +14,13 @@ export interface GlmEffortSliderProps {
 }
 
 /**
- * Replaces a raw model checklist with a 3-position draggable slider — the
- * position IS the choice (drag across Low/Medium/High), not a list you click
- * into. Each snap position is a genuinely different real model
- * (`glmEffortTiers.ts`); dragging calls `onModelChange` with that real model
- * id on every step crossed, wired by the caller into the same
- * `onProviderModelChange` path any other model change already uses — this
- * component has no opinion on how the switch itself happens.
+ * Replaces a raw model checklist with a draggable slider — the position IS
+ * the choice (drag across the tiers, e.g. Low/High), not a list you click
+ * into. Tier count is whatever `GLM_EFFORT_TIERS` lists; each snap position
+ * is a genuinely different real model (`glmEffortTiers.ts`), dragging calls
+ * `onModelChange` with that real model id on every step crossed, wired by the
+ * caller into the same `onProviderModelChange` path any other model change
+ * already uses — this component has no opinion on how the switch happens.
  */
 export const GlmEffortSlider = memo(function GlmEffortSlider({
   model,
@@ -27,7 +28,7 @@ export const GlmEffortSlider = memo(function GlmEffortSlider({
 }: GlmEffortSliderProps) {
   const initialTier = tierForGlmModel(model) ?? "high";
   const initialIndex = GLM_EFFORT_TIERS.indexOf(initialTier);
-  const [index, setIndex] = useState(initialIndex === -1 ? 2 : initialIndex);
+  const [index, setIndex] = useState(initialIndex === -1 ? GLM_EFFORT_TIERS.length - 1 : initialIndex);
   const tier = GLM_EFFORT_TIERS[index] ?? "high";
 
   return (
@@ -62,9 +63,9 @@ export const GlmEffortSlider = memo(function GlmEffortSlider({
         </SliderControl>
       </Slider>
       <div className="mt-1.5 flex justify-between text-[11px] text-muted-foreground">
-        <span>Low</span>
-        <span>Medium</span>
-        <span>High</span>
+        {GLM_EFFORT_TIERS.map((tierOption) => (
+          <span key={tierOption}>{GLM_EFFORT_TIER_LABEL[tierOption]}</span>
+        ))}
       </div>
     </div>
   );
