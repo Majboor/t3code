@@ -1,4 +1,5 @@
 import { PROVIDER_DISPLAY_NAMES, type ServerProvider } from "@t3tools/contracts";
+import { shouldShowProviderStatus } from "./providerStatusBanner.logic";
 import { memo, useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
@@ -191,7 +192,13 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
     connection !== null &&
     connectedAccounts.length === 0;
 
-  if (status.status === "ready" && !noAccountForMe) {
+  if (
+    !shouldShowProviderStatus({
+      status: status.status,
+      viewerConnectedAccounts: connections === null ? null : connectedAccounts.length,
+      noAccountForMe,
+    })
+  ) {
     return null;
   }
 
