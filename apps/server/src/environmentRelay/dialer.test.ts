@@ -154,7 +154,10 @@ describe("dialling out", () => {
 
     harness.dialer.start();
     // Let the loop fail a dial and settle into its backoff.
-    for (let attempt = 0; attempt < 200 && releaseSleep === null; attempt += 1) {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (releaseSleep !== null) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 1));
     }
     expect(releaseSleep).not.toBeNull();
