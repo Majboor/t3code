@@ -96,7 +96,7 @@ function buildProps() {
     resolvedTheme: "light" as const,
     timestampFormat: "locale" as const,
     workspaceRoot: undefined,
-    collaborationMembers: { byUserId: new Map(), viewerUserId: null },
+    collaborationMembers: { byUserId: new Map(), viewerUserId: null, hasScope: true },
     onIsAtEndChange: () => {},
     onRetryStuckTurn: () => {},
     isRetryingStuckTurn: false,

@@ -8,6 +8,18 @@ export interface CollaborationMembers {
   readonly byUserId: ReadonlyMap<string, CollaborationMember>;
   /** Who is reading. Their own messages need no label — they know. */
   readonly viewerUserId: string | null;
+  /**
+   * Whether a roster can exist for what is on screen at all.
+   *
+   * Distinguishes "the roster has not answered yet" from "there is no roster to
+   * ask for". Both leave `viewerUserId` null, and the timeline has to treat
+   * them oppositely: a pending roster gets a provisional tag so a colleague's
+   * words are never mistaken for the reader's own, while a project with no
+   * ownership has no colleagues and every label on it is noise. Without this
+   * flag the provisional tag became permanent, which is how an unshared
+   * project ended up with every message reading "Someone else" forever.
+   */
+  readonly hasScope: boolean;
 }
 
 const NO_MEMBERS: ReadonlyMap<string, CollaborationMember> = new Map();
@@ -155,6 +167,22 @@ export function useCollaborationMembers(input: {
   );
 
   useEffect(() => {
+    // Re-seat the roster on the new scope before anything is fetched for it.
+    // `setMembers` only ever ran on success and the cache only primed the
+    // FIRST render, so between switching workspaces and the new roster
+    // arriving, the previous workspace's names and colours were still on
+    // screen labelling this workspace's messages — not a missing name, a
+    // confidently wrong one.
+    //
+    // Re-read the cache rather than blanking: the cache is per-scope, so the
+    // new scope's own names appear immediately where they are known, and
+    // clearing would have traded a wrong name for a visible flicker on every
+    // workspace switch. A scope of null has no cache entry and correctly
+    // yields nobody.
+    const seeded = scope ? readRosterCache(scope) : null;
+    setMembers(seeded?.members ?? []);
+    setViewerUserId(seeded?.viewerUserId ?? null);
+
     if (!environmentId || !scope) {
       return;
     }
@@ -219,5 +247,12 @@ export function useCollaborationMembers(input: {
     return new Map(members.map((member) => [member.userId as string, member]));
   }, [members]);
 
-  return { byUserId, viewerUserId };
+  // A fresh object every render defeated `MessagesTimeline`'s memo, so every
+  // visible row re-rendered on every streaming delta of every turn. The map
+  // inside was already memoized; the wrapper around it was not.
+  const hasScope = environmentId !== null && scope !== null;
+  return useMemo(
+    () => ({ byUserId, viewerUserId, hasScope }),
+    [byUserId, hasScope, viewerUserId],
+  );
 }

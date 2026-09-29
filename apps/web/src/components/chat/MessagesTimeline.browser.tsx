@@ -70,7 +70,7 @@ function buildProps() {
     resolvedTheme: "dark" as const,
     timestampFormat: "24-hour" as const,
     workspaceRoot: undefined,
-    collaborationMembers: { byUserId: new Map(), viewerUserId: null },
+    collaborationMembers: { byUserId: new Map(), viewerUserId: null, hasScope: true },
     onIsAtEndChange: vi.fn(),
     onRetryStuckTurn: vi.fn(),
     isRetryingStuckTurn: false,

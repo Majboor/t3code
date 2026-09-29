@@ -67,6 +67,15 @@ export function resolveMessageAuthor(
   // told apart from the viewer — but an unlabelled bubble reads as the
   // reader's own words, which is the worse mistake in a shared thread. Draw a
   // provisional tag in the author's colour; the name arrives with the roster.
+  // No roster is possible here at all — the project carries no ownership, so
+  // there is no workspace to have members in. That is the unshared case, and
+  // the honest label for a lone author's own words is none. Checked before the
+  // pending-roster branch below, which otherwise never resolves and leaves
+  // every message in the thread reading "Someone else" permanently.
+  if (!members.hasScope) {
+    return null;
+  }
+
   if (members.viewerUserId === null) {
     return {
       userId: authorUserId,

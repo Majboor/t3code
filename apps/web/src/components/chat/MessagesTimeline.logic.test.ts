@@ -503,6 +503,7 @@ describe("resolveMessageAuthor", () => {
       ["user-grace", grace],
     ]),
     viewerUserId: "user-grace",
+      hasScope: true,
   };
 
   it("names the colleague who sent a message", () => {
@@ -531,12 +532,25 @@ describe("resolveMessageAuthor", () => {
     const alone = {
       byUserId: new Map([["user-grace", grace]]),
       viewerUserId: "user-grace",
+      hasScope: true,
     };
     expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, alone)).toBeNull();
   });
 
+  // The nametag bug, reported as "sometimes they show, sometimes not, very
+  // unstable". It was never intermittent in the UI — it depended entirely on
+  // whether the project carried ownership. Without it there is no workspace to
+  // scope a roster to, nothing is ever fetched, `viewerUserId` stays null
+  // forever, and the provisional tag below became permanent: every message in
+  // the thread read "Someone else" in a hashed colour, including the reader's
+  // own.
+  it("labels nothing when the project has no workspace to have members in", () => {
+    const unowned = { byUserId: new Map(), viewerUserId: null, hasScope: false };
+    expect(resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, unowned)).toBeNull();
+  });
+
   it("draws a provisional tag while the roster is still on its way", () => {
-    const loading = { byUserId: new Map(), viewerUserId: null };
+    const loading = { byUserId: new Map(), viewerUserId: null, hasScope: true };
     const label = resolveMessageAuthor({ authorUserId: UserId.make("user-grace") }, loading);
     expect(label).not.toBeNull();
     expect(label?.isKnown).toBe(false);
@@ -569,6 +583,7 @@ describe("resolveMessageAuthor", () => {
     const departed = {
       byUserId: new Map([["user-grace", grace]]),
       viewerUserId: "user-grace",
+      hasScope: true,
     };
     const present = {
       byUserId: new Map([
@@ -579,6 +594,7 @@ describe("resolveMessageAuthor", () => {
         ],
       ]),
       viewerUserId: "user-grace",
+      hasScope: true,
     };
 
     expect(resolveMessageAuthor({ authorUserId: UserId.make("user-ada") }, departed)?.color).toBe(
