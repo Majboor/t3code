@@ -120,7 +120,14 @@ export interface EnvironmentDialer {
   readonly failedAttempts: () => number;
 }
 
-const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const defaultSleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    // A backoff timer is never a reason to keep the process alive. Without
+    // this, shutting down while the dialer happens to be waiting out a long
+    // backoff holds Node open until the timer fires on its own.
+    timer.unref?.();
+  });
 
 /** `http://hub` -> `ws://hub/api/environments/relay?wsToken=…` */
 export function relayDialUrl(hubBaseUrl: string, wsToken: string): string {
@@ -132,6 +139,16 @@ export function relayDialUrl(hubBaseUrl: string, wsToken: string): string {
 
 export function createEnvironmentDialer(options: EnvironmentDialerOptions): EnvironmentDialer {
   const sleep = options.sleep ?? defaultSleep;
+  /**
+   * Cuts short whatever backoff the loop is sitting in.
+   *
+   * `stop()` awaits the loop, and the loop spends nearly all of its time
+   * asleep between dial attempts — up to the backoff ceiling. Awaiting it
+   * without a way to wake it meant shutdown blocked for as long as the current
+   * wait had left, which on a repeatedly failing dial is the full ceiling.
+   * Set while a backoff is in flight and cleared as soon as it ends.
+   */
+  let wakeFromBackoff: (() => void) | null = null;
   const random = options.random ?? Math.random;
 
   let state: RelayDialerState = "idle";
@@ -367,7 +384,11 @@ export function createEnvironmentDialer(options: EnvironmentDialerOptions): Envi
         random(),
       );
       setState("waiting", `Reconnecting in ${Math.round(delayMs / 100) / 10}s.`);
-      await sleep(delayMs);
+      await new Promise<void>((resolve) => {
+        wakeFromBackoff = resolve;
+        void sleep(delayMs).then(() => resolve());
+      });
+      wakeFromBackoff = null;
     }
     if (state !== "refused") {
       setState("stopped");
@@ -390,6 +411,9 @@ export function createEnvironmentDialer(options: EnvironmentDialerOptions): Envi
       } catch {
         // Already closed.
       }
+      // Wake the loop if it is waiting out a backoff, so `await loop` below
+      // returns now rather than whenever that wait happened to end.
+      wakeFromBackoff?.();
       await loop;
     },
     state: () => state,

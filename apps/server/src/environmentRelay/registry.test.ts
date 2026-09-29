@@ -388,7 +388,11 @@ describe("revoking a machine", () => {
     expect(dropped).toEqual(["env-1"]);
     expect(socket.lastOf("bye")?.reason).toBe("revoked");
     expect(socket.closed).toEqual(["revoked"]);
-    expect(relayLinkFor("env-1", NOW)).toBeNull();
+    // Kept, and readable as revoked. Forgetting it made this verdict
+    // unreachable: the caller could not tell a revoked machine from one that
+    // had never dialled in, so the UI settled on "Offline — open the app on
+    // that machine", which is the one thing that will not help.
+    expect(relayLinkFor("env-1", NOW)?.verdict.state).toBe("revoked");
   });
 
   it("closes the browsers riding on it", () => {
@@ -433,6 +437,6 @@ describe("revoking a machine", () => {
         nowMs: NOW,
         sink: { onData: () => {}, onClose: () => {} },
       }),
-    ).toEqual({ outcome: "refused", reason: "not-connected" });
+    ).toEqual({ outcome: "refused", reason: "revoked" });
   });
 });

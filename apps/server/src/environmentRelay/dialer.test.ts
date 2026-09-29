@@ -134,6 +134,39 @@ function makeHarness(
 const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 describe("dialling out", () => {
+  // `stop()` awaits the dial loop, and the loop spends nearly all its time
+  // asleep between attempts. Without a way to wake it, shutdown blocked for
+  // whatever the current backoff had left — up to the ceiling on a repeatedly
+  // failing dial.
+  it("stops without waiting out the backoff it is sitting in", async () => {
+    let releaseSleep: (() => void) | null = null;
+    const harness = makeHarness({
+      // Never resolves on its own: the only way out of this backoff is the
+      // interrupt, so a stop that still returns proves it was used.
+      sleep: () =>
+        new Promise<void>((resolve) => {
+          releaseSleep = resolve;
+        }),
+      connect: () => {
+        throw new Error("hub unreachable");
+      },
+    });
+
+    harness.dialer.start();
+    // Let the loop fail a dial and settle into its backoff.
+    for (let attempt = 0; attempt < 200 && releaseSleep === null; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(releaseSleep).not.toBeNull();
+
+    await expect(
+      Promise.race([
+        harness.dialer.stop().then(() => "stopped"),
+        new Promise((resolve) => setTimeout(() => resolve("blocked"), 250)),
+      ]),
+    ).resolves.toBe("stopped");
+  });
+
   it("names itself the moment the socket opens", async () => {
     const harness = makeHarness();
     harness.dialer.start();

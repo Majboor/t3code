@@ -242,7 +242,21 @@ function endConnection(
   if (reason === "revoked") {
     connection.revoked = true;
   }
-  connections.delete(connection.handle.environmentId);
+  // A revoked machine is kept as a tombstone rather than forgotten.
+  //
+  // `summarize` reads `revoked` off the connection, so deleting the entry here
+  // made the `revoked` verdict unreachable: `relayLinkFor` found nothing, the
+  // caller could not tell "revoked" from "has never dialled in", and the UI
+  // settled on "Offline — open the app on that machine". That is not merely
+  // vague, it is wrong advice — opening the app on that machine is exactly
+  // what will not help, and the person follows it anyway.
+  //
+  // The tombstone is replaced wholesale if the machine is ever enrolled again
+  // (registration writes the same key), so this holds at most one entry per
+  // environment that has been revoked in this process's lifetime.
+  if (reason !== "revoked") {
+    connections.delete(connection.handle.environmentId);
+  }
   connection.send({ type: "bye", reason, message });
   connection.close(reason);
   closeAllChannels(connection, message);
@@ -352,7 +366,17 @@ export type OpenRelayChannelRefusal =
   /** There is one, and it is not this person's. */
   | "not-yours"
   /** There is one, it is theirs, and it is not in a state to serve anybody. */
-  | "not-healthy";
+  | "not-healthy"
+  /**
+   * There is one, it is theirs, and their access to it was taken away.
+   *
+   * Distinct from `not-healthy` because the advice differs entirely: a wedged
+   * environment is worth waiting for or restarting, a revoked one never
+   * recovers by itself and the person needs to enrol the machine again. Told
+   * apart here so the caller is not left saying "open the app on that machine"
+   * to somebody for whom that will never work.
+   */
+  | "revoked";
 
 /**
  * Gives a browser a lane on an environment's outbound connection.
@@ -381,6 +405,9 @@ export function openRelayChannel(input: {
     // kinder to probing; the caller flattens both into one sentence, and this
     // distinction stays inside the process where it is useful for logs.
     return { outcome: "refused", reason: "not-yours" };
+  }
+  if (connection.revoked) {
+    return { outcome: "refused", reason: "revoked" };
   }
   if (!summarize(connection, input.nowMs).verdict.acceptsTraffic) {
     return { outcome: "refused", reason: "not-healthy" };
