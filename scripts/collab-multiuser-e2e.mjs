@@ -118,6 +118,7 @@ const {
   sendAgentMessage,
   createInvite,
   ensureWorkspacePanelOpen,
+  dismissFirstRunOverlays,
 } = harness;
 
 // ── the folder on disk ──────────────────────────────────────────────────────
@@ -291,11 +292,25 @@ async function reachProject(page, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs;
   let reloaded = false;
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  // Every fresh account meets the onboarding questionnaire and the product
+  // tour, and both sit over the dashboard. An invited colleague is a fresh
+  // account too — they never went through `addProject`, which is the only
+  // other place these were cleared.
+  await dismissFirstRunOverlays(page);
   while (Date.now() < deadline) {
     if ((await link.count().catch(() => 0)) > 0) {
-      await link.click().catch(() => undefined);
-      await sleep(NAVIGATION_MS);
-      return true;
+      // Not `.catch(() => undefined)` followed by `return true`: a click an
+      // overlay swallowed used to report the project as reached, and the
+      // failure surfaced much later as "no composer on the page".
+      const clicked = await link
+        .click({ timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (clicked) {
+        await sleep(NAVIGATION_MS);
+        return true;
+      }
+      await dismissFirstRunOverlays(page);
     }
     await sleep(2_500);
     // One reload halfway through, for a dashboard that fetched before the

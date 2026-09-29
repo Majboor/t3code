@@ -47,7 +47,7 @@ const SETTLE_MS = 8_000;
 
 const { phase, check, finish } = createReporter();
 const harness = createHarness({ baseUrl: BASE_URL, password: PASSWORD });
-const { signUp, logIn, addProject, sendAgentMessage, createInvite } = harness;
+const { signUp, logIn, addProject, sendAgentMessage, createInvite, dismissFirstRunOverlays } = harness;
 
 function displayNameFor(email) {
   return email
@@ -80,11 +80,25 @@ async function reachProject(page, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs;
   let reloaded = false;
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  // Every fresh account meets the onboarding questionnaire and the product
+  // tour, and both sit over the dashboard. An invited colleague is a fresh
+  // account too — they never went through `addProject`, which is the only
+  // other place these were cleared.
+  await dismissFirstRunOverlays(page);
   while (Date.now() < deadline) {
     if ((await link.count().catch(() => 0)) > 0) {
-      await link.click().catch(() => undefined);
-      await sleep(SETTLE_MS);
-      return true;
+      // Not `.catch(() => undefined)` followed by `return true`: a click that
+      // an overlay swallowed used to report the project as reached, and the
+      // failure surfaced much later as "no composer on the page".
+      const clicked = await link
+        .click({ timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (clicked) {
+        await sleep(SETTLE_MS);
+        return true;
+      }
+      await dismissFirstRunOverlays(page);
     }
     await sleep(2_500);
     if (!reloaded && Date.now() > deadline - timeoutMs / 2) {
