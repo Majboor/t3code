@@ -31,6 +31,94 @@ function makeTenancyLayer<E, R>(persistenceLayer: Layer.Layer<SqlClient.SqlClien
   );
 }
 
+/**
+ * Measured on the live test instance before this fix: one account had eleven
+ * personal tenants and a membership in one of them.
+ *
+ * `CollaborationService` loads collaboration state once, when the service is
+ * constructed, and every mutation writes that whole in-memory state back.
+ * `createPersonalTenant` writes personal memberships straight to the table
+ * afterwards, so they were never in that snapshot — and `saveCollaboration`
+ * opened by deleting every personal membership before reinserting what it held.
+ * A presence heartbeat was enough to destroy an account's membership.
+ *
+ * The consequence was not a missing row. `provisionPersonalTenant` looks for an
+ * existing membership, finds none, and mints a fresh tenant and workspace. So
+ * the account's projects ended up spread across tenants it was not a member of,
+ * invisible on its own dashboard — which is what "my project vanished" was.
+ */
+it.effect("keeps a membership written outside the collaboration snapshot", () =>
+  Effect.gen(function* () {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-tenancy-survival-"));
+    const dbPath = path.join(tempDir, "tenancy.sqlite");
+    const layer = makeTenancyLayer(makeSqlitePersistenceLive(dbPath));
+    const tenantId = TenantId.make("tenant:personal-alice");
+    const userId = UserId.make("local:alice");
+
+    yield* Effect.gen(function* () {
+      const repository = yield* TenancyRepository;
+
+      // Alice signs in and is provisioned, writing straight to the table.
+      yield* repository.createPersonalTenant({
+        tenant: {
+          id: tenantId,
+          slug: "personal-alice",
+          displayName: "Alice",
+          kind: "personal",
+          organizationId: null,
+          runtimeId: TenantRuntimeId.make("runtime:personal-alice"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          archivedAt: null,
+        },
+        membership: {
+          id: MembershipId.make("membership:alice"),
+          tenantId,
+          userId,
+          organizationId: null,
+          roles: ["owner"],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          disabledAt: null,
+        },
+        workspace: {
+          id: WorkspaceId.make("workspace:alice"),
+          tenantId,
+          organizationId: null,
+          ownerUserId: userId,
+          kind: "personal",
+          accessMode: "invite-only",
+          title: "Alice's Workspace",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          archivedAt: null,
+        },
+      });
+
+      // Somebody else's collaboration mutation persists a snapshot that has
+      // never heard of Alice — which is every snapshot loaded before she
+      // signed in.
+      yield* repository.saveCollaboration({
+        presence: [],
+        invites: [],
+        memberships: [],
+        activities: [],
+        settings: [],
+        approvals: [],
+        viewPreferences: [],
+        branchClaims: [],
+        fileTouches: [],
+        filePresence: [],
+        memberProfiles: [],
+        memberUsage: [],
+      });
+
+      const after = yield* repository.loadCollaboration();
+      const mine = after.memberships.filter((membership) => membership.userId === userId);
+      assert.strictEqual(mine.length, 1, "a collaboration save erased a membership it never held");
+    }).pipe(Effect.provide(layer));
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }),
+);
+
 it.effect("persists tenancy, organization, and collaboration rows across layer restart", () =>
   Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-tenancy-restart-"));

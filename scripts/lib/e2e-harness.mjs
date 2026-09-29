@@ -208,6 +208,9 @@ export function createHarness({
   /** Opens the project's thread view from the dashboard. */
   async function openProject(page) {
     await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    // Every fresh account meets the first-run overlays, not just the one that
+    // adds the project — an invited colleague signs up too, and lands here.
+    await dismissFirstRunOverlays(page);
     // The dashboard lists the project once its membership has landed, which on
     // a busy host is not always within a fixed pause: poll, and reload once
     // halfway through for a dashboard that fetched before the membership did.

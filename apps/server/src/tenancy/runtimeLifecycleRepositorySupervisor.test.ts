@@ -77,6 +77,7 @@ function makeRepositoryLayer(stateRef: {
       }),
     saveCollaboration: () => Effect.void,
     createPersonalTenant: () => Effect.void,
+    deleteMemberships: () => Effect.void,
     loadWorkspaces: () =>
       Effect.succeed({
         workspaces: [],

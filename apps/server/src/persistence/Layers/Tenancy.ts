@@ -579,9 +579,28 @@ const makeTenancyRepository = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* sql`DELETE FROM collaboration_activities`;
           yield* sql`DELETE FROM collaboration_presence`;
-          // Non-organization memberships are owned by this snapshot: a member removed in memory
-          // must also disappear from the table, otherwise the next restart resurrects them.
-          yield* sql`DELETE FROM tenant_memberships WHERE organization_id IS NULL`;
+          // Memberships are upserted, never cleared first.
+          //
+          // This used to open with `DELETE FROM tenant_memberships WHERE
+          // organization_id IS NULL` so that a member removed in memory also
+          // disappeared from disk. The cost of inferring deletion that way was
+          // that it deleted rows this caller had never heard of — and
+          // `CollaborationService` loads its state once, when the service is
+          // constructed, while `createPersonalTenant` writes personal
+          // memberships straight to the table afterwards. So every membership
+          // created after that service booted was destroyed by the next
+          // collaboration mutation, and a presence heartbeat was enough.
+          //
+          // The damage was not a lost row: `provisionPersonalTenant` looks for
+          // an existing membership, finds none, and mints a whole new tenant
+          // and workspace. Measured on the test instance, one account had
+          // accumulated ELEVEN personal tenants and held a membership in one of
+          // them, so ten workspaces' worth of its projects sat in tenants it
+          // was not a member of — invisible on its own dashboard, which is what
+          // "my project vanished" turned out to be.
+          //
+          // Removal is now explicit: `deleteMemberships` below, called where a
+          // member is actually removed.
           yield* persistInvites(snapshot.invites);
           yield* persistMemberships(snapshot.memberships);
           for (const presence of snapshot.presence) {
@@ -755,6 +774,19 @@ const makeTenancyRepository = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.mapError(toSqlError("TenancyRepository.createPersonalTenant:query")));
+
+  const deleteMemberships: TenancyRepositoryShape["deleteMemberships"] = (membershipIds) =>
+    membershipIds.length === 0
+      ? Effect.void
+      : sql
+          .withTransaction(
+            Effect.forEach(
+              membershipIds,
+              (membershipId) =>
+                sql`DELETE FROM tenant_memberships WHERE membership_id = ${membershipId}`,
+            ).pipe(Effect.asVoid),
+          )
+          .pipe(Effect.mapError(toSqlError("TenancyRepository.deleteMemberships:query")));
 
   const appendCollaborationUsageSamples: NonNullable<
     TenancyRepositoryShape["appendCollaborationUsageSamples"]
@@ -1059,6 +1091,7 @@ const makeTenancyRepository = Effect.gen(function* () {
     loadCollaboration,
     saveCollaboration,
     createPersonalTenant,
+    deleteMemberships,
     appendCollaborationUsageSamples,
     readCollaborationUsageBuckets,
     loadWorkspaces,

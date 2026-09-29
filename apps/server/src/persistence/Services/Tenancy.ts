@@ -206,6 +206,18 @@ export interface TenancyRepositoryShape {
     CollaborationPersistenceSnapshot,
     TenancyRepositoryError
   >;
+  /**
+   * Removes exactly these memberships and nothing else.
+   *
+   * Deletion is explicit because `saveCollaboration` no longer infers it.
+   * Inferring it meant a blanket delete of every personal membership followed
+   * by a reinsert of whatever the caller happened to hold, which destroyed the
+   * rows of everybody the caller had never loaded.
+   */
+  readonly deleteMemberships: (
+    membershipIds: ReadonlyArray<string>,
+  ) => Effect.Effect<void, TenancyRepositoryError>;
+
   readonly saveCollaboration: (
     snapshot: CollaborationPersistenceSnapshot,
   ) => Effect.Effect<void, TenancyRepositoryError>;

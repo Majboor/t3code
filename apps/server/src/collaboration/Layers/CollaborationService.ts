@@ -1876,12 +1876,14 @@ const makeCollaborationService = Effect.gen(function* () {
         });
       }
 
+      const removedMembershipIds: string[] = [];
       const removed = yield* Ref.modify(stateRef, (state) => {
         const memberships = new Map(state.memberships);
         let didRemove = false;
         for (const [id, membership] of memberships) {
           if (membership.tenantId === input.tenantId && membership.userId === input.userId) {
             memberships.delete(id);
+            removedMembershipIds.push(id);
             didRemove = true;
           }
         }
@@ -1906,6 +1908,23 @@ const makeCollaborationService = Effect.gen(function* () {
         return { removed: false };
       }
 
+      // Removal has to be said out loud now. `saveCollaboration` upserts and no
+      // longer infers deletion from absence, because inferring it meant clearing
+      // every personal membership on the instance and reinstating only the ones
+      // this service happened to be holding — which destroyed the rows of every
+      // account provisioned since it booted.
+      yield* repository
+        .deleteMemberships(removedMembershipIds)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new CollaborationError({
+                code: "invalid-membership-rule",
+                message: "Failed to remove the member.",
+                cause,
+              }),
+          ),
+        );
       yield* persist;
       yield* PubSub.publish(events, {
         type: "member-removed",

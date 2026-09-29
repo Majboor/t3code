@@ -66,6 +66,7 @@ function makeRepositoryLayer() {
     loadCollaboration: () => Effect.succeed(emptyCollaboration),
     saveCollaboration: () => Effect.void,
     createPersonalTenant: () => Effect.void,
+    deleteMemberships: () => Effect.void,
     loadWorkspaces: () => Effect.succeed(emptyWorkspaces),
     saveWorkspaces: () => Effect.void,
     loadProviderIsolation: () => Effect.succeed(emptyProviderIsolation),
