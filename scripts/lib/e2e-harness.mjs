@@ -169,22 +169,32 @@ export function createHarness({
   const logIn = (session, email) => authenticate(session, email, "login");
 
   /**
-   * Get the first-run product tour out of the way.
+   * Clear whatever a brand-new account is greeted with.
    *
-   * A fresh account auto-starts an eleven-step tour 1.2s after the shell
-   * mounts, and its first step anchors to the sidebar with the callout placed
-   * to the right — directly over the dashboard's "Add project" button. The
-   * callout is the one part of that overlay that takes pointer events, so the
-   * click lands on the tour and times out waiting for actionability. A real
-   * person dismisses it; so does this.
+   * Two things cover the dashboard on a fresh signup, and measuring beat
+   * guessing here: `document.elementFromPoint` over the centre of the "Add
+   * project" button returns the onboarding questionnaire, a full-screen
+   * `fixed inset-0 z-[110]` panel, not the product tour underneath it at
+   * z-100. Both are dismissed, cheapest first, because both are real and the
+   * order they appear in is a race.
+   *
+   * This is why three suites timed out after 30s on a button Playwright could
+   * see perfectly well: `locator.count()` ignores what is stacked on top of an
+   * element and `click()` waits for it to actually receive the event.
    */
-  async function dismissProductTour(page) {
+  async function dismissFirstRunOverlays(page) {
+    const skip = page.locator('button:has-text("Skip for now")').first();
+    if (await skip.isVisible().catch(() => false)) {
+      await skip.click().catch(() => undefined);
+      await sleep(500);
+    }
+    // The tour sits below the questionnaire and outlives it.
     await page.keyboard.press("Escape").catch(() => undefined);
     await sleep(300);
   }
 
   async function addProject(page, workspaceRoot) {
-    await dismissProductTour(page);
+    await dismissFirstRunOverlays(page);
     await page.locator('button:has-text("Add project")').first().click();
     await sleep(uiSettleMs);
     await page.locator("[data-base-ui-portal] input").first().fill(workspaceRoot);
@@ -626,7 +636,7 @@ export function createHarness({
     signUp,
     logIn,
     addProject,
-    dismissProductTour,
+    dismissFirstRunOverlays,
     openProject,
     ensureWorkspacePanelOpen,
     closeWorkspacePanel,
