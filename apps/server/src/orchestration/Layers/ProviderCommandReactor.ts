@@ -278,6 +278,21 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  /**
+   * Which provider account each thread's live session was launched on.
+   *
+   * `ProviderSession` does not record it, and a thread stayed pinned to
+   * whatever account it started with: connecting a new account or
+   * disconnecting a depleted one changed nothing until the session happened to
+   * end. That is the reported "my company account ran out, I connected another,
+   * sent continue in the same chat, and it still says limit reached".
+   *
+   * Kept here rather than added to the session contract for the same reason
+   * `threadModelSelections` is: it exists to answer one question at one
+   * decision — should this session be restarted — and the answer is only ever
+   * needed in this reactor.
+   */
+  const threadProviderAccounts = new Map<string, string>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -651,7 +666,14 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const credentials = yield* resolveProviderCredentialEnvironment(input);
         const hub = yield* resolveHubCredentialEnvironment(input.provider);
-        return { env: { ...credentials.env, ...hub } };
+        const env = { ...credentials.env, ...hub };
+        // Read off the credential half rather than the merged object: the hub
+        // half narrows the merged type to its own keys, and this one is about
+        // which account was chosen, which only the credential half knows.
+        const accountId = (credentials.env as Record<string, string | undefined>)[
+          "T3_PROVIDER_ACCOUNT_ID"
+        ];
+        return { env, ...(accountId ? { accountId } : {}) };
       });
 
     const resolveActiveSession = (threadId: ThreadId) =>
@@ -668,6 +690,13 @@ const make = Effect.gen(function* () {
           provider: input?.provider ?? preferredProvider,
           cwd: effectiveCwd,
         });
+        // Remember the account this session is about to run on, so a later turn
+        // can notice it is no longer the one this person would use.
+        if (providerLaunchEnvironment.accountId) {
+          threadProviderAccounts.set(threadId, providerLaunchEnvironment.accountId);
+        } else {
+          threadProviderAccounts.delete(threadId);
+        }
         return yield* providerService.startSession(threadId, {
           threadId,
           ...(preferredProvider ? { provider: preferredProvider } : {}),
@@ -717,18 +746,50 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
+      // Has the account moved out from under this session?
+      //
+      // Resolved the same way a fresh launch would resolve it, then compared
+      // with what this session was actually started on. A thread used to stay
+      // pinned to its original account for as long as the session lived, so
+      // connecting a new account or disconnecting a depleted one changed
+      // nothing — the reported "my account ran out, I connected another, sent
+      // continue in the same chat, and it still says limit reached".
+      //
+      // Only a *changed* answer restarts. An unresolvable one is left alone:
+      // the credential may be momentarily unreadable, and tearing down a live
+      // session over a failed lookup would lose the conversation for a reason
+      // that is probably transient.
+      const launchedAccountId = threadProviderAccounts.get(threadId);
+      const currentAccountId = launchedAccountId
+        ? yield* resolveProviderLaunchEnvironment({
+            provider: currentProvider ?? preferredProvider,
+            cwd: effectiveCwd,
+          }).pipe(
+            Effect.map((environment) => environment.accountId),
+            Effect.catchCause(() => Effect.succeed(undefined)),
+          )
+        : undefined;
+      const providerAccountChanged =
+        launchedAccountId !== undefined &&
+        currentAccountId !== undefined &&
+        currentAccountId !== launchedAccountId;
+
       if (
         !runtimeModeChanged &&
         !providerChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !providerAccountChanged
       ) {
         return existingSessionThreadId;
       }
 
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange
+        providerChanged || shouldRestartForModelChange || providerAccountChanged
           ? undefined
+          // A different account is a different upstream conversation, so its
+          // cursor means nothing there — resuming against it is how a switch
+          // ends up still talking to the account it was supposed to leave.
           : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
         threadId,

@@ -722,6 +722,83 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
+  // The reported "my company account ran out, I connected another, sent continue
+  // in the same chat, and it still says limit reached". A thread stayed pinned
+  // to the account its session started on for as long as that session lived.
+  it("restarts the session when the account underneath it changes", async () => {
+    const now = new Date().toISOString();
+    const accountFor = (id: string): ProviderAccount => ({
+      id: ProviderAccountId.make(id),
+      provider: "codex",
+      tenantId: TenantId.make("tenant-acme"),
+      owner: { type: "user", userId: UserId.make("user-1") },
+      sharing: "private",
+      authHomeDir: `/srv/t3/tenants/acme/provider-homes/${id}/codex`,
+      configDir: `/srv/t3/tenants/acme/provider-homes/${id}/codex/config`,
+      secretsDir: `/srv/t3/tenants/acme/data/userdata/secrets/${id}/codex`,
+      createdAt: now,
+      disabledAt: null,
+    });
+    const depleted = accountFor("provider-account-depleted");
+    const replacement = accountFor("provider-account-replacement");
+
+    const sessionOn = (account: ProviderAccount): ProviderSessionIsolation => ({
+      id: ProviderSessionId.make("provider-session-1"),
+      tenantId: TenantId.make("tenant-acme"),
+      userId: UserId.make("user-1"),
+      providerAccountId: account.id,
+      provider: "codex",
+      providerHomeDir: account.authHomeDir,
+      cwd: "/tmp/provider-project",
+      createdAt: now,
+      endedAt: null,
+    });
+
+    // Mutable on purpose: the harness's `loadProviderIsolation` hands back this
+    // same object every time, which is how the account is changed mid-thread.
+    const providerIsolation = {
+      providerAccounts: [depleted, replacement],
+      providerSessions: [sessionOn(depleted)],
+    };
+    const harness = await createHarness({ providerIsolation });
+
+    const turn = (commandId: string, messageId: string) =>
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        packModeEnabled: false,
+        commandId: CommandId.make(commandId),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId(messageId),
+          role: "user",
+          authorUserId: UserId.make("user-1"),
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+
+    await Effect.runPromise(turn("cmd-account-1", "user-message-account-1"));
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+
+    // They connect a new account, so the pinned session now resolves to it.
+    providerIsolation.providerSessions = [sessionOn(replacement)];
+
+    await Effect.runPromise(turn("cmd-account-2", "user-message-account-2"));
+
+    // The session is torn down and started again on the new account, rather
+    // than continuing to spend the old one.
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    const relaunch = harness.startSession.mock.calls[1]?.[1] as
+      | { providerLaunchEnvironment?: { env?: Record<string, string> } }
+      | undefined;
+    expect(relaunch?.providerLaunchEnvironment?.env?.["T3_PROVIDER_ACCOUNT_ID"]).toBe(
+      "provider-account-replacement",
+    );
+  });
+
   // The defect this guards: a live session was matched on tenant, path and
   // provider but never on the person. In a shared workspace the second member
   // to take a turn inherited the first member's provider session, so their
