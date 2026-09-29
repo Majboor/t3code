@@ -207,33 +207,33 @@ describe("resolveAssistantMessageCopyState", () => {
   });
 });
 
+const userMessageEntry = (id: string, author: string | null, at: string) => ({
+  id: `${id}-entry`,
+  kind: "message" as const,
+  createdAt: at,
+  message: {
+    id: id as never,
+    role: "user" as const,
+    text: id,
+    turnId: null,
+    authorUserId: author as never,
+    createdAt: at,
+    streaming: false,
+  },
+});
+
 describe("deriveMessagesTimelineRows", () => {
   // Consecutive messages from one person are one person talking, so only the
   // first of a run wears their name. Anything in between — an assistant reply,
   // a work log — ends the run, because the messages are no longer adjacent on
   // screen and the name is worth repeating.
   it("marks the first message of each author's run", () => {
-    const userMessage = (id: string, author: string | null, at: string) => ({
-      id: `${id}-entry`,
-      kind: "message" as const,
-      createdAt: at,
-      message: {
-        id: id as never,
-        role: "user" as const,
-        text: id,
-        turnId: null,
-        authorUserId: author as never,
-        createdAt: at,
-        streaming: false,
-      },
-    });
-
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
-        userMessage("a-1", "user-a", "2026-01-01T00:00:00Z"),
-        userMessage("a-2", "user-a", "2026-01-01T00:00:01Z"),
-        userMessage("b-1", "user-b", "2026-01-01T00:00:02Z"),
-        userMessage("b-2", "user-b", "2026-01-01T00:00:03Z"),
+        userMessageEntry("a-1", "user-a", "2026-01-01T00:00:00Z"),
+        userMessageEntry("a-2", "user-a", "2026-01-01T00:00:01Z"),
+        userMessageEntry("b-1", "user-b", "2026-01-01T00:00:02Z"),
+        userMessageEntry("b-2", "user-b", "2026-01-01T00:00:03Z"),
         {
           id: "assistant-entry",
           kind: "message" as const,
@@ -248,7 +248,7 @@ describe("deriveMessagesTimelineRows", () => {
             streaming: false,
           },
         },
-        userMessage("b-3", "user-b", "2026-01-01T00:00:06Z"),
+        userMessageEntry("b-3", "user-b", "2026-01-01T00:00:06Z"),
       ],
       completionDividerBeforeEntryId: null,
       isWorking: false,
