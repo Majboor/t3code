@@ -176,6 +176,48 @@ describe("createEnvironmentConnection", () => {
     await connection.dispose();
   });
 
+  // The hang. `resubscribeShell` resets the bootstrap gate, and the reset used
+  // to replace the pending promise without settling the old one — so anyone
+  // already awaiting `ensureBootstrapped`, which the invite path does, waited
+  // on a promise nothing could ever resolve.
+  it("does not strand a caller already waiting when the shell resubscribes", async () => {
+    const environmentId = EnvironmentId.make("env-1");
+    const { client } = createTestClient();
+
+    const connection = createEnvironmentConnection({
+      kind: "saved",
+      knownEnvironment: {
+        id: "env-1",
+        label: "Remote env",
+        source: "manual",
+        target: { httpBaseUrl: "http://example.test", wsBaseUrl: "ws://example.test" },
+        environmentId,
+      },
+      client,
+      applyShellEvent: vi.fn(),
+      syncShellSnapshot: vi.fn(),
+      applyTerminalEvent: vi.fn(),
+    });
+
+    // Bootstrapped once, then somebody starts waiting on the next one.
+    await connection.ensureBootstrapped();
+    connection.resubscribeShell();
+    const waiting = connection.ensureBootstrapped();
+
+    // A second resubscribe while that caller is still waiting: before the fix
+    // this is the moment their promise was orphaned.
+    connection.resubscribeShell();
+
+    await expect(
+      Promise.race([
+        waiting.then(() => "settled"),
+        new Promise((resolve) => setTimeout(() => resolve("hung"), 200)),
+      ]),
+    ).resolves.toBe("settled");
+
+    await connection.dispose();
+  });
+
   it("rejects welcome/config identity drift", async () => {
     const environmentId = EnvironmentId.make("env-1");
     const { client, emitWelcome } = createTestClient();

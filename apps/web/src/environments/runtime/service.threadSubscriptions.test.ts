@@ -338,6 +338,54 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  // The leak. A thread whose session is still doing something was never
+  // evictable, so moving between more than the cache ceiling of busy threads
+  // grew live subscriptions and store state without bound — "long chats, jump
+  // between them again and again, it crashes and you get disconnected".
+  it("holds the cache ceiling even when every cached thread is still busy", async () => {
+    const {
+      retainThreadDetailSubscription,
+      startEnvironmentConnectionService,
+      resetEnvironmentServiceForTests,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+
+    // One snapshot holding all of them at once: the helper builds a
+    // single-thread snapshot and each sync replaces the last, so syncing in a
+    // loop would leave only the final thread non-idle and the rest evictable
+    // by the ordinary idle pass — which is not the case under test.
+    const threadIds = Array.from({ length: 48 }, (_, index) =>
+      ThreadId.make(`busy-thread-${index + 1}`),
+    );
+    const template = makeThreadShellSnapshot({
+      threadId: threadIds[0]!,
+      sessionStatus: "ready",
+      hasPendingApprovals: true,
+    });
+    connectionInput.syncShellSnapshot(
+      { ...template, threads: threadIds.map((id) => ({ ...template.threads[0]!, id })) },
+      environmentId,
+    );
+
+    // Every one of them opened and released, so nothing is on screen.
+    for (const threadId of threadIds) {
+      retainThreadDetailSubscription(environmentId, threadId)();
+    }
+
+    // Live subscriptions, not "was unsubscribe ever called" — a reattach after
+    // a reconnect calls unsubscribe too, so that assertion passes with the leak
+    // still in place.
+    const live = mockSubscribeThread.mock.calls.length - mockThreadUnsubscribe.mock.calls.length;
+    expect(live).toBeLessThanOrEqual(32);
+
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
   it("disposes cached thread detail subscriptions when the environment service resets", async () => {
     const {
       retainThreadDetailSubscription,

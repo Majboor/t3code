@@ -307,6 +307,30 @@ function evictIdleThreadDetailSubscriptionsToCapacity(): void {
     }
     disposeThreadDetailSubscriptionByKey(key);
   }
+
+  // The ceiling was not a ceiling. `shouldEvictThreadDetailSubscription`
+  // refuses to evict a thread whose session is still doing something, so a
+  // person moving between more than `MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS`
+  // busy threads accumulated live subscriptions and their store state without
+  // any bound — the reported "long chats, you jump between them again and
+  // again, it crashes and you get disconnected". The cap has to hold even when
+  // every candidate is busy.
+  //
+  // Only entries nobody is holding (`refCount === 0`) are taken, least recently
+  // used first: a thread on screen is never dropped out from under its viewer.
+  // What a dropped background thread loses is live updates while it is closed,
+  // and reopening it resubscribes and takes a fresh snapshot — which is the
+  // same recovery a reconnect already performs, so the path is well travelled.
+  const releasedEntries = [...threadDetailSubscriptions.entries()]
+    .filter(([, entry]) => entry.refCount === 0)
+    .toSorted(([, left], [, right]) => left.lastAccessedAt - right.lastAccessedAt);
+
+  for (const [key] of releasedEntries) {
+    if (threadDetailSubscriptions.size <= MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS) {
+      return;
+    }
+    disposeThreadDetailSubscriptionByKey(key);
+  }
 }
 
 function reconcileThreadDetailSubscriptionEvictionState(

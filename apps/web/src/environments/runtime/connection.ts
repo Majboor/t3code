@@ -84,11 +84,34 @@ function createBootstrapGate() {
       resolve = null;
       reject = null;
     },
+    /**
+     * Start a fresh bootstrap, carrying anyone already waiting over to it.
+     *
+     * This used to replace `promise` and drop the old one on the floor still
+     * pending. Every caller blocked on the previous attempt — and
+     * `ensureBootstrapped` is awaited on the invite path — waited forever on a
+     * promise nothing could ever settle. A resubscribe is routine (it happens
+     * on any reconnect), so "the app hung on a link somebody sent me" needed
+     * nothing more exotic than a dropped socket at the wrong moment.
+     *
+     * The old waiters follow the new attempt rather than being rejected,
+     * because a resubscribe is not a failure; it is the same bootstrap, again.
+     */
     reset: () => {
+      const staleResolve = resolve;
+      const staleReject = reject;
+      const stale = promise;
+      // Nothing may be awaiting the previous attempt any more, and a rejection
+      // nobody listens for is an unhandled rejection.
+      void stale.catch(() => undefined);
       promise = new Promise<void>((nextResolve, nextReject) => {
         resolve = nextResolve;
         reject = nextReject;
       });
+      void promise.then(
+        () => staleResolve?.(),
+        (error: unknown) => staleReject?.(error),
+      );
     },
   };
 }
@@ -174,6 +197,12 @@ export function createEnvironmentConnection(
 
   const cleanup = () => {
     disposed = true;
+    // Release anyone blocked on a bootstrap that is now never going to happen.
+    // Resolved rather than rejected on purpose: callers await this inside
+    // unguarded async work (the root route does), so a rejection here surfaces
+    // as an unhandled rejection instead of as the disposal it actually is.
+    // They proceed and find the connection gone by the ordinary means.
+    bootstrapGate.resolve();
     unsubShell();
     unsubTerminalEvent();
     unsubLifecycle();
