@@ -110,6 +110,23 @@ export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/**
+ * What all of a message's attachments may weigh together, before base64.
+ *
+ * Attachments travel inside the RPC envelope as data URLs, and base64 costs a
+ * third on top, so the bytes a person picks are not the bytes that are sent.
+ * `maxRpcRequestBytes` is 12 MiB (`DEFAULT_PUBLIC_ACCESS_LIMITS`, which this
+ * package cannot import — it is schema-only and `shared` depends on it, not the
+ * other way round), and against that ceiling the per-image limit above was
+ * never reachable: one 10 MiB image inflates to about 14 MB and is refused on
+ * send, while the composer had cheerfully accepted eight of them.
+ *
+ * 8 MiB raw is about 10.9 MB encoded, which leaves room for the prompt text and
+ * the rest of the envelope. Enforced in the composer so the refusal happens
+ * where the person can still do something about it, rather than after the
+ * upload as a failed send.
+ */
+export const PROVIDER_SEND_TURN_MAX_ATTACHMENT_TOTAL_BYTES = 8 * 1024 * 1024;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 // Correlation id is command id by design in this model.

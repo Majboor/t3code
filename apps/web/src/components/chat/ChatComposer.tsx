@@ -16,6 +16,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENT_TOTAL_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   WorkspaceId,
 } from "@t3tools/contracts";
@@ -113,6 +114,7 @@ import { formatProviderSkillDisplayName } from "../../providerSkillPresentation"
 import { searchProviderSkills } from "../../providerSkillSearch";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
+const ATTACHMENT_TOTAL_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_ATTACHMENT_TOTAL_BYTES / (1024 * 1024))}MB`;
 
 const runtimeModeConfig: Record<
   RuntimeMode,
@@ -1587,6 +1589,16 @@ export const ChatComposer = memo(
       }
       const nextImages: ComposerImageAttachment[] = [];
       let nextImageCount = composerImagesRef.current.length;
+      // Attachments ride inside the RPC envelope as base64 data URLs, which
+      // costs a third on top. The per-image limit alone never expressed that,
+      // so a set the composer accepted could still be refused on send — the
+      // reported "upload just doesn't work, it says disconnected". Counting the
+      // running total here means the refusal lands while the person is still
+      // choosing.
+      let nextImageBytes = composerImagesRef.current.reduce(
+        (total, image) => total + image.sizeBytes,
+        0,
+      );
       let error: string | null = null;
       for (const file of files) {
         if (!file.type.startsWith("image/")) {
@@ -1601,6 +1613,10 @@ export const ChatComposer = memo(
           error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`;
           break;
         }
+        if (nextImageBytes + file.size > PROVIDER_SEND_TURN_MAX_ATTACHMENT_TOTAL_BYTES) {
+          error = `'${file.name}' would put this message over the ${ATTACHMENT_TOTAL_LIMIT_LABEL} limit for all attachments together.`;
+          continue;
+        }
         const previewUrl = URL.createObjectURL(file);
         nextImages.push({
           type: "image",
@@ -1612,6 +1628,7 @@ export const ChatComposer = memo(
           file,
         });
         nextImageCount += 1;
+        nextImageBytes += file.size;
       }
       if (nextImages.length === 1 && nextImages[0]) {
         addComposerImage(nextImages[0]);

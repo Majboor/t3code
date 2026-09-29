@@ -1,7 +1,7 @@
 import { PackagePlusIcon } from "lucide-react";
 import { useState } from "react";
 
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationProjectOwnership } from "@t3tools/contracts";
 
 import { buildManifest, findPublishProblems, type PublishPackShape } from "./publishPack.logic";
 import { readEnvironmentApi } from "../../environmentApi";
@@ -35,12 +35,15 @@ import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 export function PublishPackDialog({
   environmentId,
   projectName,
+  ownership,
   open,
   onOpenChange,
   onPublished,
 }: {
   environmentId: EnvironmentId;
   projectName: string;
+  /** The workspace that owns the project, so the pack lands in its registry. */
+  ownership?: OrchestrationProjectOwnership | null | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPublished?: (packId: string) => void;
@@ -76,9 +79,26 @@ export function PublishPackDialog({
     setBusy(true);
     try {
       const snapshot = await api.organizations.list();
-      const workspace = (snapshot.workspaces ?? [])[0];
+      const workspaces = snapshot.workspaces ?? [];
+      // Publish into the workspace that owns the project, not whichever one
+      // this session happens to list first. A collaborator belongs to several
+      // at once — their own, plus every workspace they were invited into — and
+      // the order is not theirs to control, so `[0]` could put a private
+      // project's pack into an employer's registry under that employer's
+      // publisher handle.
+      const owned = ownership?.workspaceId
+        ? workspaces.find((candidate) => candidate.id === ownership.workspaceId)
+        : undefined;
+      // No ownership stamped: one visible workspace is unambiguous and is the
+      // ordinary desktop case. More than one is a genuine question this dialog
+      // cannot answer for the person, and guessing is the bug above.
+      const workspace = owned ?? (workspaces.length === 1 ? workspaces[0] : undefined);
       if (!workspace) {
-        throw new Error("This session can see no workspace to publish into.");
+        throw new Error(
+          workspaces.length === 0
+            ? "This session can see no workspace to publish into."
+            : "This project is not stamped with a workspace, and this session can see several. Open the project from its own workspace and publish again.",
+        );
       }
 
       const manifest = buildManifest({

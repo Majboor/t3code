@@ -33,9 +33,25 @@ import { toastManager } from "../ui/toast";
  */
 const ACTIVITY_LIMIT = 24;
 
-function pickTenantForProject(tenants: readonly Tenant[]): Tenant | null {
-  return tenants[0] ?? null;
-}
+/**
+ * Presence needs a real workspace, and an unowned project does not have one.
+ *
+ * This used to fabricate both halves of the scope when `ownership` was absent:
+ * a workspace id minted from the project id, and whichever tenant the viewer's
+ * own list happened to put first. The workspace id at least matched between two
+ * people looking at the same project, but the tenant did not — each viewer
+ * picked their own — so the two of them subscribed to different scopes and
+ * never saw one another. A presence bar that reliably shows nobody is worse
+ * than no presence bar, because it reads as "you are alone here".
+ *
+ * So there is no fallback any more. Ownership or nothing.
+ */
+const presenceScopeFor = (
+  ownership: OrchestrationProjectOwnership | null | undefined,
+): { readonly tenantId: Tenant["id"]; readonly workspaceId: WorkspaceId } | null =>
+  ownership?.tenantId && ownership?.workspaceId
+    ? { tenantId: ownership.tenantId, workspaceId: ownership.workspaceId }
+    : null;
 
 export function CollaborationPresenceBar({
   environmentId,
@@ -48,8 +64,9 @@ export function CollaborationPresenceBar({
   projectId: ProjectId | null;
   threadId: ThreadId;
 }) {
-  const workspaceId = ownership?.workspaceId ?? (projectId ? WorkspaceId.make(projectId) : null);
-  const [tenantId, setTenantId] = useState<Tenant["id"] | null>(ownership?.tenantId ?? null);
+  const scope = presenceScopeFor(ownership);
+  const workspaceId = scope?.workspaceId ?? null;
+  const [tenantId, setTenantId] = useState<Tenant["id"] | null>(scope?.tenantId ?? null);
   const [presence, setPresence] = useState<readonly CollaborationPresence[]>([]);
   const [activities, setActivities] = useState<readonly CollaborationActivity[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -59,8 +76,10 @@ export function CollaborationPresenceBar({
     if (!workspaceId) return;
     const api = readEnvironmentApi(environmentId);
     if (!api) return;
-    const nextTenantId =
-      ownership?.tenantId ?? pickTenantForProject((await api.organizations.list()).tenants)?.id;
+    // Equivalent to the scope's tenant: `workspaceId` above is non-null only
+    // when ownership carried both halves, and this returns before here without
+    // it.
+    const nextTenantId = ownership?.tenantId;
     setTenantId(nextTenantId ?? null);
     if (!nextTenantId) return;
     const [presenceResult, activityResult] = await Promise.all([

@@ -766,6 +766,7 @@ function WorkspaceRow({
         <PublishPackDialog
           environmentId={publishingProject.project.environmentId}
           projectName={publishingProject.project.name}
+          ownership={publishingProject.project.ownership}
           open
           onOpenChange={(next) => {
             if (!next) setPublishingProject(null);
