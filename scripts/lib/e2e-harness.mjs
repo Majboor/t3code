@@ -230,9 +230,24 @@ export function createHarness({
         await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
       }
     }
-    await link.click();
-    await sleep(navigationMs);
-    return true;
+    // The tour auto-starts 1.2s after the shell mounts, so clearing the
+    // overlays once at the top of this function is not enough — by the time
+    // the project link appears they can be back. Clear and retry rather than
+    // throwing an uncaught actionability timeout, which is what took
+    // collab-e2e down mid-run with no tally at all.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const clicked = await link
+        .click({ timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (clicked) {
+        await sleep(navigationMs);
+        return true;
+      }
+      await dismissFirstRunOverlays(page);
+    }
+    console.log("  (openProject: the project link never became clickable)");
+    return false;
   }
 
   /**
