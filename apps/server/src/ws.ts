@@ -3365,9 +3365,32 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         provider: ProviderKind,
         authHomeDir: string,
       ): Effect.Effect<void, never> => {
-        // A single operator machine seeds by default; a published host only when
-        // the operator asked to lend their login to everyone (see cli.ts).
-        if (!isSingleMachineServer && config.operatorProviderFallback !== true) {
+        // Only the operator's own machine. A published host never lends.
+        //
+        // Seeding copies the operator's Codex or Claude credential into
+        // somebody else's provider home, and on their own computer that is
+        // simply their login reaching their own isolated homes. On a host with
+        // other people on it, it is a durable copy of one subscription handed
+        // to every account: one instance ended up with 390 byte-identical
+        // copies of a single OpenAI credential, with the operator's address
+        // shown to all of them as "your account".
+        //
+        // The flag that used to allow it on a published host is no longer
+        // honoured, because the product it existed for is gone. LogicPacks
+        // gives every account GLM free — a per-user gateway key minted at
+        // signup, with nothing to connect and nothing shared — and Codex and
+        // Claude are logins people bring themselves. Lending the operator's is
+        // not a fallback any more, just a leak.
+        if (!isSingleMachineServer) {
+          if (config.operatorProviderFallback === true) {
+            return Effect.logWarning(
+              "ignoring T3CODE_OPERATOR_PROVIDER_FALLBACK on a published host",
+              {
+                detail:
+                  "Lending the operator's Codex/Claude login to every account is no longer supported. Accounts get GLM free through the LogicPacks gateway, and connect their own Codex or Claude.",
+              },
+            );
+          }
           return Effect.void;
         }
         const sourceHome = operatorProviderHome(provider);

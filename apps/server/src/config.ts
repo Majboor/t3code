@@ -77,7 +77,21 @@ export interface ServerConfigShape extends ServerDerivedPaths {
    * auth layer stops taking loopback as proof of identity.
    */
   readonly publishedBeyondLoopback: boolean;
-  /** Seed every hosted provider home from the operator's own login (T3CODE_OPERATOR_PROVIDER_FALLBACK). */
+  /**
+   * Legacy: seed hosted provider homes from the operator's own Codex/Claude
+   * login (T3CODE_OPERATOR_PROVIDER_FALLBACK).
+   *
+   * No longer honoured on a published host — it is ignored with a warning.
+   * Lending one subscription to every account meant copying that credential
+   * into each of their provider homes, which on one instance left 390
+   * byte-identical copies of a single OpenAI login, each presented to its
+   * holder as their own account. LogicPacks gives every account GLM free (a
+   * per-user gateway key minted at signup, nothing to connect and nothing
+   * shared), and Codex and Claude are logins people bring themselves.
+   *
+   * Still read on a single-machine install, where the only person it can seed
+   * from is the person sitting at the computer.
+   */
   readonly operatorProviderFallback?: boolean;
   /** Where the desktop installers live, served at /downloads (T3CODE_DESKTOP_DOWNLOAD_DIR). */
   readonly desktopDownloadDir?: string;
