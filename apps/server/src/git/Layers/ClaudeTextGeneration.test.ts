@@ -4,11 +4,33 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import { expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
+import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { sanitizeThreadTitle } from "../Utils.ts";
 import { ClaudeTextGenerationLive } from "./ClaudeTextGeneration.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { TextGenerationError } from "@t3tools/contracts";
+
+
+
+/**
+ * One enabled account — the desktop case these tests describe, where the
+ * operator's own provider login is legitimately theirs to spend.
+ */
+const mockLocalAuthAccounts = Layer.mock(LocalAuthAccountRepository)({
+  countEnabled: () => Effect.succeed(1),
+});
+
+/**
+ * Two accounts: a host with somebody else on it.
+ *
+ * This is what makes lending the operator's login wrong, not the bind address —
+ * `--host 0.0.0.0` is how a single user reaches their own machine from their
+ * own phone. See `providerAuth/operatorCredentialLending.ts`.
+ */
+const mockSharedHostAccounts = Layer.mock(LocalAuthAccountRepository)({
+  countEnabled: () => Effect.succeed(2),
+});
 
 const ClaudeTextGenerationTestLayer = ClaudeTextGenerationLive.pipe(
   Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -18,6 +40,7 @@ const ClaudeTextGenerationTestLayer = ClaudeTextGenerationLive.pipe(
     }),
   ),
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(mockLocalAuthAccounts),
 );
 
 function makeFakeClaudeBinary(dir: string) {
@@ -339,6 +362,7 @@ const ClaudeTextGenerationPublishedHostLayer = ClaudeTextGenerationLive.pipe(
     ),
   ),
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(mockSharedHostAccounts),
 );
 
 it.layer(ClaudeTextGenerationPublishedHostLayer)(

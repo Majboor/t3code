@@ -13,9 +13,11 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../src/provider/Services/ProviderService.ts";
+import { ServerConfig } from "../src/config.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { SqlitePersistenceMemory } from "../src/persistence/Layers/Sqlite.ts";
+import { LocalAuthAccountRepositoryLive } from "../src/persistence/Layers/LocalAuthAccounts.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
 
 import {
@@ -64,9 +66,21 @@ const makeIntegrationFixture = Effect.gen(function* () {
     Layer.succeed(ProviderAdapterRegistry, registry),
     ServerSettingsService.layerTest(DEFAULT_SERVER_SETTINGS),
     AnalyticsService.layerTest,
+    // Session recovery asks the config whether this install is a single
+    // machine before it will resume a session whose provider account it cannot
+    // name. `layerTest` leaves `host` unset, which reads as loopback.
+    ServerConfig.layerTest(process.cwd(), {
+      prefix: "t3code-provider-service-integration-",
+    }).pipe(Layer.provide(NodeServices.layer)),
   ).pipe(Layer.provide(SqlitePersistenceMemory));
 
-  const layer = makeProviderServiceLive().pipe(Layer.provide(shared));
+  const layer = makeProviderServiceLive().pipe(
+    // The account-count lookup that decides whether the operator's own provider
+    // login may be spent needs the repository, which needs the sql client that
+    // `shared` carries — so it is provided with `shared` already applied.
+    Layer.provide(LocalAuthAccountRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+    Layer.provide(shared),
+  );
 
   return {
     cwd,

@@ -4,15 +4,37 @@ import { Effect, FileSystem, Layer, Path, Result } from "effect";
 import { expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
+import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
 import { CodexTextGenerationLive } from "./CodexTextGeneration.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
+
+
 const DEFAULT_TEST_MODEL_SELECTION = {
   provider: "codex" as const,
   model: "gpt-5.4-mini",
 };
+
+/**
+ * One enabled account — the desktop case these tests describe, where the
+ * operator's own provider login is legitimately theirs to spend.
+ */
+const mockLocalAuthAccounts = Layer.mock(LocalAuthAccountRepository)({
+  countEnabled: () => Effect.succeed(1),
+});
+
+/**
+ * Two accounts: a host with somebody else on it.
+ *
+ * This is what makes lending the operator's login wrong, not the bind address —
+ * `--host 0.0.0.0` is how a single user reaches their own machine from their
+ * own phone. See `providerAuth/operatorCredentialLending.ts`.
+ */
+const mockSharedHostAccounts = Layer.mock(LocalAuthAccountRepository)({
+  countEnabled: () => Effect.succeed(2),
+});
 
 const CodexTextGenerationTestLayer = CodexTextGenerationLive.pipe(
   Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -22,6 +44,7 @@ const CodexTextGenerationTestLayer = CodexTextGenerationLive.pipe(
     }),
   ),
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(mockLocalAuthAccounts),
 );
 
 function makeFakeCodexBinary(
@@ -670,6 +693,7 @@ const CodexTextGenerationPublishedHostLayer = CodexTextGenerationLive.pipe(
     ),
   ),
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(mockSharedHostAccounts),
 );
 
 it.layer(CodexTextGenerationPublishedHostLayer)(

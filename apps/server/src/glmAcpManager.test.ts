@@ -590,3 +590,94 @@ it("startSession rejects instead of crashing the process when the opencode binar
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+/**
+ * The server's secrets are not part of the agent's environment.
+ *
+ * Both spawns in `glmAcpManager.ts` used to be handed `{ ...process.env }`. A
+ * GLM thread is something any signed-in account can open, the agent's own shell
+ * tool reaches `terminal/create`, and the session config auto-allows reads — so
+ * "run `env`" was a supported way for any user to read the whole server
+ * environment back into their browser. The worst name in there is
+ * `T3CODE_GATEWAY_PROVISION_TOKEN`: it mints gateway accounts and hands back
+ * their `sk_live_` keys, which is every other account's credential, so one
+ * printed environment is the whole gateway.
+ *
+ * `T3CODE_HOME` stays because it is a location, not a credential, and the `t3`
+ * shim on the agent's PATH needs it to act on the same base directory the
+ * server is using. `HOME` stays because a subprocess without one cannot resolve
+ * a cache dir or a git config, which breaks the turn rather than securing it.
+ */
+it("terminal/create does not hand the agent's command the server's own secrets", async () => {
+  const previous = {
+    provision: process.env["T3CODE_GATEWAY_PROVISION_TOKEN"],
+    hub: process.env["T3CODE_HUB_TOKEN"],
+    githubSecret: process.env["T3CODE_GITHUB_CLIENT_SECRET"],
+    anthropic: process.env["ANTHROPIC_API_KEY"],
+    openai: process.env["OPENAI_API_KEY"],
+    t3Home: process.env["T3CODE_HOME"],
+  };
+  process.env["T3CODE_GATEWAY_PROVISION_TOKEN"] = "provision-secret-under-test";
+  process.env["T3CODE_HUB_TOKEN"] = "hub-secret-under-test";
+  process.env["T3CODE_GITHUB_CLIENT_SECRET"] = "github-secret-under-test";
+  process.env["ANTHROPIC_API_KEY"] = "anthropic-secret-under-test";
+  process.env["OPENAI_API_KEY"] = "openai-secret-under-test";
+  process.env["T3CODE_HOME"] = "/tmp/t3-home-under-test";
+
+  try {
+    const registry = new GlmTerminalRegistry(process.cwd());
+    const terminalId = registry.create({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(JSON.stringify({" +
+          "provision: process.env.T3CODE_GATEWAY_PROVISION_TOKEN ?? null," +
+          "hub: process.env.T3CODE_HUB_TOKEN ?? null," +
+          "githubSecret: process.env.T3CODE_GITHUB_CLIENT_SECRET ?? null," +
+          "anthropic: process.env.ANTHROPIC_API_KEY ?? null," +
+          "openai: process.env.OPENAI_API_KEY ?? null," +
+          "t3Home: process.env.T3CODE_HOME ?? null," +
+          "hasHome: typeof process.env.HOME === 'string'," +
+          "hasPath: typeof process.env.PATH === 'string'" +
+          "}))",
+      ],
+    });
+
+    const result = await waitUntil(
+      () => {
+        const current = registry.output(terminalId);
+        return current.exitStatus !== null ? current : null;
+      },
+      5000,
+      "terminal command to exit",
+    );
+    assert.equal(result.exitStatus?.exitCode, 0);
+
+    const seen = JSON.parse(result.output) as Record<string, unknown>;
+    assert.equal(seen["provision"], null);
+    assert.equal(seen["hub"], null);
+    assert.equal(seen["githubSecret"], null);
+    assert.equal(seen["anthropic"], null);
+    assert.equal(seen["openai"], null);
+    assert.equal(seen["t3Home"], "/tmp/t3-home-under-test");
+    assert.equal(seen["hasHome"], true);
+    assert.equal(seen["hasPath"], true);
+
+    registry.release(terminalId);
+  } finally {
+    for (const [name, value] of [
+      ["T3CODE_GATEWAY_PROVISION_TOKEN", previous.provision],
+      ["T3CODE_HUB_TOKEN", previous.hub],
+      ["T3CODE_GITHUB_CLIENT_SECRET", previous.githubSecret],
+      ["ANTHROPIC_API_KEY", previous.anthropic],
+      ["OPENAI_API_KEY", previous.openai],
+      ["T3CODE_HOME", previous.t3Home],
+    ] as ReadonlyArray<readonly [string, string | undefined]>) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+});

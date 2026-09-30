@@ -287,11 +287,25 @@ const makeCloudSyncService = Effect.gen(function* () {
   /**
    * The cloud copy's directory, and proof it is this workspace's.
    *
-   * Project ids are global, so without this being a member of *some* workspace
-   * would be enough to replicate any project on the server. A project with no
-   * ownership at all is a purely local one, created before any tenancy existed;
-   * it is allowed, because refusing it would break sync on every single-user
-   * install for a check with nothing to compare against.
+   * Project ids are global, so without this, being a member of *some*
+   * workspace would be enough to replicate any project on the server.
+   *
+   * A project with no ownership stamp predates tenancy, and who it belongs to
+   * depends entirely on who can reach this server. On a desktop install it is
+   * the only person's own and has to stay syncable — there is no second tenant
+   * for it to leak to, and refusing it would break sync on every single-user
+   * install for a check with nothing to compare against. On a server published
+   * to other people it is the HOST's, which on this codebase includes a legacy
+   * project rooted at the machine's home directory; exempting it from the
+   * scope check handed any signed-in member of their own workspace a full
+   * read, a download of every byte under that root, and a write back into it.
+   *
+   * So the exemption is conditioned on exactly the same fact `subscribeShell`
+   * and the project-visibility filter in ws.ts already use to decide whether an
+   * unowned project belongs on somebody else's dashboard
+   * (`unownedProjectsAreShared = !config.publishedBeyondLoopback`, see
+   * `isProjectOwnershipVisible`). Duplicated as one boolean rather than
+   * imported, because ws.ts imports this service.
    */
   const readProjectRoot = (scope: CloudSyncProjectScope) =>
     projects.getById({ projectId: scope.projectId }).pipe(
@@ -301,10 +315,14 @@ const makeCloudSyncService = Effect.gen(function* () {
           return Effect.fail(notFound("There is no such project in this workspace."));
         }
         const ownership = project.value.ownership;
-        return ownership !== null &&
-          (ownership.tenantId !== scope.tenantId || ownership.workspaceId !== scope.workspaceId)
-          ? Effect.fail(notFound("There is no such project in this workspace."))
-          : Effect.succeed(nodePath.resolve(project.value.workspaceRoot));
+        const unownedProjectsAreShared = !config.publishedBeyondLoopback;
+        const belongsHere =
+          ownership === null
+            ? unownedProjectsAreShared
+            : ownership.tenantId === scope.tenantId && ownership.workspaceId === scope.workspaceId;
+        return belongsHere
+          ? Effect.succeed(nodePath.resolve(project.value.workspaceRoot))
+          : Effect.fail(notFound("There is no such project in this workspace."));
       }),
     );
 

@@ -309,3 +309,92 @@ it.effect("shows an admin every member's account, with who is lending what", () 
     assert.deepStrictEqual(asMember.workspaceAccounts, []);
   }).pipe(Effect.provide(makeLayer())),
 );
+
+// An unnamed Codex account is labelled with the email address in its
+// auth.json, and the connect flow copies that label into the account index.
+// The admin panel showed the index verbatim, so a workspace approver read
+// every member's email address there — including the members whose roster row
+// deliberately withholds it, which is all of them by default.
+it.effect("does not hand an approver the email address the roster withholds", () =>
+  Effect.gen(function* () {
+    const sharing = yield* ProviderSharingService;
+    const repository = yield* ProviderSharingRepository;
+    const collaboration = yield* CollaborationService;
+
+    yield* repository.upsertAccount({
+      userId: member.userId,
+      provider: "codex",
+      accountId: ProviderAccountId.make("codex-primary"),
+      label: "member@example.com",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      lastUsedAt: null,
+    });
+    yield* repository.upsertAccount({
+      userId: member.userId,
+      provider: "codex",
+      accountId: ProviderAccountId.make("codex-secondary"),
+      label: "member.work@example.com",
+      createdAt: "2026-08-02T00:00:00.000Z",
+      lastUsedAt: null,
+    });
+    yield* beVisible(member);
+    yield* beLead;
+
+    // The roster itself refuses the address, which is the promise being kept.
+    const roster = yield* collaboration.listMembers(lead, scope);
+    assert.strictEqual(
+      roster.members.find((row) => row.userId === member.userId)?.email ?? null,
+      null,
+    );
+
+    const asLead = yield* sharing.getOverview(lead, scope);
+    const labels = asLead.workspaceAccounts.map((account) => account.label);
+    assert.deepStrictEqual(labels, ["Codex account 1", "Codex account 2"]);
+
+    // The member still sees their own addresses; consent is about other people.
+    yield* collaboration.updateSettings(lead, {
+      ...scope,
+      approverUserIds: [member.userId],
+    });
+    const asMember = yield* sharing.getOverview(member, scope);
+    assert.deepStrictEqual(
+      asMember.workspaceAccounts.map((account) => account.label),
+      ["member@example.com", "member.work@example.com"],
+    );
+
+    // And offering it is still allowed to mean offering it.
+    yield* collaboration.updateConsent(member, { ...scope, shareProfile: true, shareUsage: true });
+    const afterConsent = yield* sharing.getOverview(lead, scope);
+    assert.deepStrictEqual(
+      afterConsent.workspaceAccounts.map((account) => account.label),
+      ["member@example.com", "member.work@example.com"],
+    );
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+// A label somebody typed is not an address, and an admin choosing whose
+// subscription to run on has to be able to tell two accounts apart. Redacting
+// every label would have been the tidier rule and the wrong one.
+it.effect("still shows a label somebody chose for themselves", () =>
+  Effect.gen(function* () {
+    const sharing = yield* ProviderSharingService;
+    const repository = yield* ProviderSharingRepository;
+
+    yield* repository.upsertAccount({
+      userId: member.userId,
+      provider: "codex",
+      accountId: ProviderAccountId.make("codex-named"),
+      label: "Work subscription",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      lastUsedAt: null,
+    });
+    yield* beVisible(member);
+    yield* beLead;
+
+    const asLead = yield* sharing.getOverview(lead, scope);
+    assert.deepStrictEqual(
+      asLead.workspaceAccounts.map((account) => account.label),
+      ["Work subscription"],
+    );
+  }).pipe(Effect.provide(makeLayer())),
+);

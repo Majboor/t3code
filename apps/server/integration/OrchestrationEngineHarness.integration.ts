@@ -30,6 +30,7 @@ import { GitCore, type GitCoreShape } from "../src/git/Services/GitCore.ts";
 import { GitStatusBroadcaster } from "../src/git/Services/GitStatusBroadcaster.ts";
 import { TextGeneration, type TextGenerationShape } from "../src/git/Services/TextGeneration.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../src/persistence/Layers/OrchestrationCommandReceipts.ts";
+import { LocalAuthAccountRepositoryLive } from "../src/persistence/Layers/LocalAuthAccounts.ts";
 import { OrchestrationEventStoreLive } from "../src/persistence/Layers/OrchestrationEventStore.ts";
 import { ProjectionCheckpointRepositoryLive } from "../src/persistence/Layers/ProjectionCheckpoints.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Layers/ProjectionPendingApprovals.ts";
@@ -312,11 +313,13 @@ export const makeOrchestrationIntegrationHarness = (
     );
     const providerLayer = useRealCodex
       ? makeProviderServiceLive().pipe(
+        Layer.provide(LocalAuthAccountRepositoryLive),
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(realCodexRegistry),
           Layer.provide(AnalyticsService.layerTest),
         )
       : makeProviderServiceLive().pipe(
+        Layer.provide(LocalAuthAccountRepositoryLive),
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(fakeRegistry!),
           Layer.provide(AnalyticsService.layerTest),

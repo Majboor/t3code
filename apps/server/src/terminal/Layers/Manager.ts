@@ -7,6 +7,7 @@ import {
   type TerminalSessionStatus,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
+import { filterProviderLaunchBaseEnv } from "@t3tools/shared/tenancy";
 import {
   Effect,
   Encoding,
@@ -663,15 +664,57 @@ function shouldExcludeTerminalEnvKey(key: string): boolean {
   return TERMINAL_ENV_BLOCKLIST.has(normalizedKey);
 }
 
+/**
+ * The two names the shared provider-launch filter strips that a shell keeps.
+ *
+ * `HOME` is not a credential, it is where the person's shell lives: without it
+ * `cd`, `~`, `.zshrc`, `.gitconfig` and most of the tools somebody opens a
+ * terminal to run stop working, and hiding it conceals nothing anyway, because
+ * a shell can name any absolute path whether or not a variable points at it.
+ * `XDG_CONFIG_HOME` is the same kind of name one level down.
+ *
+ * `CODEX_HOME` and `CLAUDE_CONFIG_DIR` are deliberately NOT here even though
+ * they also only name a directory. They name the directory one particular
+ * provider login lives in, so inheriting the server's copy would point a
+ * `codex` or `claude` typed into any tenant's terminal at whatever account the
+ * operator connected — the operator-credential lending that was removed from
+ * this codebase, reappearing through a shell. A terminal that has a per-user
+ * provider home gets it put back explicitly through `runtimeEnv`, the way the
+ * provider-auth terminal does; one that does not is supposed to find nothing.
+ */
+const TERMINAL_INHERITED_HOME_ENV_KEYS = ["HOME", "XDG_CONFIG_HOME"] as const;
+
+/**
+ * The environment a shell is handed, with the server's own credentials removed.
+ *
+ * This used to be the server's whole environment minus `T3CODE_*`, `VITE_*` and
+ * three Electron variables — which meant any tenant member who could open a
+ * terminal on any workspace they could reach typed `env` and read the
+ * operator's `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+ * `CLAUDE_CODE_OAUTH_TOKEN` (a year long, and the whole account), straight into
+ * their browser and into the persisted scrollback log on disk. A terminal is a
+ * process started on somebody's behalf exactly like a provider launch is, so it
+ * is filtered by the same list rather than by a second one beside it:
+ * `filterProviderLaunchBaseEnv` is the one place those names are written down,
+ * and importing it means a name added there can never be missing here.
+ *
+ * `runtimeEnv` is applied last and on purpose: it is how a caller that resolved
+ * a credential for this particular person puts that one credential back.
+ */
 function createTerminalSpawnEnv(
   baseEnv: NodeJS.ProcessEnv,
   runtimeEnv?: Record<string, string> | null,
 ): NodeJS.ProcessEnv {
   const spawnEnv: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(baseEnv)) {
-    if (value === undefined) continue;
+  for (const [key, value] of Object.entries(filterProviderLaunchBaseEnv(baseEnv))) {
     if (shouldExcludeTerminalEnvKey(key)) continue;
     spawnEnv[key] = value;
+  }
+  for (const key of TERMINAL_INHERITED_HOME_ENV_KEYS) {
+    const value = baseEnv[key];
+    if (value !== undefined && !shouldExcludeTerminalEnvKey(key)) {
+      spawnEnv[key] = value;
+    }
   }
   if (runtimeEnv) {
     for (const [key, value] of Object.entries(runtimeEnv)) {

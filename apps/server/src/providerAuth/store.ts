@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -128,6 +128,57 @@ export function providerAuthRoot(stateDir: string): string {
   return path.join(stateDir, "provider-auth");
 }
 
+/**
+ * Make `target`, and every directory between it and the provider-auth root,
+ * reachable by this process' OS user alone.
+ *
+ * `mkdir`'s `mode` is only applied to directories `mkdir` actually creates. It
+ * says nothing about one that is already there, so a provider-auth root that
+ * arrived any other way — a state directory restored from a tar or a `cp -r`
+ * that dropped modes, a volume copied between the two deployments that share
+ * this box, a directory some future code path creates without the mode — stays
+ * group- and world-readable for good, and every credential written under it is
+ * one `ls` away for every other OS account on the machine. The mode was never
+ * re-asserted anywhere: this is the only place that can.
+ *
+ * ws.ts already reached this conclusion for the isolated provider homes it
+ * prepares before a login terminal (`makeDirectory` and then `chmod`); this is
+ * the same rule at the place the credential is actually written.
+ *
+ * It throws rather than warns. A credential written into a directory we could
+ * not make private is a credential we have quietly published, and refusing is
+ * the only answer that does not do that silently.
+ */
+async function ensurePrivateProviderDir(stateDir: string, target: string): Promise<void> {
+  await mkdir(target, { recursive: true, mode: 0o700 });
+  const root = path.resolve(providerAuthRoot(stateDir));
+  let current = path.resolve(target);
+  while (current === root || current.startsWith(`${root}${path.sep}`)) {
+    await chmod(current, 0o700);
+    if (current === root) {
+      return;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return;
+    }
+    current = parent;
+  }
+}
+
+/**
+ * Write a credential file and leave it readable by this process' OS user alone.
+ *
+ * Same trap one level down: `writeFile`'s `mode` is honoured when the file is
+ * created and ignored when it already exists, so a reconnect over a token file
+ * that is somehow at 0644 rewrites the secret and keeps the permissions. The
+ * `chmod` states the mode instead of hoping the file is new.
+ */
+async function writePrivateProviderFile(target: string, contents: string): Promise<void> {
+  await writeFile(target, contents, { encoding: "utf8", mode: 0o600 });
+  await chmod(target, 0o600);
+}
+
 export function providerAuthUserDir(stateDir: string, userId: string): string {
   return path.join(providerAuthRoot(stateDir), providerAuthUserSlug(userId));
 }
@@ -232,7 +283,7 @@ export async function ensureCodexHome(
   accountId: string = DEFAULT_PROVIDER_ACCOUNT_ID,
 ): Promise<string> {
   const home = codexHomeFor(stateDir, userId, accountId);
-  await mkdir(home, { recursive: true, mode: 0o700 });
+  await ensurePrivateProviderDir(stateDir, home);
   return home;
 }
 
@@ -249,10 +300,23 @@ export async function isCodexConnected(
 }
 
 /**
- * Kept at 0600 under a directory only this process can read.
+ * Written at 0600 inside a 0700 directory, every time, not only the first time.
  *
  * The token is a year long and is the account, so it is written the way a
  * private key is written rather than the way a cache is.
+ *
+ * What that buys, precisely, because the earlier version of this comment
+ * claimed more than it could deliver ("a directory only this process can
+ * read"): the modes keep one OS account on the box out of another's, which is
+ * what matters on a shared VPS and to anything that copies the state directory.
+ * They do NOT separate this server's own users from each other. Every shell and
+ * every agent this server spawns runs as the same OS user that owns these files
+ * — there is no per-tenant uid anywhere in `apps/server/src` — so a person who
+ * can open a terminal can read any of them by absolute path, and no file mode
+ * and no encryption key that this process itself has to hold would change that.
+ * The isolation claim in ws.ts rests on that missing uid, and until a spawned
+ * shell stops running as the server, the honest description of these modes is
+ * "defence against the rest of the machine", not "defence between tenants".
  */
 export async function writeClaudeToken(
   stateDir: string,
@@ -261,8 +325,8 @@ export async function writeClaudeToken(
   accountId: string = DEFAULT_PROVIDER_ACCOUNT_ID,
 ): Promise<void> {
   const target = claudeTokenPath(stateDir, userId, accountId);
-  await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-  await writeFile(target, token, { encoding: "utf8", mode: 0o600 });
+  await ensurePrivateProviderDir(stateDir, path.dirname(target));
+  await writePrivateProviderFile(target, token);
 }
 
 export async function readClaudeToken(
@@ -394,11 +458,8 @@ async function mutateMeta(
   const previous = metaMutations.get(target) ?? Promise.resolve();
   const run = async (): Promise<void> => {
     const next = mutate(await readMeta(stateDir, userId, provider));
-    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    await writeFile(target, `${JSON.stringify(next, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await ensurePrivateProviderDir(stateDir, path.dirname(target));
+    await writePrivateProviderFile(target, `${JSON.stringify(next, null, 2)}\n`);
   };
   const settled = previous.then(run, run);
   const chain = settled.catch(() => undefined);
@@ -672,10 +733,10 @@ export async function createProviderAccount(
       meta.defaultAccountId ?? (hasAdoptedDefault || meta.accounts.length > 0 ? null : accountId),
     accounts: [...meta.accounts, { id: accountId, label: trimmed, createdAt }],
   }));
-  await mkdir(path.dirname(credentialCandidates(stateDir, userId, provider, accountId)[0]!), {
-    recursive: true,
-    mode: 0o700,
-  });
+  await ensurePrivateProviderDir(
+    stateDir,
+    path.dirname(credentialCandidates(stateDir, userId, provider, accountId)[0]!),
+  );
   return accountId;
 }
 
@@ -800,13 +861,13 @@ export async function providerCredentialEnvForAccount(
     if (!(await exists(path.join(codexHome, "auth.json")))) {
       return null;
     }
-    await mkdir(home, { recursive: true, mode: 0o700 });
+    await ensurePrivateProviderDir(stateDir, home);
     return { HOME: home, CODEX_HOME: codexHome };
   }
   const token = await readClaudeToken(stateDir, ownerUserId, accountId);
   if (token === null) {
     return null;
   }
-  await mkdir(home, { recursive: true, mode: 0o700 });
+  await ensurePrivateProviderDir(stateDir, home);
   return { HOME: home, CLAUDE_CODE_OAUTH_TOKEN: token };
 }

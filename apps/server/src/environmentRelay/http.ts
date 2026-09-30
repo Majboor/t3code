@@ -87,6 +87,37 @@ export const MAX_RELAY_LINKS_PER_USER = 16;
  */
 export const RELAY_HELLO_TIMEOUT_MS = 10_000;
 
+/**
+ * How often an attached browser's credential is asked for again.
+ *
+ * The attach socket authenticates once, at the upgrade, and then relays
+ * whatever the browser sends into somebody's machine for as long as it stays
+ * open. Nothing on that path ever looked at the session again, so revoking the
+ * browser session from Settings took the *next* connection away and left the
+ * one already open relaying: a laptop that had been signed out of on the web
+ * kept answering RPC from the tab that was still up.
+ *
+ * The dial side already had an answer to this — `dropRelayConnectionsForAuthSession`
+ * reaches in from the revoke path and ends the environment's socket — but it
+ * can only find connections the registry knows a session id for, and a browser
+ * channel is not one. Re-asking is the cheaper of the two fixes and needs no
+ * new bookkeeping: one indexed session read per open channel per interval.
+ *
+ * Fifteen seconds is the heartbeat interval; a revoked tab therefore stops
+ * being able to reach the machine inside one beat of the link it is riding.
+ */
+export const RELAY_ATTACH_REAUTH_INTERVAL_MS = 15_000;
+
+let attachReauthIntervalMs = RELAY_ATTACH_REAUTH_INTERVAL_MS;
+
+/**
+ * Shortens the re-check so a test can watch a revocation land without waiting
+ * out a real interval. Nothing but a test calls this.
+ */
+export function setRelayAttachReauthIntervalMsForTests(intervalMs: number): void {
+  attachReauthIntervalMs = intervalMs;
+}
+
 const RELAY_HEADERS: Readonly<Record<string, string>> = {
   "cache-control": "no-store, private",
   "x-content-type-options": "nosniff",
@@ -480,6 +511,45 @@ const attachRoute = Effect.gen(function* () {
     return HttpServerResponse.empty();
   }
 
+  /**
+   * Ends the channel the moment the browser's credential stops being good.
+   *
+   * Everything below this line carries traffic into somebody's machine, and
+   * the only check on who may do that ran once, before the upgrade. See
+   * `RELAY_ATTACH_REAUTH_INTERVAL_MS`.
+   *
+   * Cutting off is also what happens when the session cannot be READ — a
+   * failed lookup is not permission, and a channel already open into a machine
+   * is the wrong place to give something the benefit of the doubt. The browser
+   * reconnects and meets the ordinary refusal, which is a sentence it can act
+   * on.
+   *
+   * The user id is compared as well as the credential's validity: a session
+   * that comes back as somebody else is not this channel's owner, whatever the
+   * cookie now says.
+   */
+  const cutOff = Effect.sync(() => {
+    relayed.channel.close("browser session revoked");
+    Queue.offerUnsafe(outbound, new Socket.CloseEvent(1008, "session revoked"));
+  });
+
+  const watchCredential = (): Effect.Effect<
+    void,
+    never,
+    HttpServerRequest.HttpServerRequest | ServerAuth
+  > =>
+    Effect.sleep(attachReauthIntervalMs).pipe(
+      Effect.flatMap(() => authenticatedSession),
+      Effect.flatMap((current) =>
+        current !== null && resolveAuthenticatedUserId(current) === userId
+          ? Effect.suspend(watchCredential)
+          : cutOff,
+      ),
+      Effect.catchCause(() => cutOff),
+    );
+
+  const credentialFiber = yield* Effect.forkScoped(watchCredential());
+
   yield* socket
     .runRaw((data) => {
       relayed.channel.send(frameTextOf(data));
@@ -489,6 +559,8 @@ const attachRoute = Effect.gen(function* () {
       Effect.catchCause(() => Effect.void),
       Effect.ensuring(Effect.sync(() => relayed.channel.close("browser disconnected"))),
     );
+
+  yield* Fiber.interrupt(credentialFiber).pipe(Effect.catchCause(() => Effect.void));
 
   return HttpServerResponse.empty();
 }).pipe(Effect.catchCause(() => Effect.succeed(unavailable)));

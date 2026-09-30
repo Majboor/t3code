@@ -71,6 +71,7 @@ import { dirname, join } from "node:path";
 import { ensureAgentCliShim, withShimOnPath } from "../../agentCliShim.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { isLoopbackHost, isWildcardHost } from "../../startupAccess.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { getClaudeModelCapabilities } from "./ClaudeProvider.ts";
 import {
@@ -443,6 +444,77 @@ function transcriptHasConversation(file: string): boolean {
 }
 
 /**
+ * The transcript files one session needs, and nothing else in the directory.
+ *
+ * The copy below used to take every `*.jsonl` in the source project directory,
+ * on the reasoning that a session is a chain of files and so "the whole project
+ * dir travels together". The chain is real — the file named after the session id
+ * can be a stub whose `leafUuid` points at a message in an earlier file — but
+ * the directory is not the chain. It is every conversation anybody has ever had
+ * in that working directory, and because the source directory is found by
+ * globbing every provider home on the box, the person resuming one shared
+ * thread ended up holding a stranger's unrelated conversations in their own
+ * Claude home, readable by their own agent from then on.
+ *
+ * So the chain is followed rather than assumed: start at the session's own file,
+ * and pull in a sibling only where this session actually refers into it — by
+ * name, since Claude names a transcript after its session id, or by a `leafUuid`
+ * that sibling turns out to contain. A file nothing in the chain mentions is a
+ * different conversation and stays where it is.
+ */
+function collectSessionChainFiles(
+  sourceProjectDir: string,
+  sessionId: string,
+): ReadonlyArray<string> {
+  let siblings: ReadonlyArray<string>;
+  try {
+    siblings = readdirSync(sourceProjectDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+
+  const readText = (name: string): string => {
+    try {
+      return readFileSync(join(sourceProjectDir, name), { encoding: "utf8", flag: "r" });
+    } catch {
+      return "";
+    }
+  };
+
+  const selected = new Set<string>();
+  const pending: Array<string> = [`${sessionId}.jsonl`];
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name === undefined || selected.has(name) || !siblings.includes(name)) {
+      continue;
+    }
+    selected.add(name);
+    const text = readText(name);
+    for (const match of text.matchAll(/"leafUuid"\s*:\s*"([0-9a-fA-F-]{36})"/g)) {
+      const uuid = match[1];
+      if (uuid === undefined) continue;
+      const namedFile = `${uuid}.jsonl`;
+      if (siblings.includes(namedFile)) {
+        pending.push(namedFile);
+        continue;
+      }
+      // Not a file name, so it is a message uuid living inside one of the
+      // siblings: whichever one holds it is the earlier link in this chain.
+      for (const sibling of siblings) {
+        if (selected.has(sibling)) continue;
+        if (readText(sibling).includes(uuid)) {
+          pending.push(sibling);
+          break;
+        }
+      }
+    }
+  }
+  return Array.from(selected);
+}
+
+/**
  * "present" when `activeConfigDir` already holds the transcript for `sessionId`; "copied" when it
  * was brought over from a teammate's Claude config dir (they started the thread); "missing" when no
  * copy exists anywhere, in which case the caller must not ask Claude to resume it.
@@ -469,19 +541,16 @@ function ensureClaudeSessionTranscript(
     try {
       mkdirSync(dirname(target), { recursive: true });
       /**
-       * A session is a chain of transcript files: the one named after the
-       * session id can be a stub whose `leafUuid` points into an earlier file
-       * in the same project dir, so the whole project dir travels together.
-       * Files that already hold a conversation at the target are left alone;
-       * stubs (Claude writes one for the session id on a failed resume) are
-       * replaced.
+       * Only the files this session's own chain reaches — see
+       * `collectSessionChainFiles`. Files that already hold a conversation at
+       * the target are left alone; stubs (Claude writes one for the session id
+       * on a failed resume) are replaced.
        */
       const sourceProjectDir = join(configDir, relativeProjectDir);
-      for (const entry of readdirSync(sourceProjectDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
-        const destination = join(dirname(target), entry.name);
+      for (const fileName of collectSessionChainFiles(sourceProjectDir, sessionId)) {
+        const destination = join(dirname(target), fileName);
         if (!transcriptHasConversation(destination)) {
-          copyFileSync(join(sourceProjectDir, entry.name), destination);
+          copyFileSync(join(sourceProjectDir, fileName), destination);
         }
       }
       const sessionEnv = join(configDir, "session-env", sessionId);
@@ -1116,6 +1185,24 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const serverConfig = yield* ServerConfig;
+
+  /**
+   * Whether the Claude login this process can reach belongs to the only person
+   * who could be starting a session.
+   *
+   * On a desktop install the server's own `~/.claude` is the user's own, so a
+   * session started without a per-user launch environment reaches nobody else.
+   * On anything a second account can sign in to, it is the operator's, and
+   * `?? process.env` was how their login came to answer for everybody.
+   *
+   * Same question `ws.ts`'s `isSingleMachineServer` asks, plus the operator's
+   * own declaration that strangers reach this process.
+   */
+  const singleMachineInstall =
+    isLoopbackHost(serverConfig.host) &&
+    !isWildcardHost(serverConfig.host) &&
+    !serverConfig.publishedBeyondLoopback;
+
   const nativeEventLogger =
     options?.nativeEventLogger ??
     (options?.nativeEventLogPath !== undefined
@@ -2630,6 +2717,39 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
       }
 
+      /**
+       * Whose Claude account this session is about to spend, decided before
+       * anything is started.
+       *
+       * `input.providerLaunchEnvironment?.env ?? process.env` appeared twice
+       * further down — once to find the config dir a transcript is resumed
+       * from, once as the environment the CLI itself is launched with — and
+       * both fell back to the server's own environment when the caller gave
+       * none. The caller that gives none is the recovery path in
+       * `ProviderService`, which a restart, a dispose or a reconnect reaches
+       * routinely, so a signed-in user's turn silently moved onto the
+       * operator's `HOME` and their `CLAUDE_CODE_OAUTH_TOKEN`: authenticated,
+       * billed and logged as the operator, with
+       * `resolveProviderAccount`'s refusal never consulted.
+       *
+       * Refusing is the whole point. There is no fallback to the operator's
+       * credential any more — a user who has connected no Claude account gets
+       * a sentence telling them to connect one, not somebody else's
+       * subscription. The single-machine case keeps the old behaviour because
+       * there the server's login genuinely is the only user's.
+       */
+      const baseLaunchEnvironment = input.providerLaunchEnvironment?.env;
+      if (baseLaunchEnvironment === undefined && !singleMachineInstall) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "startSession",
+          issue:
+            "Refusing to start a Claude session on this server's own Claude login: no provider launch environment was supplied, and this host has other accounts on it. Connect a Claude account and start the turn again.",
+        });
+      }
+      const resolvedLaunchEnvironment: NodeJS.ProcessEnv | Record<string, string> =
+        baseLaunchEnvironment ?? process.env;
+
       const existingContext = sessions.get(input.threadId);
       if (existingContext) {
         yield* Effect.logWarning("claude.session.replacing", {
@@ -2662,7 +2782,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
        * start a fresh session rather than failing the turn with
        * "No conversation found with session ID".
        */
-      const launchEnv = input.providerLaunchEnvironment?.env ?? process.env;
+      const launchEnv = resolvedLaunchEnvironment;
       const claudeConfigDir =
         launchEnv["CLAUDE_CONFIG_DIR"] ??
         join(launchEnv["HOME"] ?? process.env["HOME"] ?? homedir(), ".claude");
@@ -3048,7 +3168,6 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
        * PATH is prepended rather than the environment rebuilt, so the
        * credential filtering upstream still decides everything else in here.
        */
-      const baseLaunchEnvironment = input.providerLaunchEnvironment?.env ?? process.env;
       const t3Home = process.env["T3CODE_HOME"];
       const shimDir = ensureAgentCliShim(
         join(
@@ -3056,11 +3175,11 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           "bin",
         ),
       );
-      const shimmedPath = withShimOnPath(baseLaunchEnvironment["PATH"], shimDir);
+      const shimmedPath = withShimOnPath(resolvedLaunchEnvironment["PATH"], shimDir);
       const launchEnvironment =
         shimmedPath === undefined
-          ? baseLaunchEnvironment
-          : { ...baseLaunchEnvironment, PATH: shimmedPath };
+          ? resolvedLaunchEnvironment
+          : { ...resolvedLaunchEnvironment, PATH: shimmedPath };
 
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),

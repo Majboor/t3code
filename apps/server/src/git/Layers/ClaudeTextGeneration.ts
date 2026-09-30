@@ -32,7 +32,8 @@ import {
 import { normalizeClaudeModelOptionsWithCapabilities } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { isLoopbackHost, isWildcardHost } from "../../startupAccess.ts";
+import { mayUseOperatorProviderCredentials } from "../../providerAuth/operatorCredentialLending.ts";
+import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
 import { getClaudeModelCapabilities } from "../../provider/Layers/ClaudeProvider.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
@@ -68,10 +69,20 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
    * none at all. A missing thread title is a nicety the caller already handles;
    * spending an unrelated person's Claude quota to supply it is not.
    */
-  const machineLoginIsTheOnlyUsers =
-    isLoopbackHost(serverConfig.host) &&
-    !isWildcardHost(serverConfig.host) &&
-    !serverConfig.publishedBeyondLoopback;
+  const localAuthAccounts = yield* LocalAuthAccountRepository;
+  // Whether the operator's own login may be spent here. Asking how many
+  // accounts can sign in rather than whether the bind address looks public:
+  // `publishedBeyondLoopback` defaults to false so a proxied server read as a
+  // desktop, and a wildcard bind is how LAN pairing works for a single user.
+  // See `providerAuth/operatorCredentialLending.ts`.
+  const localAccountCount = yield* localAuthAccounts
+    .countEnabled()
+    .pipe(Effect.catch(() => Effect.succeed(Number.POSITIVE_INFINITY)));
+  const machineLoginIsTheOnlyUsers = mayUseOperatorProviderCredentials({
+    host: serverConfig.host,
+    publishedBeyondLoopback: serverConfig.publishedBeyondLoopback,
+    localAccountCount,
+  });
 
   const readStreamAsString = <E>(
     operation: string,

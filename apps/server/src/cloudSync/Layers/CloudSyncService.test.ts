@@ -11,7 +11,7 @@ import { blobStoreRoot, hashBytes, storeBytes } from "../blobStore.ts";
 import { CloudSyncService, type CloudSyncEntry } from "../Services/CloudSyncService.ts";
 import { CollaborationServiceLive } from "../../collaboration/Layers/CollaborationService.ts";
 import { CollaborationService } from "../../collaboration/Services/CollaborationService.ts";
-import { ServerConfig } from "../../config.ts";
+import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { CloudSyncRepositoryLive } from "../../persistence/Layers/CloudSync.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -27,6 +27,7 @@ const tenantId = TenantId.make("tenant-atlas");
 const workspaceId = WorkspaceId.make("workspace-platform");
 const projectId = ProjectId.make("project-atlas");
 const scope = { tenantId, workspaceId, projectId };
+const unownedProjectId = ProjectId.make("project-legacy-unowned");
 
 const owner = { userId: UserId.make("user-owner"), displayName: "Owner" };
 const stranger = { userId: UserId.make("user-stranger"), displayName: "Stranger" };
@@ -36,8 +37,8 @@ const layer = CloudSyncServiceLive.pipe(
   Layer.provideMerge(CollaborationServiceLive),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
   Layer.provideMerge(TenancyRepositoryLive),
-    Layer.provideMerge(ActivityNoteRepositoryLive),
-    Layer.provideMerge(SharedPromptRepositoryLive),
+  Layer.provideMerge(ActivityNoteRepositoryLive),
+  Layer.provideMerge(SharedPromptRepositoryLive),
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-cloud-sync-" })),
   Layer.provideMerge(NodeServices.layer),
@@ -593,5 +594,103 @@ it.effect("forgets a live copy when a new pass begins, rather than offering last
     assert.strictEqual(record.value.liveCopyUrl, null);
     assert.strictEqual(record.value.laptopConfirmedAt, null);
     assert.strictEqual((yield* cloudSync.getVisitorView(owner, scope)).state, "sharer-away");
+  }).pipe(Effect.provide(layer)),
+);
+
+/**
+ * The same stack, on a server other people can reach. `publishedBeyondLoopback`
+ * is the one fact that decides who an UNOWNED project belongs to, so it is the
+ * only thing this layer changes.
+ */
+const publishedConfig = Layer.effect(
+  ServerConfig,
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    return { ...config, publishedBeyondLoopback: true } satisfies ServerConfigShape;
+  }),
+).pipe(
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-cloud-sync-published-" })),
+);
+
+const publishedLayer = CloudSyncServiceLive.pipe(
+  Layer.provideMerge(CloudSyncRepositoryLive),
+  Layer.provideMerge(CollaborationServiceLive),
+  Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(TenancyRepositoryLive),
+  Layer.provideMerge(ActivityNoteRepositoryLive),
+  Layer.provideMerge(SharedPromptRepositoryLive),
+  Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provideMerge(publishedConfig),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+/** A project with no ownership stamp: the shape that predates tenancy. */
+const makeUnownedProject = Effect.gen(function* () {
+  const config = yield* ServerConfig;
+  const projects = yield* ProjectionProjectRepository;
+  const workspaceRoot = nodePath.join(config.stateDir, "host-home");
+  yield* Effect.promise(() => fsPromises.mkdir(workspaceRoot, { recursive: true }));
+  yield* Effect.promise(() =>
+    fsPromises.writeFile(nodePath.join(workspaceRoot, "auth.json"), "OPENAI_API_KEY=sk-live"),
+  );
+  const at = "2026-08-19T09:00:00.000Z";
+  yield* projects.upsert({
+    projectId: unownedProjectId,
+    title: "Legacy",
+    workspaceRoot,
+    ownership: null,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: at,
+    updatedAt: at,
+    deletedAt: null,
+  });
+  return workspaceRoot;
+});
+
+// An unowned project was exempted from the scope check outright, so on a
+// published server any signed-in person who was a member of their OWN
+// workspace could name the host's legacy project — one of which is rooted at
+// the machine's home directory — start a sync against it, have the planner
+// list every path under it as a download, and write files back into it.
+it.effect("will not sync the host's own project for a tenant on a published server", () =>
+  Effect.gen(function* () {
+    const cloudSync = yield* CloudSyncService;
+    yield* beVisible(stranger);
+    yield* makeUnownedProject;
+
+    const unownedScope = { tenantId, workspaceId, projectId: unownedProjectId };
+
+    const refusedStart = yield* cloudSync
+      .start(stranger, { ...unownedScope, mode: "mirror" })
+      .pipe(Effect.flip);
+    // The same answer a project id that does not exist would get: telling the
+    // two apart is the first half of caring whose it is.
+    assert.strictEqual(refusedStart.code, "not-found");
+
+    // And the blob route's own gate, which took the identical exemption.
+    const refusedAccess = yield* cloudSync
+      .requireProjectAccess(stranger, unownedScope)
+      .pipe(Effect.flip);
+    assert.strictEqual(refusedAccess.code, "not-found");
+  }).pipe(Effect.provide(publishedLayer)),
+);
+
+// The other half of the same rule: on a desktop install there is no second
+// tenant for an unowned project to leak to, it is genuinely the only person's
+// own, and refusing it would break sync on every single-user install.
+it.effect("still syncs an unowned project on a machine only its owner can reach", () =>
+  Effect.gen(function* () {
+    const cloudSync = yield* CloudSyncService;
+    yield* beVisible(owner);
+    yield* makeUnownedProject;
+
+    const started = yield* cloudSync.start(owner, {
+      tenantId,
+      workspaceId,
+      projectId: unownedProjectId,
+      mode: "mirror",
+    });
+    assert.strictEqual(started.sync.mode, "mirror");
   }).pipe(Effect.provide(layer)),
 );

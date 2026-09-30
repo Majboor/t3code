@@ -184,6 +184,43 @@ const makeProviderUsageService = Effect.gen(function* () {
     );
 
   /**
+   * Answering a request is a write, and it has to be gated like one.
+   *
+   * A grant writes two rows, and the second of them is somebody ELSE's:
+   * `upsertGrant` puts the requester on `access: "workspace"`, which is the
+   * same row the admin-only `ProviderSharingService.updateMemberAccess`
+   * writes. And `decideProviderAccount` reads `access: "workspace"` as "run on
+   * the account the workspace POLICY names" — the admin's pinned subscription,
+   * not the responder's. So a read-only viewer who connected a throwaway
+   * account could answer a colleague's request and thereby put that colleague
+   * on the lead's Codex subscription, with no lead or approver anywhere in the
+   * path. Membership alone was the only thing stopping them, and membership
+   * includes people the workspace only lets watch.
+   *
+   * `checkWriteAccessForTurn` rather than a rule of its own, because it is
+   * already this workspace's definition of "may put work into it", and someone
+   * who may not start a turn has no business deciding whose subscription
+   * somebody else's turns run on. Asking is still open to everyone —
+   * `createRequest` is deliberately not gated here — because asking spends
+   * nothing.
+   */
+  const requireWriteAccess = (actor: ProviderUsageActor, scope: UsageScope) =>
+    collaboration.checkWriteAccessForTurn(actor, scope).pipe(
+      Effect.mapError(storageFailure("Could not read what this workspace lets you do.")),
+      Effect.flatMap(({ mayRun }) =>
+        mayRun
+          ? Effect.void
+          : Effect.fail(
+              new ProviderUsageError({
+                code: "forbidden",
+                message:
+                  "This workspace is read-only for you, so you cannot answer a request for provider usage.",
+              }),
+            ),
+      ),
+    );
+
+  /**
    * The store, never the index, is asked what somebody actually holds: the
    * index is a projection the connect flow maintains, while the disk is where a
    * credential either is or is not. Only connected accounts count — lending one
@@ -323,6 +360,7 @@ const makeProviderUsageService = Effect.gen(function* () {
     Effect.gen(function* () {
       const scope: UsageScope = { tenantId: input.tenantId, workspaceId: input.workspaceId };
       const { members } = yield* requireMember(actor, scope);
+      yield* requireWriteAccess(actor, scope);
       const record = yield* readRequestInScope(input.requestId, scope);
 
       if (record.requesterUserId === actor.userId) {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -136,6 +136,11 @@ function makeHarness(config?: {
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
   readonly cwd?: string;
   readonly baseDir?: string;
+  /**
+   * A host the operator has declared reachable by other people, i.e. one where
+   * the server's own Claude login is nobody's but the operator's.
+   */
+  readonly published?: boolean;
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -162,14 +167,24 @@ function makeHarness(config?: {
       : {}),
   };
 
+  const baseServerConfigLayer = ServerConfig.layerTest(
+    config?.cwd ?? "/tmp/claude-adapter-test",
+    config?.baseDir ?? "/tmp",
+  );
+  const serverConfigLayer =
+    config?.published === true
+      ? Layer.effect(
+          ServerConfig,
+          Effect.gen(function* () {
+            const base = yield* ServerConfig;
+            return { ...base, publishedBeyondLoopback: true };
+          }),
+        ).pipe(Layer.provide(baseServerConfigLayer))
+      : baseServerConfigLayer;
+
   return {
     layer: makeClaudeAdapterLive(adapterOptions).pipe(
-      Layer.provideMerge(
-        ServerConfig.layerTest(
-          config?.cwd ?? "/tmp/claude-adapter-test",
-          config?.baseDir ?? "/tmp",
-        ),
-      ),
+      Layer.provideMerge(serverConfigLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     ),
@@ -312,6 +327,72 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  /**
+   * The operator's own Claude login is not a fallback.
+   *
+   * `startSession` used to read `input.providerLaunchEnvironment?.env ??
+   * process.env`, and the caller that supplies nothing is `ProviderService`'s
+   * recovery path — reached by a restart, a dispose or a reconnect, which is
+   * routine. So a signed-in user's turn ran as whoever the server process is
+   * signed in as: the operator's `HOME`, their `CLAUDE_CODE_OAUTH_TOKEN`, their
+   * bill, their account history, and `resolveProviderAccount`'s refusal never
+   * consulted. A refusal a person can act on is the correct answer; lending the
+   * operator's subscription is the thing being removed.
+   */
+  it.effect(
+    "refuses to start a session on the server's own Claude login on a published host",
+    () => {
+      const harness = makeHarness({ published: true });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const outcome = yield* Effect.result(
+          adapter.startSession({
+            threadId: THREAD_ID,
+            provider: "claudeAgent",
+            runtimeMode: "approval-required",
+          }),
+        );
+
+        assert.equal(outcome._tag, "Failure");
+        if (outcome._tag === "Failure") {
+          assert.equal(outcome.failure._tag, "ProviderAdapterValidationError");
+          const issue = (outcome.failure as { readonly issue?: string }).issue ?? "";
+          assert.match(issue, /no provider launch environment was supplied/);
+        }
+        // Nothing was spawned: the refusal happens before any query is created,
+        // so no prompt reaches the provider under the operator's account.
+        assert.equal(harness.getLastCreateQueryInput(), undefined);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  /**
+   * The desktop case the refusal above must not break: on a loopback-only
+   * install the server's own Claude login is the login of the person sitting at
+   * the computer, so inheriting it reaches nobody else.
+   */
+  it.effect(
+    "still starts a session without a launch environment on a single-machine install",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+        });
+        assert.notEqual(harness.getLastCreateQueryInput(), undefined);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("uses isolated launch environment for Claude SDK sessions", () => {
     const harness = makeHarness();
@@ -2606,6 +2687,91 @@ describe("ClaudeAdapterLive", () => {
       );
       yield* Stream.runHead(adapter.streamEvents);
       yield* Effect.promise(() => grepPermissionPromise);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  /**
+   * Resuming somebody else's thread brings that conversation over, not their
+   * whole working directory's worth of conversations.
+   *
+   * The copy that makes a shared thread resumable used to take every `*.jsonl`
+   * in the source project directory, and the source directory is found by
+   * globbing every provider home on the machine — every user in every tenant
+   * runtime. So one resume left the actor holding, in their own Claude config
+   * dir, every Claude conversation a stranger had ever had in that directory,
+   * readable by their own agent from then on. Only the chain the resumed session
+   * actually reaches may travel.
+   */
+  it.effect("copies only the resumed session's own transcript chain from another home", () => {
+    const homesRoot = mkdtempSync(path.join(os.tmpdir(), "claude-transcript-homes-"));
+    // Side by side under one parent, which is the "siblings of the active config
+    // dir" arm of `candidateClaudeConfigDirs` — the same shape two members of a
+    // workspace get inside one tenant runtime's `provider-homes`.
+    const providerHomes = path.join(homesRoot, "provider-homes");
+    const actorConfigDir = path.join(providerHomes, "actor");
+    const strangerConfigDir = path.join(providerHomes, "stranger");
+    const projectCwd = path.join(homesRoot, "workspace");
+    const projectDirName = projectCwd.replace(/[^a-zA-Z0-9]/g, "-");
+    const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+    const chainedId = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+    const strangerProjectDir = path.join(strangerConfigDir, "projects", projectDirName);
+
+    mkdirSync(actorConfigDir, { recursive: true });
+    mkdirSync(strangerProjectDir, { recursive: true });
+    mkdirSync(projectCwd, { recursive: true });
+    // The session being resumed: a summary stub that chains into an earlier file
+    // by `leafUuid`, which is the shape the copy exists for.
+    writeFileSync(
+      path.join(strangerProjectDir, `${sessionId}.jsonl`),
+      `${JSON.stringify({ type: "summary", leafUuid: chainedId })}\n`,
+    );
+    writeFileSync(
+      path.join(strangerProjectDir, `${chainedId}.jsonl`),
+      `${JSON.stringify({ type: "user", uuid: chainedId })}\n`,
+    );
+    // A different conversation the same stranger had in the same directory. The
+    // resumed session never refers to it, so it is none of the actor's business.
+    writeFileSync(
+      path.join(strangerProjectDir, "7c9e6679-7425-40de-944b-e07fc1f90ae7.jsonl"),
+      `${JSON.stringify({ type: "user", text: "stranger's unrelated conversation" })}\n`,
+    );
+
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: "claudeAgent",
+        cwd: projectCwd,
+        resumeCursor: {
+          threadId: "resume-thread-transcript",
+          resume: sessionId,
+          turnCount: 1,
+        },
+        runtimeMode: "full-access",
+        providerLaunchEnvironment: {
+          env: {
+            CLAUDE_CONFIG_DIR: actorConfigDir,
+            HOME: path.join(homesRoot, "actor-home"),
+            PATH: "/usr/bin",
+          },
+        },
+      });
+
+      const actorProjectDir = path.join(actorConfigDir, "projects", projectDirName);
+      // The chain the resume needs did travel, so the feature still works.
+      assert.equal(existsSync(path.join(actorProjectDir, `${sessionId}.jsonl`)), true);
+      assert.equal(existsSync(path.join(actorProjectDir, `${chainedId}.jsonl`)), true);
+      // The stranger's other conversation did not.
+      assert.equal(
+        existsSync(path.join(actorProjectDir, "7c9e6679-7425-40de-944b-e07fc1f90ae7.jsonl")),
+        false,
+      );
+
+      rmSync(homesRoot, { recursive: true, force: true });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

@@ -22,6 +22,8 @@ import {
   environmentRelayAttachRouteLayer,
   environmentRelayDialRouteLayer,
   environmentRelayLinksRouteLayer,
+  RELAY_ATTACH_REAUTH_INTERVAL_MS,
+  setRelayAttachReauthIntervalMsForTests,
 } from "./http.ts";
 import { decodeFrame, encodeFrame, RELAY_PROTOCOL_VERSION, type RelayFrame } from "./protocol.ts";
 import { dropRelayConnectionsForMachine, resetRelayRegistryForTests } from "./registry.ts";
@@ -311,6 +313,7 @@ const testEnvironment = Layer.mergeAll(
 beforeEach(() => {
   resetDeviceEnrollmentRateLimits();
   resetRelayRegistryForTests();
+  setRelayAttachReauthIntervalMsForTests(RELAY_ATTACH_REAUTH_INTERVAL_MS);
 });
 
 it.live("lets an enrolled machine hold an environment open with no public URL of its own", () =>
@@ -613,6 +616,127 @@ it.live("drops the outbound connection when the machine holding it is revoked", 
     );
     assert.equal(bye.reason, "revoked");
 
+    dialled.close();
+  }).pipe(Effect.provide(testEnvironment)),
+);
+
+// The attach socket authenticated once, at the upgrade, and then relayed
+// whatever the browser sent into the machine for as long as it stayed open.
+// Signing that browser session out took the next connection away and left this
+// one carrying traffic: a revoked tab kept reaching a laptop it no longer had
+// any credential for.
+it.live("stops relaying into the machine when the browser's session is revoked", () =>
+  Effect.gen(function* () {
+    // Short enough for a test to watch; the shipped interval is a heartbeat.
+    setRelayAttachReauthIntervalMsForTests(50);
+    yield* buildAppUnderTest;
+    const port = yield* serverPort;
+    const approverToken = yield* signIn(PERSON_SUBJECT);
+    const machineToken = yield* connectMachine({ approverToken, label: "Ada's laptop" });
+
+    const dialled = yield* dialEnvironment({
+      port,
+      wsToken: yield* webSocketTokenFor(machineToken),
+      environmentId: "env-attached",
+    });
+    dialled.socket.addEventListener("message", (event) => {
+      const frame = decodeFrame(typeof event.data === "string" ? event.data : String(event.data));
+      if (frame?.type === "data") {
+        dialled.send({
+          type: "data",
+          channelId: frame.channelId,
+          payload: frame.payload.toUpperCase(),
+        });
+      }
+    });
+    yield* Effect.promise(() => waitFor(() => findFrame(dialled.frames, "welcome"), "a welcome"));
+
+    const sessions = yield* SessionCredentialService;
+    const browserSession = yield* sessions.verify(approverToken);
+    const browserWsToken = yield* webSocketTokenFor(approverToken);
+    const attached = yield* Effect.promise(() =>
+      waitForAsync(
+        () =>
+          openSocket(
+            `ws://127.0.0.1:${port}/api/environments/relay/attach/env-attached?wsToken=${encodeURIComponent(browserWsToken)}`,
+            { decode: false },
+          ).catch(() => null),
+        "a browser attachment",
+      ),
+    );
+
+    // It genuinely reaches the machine first, or the assertion below would
+    // pass against a channel that never worked.
+    attached.sendRaw('{"_tag":"Request"}');
+    const echoed = yield* Effect.promise(() => waitFor(() => attached.raw[0], "a relayed reply"));
+    assert.equal(echoed, '{"_TAG":"REQUEST"}');
+
+    yield* sessions.revoke(browserSession.sessionId);
+
+    // The socket is closed rather than left quietly holding a routing entry.
+    const closeCode = yield* Effect.promise(() =>
+      waitFor(() => attached.closedWith(), "the attachment to be cut"),
+    );
+    assert.equal(closeCode, 1008);
+
+    // And the machine was told its channel is gone, so it stops serving it.
+    const closed = yield* Effect.promise(() =>
+      waitFor(() => findFrame(dialled.frames, "close"), "the environment's channel close"),
+    );
+    assert.isDefined(closed);
+
+    dialled.close();
+  }).pipe(Effect.provide(testEnvironment)),
+);
+
+// The other half: a session that is still good keeps working across several
+// re-checks. A watchdog that cut every channel on its first tick would pass
+// the test above and break the feature.
+it.live("keeps an attached browser working while its session is still good", () =>
+  Effect.gen(function* () {
+    setRelayAttachReauthIntervalMsForTests(20);
+    yield* buildAppUnderTest;
+    const port = yield* serverPort;
+    const approverToken = yield* signIn(PERSON_SUBJECT);
+    const machineToken = yield* connectMachine({ approverToken, label: "Ada's laptop" });
+
+    const dialled = yield* dialEnvironment({
+      port,
+      wsToken: yield* webSocketTokenFor(machineToken),
+      environmentId: "env-still-good",
+    });
+    dialled.socket.addEventListener("message", (event) => {
+      const frame = decodeFrame(typeof event.data === "string" ? event.data : String(event.data));
+      if (frame?.type === "data") {
+        dialled.send({
+          type: "data",
+          channelId: frame.channelId,
+          payload: frame.payload.toUpperCase(),
+        });
+      }
+    });
+    yield* Effect.promise(() => waitFor(() => findFrame(dialled.frames, "welcome"), "a welcome"));
+
+    const browserWsToken = yield* webSocketTokenFor(approverToken);
+    const attached = yield* Effect.promise(() =>
+      waitForAsync(
+        () =>
+          openSocket(
+            `ws://127.0.0.1:${port}/api/environments/relay/attach/env-still-good?wsToken=${encodeURIComponent(browserWsToken)}`,
+            { decode: false },
+          ).catch(() => null),
+        "a browser attachment",
+      ),
+    );
+
+    // Several re-check intervals later, it is still carrying traffic.
+    yield* Effect.sleep(200);
+    assert.isNull(attached.closedWith());
+    attached.sendRaw('{"_tag":"StillHere"}');
+    const echoed = yield* Effect.promise(() => waitFor(() => attached.raw[0], "a relayed reply"));
+    assert.equal(echoed, '{"_TAG":"STILLHERE"}');
+
+    attached.close();
     dialled.close();
   }).pipe(Effect.provide(testEnvironment)),
 );

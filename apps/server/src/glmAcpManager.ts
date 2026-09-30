@@ -26,6 +26,8 @@ import { Readable, Writable } from "node:stream";
 
 import { ensureAgentCliShim, withShimOnPath } from "./agentCliShim.ts";
 
+import { filterProviderLaunchBaseEnv } from "@t3tools/shared/tenancy";
+
 import {
   client,
   ndJsonStream,
@@ -610,7 +612,9 @@ export class GlmTerminalRegistry {
   /** Spawns `options.command`, returning a new terminal id. Throws `RequestError.invalidParams` if `options.cwd` resolves outside the session's own cwd. */
   create(options: GlmTerminalCreateOptions): string {
     const cwd = this.resolveCwd(options.cwd);
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    // The agent chose this command; it does not get the server's secrets to run
+    // it with. See `glmSpawnEnv`.
+    const env: NodeJS.ProcessEnv = glmSpawnEnv(process.env);
     for (const variable of options.env ?? []) {
       env[variable.name] = variable.value;
     }
@@ -769,7 +773,7 @@ export class GlmAcpManager extends EventEmitter {
     const child = spawn(input.opencodeBinaryPath, ["acp", "--pure", "--cwd", input.cwd], {
       cwd: input.cwd,
       env: {
-        ...process.env,
+        ...glmSpawnEnv(process.env),
         XDG_CONFIG_HOME: configDir,
         ...(shimmedPath !== undefined ? { PATH: shimmedPath } : {}),
       },
@@ -1268,6 +1272,71 @@ export class GlmAcpManager extends EventEmitter {
 
 async function mktempConfigDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "t3-glm-"));
+}
+
+/**
+ * T3CODE_* names a GLM subprocess is allowed to keep.
+ *
+ * `T3CODE_HOME` is a location, not a credential, and the `t3` shim on the
+ * agent's PATH needs it to find the same base directory the server is using —
+ * without it `t3 deploy run` and `t3 analytics declare` would quietly act on
+ * `~/.t3code` instead. Everything else under that prefix is the server's own
+ * operating secret and is dropped.
+ */
+const GLM_ALLOWED_T3CODE_ENV_KEYS = new Set(["T3CODE_HOME"]);
+
+/**
+ * The environment a GLM subprocess — and every command the agent inside it
+ * spawns — is allowed to see.
+ *
+ * Both spawns in this file used to be handed `{ ...process.env }`. A GLM
+ * thread is something any signed-in account can open (the adapter is
+ * registered unconditionally), the agent's own `bash` tool reaches
+ * `terminal/create`, and reads are auto-allowed by the session config below.
+ * So "run `env`" was a supported way for any user to read the server's whole
+ * environment back into their browser: `T3CODE_GATEWAY_PROVISION_TOKEN` — the
+ * secret that mints gateway accounts and hands back their `sk_live_` keys, i.e.
+ * every other account's credential — plus the hub token, the GitHub and
+ * Cloudflare client secrets, the basic-auth password, and whatever
+ * `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` the
+ * operator had exported.
+ *
+ * `filterProviderLaunchBaseEnv` is the same strip every Codex and Claude launch
+ * already gets — it is what `ProviderCommandReactor` builds a launch
+ * environment on top of, and GLM was the one provider that never applied it.
+ * A prefix rule is layered on top because the leak that matters most here is
+ * the gateway provisioning token, and naming server secrets one at a time is
+ * a list that goes stale the next time one is added: deny the whole `T3CODE_*`
+ * namespace except what is demonstrably a path, the way the terminal manager
+ * already does for a human's shell.
+ *
+ * `HOME` is put back on purpose. The shared filter removes it because a Codex
+ * or Claude launch is expected to substitute the account's own home in its
+ * place; GLM has no such home — its credential is the per-user gateway key the
+ * session config names — and a Node subprocess with no `HOME` cannot resolve a
+ * cache directory or a git config, which breaks the turn rather than securing
+ * it.
+ */
+function glmSpawnEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(filterProviderLaunchBaseEnv(baseEnv))) {
+    const normalizedKey = key.toUpperCase();
+    if (normalizedKey.startsWith("T3CODE_") && !GLM_ALLOWED_T3CODE_ENV_KEYS.has(normalizedKey)) {
+      continue;
+    }
+    if (normalizedKey.startsWith("VITE_")) {
+      continue;
+    }
+    if (normalizedKey.startsWith("SUPABASE_")) {
+      continue;
+    }
+    env[key] = value;
+  }
+  const home = baseEnv["HOME"];
+  if (home !== undefined) {
+    env["HOME"] = home;
+  }
+  return env;
 }
 
 /**

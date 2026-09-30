@@ -600,6 +600,13 @@ function resolveCollaborationDisplayName(session: AuthenticatedSession): string 
   return session.subject.trim() || "Authenticated user";
 }
 
+/**
+ * How long a live subscription may keep running on a permission that was
+ * checked a while ago. Short enough that a removal takes effect while the
+ * person who did it is still looking at the roster.
+ */
+const LIVE_ACCESS_RECHECK_INTERVAL_MS = 10_000;
+
 function forbiddenMessage(permission: string): string {
   return `Forbidden: authenticated session does not have ${permission}.`;
 }
@@ -610,6 +617,228 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
   return (
     normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}/`)
   );
+}
+
+/**
+ * Which projects a session may see, as one answer both a list RPC and an event
+ * replay can ask.
+ *
+ * `null` means "unscoped" — the machine's own owner, or a legacy paired client
+ * with no tenant at all. Every path on that machine is genuinely theirs, so
+ * narrowing their view would be a bug rather than a fix. Everybody else gets a
+ * set, and a set is a set of ids they hold a membership behind.
+ */
+export type VisibleProjectIds = ReadonlySet<string> | null;
+
+/**
+ * Whether a project is one this session may see at all.
+ *
+ * One rule, in one place, because three different readers ask it: the shell
+ * snapshot, the event replay, and every list RPC that used to answer "no
+ * filter given" with "everything". A project with no ownership stamp predates
+ * tenancy; on a desktop install it is the owner's own and must stay reachable,
+ * and on a server published to other people it is the host's and belongs on
+ * nobody else's dashboard.
+ */
+export function isProjectOwnershipVisible(input: {
+  readonly ownership: OrchestrationProjectOwnership | null | undefined;
+  readonly visibleTenantIds: ReadonlySet<TenantId> | null;
+  readonly unownedProjectsAreShared: boolean;
+}): boolean {
+  if (input.visibleTenantIds === null) {
+    return true;
+  }
+  if (input.ownership === undefined || input.ownership === null) {
+    return input.unownedProjectsAreShared;
+  }
+  return input.visibleTenantIds.has(input.ownership.tenantId);
+}
+
+/**
+ * Keeps the rows belonging to projects this session may see.
+ *
+ * Written as a filter and never as "skip the check when no filter was given",
+ * which is the shape that leaked: `deploy.listTargets`, `deploy.listRuns`,
+ * `deploy.listDeployments` and `analytics.listStreams` all authorized on an
+ * OPTIONAL `projectId`, so omitting the field skipped authorization entirely
+ * and the repository's no-filter branch then returned every tenant's rows —
+ * SSH hosts, identity-file paths, secret names, deploy command output. Leaving
+ * a filter out must narrow a result, never widen it.
+ *
+ * A row naming a project this session cannot see is dropped rather than
+ * reported, including a row whose project has since disappeared from the read
+ * model: a project we cannot resolve is one we cannot say belongs to the
+ * caller.
+ */
+export function keepRowsInVisibleProjects<Row extends { readonly projectId: string }>(
+  rows: ReadonlyArray<Row>,
+  visibleProjectIds: VisibleProjectIds,
+): ReadonlyArray<Row> {
+  if (visibleProjectIds === null) {
+    return rows;
+  }
+  return rows.filter((row) => visibleProjectIds.has(row.projectId));
+}
+
+/**
+ * Whether one replayed orchestration event belongs to this session.
+ *
+ * `orchestration.replayEvents` used to hand back `eventStore.readFromSequence`
+ * unfiltered — the whole instance's append-only log, from sequence 0, to any
+ * signed-in account. Every `project.created` payload carries a `workspaceRoot`,
+ * every `thread.message-sent` payload carries the full `text` of a prompt or a
+ * reply and its attachment ids, so one RPC read every other tenant's
+ * conversations and directory layout. Three separate auditors found it
+ * independently.
+ *
+ * The rule is the one `subscribeShell` already streams by: a project event is
+ * visible when its project is, and a thread event is visible when the project
+ * the thread hangs off is. A thread whose project cannot be resolved is
+ * dropped — an event we cannot attribute is not an event we can say is theirs.
+ */
+export function isOrchestrationEventVisible(
+  event: Pick<OrchestrationEvent, "aggregateKind" | "aggregateId">,
+  scope: {
+    readonly visibleProjectIds: VisibleProjectIds;
+    readonly projectIdByThreadId: ReadonlyMap<string, string>;
+  },
+): boolean {
+  if (scope.visibleProjectIds === null) {
+    return true;
+  }
+  if (event.aggregateKind === "project") {
+    return scope.visibleProjectIds.has(event.aggregateId);
+  }
+  const projectId = scope.projectIdByThreadId.get(event.aggregateId);
+  return projectId !== undefined && scope.visibleProjectIds.has(projectId);
+}
+
+/**
+ * Directories a hosted tenant may never claim as a project root.
+ *
+ * `project.create` only ever checked that the path did not overlap another
+ * tenant's project, so a signed-in account could claim `~/.codex`, `~/.ssh` or
+ * the server's own state directory — none of which any tenant had registered —
+ * and the project it got back then made that directory readable and writable
+ * through every cwd-gated RPC. `auth.json`, the sqlite projections and the
+ * tenancy tables all sit behind exactly that.
+ *
+ * Deliberately a deny-list of the machine's own furniture rather than an
+ * allow-list of the tenant's runtime tree: this box already has years of
+ * different tenants' projects sitting as flat subfolders of one home
+ * directory, and confining new claims to a per-tenant tree would refuse every
+ * legitimate first project on it. The rule here refuses the places that are
+ * never a project and always a credential store.
+ *
+ * The machine's own owner never reaches this — on their computer every path is
+ * theirs, including their own dotfiles.
+ */
+export function isWorkspaceRootOffLimits(input: {
+  readonly workspaceRoot: string;
+  readonly protectedRoots: ReadonlyArray<string>;
+}): boolean {
+  const candidate = input.workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
+  if (input.protectedRoots.some((root) => isPathInsideRoot(candidate, root))) {
+    return true;
+  }
+  // A hidden directory is a place a program keeps its own state, not a place a
+  // person keeps a project: `~/.codex`, `~/.claude`, `~/.ssh`, `~/.config` and
+  // every per-tool credential store live behind exactly one leading dot, and
+  // naming them one by one would leave the next one out.
+  return candidate
+    .split("/")
+    .some((segment) => segment.length > 1 && segment.startsWith(".") && segment !== "..");
+}
+
+/**
+ * Where a thread's agent is allowed to be told to run.
+ *
+ * `worktreePath` arrives on `thread.create`, on a turn's `bootstrap.createThread`
+ * and on `thread.meta.update`, and it becomes the cwd the provider process is
+ * launched in. Only the `projectId` beside it was ever authorized, so a caller
+ * holding `session.create` on one project of their own could start a turn with
+ * `worktreePath: "/root"` and get an agent with read and write over the whole
+ * box — and the provider-isolation row the turn then wrote made plain
+ * `projects.readFile` accept every unowned path under it afterwards.
+ *
+ * A worktree is either inside the project it belongs to or inside the server's
+ * own worktrees directory, which is where `prepareWorktree` puts one. Nothing
+ * else is a worktree, whoever is asking.
+ */
+export function isThreadWorktreePathAllowed(input: {
+  readonly worktreePath: string;
+  readonly projectWorkspaceRoot: string | undefined;
+  readonly worktreesDir: string;
+}): boolean {
+  if (isPathInsideRoot(input.worktreePath, input.worktreesDir)) {
+    return true;
+  }
+  // No project to measure against is not a reason to allow: a thread whose
+  // project we cannot resolve is a thread we cannot place.
+  return (
+    input.projectWorkspaceRoot !== undefined &&
+    isPathInsideRoot(input.worktreePath, input.projectWorkspaceRoot)
+  );
+}
+
+/**
+ * The directory a browse actually reads, which is not always the one it was
+ * handed.
+ *
+ * `filesystem.browse` resolves `partialPath` to a target and then lists the
+ * target's PARENT whenever the text has no trailing separator, using the last
+ * segment as a name prefix — that is how type-ahead works. The tenant check ran
+ * against the resolved target, so `partialPath: "/root/victim-app/a"` was
+ * checked against `/root/victim-app/a` (which nobody owns, so it passed) and
+ * then listed `/root/victim-app` (which somebody does). One trailing character
+ * walked around the exact-match guard, and iterating the prefix recovered the
+ * whole directory.
+ *
+ * This mirrors WorkspaceEntries.browse's own parent/prefix split on purpose.
+ * The duplication is the cost of authorizing the directory that will really be
+ * read; the alternative is a guard that keeps checking somewhere else.
+ */
+export function resolveBrowseListingDirectory(input: {
+  readonly partialPath: string;
+  readonly resolvedTarget: string;
+}): string {
+  const endsWithSeparator = /[\\/]$/.test(input.partialPath) || input.partialPath === "~";
+  return endsWithSeparator ? input.resolvedTarget : path.dirname(input.resolvedTarget);
+}
+
+/**
+ * What one machine's service row looks like to somebody who did not start it.
+ *
+ * `environment.services.list` reported every listening socket on a shared VPS
+ * to any signed-in account: the pid, the full command line — which routinely
+ * carries tokens passed as flags — and who started it. The port and the state
+ * are what the caller legitimately needs (a port in use is a port they cannot
+ * bind), and the process behind it is not.
+ *
+ * Rows T3 started for this caller keep everything. Everything else reports the
+ * socket and stays quiet about the process.
+ */
+export function redactForeignService<
+  Service extends {
+    readonly ownership: string;
+    readonly pid: number | null;
+    readonly command: string | null;
+    readonly startedBy: string | null;
+    readonly name: string | null;
+    readonly canManage: boolean;
+  },
+>(service: Service, viewerUserId: string): Service {
+  if (service.ownership === "ours" && service.startedBy === viewerUserId) {
+    return service;
+  }
+  return {
+    ...service,
+    pid: null,
+    command: null,
+    startedBy: null,
+    name: null,
+    canManage: false,
+  };
 }
 
 function summarizeProviderAccount(
@@ -882,15 +1111,34 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         userId: resolveAuthenticatedUserId(session),
         displayName: resolveCollaborationDisplayName(session),
       };
+      /**
+       * Who this connection acts as in the collaboration service, including the
+       * address it can prove.
+       *
+       * The address matters because `acceptInvite` refuses only on a POSITIVE
+       * mismatch between the invite's email and the actor's. `resolveLocalAccount`
+       * answers for a local password account and returns nothing for anybody
+       * signed in through Supabase, so on a hosted instance every actor arrived
+       * with no email and that check never ran at all — an invite id was
+       * redeemable by whoever held it, including a member who had just been
+       * removed and kept one from the roster panel.
+       *
+       * The identity provider's own claim is the fallback, and "absent" still
+       * means "this session cannot prove an address" rather than "any address
+       * will do" — the rule `shareLinks` already follows.
+       */
       const resolveCollaborationActor = serverAuth.resolveUserProfile(session).pipe(
         Effect.flatMap((profile) =>
           serverAuth.resolveLocalAccount(session).pipe(
-            Effect.map((localAccount) => ({
-              userId: profile.userId,
-              displayName: profile.displayName,
-              avatarInitials: profile.avatarInitials,
-              ...(localAccount ? { email: localAccount.email } : {}),
-            })),
+            Effect.map((localAccount) => {
+              const provableEmail = localAccount?.email ?? session.email;
+              return {
+                userId: profile.userId,
+                displayName: profile.displayName,
+                avatarInitials: profile.avatarInitials,
+                ...(provableEmail ? { email: provableEmail } : {}),
+              };
+            }),
           ),
         ),
         Effect.catchTag("AuthError", () => Effect.succeed(collaborationActor)),
@@ -1363,8 +1611,60 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           ),
         );
 
+      /**
+       * Whether the credential this socket was authenticated with has since
+       * been revoked.
+       *
+       * Authentication happens once, at the upgrade, and the session object is
+       * then closed over for as long as the socket lives. `revoke` marks the
+       * row, clears the connected map and tells the UI — and interrupts
+       * nothing here, so a laptop the owner had just pressed Disconnect on
+       * kept the entire RPC surface (reading any file under the workspace
+       * roots, writing them, opening terminals, starting turns, every live
+       * subscription) until the socket happened to drop on its own.
+       *
+       * Watched once per connection rather than re-verified per call: a
+       * lookup on every RPC would put a database read in front of every
+       * keystroke, and this arrives on the same stream the settings panel
+       * already listens to.
+       */
+      const sessionRevokedRef = yield* Ref.make(false);
+      yield* Effect.forkScoped(
+        sessions.streamChanges.pipe(
+          Stream.filter(
+            (change) => change.type === "clientRemoved" && change.sessionId === currentSessionId,
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.flatMap(() => Ref.set(sessionRevokedRef, true)),
+          // A watcher that died must not leave the socket looking valid
+          // forever: treat losing the stream as "assume revoked" is too harsh
+          // for a transient hiccup, so it is logged and the socket keeps its
+          // existing checks.
+          Effect.ignoreCause({ log: true }),
+        ),
+      );
+
+      const ensureSessionNotRevoked = <E>(
+        toError: (message: string) => E,
+      ): Effect.Effect<void, E> =>
+        Ref.get(sessionRevokedRef).pipe(
+          Effect.flatMap((revoked) =>
+            revoked
+              ? Effect.fail(toError("This session has been revoked. Sign in again to continue."))
+              : Effect.void,
+          ),
+        );
+
+      // Every rate-limited method runs this, which is every method that can
+      // read or change anything, so the revocation check rides along with it
+      // rather than being remembered at ~200 call sites.
       const checkRateLimit = <E>(toError: (message: string) => E): Effect.Effect<void, E> =>
-        hostedTenantSession ? checkHostedRateLimit(toError) : checkLocalRateLimit(toError);
+        ensureSessionNotRevoked(toError).pipe(
+          Effect.flatMap(() =>
+            hostedTenantSession ? checkHostedRateLimit(toError) : checkLocalRateLimit(toError),
+          ),
+        );
 
       const ensureHostedFileWriteLimit = <E>(
         input: { readonly contents: string; readonly encoding?: string | undefined },
@@ -1602,6 +1902,57 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         toError: (message: string) => E,
       ) => Stream.unwrap(checkRateLimit(toError).pipe(Effect.as(stream)));
 
+      /**
+       * Keeps asking whether a live subscription is still allowed to be one.
+       *
+       * Every stream here authorized once, at subscribe, and then ran for as
+       * long as the socket did. Removing somebody from a workspace, or revoking
+       * their session, interrupted nothing: a removed member kept receiving the
+       * workspace's shared prompts, notes, approvals and invites, and kept
+       * watching a thread's agent output arrive — live, on the socket they
+       * already held. `subscribeTerminalEvents` was the one exception, and it
+       * re-checks per event.
+       *
+       * Per event is too often for a token stream (a thread event is a few
+       * characters, and the check costs a read-model load and a membership
+       * read), so this re-checks on the first event after the interval has
+       * passed. Removal takes effect within it, which is the property that
+       * matters; nothing in between costs anything.
+       *
+       * A refusal FAILS the stream rather than silently dropping events: a
+       * client told nothing would sit there looking connected forever, while a
+       * failed stream is one the browser re-subscribes and gets a clean
+       * refusal for.
+       */
+      const withLiveAccessRecheck = <A, E, R, RecheckError>(
+        stream: Stream.Stream<A, E, R>,
+        recheck: Effect.Effect<void, RecheckError>,
+      ): Stream.Stream<A, E | RecheckError, R> =>
+        Stream.unwrap(
+          Ref.make(Date.now() + LIVE_ACCESS_RECHECK_INTERVAL_MS).pipe(
+            Effect.map((recheckDueAtRef) =>
+              stream.pipe(
+                Stream.tap(() =>
+                  Ref.get(recheckDueAtRef).pipe(
+                    Effect.flatMap((recheckDueAt) =>
+                      Date.now() < recheckDueAt
+                        ? Effect.void
+                        : recheck.pipe(
+                            Effect.flatMap(() =>
+                              Ref.set(
+                                recheckDueAtRef,
+                                Date.now() + LIVE_ACCESS_RECHECK_INTERVAL_MS,
+                              ),
+                            ),
+                          ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
       const organizationSnapshot = (): Effect.Effect<OrganizationListResult, OrganizationError> =>
         organizations.listOrganizations();
 
@@ -1649,6 +2000,73 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           ),
         );
       };
+
+      /**
+       * The set of project ids this session may see, or `null` for a session
+       * that is scoped to nothing — the machine's own owner, or a legacy
+       * paired client.
+       *
+       * Exists so that "the caller named no project" can mean "every project
+       * of theirs" instead of "every project on the instance", which is what
+       * the deploy and analytics list RPCs meant before. An optional filter
+       * must narrow a result; it must never be the thing that decides whether
+       * a check runs at all.
+       *
+       * Fails closed to the empty set: memberships we could not read make
+       * nobody a member of anything, and an empty list is the safe answer to
+       * give somebody we cannot place.
+       */
+      const sessionVisibleProjectIds = (): Effect.Effect<VisibleProjectIds, never> =>
+        sessionVisibleTenantIds().pipe(
+          Effect.flatMap((visibleTenantIds) => {
+            if (visibleTenantIds === null) {
+              return Effect.succeed<VisibleProjectIds>(null);
+            }
+            // On a server published to other people an unowned project is the
+            // host's own, and showing it to a tenant would hand them the
+            // host's files; on a desktop install it is the owner's and has to
+            // stay reachable. Same rule `subscribeShell` streams by.
+            const unownedProjectsAreShared = !config.publishedBeyondLoopback;
+            return orchestrationEngine.getReadModel().pipe(
+              Effect.map(
+                (readModel): VisibleProjectIds =>
+                  new Set(
+                    readModel.projects
+                      .filter((project) =>
+                        isProjectOwnershipVisible({
+                          ownership: project.ownership,
+                          visibleTenantIds,
+                          unownedProjectsAreShared,
+                        }),
+                      )
+                      .map((project) => project.id as string),
+                  ),
+              ),
+            );
+          }),
+          Effect.catchCause(() => Effect.succeed<VisibleProjectIds>(new Set<string>())),
+        );
+
+      /**
+       * Thread id to the project it hangs off, for scoping a replay.
+       *
+       * A thread missing from the read model is simply absent from the map,
+       * and an event we cannot attribute to a project is an event nobody is
+       * shown.
+       */
+      const projectIdByThreadId = (): Effect.Effect<ReadonlyMap<string, string>, never> =>
+        orchestrationEngine.getReadModel().pipe(
+          Effect.map(
+            (readModel) =>
+              new Map(
+                readModel.threads.map((thread) => [
+                  thread.id as string,
+                  thread.projectId as string,
+                ]),
+              ),
+          ),
+          Effect.catchCause(() => Effect.succeed(new Map<string, string>())),
+        );
 
       const ensureTenantPermission = (
         tenantId: TenantId,
@@ -3051,6 +3469,53 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           }),
         );
 
+      /**
+       * Authorize every id a deploy or analytics list RPC was handed, and say
+       * what the answer may still contain.
+       *
+       * These four methods — `deploy.listTargets`, `deploy.listRuns`,
+       * `deploy.listDeployments`, `analytics.listStreams` — all took an
+       * OPTIONAL `projectId` and authorized with a ternary: present, check it;
+       * absent, skip the check. The repositories' no-filter branch is "every
+       * row on the instance", so leaving the field out was a read of every
+       * tenant's SSH hosts, identity-file paths, secret names, deploy command
+       * output and live deployment URLs. Two of them also forwarded a
+       * caller-supplied `targetId` that nothing ever authorized, which turned
+       * one harvested id into a targeted read of somebody else's deploy logs.
+       *
+       * So: every id the caller supplies is authorized, and an absent id
+       * narrows to what this session may see rather than widening to
+       * everything. The returned scope is `null` only when an explicit id was
+       * checked — the rows are already confined to that project — and
+       * otherwise is the caller's visible project set, which `keepRowsInVisibleProjects`
+       * applies to the rows themselves.
+       */
+      const resolveDeployListScope = (input: {
+        readonly projectId?: ProjectId | undefined;
+        readonly targetId?: DeployTargetId | undefined;
+      }): Effect.Effect<VisibleProjectIds, DeployError> =>
+        Effect.all(
+          [
+            input.projectId === undefined
+              ? Effect.void
+              : ensureDeployProjectAccess(input.projectId, "project.view"),
+            input.targetId === undefined
+              ? Effect.void
+              : resolveDeployTargetProject(input.targetId).pipe(
+                  Effect.flatMap((project) =>
+                    ensureDeployProjectAccess(project.id, "project.view"),
+                  ),
+                ),
+          ],
+          { discard: true },
+        ).pipe(
+          Effect.flatMap(() =>
+            input.projectId === undefined && input.targetId === undefined
+              ? sessionVisibleProjectIds()
+              : Effect.succeed<VisibleProjectIds>(null),
+          ),
+        );
+
       const gitRpcError = (cwd: string, message: string): GitCommandError =>
         new GitCommandError({
           operation: "authorize",
@@ -3804,6 +4269,110 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           Effect.catchCause(() => Effect.void),
         );
 
+      /**
+       * Directories on this machine that are nobody's project, whoever asks.
+       *
+       * `project.create` only ever asked whether another tenant had already
+       * claimed the path, so anything unclaimed was claimable — including the
+       * server's own state directory (the sqlite projections, the tenancy
+       * tables, the session credentials), the provider homes under it, and the
+       * operator's `~/.ssh` and `~/.codex`. Claiming one stamped it with the
+       * caller's tenant, and from then on every cwd-gated RPC read and wrote
+       * inside it quite legitimately.
+       */
+      const protectedWorkspaceRoots = (): ReadonlyArray<string> => [
+        config.baseDir,
+        config.stateDir,
+        config.secretsDir,
+        hostedTenantRuntimeRootDir,
+        path.join(os.homedir(), ".ssh"),
+      ];
+
+      /**
+       * Refuses a project root that is the machine's own furniture.
+       *
+       * The machine's owner is exempt, as everywhere else: on their computer
+       * their dotfiles are theirs, and a desktop install that refused to open
+       * a folder the person picked would be the bug.
+       */
+      const ensureWorkspaceRootClaimable = <E>(
+        workspaceRoot: string,
+        toError: (message: string) => E,
+      ): Effect.Effect<void, E> => {
+        if (machineOwnerSession || !hostedTenantSession) {
+          return Effect.void;
+        }
+        return isWorkspaceRootOffLimits({
+          workspaceRoot,
+          protectedRoots: protectedWorkspaceRoots(),
+        })
+          ? Effect.fail(
+              toError(
+                "That directory belongs to the server itself and cannot be registered as a project.",
+              ),
+            )
+          : Effect.void;
+      };
+
+      /**
+       * Pins a thread's worktree to the project it claims to belong to.
+       *
+       * `worktreePath` travels on `thread.create`, on a turn's
+       * `bootstrap.createThread` and on `thread.meta.update`, and it becomes
+       * the cwd the agent process is launched in — but only the `projectId`
+       * beside it was ever authorized. Anybody holding `session.create` on one
+       * project of their own could therefore start a turn with
+       * `worktreePath: "/root"` and get an agent reading and writing across the
+       * whole box; worse, the provider-isolation row that turn then wrote made
+       * plain `projects.readFile` accept every unowned path underneath it
+       * afterwards.
+       *
+       * Fails closed: a project we cannot resolve is a project we cannot
+       * measure the path against, and an unmeasurable path is refused.
+       */
+      const ensureThreadWorktreePathAllowed = (input: {
+        readonly worktreePath: string | null | undefined;
+        readonly projectId?: ProjectId | undefined;
+        readonly threadId?: ThreadId | undefined;
+      }): Effect.Effect<void, OrchestrationDispatchCommandError> => {
+        const worktreePath = input.worktreePath;
+        if (worktreePath === null || worktreePath === undefined || worktreePath.length === 0) {
+          return Effect.void;
+        }
+        // Every path on this machine is the owner's own, and a desktop install
+        // has no second tenant to keep them out of.
+        if (machineOwnerSession || !hostedTenantSession) {
+          return Effect.void;
+        }
+        const refuse = Effect.fail(
+          new OrchestrationDispatchCommandError({
+            message:
+              "A thread worktree must sit inside its own project or the server's worktrees directory.",
+          }),
+        );
+        return orchestrationEngine.getReadModel().pipe(
+          Effect.map((readModel) => {
+            const projectId =
+              input.projectId ??
+              readModel.threads.find((thread) => thread.id === input.threadId)?.projectId;
+            return Option.fromUndefinedOr(
+              readModel.projects.find((project) => project.id === projectId)?.workspaceRoot,
+            );
+          }),
+          // A read model we could not load must not widen anything.
+          Effect.catchCause(() => Effect.succeed(Option.none<string>())),
+          Effect.flatMap((projectWorkspaceRoot) =>
+            isThreadWorktreePathAllowed({
+              worktreePath,
+              projectWorkspaceRoot: Option.getOrUndefined(projectWorkspaceRoot),
+              worktreesDir: config.worktreesDir,
+            })
+              ? Effect.void
+              : refuse,
+          ),
+        );
+      };
+
       const ensureOrchestrationCommandAuthorized = (
         command: OrchestrationCommand,
       ): Effect.Effect<void, OrchestrationDispatchCommandError> => {
@@ -3812,6 +4381,12 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             return checkRateLimit(
               (message) => new OrchestrationDispatchCommandError({ message }),
             ).pipe(
+              Effect.flatMap(() =>
+                ensureWorkspaceRootClaimable(
+                  command.workspaceRoot,
+                  (message) => new OrchestrationDispatchCommandError({ message }),
+                ),
+              ),
               Effect.flatMap(() =>
                 ensureWorkspaceRootNotClaimedByOtherTenant(
                   command.workspaceRoot,
@@ -3828,7 +4403,17 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           case "thread.create":
             return checkRateLimit(
               (message) => new OrchestrationDispatchCommandError({ message }),
-            ).pipe(Effect.flatMap(() => ensureProjectAccess(command.projectId, "session.create")));
+            ).pipe(
+              Effect.flatMap(() => ensureProjectAccess(command.projectId, "session.create")),
+              // The cwd the agent will be launched in is a path parameter, not
+              // metadata, so it is authorized like one.
+              Effect.flatMap(() =>
+                ensureThreadWorktreePathAllowed({
+                  worktreePath: command.worktreePath,
+                  projectId: command.projectId,
+                }),
+              ),
+            );
           case "thread.turn.start":
             return checkRateLimit(
               (message) => new OrchestrationDispatchCommandError({ message }),
@@ -3844,6 +4429,10 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 if (command.bootstrap?.createThread) {
                   checks.push(
                     ensureProjectAccess(command.bootstrap.createThread.projectId, "session.create"),
+                    ensureThreadWorktreePathAllowed({
+                      worktreePath: command.bootstrap.createThread.worktreePath,
+                      projectId: command.bootstrap.createThread.projectId,
+                    }),
                   );
                 }
                 if (command.bootstrap?.prepareWorktree && !command.bootstrap.createThread) {
@@ -3886,10 +4475,31 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 ),
               ),
             );
+          case "thread.meta.update":
+            return checkRateLimit(
+              (message) => new OrchestrationDispatchCommandError({ message }),
+            ).pipe(
+              Effect.flatMap(() =>
+                ensureThreadAccess(
+                  command.threadId,
+                  "session.view",
+                  (message) => new OrchestrationDispatchCommandError({ message }),
+                ),
+              ),
+              // Repointing an existing thread's worktree moves where its next
+              // turn runs, so it is the same path parameter as on create and
+              // gets the same check — without it, `session.view` on one thread
+              // was enough to aim an agent anywhere on the box.
+              Effect.flatMap(() =>
+                ensureThreadWorktreePathAllowed({
+                  worktreePath: command.worktreePath,
+                  threadId: command.threadId,
+                }),
+              ),
+            );
           case "thread.delete":
           case "thread.archive":
           case "thread.unarchive":
-          case "thread.meta.update":
           case "thread.interaction-mode.set":
             return checkRateLimit(
               (message) => new OrchestrationDispatchCommandError({ message }),
@@ -4458,15 +5068,36 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.replayEvents,
             withRateLimit(
-              Stream.runCollect(
-                orchestrationEngine.readEvents(
-                  clamp(input.fromSequenceExclusive, {
-                    maximum: Number.MAX_SAFE_INTEGER,
-                    minimum: 0,
-                  }),
+              // The replay is the raw append-only log for the whole instance,
+              // so it is scoped here or it is not scoped anywhere: a
+              // `project.created` payload carries a workspace root and a
+              // `thread.message-sent` payload carries the text of a prompt.
+              // Scope resolved before the rows are read, and the filter
+              // applied before enrichment, so another tenant's project never
+              // costs this caller two git spawns either.
+              Effect.all({
+                visibleProjectIds: sessionVisibleProjectIds(),
+                threadProjects: projectIdByThreadId(),
+              }).pipe(
+                Effect.flatMap(({ visibleProjectIds, threadProjects }) =>
+                  Stream.runCollect(
+                    orchestrationEngine.readEvents(
+                      clamp(input.fromSequenceExclusive, {
+                        maximum: Number.MAX_SAFE_INTEGER,
+                        minimum: 0,
+                      }),
+                    ),
+                  ).pipe(
+                    Effect.map((events) =>
+                      Array.from(events).filter((event) =>
+                        isOrchestrationEventVisible(event, {
+                          visibleProjectIds,
+                          projectIdByThreadId: threadProjects,
+                        }),
+                      ),
+                    ),
+                  ),
                 ),
-              ).pipe(
-                Effect.map((events) => Array.from(events)),
                 Effect.flatMap(enrichOrchestrationEvents),
                 Effect.mapError(
                   (cause) =>
@@ -4516,10 +5147,11 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               const isOwnershipVisible = (
                 ownership: OrchestrationProjectShell["ownership"] | null | undefined,
               ): boolean =>
-                visibleTenantIds === null ||
-                (ownership === undefined || ownership === null
-                  ? unownedProjectsAreShared
-                  : visibleTenantIds.has(ownership.tenantId));
+                isProjectOwnershipVisible({
+                  ownership,
+                  visibleTenantIds,
+                  unownedProjectsAreShared,
+                });
               const isVisibleProject = (project: OrchestrationProjectShell): boolean =>
                 isOwnershipVisible(project.ownership);
               // Computed before the snapshot query itself so it can skip
@@ -4631,18 +5263,28 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 threadDetail.value,
               );
 
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.filter(
-                  (event) =>
-                    event.aggregateKind === "thread" &&
-                    event.aggregateId === input.threadId &&
-                    isThreadDetailEvent(event),
+              const liveStream = withLiveAccessRecheck(
+                orchestrationEngine.streamDomainEvents.pipe(
+                  Stream.filter(
+                    (event) =>
+                      event.aggregateKind === "thread" &&
+                      event.aggregateId === input.threadId &&
+                      isThreadDetailEvent(event),
+                  ),
+                  Stream.tap(recordThreadTokenUsage),
+                  Stream.map((event) => ({
+                    kind: "event" as const,
+                    event,
+                  })),
                 ),
-                Stream.tap(recordThreadTokenUsage),
-                Stream.map((event) => ({
-                  kind: "event" as const,
-                  event,
-                })),
+                // The thread's agent output is the substance of somebody's
+                // work. Access to it was checked once above and never again,
+                // so removal from the owning tenant left the stream running.
+                ensureThreadAccess(
+                  input.threadId,
+                  "session.view",
+                  (message) => new OrchestrationGetSnapshotError({ message }),
+                ),
               );
 
               return Stream.concat(
@@ -5202,7 +5844,18 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             withRateLimitedStream(
               Stream.unwrap(
                 ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
-                  Effect.as(collaboration.stream(input)),
+                  Effect.as(
+                    // `collaboration.stream` filters on the tenant and
+                    // workspace ids the CLIENT supplied and consults no
+                    // membership of its own, so this re-check is the only
+                    // thing standing between a removed member and the
+                    // workspace's shared prompts, notes, approvals and invites
+                    // continuing to arrive on their open socket.
+                    withLiveAccessRecheck(
+                      collaboration.stream(input),
+                      ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view"),
+                    ),
+                  ),
                 ),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
@@ -5616,19 +6269,21 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.analyticsListStreams,
             withRateLimit(
-              (input.projectId === undefined
-                ? Effect.void
-                : ensureDeployProjectAccess(input.projectId, "project.view").pipe(
-                    Effect.mapError(
-                      (error) =>
-                        new AnalyticsError({ code: "storage-failed", message: error.message }),
+              resolveDeployListScope(input).pipe(
+                Effect.mapError(
+                  (error) => new AnalyticsError({ code: "storage-failed", message: error.message }),
+                ),
+                Effect.flatMap((visibleProjectIds) =>
+                  analyticsStore
+                    .listStreams(
+                      input.projectId !== undefined ? { projectId: input.projectId } : {},
+                    )
+                    .pipe(
+                      Effect.map((result) => ({
+                        ...result,
+                        streams: keepRowsInVisibleProjects(result.streams, visibleProjectIds),
+                      })),
                     ),
-                  )
-              ).pipe(
-                Effect.flatMap(() =>
-                  analyticsStore.listStreams(
-                    input.projectId !== undefined ? { projectId: input.projectId } : {},
-                  ),
                 ),
               ),
               (message) => new AnalyticsError({ code: "storage-failed", message }),
@@ -5669,14 +6324,17 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.deployListTargets,
             withRateLimit(
-              (input.projectId === undefined
-                ? Effect.void
-                : ensureDeployProjectAccess(input.projectId, "project.view")
-              ).pipe(
-                Effect.flatMap(() =>
-                  deployService.listTargets(
-                    input.projectId !== undefined ? { projectId: input.projectId } : {},
-                  ),
+              resolveDeployListScope(input).pipe(
+                Effect.flatMap((visibleProjectIds) =>
+                  deployService
+                    .listTargets(
+                      input.projectId !== undefined ? { projectId: input.projectId } : {},
+                    )
+                    .pipe(
+                      Effect.map((targets) =>
+                        keepRowsInVisibleProjects(targets, visibleProjectIds),
+                      ),
+                    ),
                 ),
                 Effect.map((targets) => ({ targets })),
               ),
@@ -5735,16 +6393,15 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.deployListRuns,
             withRateLimit(
-              (input.projectId === undefined
-                ? Effect.void
-                : ensureDeployProjectAccess(input.projectId, "project.view")
-              ).pipe(
-                Effect.flatMap(() =>
-                  deployService.listRuns({
-                    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
-                    ...(input.targetId !== undefined ? { targetId: input.targetId } : {}),
-                    ...(input.limit !== undefined ? { limit: input.limit } : {}),
-                  }),
+              resolveDeployListScope(input).pipe(
+                Effect.flatMap((visibleProjectIds) =>
+                  deployService
+                    .listRuns({
+                      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+                      ...(input.targetId !== undefined ? { targetId: input.targetId } : {}),
+                      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+                    })
+                    .pipe(Effect.map((runs) => keepRowsInVisibleProjects(runs, visibleProjectIds))),
                 ),
                 Effect.map((runs) => ({ runs })),
               ),
@@ -5756,15 +6413,18 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.deployListDeployments,
             withRateLimit(
-              (input.projectId === undefined
-                ? Effect.void
-                : ensureDeployProjectAccess(input.projectId, "project.view")
-              ).pipe(
-                Effect.flatMap(() =>
-                  deploymentRegistry.list({
-                    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
-                    ...(input.targetId !== undefined ? { targetId: input.targetId } : {}),
-                  }),
+              resolveDeployListScope(input).pipe(
+                Effect.flatMap((visibleProjectIds) =>
+                  deploymentRegistry
+                    .list({
+                      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+                      ...(input.targetId !== undefined ? { targetId: input.targetId } : {}),
+                    })
+                    .pipe(
+                      Effect.map((deployments) =>
+                        keepRowsInVisibleProjects(deployments, visibleProjectIds),
+                      ),
+                    ),
                 ),
                 Effect.map((deployments) => ({ deployments })),
               ),
@@ -5821,6 +6481,27 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               // here can see.
               resolveServiceRegistryEnvironment(input.environmentId).pipe(
                 Effect.flatMap((environmentId) => serviceRegistry.list({ environmentId })),
+                // The registry takes no actor and filters by nobody, so every
+                // row on a shared host came back whole: the pid, the full
+                // command line — which routinely carries a token passed as a
+                // flag — who started it, and every other person's port claims.
+                // A caller legitimately needs to know a port is taken; they do
+                // not need the process behind it. The machine's own owner sees
+                // everything, because on their computer every process is
+                // theirs.
+                Effect.map((result) =>
+                  machineOwnerSession
+                    ? result
+                    : {
+                        ...result,
+                        services: result.services.map((service) =>
+                          redactForeignService(service, serviceRegistryActor),
+                        ),
+                        claims: result.claims.filter(
+                          (claim) => claim.claimedBy === serviceRegistryActor,
+                        ),
+                      },
+                ),
               ),
               (message) => new ServiceRegistryError({ code: "forbidden", message }),
             ),
@@ -6388,8 +7069,20 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                   (cause) => new FilesystemBrowseError({ message: cause.detail, cause }),
                 ),
                 Effect.flatMap((resolvedTarget) =>
+                  // Authorize the directory that will actually be READ, which
+                  // is the resolved target's parent whenever the typed text has
+                  // no trailing separator — that last segment is a name prefix,
+                  // not a directory. Checking the target itself let one
+                  // trailing character walk around the exact-match guard:
+                  // "/root/victim-app/a" is nobody's project root, so it
+                  // passed, and then the listing came back from
+                  // "/root/victim-app", which is somebody's. Iterating the
+                  // prefix recovered their whole directory.
                   ensureWorkspaceRootNotClaimedByOtherTenant(
-                    resolvedTarget,
+                    resolveBrowseListingDirectory({
+                      partialPath: input.partialPath,
+                      resolvedTarget,
+                    }),
                     "file.read",
                     (message) => new FilesystemBrowseError({ message }),
                     "exactMatchOnly",
@@ -6912,6 +7605,29 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeAuthAccess,
             Effect.gen(function* () {
+              // This is every active session on the instance: each one's
+              // subject, role, issue and expiry times, and the client block
+              // with its IP address, user agent, OS, browser and the person's
+              // display name — plus every pairing link, and a live feed of each
+              // new sign-in as it happens. Nothing here was ever checked: the
+              // only gate was the settings panel declining to subscribe unless
+              // `currentSessionRole === "owner"`, which is a decision taken in
+              // the browser and therefore no decision at all.
+              //
+              // Gated on what the UI already gated on, so nothing that works
+              // today stops working: the machine's owner, and an owner-role
+              // session.
+              if (!machineOwnerSession && session.role !== "owner") {
+                // This RPC declares no error channel — its snapshot loader
+                // already `orDie`s — so a refusal travels as a failed
+                // subscription rather than a typed error.
+                return yield* Effect.die(
+                  new AuthError({
+                    message: forbiddenMessage("auth.access.view"),
+                    status: 403,
+                  }),
+                );
+              }
               const initialSnapshot = yield* loadAuthAccessSnapshot();
               const revisionRef = yield* Ref.make(1);
               const accessChanges: Stream.Stream<

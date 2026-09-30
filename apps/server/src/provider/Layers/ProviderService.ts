@@ -19,6 +19,7 @@ import {
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  type ProviderLaunchEnvironment,
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
@@ -48,6 +49,9 @@ import {
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import { ServerConfig } from "../../config.ts";
+import { mayUseOperatorProviderCredentials } from "../../providerAuth/operatorCredentialLending.ts";
+import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
 export interface ProviderServiceLiveOptions {
@@ -150,7 +154,59 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   options?: ProviderServiceLiveOptions,
 ) {
   const analytics = yield* Effect.service(AnalyticsService);
+  const serverConfig = yield* Effect.service(ServerConfig);
   const serverSettings = yield* ServerSettingsService;
+
+  /**
+   * Whether the only person who could be running a turn here is the person
+   * sitting at this computer.
+   *
+   * On a desktop install the server's own Codex/Claude login *is* the user's,
+   * so a session recovered without a per-user launch environment reaches
+   * nobody else's account. On anything reachable by a second person it is the
+   * operator's account, and recovering onto it is how one login comes to
+   * answer for every tenant on the box.
+   *
+   * Same question `ws.ts`'s `isSingleMachineServer` asks, with the operator's
+   * own declaration that strangers reach this process added: a server bound to
+   * loopback behind a public proxy is not a desktop, and `publishedBeyondLoopback`
+   * is the only thing that knows the difference.
+   */
+  const localAuthAccounts = yield* LocalAuthAccountRepository;
+  // Whether the operator's own login may be spent here. Asking how many
+  // accounts can sign in rather than whether the bind address looks public:
+  // `publishedBeyondLoopback` defaults to false so a proxied server read as a
+  // desktop, and a wildcard bind is how LAN pairing works for a single user.
+  // See `providerAuth/operatorCredentialLending.ts`.
+  const localAccountCount = yield* localAuthAccounts
+    .countEnabled()
+    .pipe(Effect.catch(() => Effect.succeed(Number.POSITIVE_INFINITY)));
+  const singleMachineInstall = mayUseOperatorProviderCredentials({
+    host: serverConfig.host,
+    publishedBeyondLoopback: serverConfig.publishedBeyondLoopback,
+    localAccountCount,
+  });
+
+  /**
+   * The launch environment each live session was started on, so a recovery can
+   * put the replacement back on the same provider account.
+   *
+   * Recovery used to call `adapter.startSession` with no launch environment at
+   * all. Every adapter treats that as "use whatever this process has": Codex
+   * falls through to the curated home whose `auth.json` is a symlink to the
+   * server OS user's `~/.codex`, and Claude inherits the server's `HOME`. So
+   * any signed-in user whose session had been disposed, restarted or
+   * reconnected — routine, not exotic — silently moved onto the operator's
+   * own login, authenticated and billed as them, with
+   * `resolveProviderAccount`'s refusal never consulted.
+   *
+   * `has()` rather than a truthy check on purpose: an entry holding
+   * `undefined` means "this session was deliberately started without one" and
+   * the replacement is entitled to the same treatment, while a missing entry
+   * means this process never saw the session start and genuinely cannot say
+   * whose account it ran on.
+   */
+  const sessionLaunchEnvironments = new Map<ThreadId, ProviderLaunchEnvironment | undefined>();
   const canonicalEventLogger =
     options?.canonicalEventLogger ??
     (options?.canonicalEventLogPath !== undefined
@@ -253,12 +309,41 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
+      /**
+       * Whose account the replacement runs on, or no replacement at all.
+       *
+       * The binding outlives the process; the launch environment does not, and
+       * it is deliberately not persisted — it carries the credential itself,
+       * and a provider login written to the orchestration database is a worse
+       * problem than the one being solved here. So after a restart this map is
+       * empty and the honest answer to "whose Codex login was this session
+       * using" is that we do not know.
+       *
+       * A lookup we could not make must not promote the operator. On a
+       * published host that is a refusal the sender can act on — send again and
+       * a fresh session is started through the reactor, which resolves their
+       * own account properly. On the operator's own desktop there is nobody
+       * else to reach, so the old behaviour stands and a rollback or an
+       * interrupt still works across a restart.
+       */
+      const launchEnvironmentKnown = sessionLaunchEnvironments.has(input.binding.threadId);
+      const launchEnvironment = sessionLaunchEnvironments.get(input.binding.threadId);
+      if (!launchEnvironmentKnown && !singleMachineInstall) {
+        return yield* toValidationError(
+          input.operation,
+          `Cannot recover thread '${input.binding.threadId}' because this server process does not know which provider account its session was running on, and will not resume it on the server's own provider login. Send a message on the thread to start a new session.`,
+        );
+      }
+
       const resumed = yield* adapter.startSession({
         threadId: input.binding.threadId,
         provider: input.binding.provider,
         ...(persistedCwd ? { cwd: persistedCwd } : {}),
         ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
         ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
+        ...(launchEnvironment !== undefined
+          ? { providerLaunchEnvironment: launchEnvironment }
+          : {}),
         runtimeMode: input.binding.runtimeMode ?? "full-access",
       });
       if (resumed.provider !== adapter.provider) {
@@ -450,6 +535,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
           );
         }
+
+        // Remember whose account this session is on, so the recovery path above
+        // can put its replacement back on the same one rather than on whatever
+        // credential the server process happens to be holding.
+        sessionLaunchEnvironments.set(threadId, input.providerLaunchEnvironment);
 
         yield* stopStaleSessionsForThread({
           threadId,

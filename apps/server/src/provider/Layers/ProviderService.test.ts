@@ -37,13 +37,21 @@ import { makeProviderServiceLive } from "./ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
+import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
+import { ServerConfig } from "../../config.ts";
 import {
   makeSqlitePersistenceLive,
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+
+
+/** One enabled account: the desktop case these tests describe. */
+const mockLocalAuthAccounts = Layer.mock(LocalAuthAccountRepository)({
+  countEnabled: () => Effect.succeed(1),
+});
 
 const defaultServerSettingsLayer = ServerSettingsService.layerTest();
 
@@ -243,6 +251,28 @@ const hasMetricSnapshot = (
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
   );
 
+/**
+ * Session recovery asks the config whether this install is a single machine
+ * before it will resume a session whose provider account this process cannot
+ * name. `layerTest` leaves `host` unset, which reads as loopback: the desktop
+ * case, where the server's own provider login genuinely is the only user's.
+ * Pass `published: true` for a host with other accounts on it.
+ */
+function makeTestServerConfigLayer(options?: { readonly published: boolean }) {
+  return Layer.effect(
+    ServerConfig,
+    Effect.gen(function* () {
+      const base = yield* ServerConfig;
+      return { ...base, publishedBeyondLoopback: options?.published === true };
+    }),
+  ).pipe(
+    Layer.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3code-provider-service-test-" }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+}
+
 function makeProviderServiceLayer() {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter("claudeAgent");
@@ -264,10 +294,15 @@ function makeProviderServiceLayer() {
 
   const layer = it.layer(
     Layer.mergeAll(
+      // Merged, not just provided: a few test bodies reach the repository
+      // themselves to vary the account count.
+      mockLocalAuthAccounts,
       makeProviderServiceLive().pipe(
+        Layer.provide(mockLocalAuthAccounts),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(makeTestServerConfigLayer()),
         Layer.provideMerge(AnalyticsService.layerTest),
       ),
       directoryLayer,
@@ -310,9 +345,11 @@ it.effect("ProviderServiceLive rejects new sessions for disabled providers", () 
     );
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(mockLocalAuthAccounts),
       Layer.provide(providerAdapterLayer),
       Layer.provide(directoryLayer),
       Layer.provide(serverSettingsLayer),
+      Layer.provide(makeTestServerConfigLayer()),
       Layer.provide(AnalyticsService.layerTest),
     );
 
@@ -363,9 +400,11 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
     }).pipe(Effect.provide(directoryLayer));
 
     const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(mockLocalAuthAccounts),
       Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
       Layer.provide(directoryLayer),
       Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(makeTestServerConfigLayer()),
       Layer.provide(AnalyticsService.layerTest),
     );
 
@@ -423,9 +462,11 @@ it.effect(
         Layer.provide(runtimeRepositoryLayer),
       );
       const firstProviderLayer = makeProviderServiceLive().pipe(
+      Layer.provide(mockLocalAuthAccounts),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(makeTestServerConfigLayer()),
         Layer.provide(AnalyticsService.layerTest),
       );
       const updatedResumeCursor = {
@@ -475,9 +516,11 @@ it.effect(
         Layer.provide(runtimeRepositoryLayer),
       );
       const secondProviderLayer = makeProviderServiceLive().pipe(
+      Layer.provide(mockLocalAuthAccounts),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(makeTestServerConfigLayer()),
         Layer.provide(AnalyticsService.layerTest),
       );
 
@@ -511,6 +554,98 @@ it.effect(
       const rollbackCall = secondCodex.rollbackThread.mock.calls[0];
       assert.equal(typeof rollbackCall?.[0], "string");
       assert.equal(rollbackCall?.[1], 1);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+/**
+ * A count we could not read must not promote a guest, and an account we cannot
+ * name must not become the operator's.
+ *
+ * The runtime binding outlives the process; the launch environment deliberately
+ * does not — it carries the credential itself, and a provider login written to
+ * the orchestration database is a worse problem than the one being solved. So
+ * after a restart the honest answer to "whose Codex login was this session
+ * using" is that we do not know, and recovery used to answer it by starting the
+ * replacement with no launch environment at all: the adapter then fell through
+ * to the server's own credential and the turn ran as the operator. On a host
+ * with other accounts on it the refusal is the answer; the next message starts
+ * a fresh session through the reactor, which resolves the sender's own account.
+ */
+it.effect(
+  "ProviderServiceLive refuses to recover a session whose provider account it cannot name on a published host",
+  () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-published-"));
+      const dbPath = path.join(tempDir, "orchestration.sqlite");
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(persistenceLayer),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+
+      const firstCodex = makeFakeCodexAdapter();
+      const secondCodex = makeFakeCodexAdapter();
+      const registryFor = (codex: ReturnType<typeof makeFakeCodexAdapter>) =>
+        ({
+          getByProvider: (provider) =>
+            provider === "codex"
+              ? Effect.succeed(codex.adapter)
+              : Effect.fail(new ProviderUnsupportedError({ provider })),
+          listProviders: () => Effect.succeed(["codex"]),
+        }) satisfies typeof ProviderAdapterRegistry.Service;
+
+      const providerLayerFor = (codex: ReturnType<typeof makeFakeCodexAdapter>) =>
+        makeProviderServiceLive().pipe(
+      Layer.provide(mockLocalAuthAccounts),
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registryFor(codex))),
+          Layer.provide(directoryLayer),
+          Layer.provide(defaultServerSettingsLayer),
+          Layer.provide(makeTestServerConfigLayer({ published: true })),
+          Layer.provide(AnalyticsService.layerTest),
+        );
+
+      const startedSession = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("thread-published-restart");
+        return yield* provider.startSession(threadId, {
+          provider: "codex",
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+          threadId,
+          providerLaunchEnvironment: {
+            env: { CODEX_HOME: "/srv/t3/tenants/acme/provider-homes/user-1/codex" },
+          },
+        });
+      }).pipe(Effect.provide(providerLayerFor(firstCodex)));
+
+      secondCodex.startSession.mockClear();
+      secondCodex.rollbackThread.mockClear();
+
+      const outcome = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        return yield* Effect.result(
+          provider.rollbackConversation({
+            threadId: startedSession.threadId,
+            numTurns: 1,
+          }),
+        );
+      }).pipe(Effect.provide(providerLayerFor(secondCodex)));
+
+      assert.equal(outcome._tag, "Failure");
+      if (outcome._tag === "Failure") {
+        assert.match(
+          String((outcome.failure as { readonly issue?: string }).issue ?? ""),
+          /does not know which provider account/,
+        );
+      }
+      // Proof no turn ran on the operator's credential: the fresh process never
+      // started a provider session at all.
+      assert.equal(secondCodex.startSession.mock.calls.length, 0);
+      assert.equal(secondCodex.rollbackThread.mock.calls.length, 0);
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -731,6 +866,57 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  /**
+   * A recovered session runs on the account the original ran on.
+   *
+   * Recovery used to call `adapter.startSession` with no
+   * `providerLaunchEnvironment` at all, which every adapter reads as "use
+   * whatever this process has": Codex falls through to the curated home whose
+   * `auth.json` symlinks the server OS user's `~/.codex`, Claude inherits the
+   * server's `HOME`. A disposed, restarted or reconnected session is routine,
+   * so any signed-in user's turn silently moved onto the operator's own
+   * provider login — authenticated, billed and logged as them.
+   */
+  it.effect("recovers a stale session onto the same provider account it was started on", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+
+      const initial = yield* provider.startSession(asThreadId("thread-relaunch-account"), {
+        provider: "codex",
+        threadId: asThreadId("thread-relaunch-account"),
+        cwd: "/tmp/project-relaunch-account",
+        runtimeMode: "full-access",
+        providerLaunchEnvironment: {
+          env: {
+            CODEX_HOME: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+            HOME: "/srv/t3/tenants/acme/provider-homes/user-1",
+            T3_PROVIDER_ACCOUNT_ID: "provider-account-user-1",
+          },
+        },
+      });
+
+      yield* routing.codex.stopAll();
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+
+      yield* provider.sendTurn({
+        threadId: initial.threadId,
+        input: "resume",
+        attachments: [],
+      });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.codex.startSession.mock.calls[0]?.[0] as
+        | { providerLaunchEnvironment?: { env?: Record<string, string> } }
+        | undefined;
+      assert.deepEqual(resumedStartInput?.providerLaunchEnvironment?.env, {
+        CODEX_HOME: "/srv/t3/tenants/acme/provider-homes/user-1/codex",
+        HOME: "/srv/t3/tenants/acme/provider-homes/user-1",
+        T3_PROVIDER_ACCOUNT_ID: "provider-account-user-1",
+      });
+    }),
+  );
+
   it.effect("adopts an active session for sendTurn when the persisted binding is missing", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -907,9 +1093,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(runtimeRepositoryLayer),
       );
       const firstProviderLayer = makeProviderServiceLive().pipe(
+      Layer.provide(mockLocalAuthAccounts),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(makeTestServerConfigLayer()),
         Layer.provide(AnalyticsService.layerTest),
       );
 
@@ -940,9 +1128,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(runtimeRepositoryLayer),
       );
       const secondProviderLayer = makeProviderServiceLive().pipe(
+      Layer.provide(mockLocalAuthAccounts),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(makeTestServerConfigLayer()),
         Layer.provide(AnalyticsService.layerTest),
       );
 

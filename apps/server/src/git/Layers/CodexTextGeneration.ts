@@ -30,7 +30,8 @@ import {
 } from "../Utils.ts";
 import { getCodexModelCapabilities } from "../../provider/Layers/CodexProvider.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { isLoopbackHost, isWildcardHost } from "../../startupAccess.ts";
+import { mayUseOperatorProviderCredentials } from "../../providerAuth/operatorCredentialLending.ts";
+import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
 import { normalizeCodexModelOptionsWithCapabilities } from "@t3tools/shared/model";
 
 const CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT = "low";
@@ -65,10 +66,20 @@ const makeCodexTextGeneration = Effect.gen(function* () {
    * Same question `ws.ts`'s `isSingleMachineServer` asks, plus the operator's
    * own declaration that strangers reach this process.
    */
-  const machineLoginIsTheOnlyUsers =
-    isLoopbackHost(serverConfig.host) &&
-    !isWildcardHost(serverConfig.host) &&
-    !serverConfig.publishedBeyondLoopback;
+  const localAuthAccounts = yield* LocalAuthAccountRepository;
+  // Whether the operator's own login may be spent here. Asking how many
+  // accounts can sign in rather than whether the bind address looks public:
+  // `publishedBeyondLoopback` defaults to false so a proxied server read as a
+  // desktop, and a wildcard bind is how LAN pairing works for a single user.
+  // See `providerAuth/operatorCredentialLending.ts`.
+  const localAccountCount = yield* localAuthAccounts
+    .countEnabled()
+    .pipe(Effect.catch(() => Effect.succeed(Number.POSITIVE_INFINITY)));
+  const machineLoginIsTheOnlyUsers = mayUseOperatorProviderCredentials({
+    host: serverConfig.host,
+    publishedBeyondLoopback: serverConfig.publishedBeyondLoopback,
+    localAccountCount,
+  });
 
   const refuseOperatorCredentialSpend = (
     operation: string,

@@ -307,3 +307,86 @@ it.effect("a request from another workspace is not visible by its id", () =>
     assert.strictEqual(elsewhere.code, "request-not-found");
   }).pipe(Effect.provide(makeLayer())),
 );
+
+// Answering a request is a write on somebody else's behalf: the grant row it
+// leaves is the same one only a lead or approver may write through
+// `updateMemberAccess`, and `access: "workspace"` resolves to the account the
+// workspace POLICY names — the admin's pinned subscription, not the
+// responder's. Membership was the only gate, and membership includes people
+// the workspace only lets watch.
+it.effect("will not let someone the workspace only lets watch answer a request", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    const usage = yield* ProviderUsageService;
+    const collaboration = yield* CollaborationService;
+    const sharing = yield* ProviderSharingRepository;
+
+    // Configuring the workspace makes this caller its lead, and the lead pins
+    // their own subscription as what the workspace runs on.
+    yield* collaboration.updateSettings(holder, { ...scope, approvalMode: "open" });
+    const leadAccount = yield* connectClaude(config.stateDir, holder.userId, "Lead's plan");
+    yield* sharing.upsertShare({
+      ...scope,
+      ownerUserId: holder.userId,
+      provider: "claude",
+      accountId: leadAccount,
+      enabled: true,
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    yield* sharing.upsertPolicy({
+      ...scope,
+      provider: "claude",
+      mode: "shared",
+      sharedOwnerUserId: holder.userId,
+      sharedAccountId: leadAccount,
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
+
+    // The watcher joins by invite as a viewer and connects a throwaway account
+    // of their own, which is all the old check ever asked for.
+    const invite = yield* collaboration.createInvite(holder, {
+      ...scope,
+      email: "bystander@example.com",
+      scope: "workspace",
+      roles: ["viewer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    yield* collaboration.acceptInvite(bystander, { inviteId: invite.invite.id });
+    yield* connectClaude(config.stateDir, bystander.userId, "Throwaway");
+
+    yield* beVisible(asker);
+    const request = yield* usage.createRequest(asker, {
+      ...scope,
+      provider: "claude",
+      reason: "no-account",
+    });
+
+    const refused = yield* usage
+      .respondToRequest(bystander, { ...scope, requestId: request.request.id, decision: "grant" })
+      .pipe(Effect.flip);
+    assert.strictEqual(refused.code, "forbidden");
+
+    // Nothing was written on the asker's behalf.
+    const grants = yield* sharing.listGrantsForWorkspace(scope);
+    assert.deepStrictEqual(
+      grants.filter((grant) => grant.userId === asker.userId),
+      [],
+    );
+
+    // Declining is the same write to the same request row, so it is refused too.
+    const refusedDecline = yield* usage
+      .respondToRequest(bystander, { ...scope, requestId: request.request.id, decision: "decline" })
+      .pipe(Effect.flip);
+    assert.strictEqual(refusedDecline.code, "forbidden");
+
+    // And the person the workspace does let work can still answer, which is
+    // the feature this is not allowed to break.
+    const answered = yield* usage.respondToRequest(holder, {
+      ...scope,
+      requestId: request.request.id,
+      decision: "grant",
+      accountId: leadAccount,
+    });
+    assert.strictEqual(answered.request.status, "granted");
+  }).pipe(Effect.provide(makeLayer())),
+);
