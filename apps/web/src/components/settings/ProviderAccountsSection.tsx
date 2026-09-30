@@ -230,7 +230,9 @@ function AccountRow({
                 Reconnect
               </Button>
             )}
-            {account.connected ? (
+            {/* No Disconnect for a credential the operator lent: it is not this
+                person's to revoke, and the control implied it was. */}
+            {account.connected && !account.operatorProvided ? (
               <Button
                 size="xs"
                 variant="destructive-outline"
@@ -672,7 +674,14 @@ export function ProviderAccountsSection() {
                           subscriptions connected, which one is spending. */}
                       <div className="text-xs text-muted-foreground">
                         {runsOn
-                          ? `Your ${connection.label} turns run as ${runsOn.label}.`
+                          ? runsOn.operatorProvided
+                            ? // Not "your account". The operator lent this login
+                              // to everyone on the host, and saying otherwise put
+                              // their address in front of every user next to a
+                              // Disconnect button for a credential none of them
+                              // owned.
+                              `${connection.label} turns run on an account the workspace operator provides.`
+                            : `Your ${connection.label} turns run as ${runsOn.label}.`
                           : `${connection.label} turns will not run until you connect an account.`}
                       </div>
                     </div>

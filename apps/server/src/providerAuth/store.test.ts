@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   clearProviderCredential,
+  OPERATOR_PROVIDED_MARKER,
   codexHomeFor,
   createProviderAccount,
   isProviderConnected,
@@ -34,6 +35,16 @@ async function seedLegacyCodex(stateDir: string, userId: string): Promise<string
   await mkdir(legacyHome, { recursive: true, mode: 0o700 });
   await writeFile(path.join(legacyHome, "auth.json"), JSON.stringify({ tokens: {} }), "utf8");
   return legacyHome;
+}
+
+/**
+ * The shape `T3CODE_OPERATOR_PROVIDER_FALLBACK` leaves behind: the operator's
+ * own credential copied into somebody else's provider home, with a marker
+ * beside it saying so.
+ */
+async function seedOperatorProvidedCodex(stateDir: string, userId: string): Promise<void> {
+  const home = await seedLegacyCodex(stateDir, userId);
+  await writeFile(path.join(home, OPERATOR_PROVIDED_MARKER), "seeded\n", "utf8");
 }
 
 async function seedLegacyClaude(stateDir: string, userId: string, token: string): Promise<string> {
@@ -361,5 +372,36 @@ describe("shared accounts", () => {
     await expect(
       providerCredentialEnvForAccount(stateDir, "auth:owner", "claude", reserved),
     ).resolves.toBeNull();
+  });
+});
+
+describe("an operator-provided credential", () => {
+  // 390 users on one instance each held a byte-identical copy of a single
+  // OpenAI credential, and every one of their settings pages called it their
+  // own account, showed the operator's email, and offered a Disconnect.
+  it("is listed, because turns really do run on it", async () => {
+    const stateDir = await makeStateDir();
+    await seedOperatorProvidedCodex(stateDir, "user-borrower");
+
+    const accounts = await listProviderAccounts(stateDir, "user-borrower", "codex");
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]?.connected).toBe(true);
+  });
+
+  it("says it was lent rather than connected", async () => {
+    const stateDir = await makeStateDir();
+    await seedOperatorProvidedCodex(stateDir, "user-borrower");
+
+    const accounts = await listProviderAccounts(stateDir, "user-borrower", "codex");
+    expect(accounts[0]?.operatorProvided).toBe(true);
+  });
+
+  it("does not mark an account the person connected themselves", async () => {
+    const stateDir = await makeStateDir();
+    await seedLegacyCodex(stateDir, "user-owner");
+
+    const accounts = await listProviderAccounts(stateDir, "user-owner", "codex");
+    expect(accounts[0]?.connected).toBe(true);
+    expect(accounts[0]?.operatorProvided).toBe(false);
   });
 });

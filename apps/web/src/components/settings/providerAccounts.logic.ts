@@ -20,6 +20,17 @@ export interface ProviderAccount {
   /** The account this person's own turns run on when nobody names one. */
   readonly isDefault: boolean;
   readonly connected: boolean;
+  /**
+   * The operator lent this credential; this person did not connect it.
+   *
+   * They may run turns on it, but it is not theirs to name, disconnect or lend
+   * onward — and calling it theirs is what showed the operator's own email to
+   * every user on the host beside a Disconnect button.
+   *
+   * Optional because a server from before this existed does not send it, and an
+   * absent value has to mean "connected normally" for those installs.
+   */
+  readonly operatorProvided?: boolean;
 }
 
 export interface Connection {

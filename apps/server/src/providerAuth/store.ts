@@ -65,6 +65,13 @@ export type StoredProviderAccount = {
    * account and its label behind.
    */
   connected: boolean;
+  /**
+   * The credential was lent by the operator, not connected by this person.
+   *
+   * They may run turns on it — that is the whole point of the fallback — but it
+   * is not theirs to name, disconnect, or lend to a workspace.
+   */
+  operatorProvided: boolean;
 };
 
 type ProviderAccountRecord = {
@@ -161,6 +168,29 @@ function credentialCandidates(
  * flow hands to a spawning CLI — an async answer there would mean the directory
  * a login writes into could differ from the one a read later looks in.
  */
+/**
+ * The file that says a credential was lent, not connected.
+ *
+ * `T3CODE_OPERATOR_PROVIDER_FALLBACK` seeds a hosted account by copying the
+ * operator's own credential into their provider home. On disk the result is
+ * indistinguishable from an account they connected themselves, and everything
+ * downstream believed it: the settings page said "Your Codex turns run as
+ * <operator email>" and offered a Disconnect, the account index recorded it as
+ * theirs, and the roster offered it as something they could lend onward.
+ * Measured on one instance: 390 users each holding a byte-identical copy of one
+ * OpenAI credential, with the operator's address shown to all of them.
+ *
+ * Written beside the credential so the seeder and the reader cannot disagree
+ * about where it lives, and named with a leading dot so it never looks like a
+ * credential itself.
+ */
+export const OPERATOR_PROVIDED_MARKER = ".operator-provided";
+
+/** Whether this account's credential was lent by the operator rather than connected. */
+export function operatorProvidedMarkerPath(credentialFile: string): string {
+  return path.join(path.dirname(credentialFile), OPERATOR_PROVIDED_MARKER);
+}
+
 function credentialPath(
   stateDir: string,
   userId: string,
@@ -462,6 +492,7 @@ type AccountRow = {
   /** Where its credential is, whether or not anything is there yet. */
   file: string;
   connected: boolean;
+  operatorProvided: boolean;
 };
 
 /**
@@ -508,7 +539,12 @@ async function accountRows(
   const rows: AccountRow[] = [];
   for (const record of records) {
     const file = credentialPath(stateDir, userId, provider, record.id);
-    rows.push({ record, file, connected: await exists(file) });
+    rows.push({
+      record,
+      file,
+      connected: await exists(file),
+      operatorProvided: await exists(operatorProvidedMarkerPath(file)),
+    });
   }
   return rows;
 }
@@ -538,6 +574,7 @@ async function accountsForProvider(
         index + 1,
       ),
       createdAt: row.record.createdAt,
+      operatorProvided: row.operatorProvided,
       isDefault: row.record.id === defaultAccountId,
       connected: row.connected,
     });

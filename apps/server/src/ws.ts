@@ -159,6 +159,7 @@ import { DeploymentRegistry } from "./deploy/Services/DeploymentRegistry.ts";
 import { AnalyticsStore } from "./analytics/Services/AnalyticsStore.ts";
 import { PackEnablementService } from "./packEnablement/Services/PackEnablementService.ts";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
+import { OPERATOR_PROVIDED_MARKER } from "./providerAuth/store.ts";
 import { LocalAuthAccountRepository } from "./persistence/Services/LocalAuthAccounts.ts";
 import { ProjectionThreadPreferenceRepository } from "./persistence/Services/ProjectionThreadPreferences.ts";
 
@@ -3336,6 +3337,21 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               yield* fileSystem.makeDirectory(dir, { recursive: true });
               yield* fileSystem.copyFile(source, target);
               yield* fileSystem.chmod(target, 0o600);
+              // Say, on disk, that this was lent rather than connected.
+              //
+              // A copied credential is otherwise indistinguishable from one the
+              // person logged in with, and everything downstream believed it:
+              // settings called it their account and showed the operator's
+              // email, the account index recorded it as theirs, and the roster
+              // offered it as something they could lend onward. One instance
+              // had 390 users each holding a byte-identical copy of a single
+              // OpenAI credential on exactly that misunderstanding.
+              yield* fileSystem
+                .writeFileString(
+                  path.join(dir, OPERATOR_PROVIDED_MARKER),
+                  "Seeded from the operator's own login by T3CODE_OPERATOR_PROVIDER_FALLBACK.\n",
+                )
+                .pipe(Effect.ignore);
             }).pipe(Effect.ignore),
           { discard: true },
         );
