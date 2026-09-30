@@ -8,6 +8,7 @@ import { TextGeneration } from "../Services/TextGeneration.ts";
 import { sanitizeThreadTitle } from "../Utils.ts";
 import { ClaudeTextGenerationLive } from "./ClaudeTextGeneration.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { TextGenerationError } from "@t3tools/contracts";
 
 const ClaudeTextGenerationTestLayer = ClaudeTextGenerationLive.pipe(
   Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -307,3 +308,63 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGenerationLive", (it) => {
     ),
   );
 });
+
+/**
+ * A generated thread title is not worth somebody else's Claude subscription.
+ *
+ * This layer's spawn passed no `env` at all, so the child inherited the whole
+ * server process environment: `HOME` pointing at the operator's home, their
+ * `CLAUDE_CODE_OAUTH_TOKEN`, their `ANTHROPIC_API_KEY` — and ran `claude -p`
+ * with `--dangerously-skip-permissions` as them, on a prompt somebody else
+ * wrote. There is no acting user to resolve instead: `TextGenerationShape`
+ * carries a cwd and a prompt and no identity, so the only honest alternative to
+ * the operator's login is none at all, and the caller already handles a missing
+ * title as a missing nicety.
+ */
+const ClaudeTextGenerationPublishedHostLayer = ClaudeTextGenerationLive.pipe(
+  Layer.provideMerge(ServerSettingsService.layerTest()),
+  Layer.provideMerge(
+    Layer.effect(
+      ServerConfig,
+      Effect.gen(function* () {
+        const base = yield* ServerConfig;
+        return { ...base, publishedBeyondLoopback: true };
+      }),
+    ).pipe(
+      Layer.provide(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "t3code-claude-text-generation-published-test-",
+        }),
+      ),
+    ),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+it.layer(ClaudeTextGenerationPublishedHostLayer)(
+  "ClaudeTextGenerationLive on a published host",
+  (it) => {
+    it.effect("refuses to generate a thread title on the server's own Claude login", () =>
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const outcome = yield* Effect.result(
+          textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "please rename this repository's readme",
+            modelSelection: {
+              provider: "claudeAgent",
+              model: "claude-haiku-4-5",
+            },
+          }),
+        );
+
+        expect(outcome._tag).toBe("Failure");
+        if (outcome._tag === "Failure") {
+          expect(outcome.failure).toBeInstanceOf(TextGenerationError);
+          expect(outcome.failure.detail).toMatch(/Refusing to run Claude text generation/);
+        }
+      }),
+    );
+  },
+);

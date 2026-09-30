@@ -30,7 +30,9 @@ import {
   toJsonSchemaObject,
 } from "../Utils.ts";
 import { normalizeClaudeModelOptionsWithCapabilities } from "@t3tools/shared/model";
+import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { isLoopbackHost, isWildcardHost } from "../../startupAccess.ts";
 import { getClaudeModelCapabilities } from "../../provider/Layers/ClaudeProvider.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
@@ -45,7 +47,31 @@ const ClaudeOutputEnvelope = Schema.Struct({
 
 const makeClaudeTextGeneration = Effect.gen(function* () {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const serverConfig = yield* Effect.service(ServerConfig);
   const serverSettingsService = yield* Effect.service(ServerSettingsService);
+
+  /**
+   * Whether the Claude login this process can reach belongs to the only person
+   * who could be asking for a thread title.
+   *
+   * This spawn passed no `env` at all, which is worse than it looks: the child
+   * inherits the whole server process environment, so `HOME` points at the
+   * operator's home and `claude -p` signs in as them — with
+   * `--dangerously-skip-permissions` on, in the caller's working directory. On
+   * a desktop install that is the person typing, on their own subscription. On
+   * a host with other accounts on it, every first turn and every pull request
+   * body is generated on the operator's Claude subscription, from a prompt
+   * somebody else wrote.
+   *
+   * `TextGenerationShape` carries no identity, so there is no acting user to
+   * resolve here and the only honest alternative to the operator's login is
+   * none at all. A missing thread title is a nicety the caller already handles;
+   * spending an unrelated person's Claude quota to supply it is not.
+   */
+  const machineLoginIsTheOnlyUsers =
+    isLoopbackHost(serverConfig.host) &&
+    !isWildcardHost(serverConfig.host) &&
+    !serverConfig.publishedBeyondLoopback;
 
   const readStreamAsString = <E>(
     operation: string,
@@ -83,6 +109,15 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     outputSchemaJson: S;
     modelSelection: ClaudeModelSelection;
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
+    // Before anything is built or spawned: on a shared host there is no Claude
+    // account here that may be spent. See `machineLoginIsTheOnlyUsers`.
+    if (!machineLoginIsTheOnlyUsers) {
+      return yield* new TextGenerationError({
+        operation,
+        detail:
+          "Refusing to run Claude text generation on this server's own Claude login: this host has other accounts on it, and T3 cannot tell whose Claude account asked for it. Connect a Claude account and start the turn again.",
+      });
+    }
     const jsonSchemaStr = JSON.stringify(toJsonSchemaObject(outputSchemaJson));
     const normalizedOptions = normalizeClaudeModelOptionsWithCapabilities(
       getClaudeModelCapabilities(modelSelection.model),
@@ -116,6 +151,26 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
           "--dangerously-skip-permissions",
         ],
         {
+          /**
+           * Stated rather than inherited.
+           *
+           * This spawn used to pass no `env` at all, which handed the child the
+           * whole server process environment — the operator's `HOME`, their
+           * `CLAUDE_CODE_OAUTH_TOKEN`, their `ANTHROPIC_API_KEY` — and so ran
+           * `claude -p --dangerously-skip-permissions` as them for whoever had
+           * typed the prompt. It is the server's own environment again here,
+           * but only because the guard at the top of `runClaudeJson` has
+           * already established that the machine's login is the asking
+           * person's login. Anything that lets a second person reach this
+           * function has to replace this expression with an environment built
+           * from *their* resolved account —
+           * `filterProviderLaunchBaseEnv(process.env)` plus
+           * `providerCredentialEnvForAccount`, the way
+           * `ProviderCommandReactor.resolveConnectedLaunchEnvironment` does —
+           * and this line is written out so that there is somewhere obvious to
+           * do it.
+           */
+          env: { ...process.env },
           cwd,
           shell: process.platform === "win32",
           stdin: {

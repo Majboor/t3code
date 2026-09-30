@@ -1245,15 +1245,45 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     });
     const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
 
-    const generated = yield* textGeneration.generatePrContent({
-      cwd,
-      baseBranch,
-      headBranch: headContext.headBranch,
-      commitSummary: limitContext(rangeContext.commitSummary, 20_000),
-      diffSummary: limitContext(rangeContext.diffSummary, 20_000),
-      diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-      modelSelection,
-    });
+    // A written title and body is a nicety; opening the pull request is the
+    // thing the person asked for.
+    //
+    // Text generation now refuses on a host with other accounts on it, rather
+    // than quietly running on the operator's own Claude or Codex login — the
+    // right call, but it made this step fail outright and took pull requests
+    // with it on every published host. The title and branch callers already
+    // tolerate the same refusal; this one did not, only because it never had
+    // to before.
+    //
+    // So the refusal degrades instead: the branch name and the commit summary
+    // are already here, and they make a perfectly serviceable pull request
+    // that a person can edit. Losing the generated prose is a smaller harm
+    // than losing the pull request.
+    const generated = yield* textGeneration
+      .generatePrContent({
+        cwd,
+        baseBranch,
+        headBranch: headContext.headBranch,
+        commitSummary: limitContext(rangeContext.commitSummary, 20_000),
+        diffSummary: limitContext(rangeContext.diffSummary, 20_000),
+        diffPatch: limitContext(rangeContext.diffPatch, 60_000),
+        modelSelection,
+      })
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.as(
+            Effect.logInfo("pull request content was not generated; using the commit summary", {
+              cwd,
+              headBranch: headContext.headBranch,
+              detail: cause.detail,
+            }),
+            {
+              title: headContext.headBranch,
+              body: rangeContext.commitSummary.trim() || headContext.headBranch,
+            },
+          ),
+        ),
+      );
 
     const bodyFile = path.join(tempDir, `t3code-pr-body-${process.pid}-${randomUUID()}.md`);
     yield* fileSystem

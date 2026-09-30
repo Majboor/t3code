@@ -635,3 +635,88 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 });
+
+/**
+ * A generated thread title is not worth somebody else's Codex quota.
+ *
+ * `runCodexJson` spawns `codex exec` with the server's own environment, so it
+ * runs as whatever Codex account the machine is signed in to. On a desktop
+ * install that is the person typing. On a host other accounts can sign in to it
+ * is the operator's, and this layer has no identity to resolve instead —
+ * `TextGenerationShape` carries a cwd and a prompt and nothing about who asked.
+ * So every first turn's prompt, and every pull request's commit summary and
+ * diff (up to 60_000 characters of it), went to the provider under the
+ * operator's account and into their history and their bill.
+ *
+ * The caller already treats a failed generation as a missing nicety: the thread
+ * keeps its first-line title, the worktree keeps its generated branch name.
+ * That is the right outcome here.
+ */
+const CodexTextGenerationPublishedHostLayer = CodexTextGenerationLive.pipe(
+  Layer.provideMerge(ServerSettingsService.layerTest()),
+  Layer.provideMerge(
+    Layer.effect(
+      ServerConfig,
+      Effect.gen(function* () {
+        const base = yield* ServerConfig;
+        return { ...base, publishedBeyondLoopback: true };
+      }),
+    ).pipe(
+      Layer.provide(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "t3code-codex-text-generation-published-test-",
+        }),
+      ),
+    ),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+it.layer(CodexTextGenerationPublishedHostLayer)(
+  "CodexTextGenerationLive on a published host",
+  (it) => {
+    it.effect("refuses to generate a thread title on the server's own Codex login", () =>
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const outcome = yield* Effect.result(
+          textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "please rename this repository's readme",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          }),
+        );
+
+        expect(outcome._tag).toBe("Failure");
+        if (outcome._tag === "Failure") {
+          expect(outcome.failure).toBeInstanceOf(TextGenerationError);
+          expect(outcome.failure.detail).toMatch(/Refusing to run Codex text generation/);
+        }
+      }),
+    );
+
+    it.effect("refuses to send a pull request diff to the server's own Codex login", () =>
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const outcome = yield* Effect.result(
+          textGeneration.generatePrContent({
+            cwd: process.cwd(),
+            baseBranch: "main",
+            headBranch: "feature/x",
+            commitSummary: "one commit",
+            diffSummary: "1 file changed",
+            diffPatch: "diff --git a/secret.ts b/secret.ts",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          }),
+        );
+
+        expect(outcome._tag).toBe("Failure");
+        if (outcome._tag === "Failure") {
+          expect(outcome.failure).toBeInstanceOf(TextGenerationError);
+          expect(outcome.failure.detail).toMatch(/Refusing to run Codex text generation/);
+        }
+      }),
+    );
+  },
+);

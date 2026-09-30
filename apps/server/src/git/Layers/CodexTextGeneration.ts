@@ -30,6 +30,7 @@ import {
 } from "../Utils.ts";
 import { getCodexModelCapabilities } from "../../provider/Layers/CodexProvider.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { isLoopbackHost, isWildcardHost } from "../../startupAccess.ts";
 import { normalizeCodexModelOptionsWithCapabilities } from "@t3tools/shared/model";
 
 const CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT = "low";
@@ -40,6 +41,45 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig);
   const serverSettingsService = yield* Effect.service(ServerSettingsService);
+
+  /**
+   * Whether the Codex login this process can reach belongs to the only person
+   * who could be asking for a thread title.
+   *
+   * `codex exec` here is spawned with the server's own environment, so it runs
+   * as whatever account the machine is signed in to. On a desktop install that
+   * is the person typing, and generating their branch name on their own
+   * subscription is exactly right. On anything a second person can sign in to
+   * it is the operator's account, and every first turn on the box — plus every
+   * pull request, which sends up to 60_000 characters of diff — would be
+   * charged to them and would show up in their history.
+   *
+   * There is no acting user to resolve down here: `TextGenerationShape` carries
+   * a cwd and a prompt and no identity at all, so the only two answers
+   * available are "the machine's own login" and "nobody". Refusing is the
+   * cheaper mistake. A generated title is a nicety, and the caller treats a
+   * failed generation as one — the thread keeps its first-line title and the
+   * worktree keeps its generated branch name. Spending somebody else's quota
+   * to avoid that is not a trade worth making.
+   *
+   * Same question `ws.ts`'s `isSingleMachineServer` asks, plus the operator's
+   * own declaration that strangers reach this process.
+   */
+  const machineLoginIsTheOnlyUsers =
+    isLoopbackHost(serverConfig.host) &&
+    !isWildcardHost(serverConfig.host) &&
+    !serverConfig.publishedBeyondLoopback;
+
+  const refuseOperatorCredentialSpend = (
+    operation: string,
+  ): Effect.Effect<never, TextGenerationError> =>
+    Effect.fail(
+      new TextGenerationError({
+        operation,
+        detail:
+          "Refusing to run Codex text generation on this server's own Codex login: this host has other accounts on it, and T3 cannot tell whose Codex account asked for it. Connect a Codex account and start the turn again.",
+      }),
+    );
 
   type MaterializedImageAttachments = {
     readonly imagePaths: ReadonlyArray<string>;
@@ -142,6 +182,11 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     cleanupPaths?: ReadonlyArray<string>;
     modelSelection: CodexModelSelection;
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
+    // Before anything is written or copied: on a shared host there is no
+    // account here that may be spent. See `machineLoginIsTheOnlyUsers`.
+    if (!machineLoginIsTheOnlyUsers) {
+      return yield* refuseOperatorCredentialSpend(operation);
+    }
     const schemaPath = yield* writeTempFile(
       operation,
       "codex-schema",
@@ -182,6 +227,15 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           "-",
         ],
         {
+          /**
+           * The server's own environment, deliberately and only because the
+           * guard above has established that the server's own Codex login is
+           * the login of the one person who can be asking. Any change that
+           * lets this function run for somebody else has to build this from
+           * their resolved account instead — `filterProviderLaunchBaseEnv`
+           * plus `providerCredentialEnvForAccount`, the way
+           * `ProviderCommandReactor.resolveConnectedLaunchEnvironment` does.
+           */
           env: {
             ...process.env,
             ...(codexSettings?.homePath ? { CODEX_HOME: codexSettings.homePath } : {}),
