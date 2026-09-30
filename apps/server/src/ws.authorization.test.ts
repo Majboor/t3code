@@ -299,20 +299,24 @@ describe("redactForeignService", () => {
     pid: 4242,
     command: "postgres --password=hunter2",
     startedBy: "user-someone-else",
+    ownershipReason: "matched /usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql",
     canManage: true,
   };
 
-  // environment.services.list reported every listening socket on the shared
-  // host to any signed-in account, command line included.
-  it("keeps the port and drops the process for somebody else's service", () => {
+  // A service T3 started for a colleague. Blanking these was the first attempt
+  // and it was the wrong axis: the leak is other people's processes on a shared
+  // host, not a workspace-mate's dev server, and an anonymous row leaves a port
+  // held by nobody. The command line still goes — it carries the password here,
+  // which is exactly why.
+  it("drops a colleague's command line but keeps their row legible", () => {
     const seen = redactForeignService(foreign, "user-me");
     expect(seen.port).toBe(5432);
     expect(seen.state).toBe("listening");
-    expect(seen.pid).toBeNull();
     expect(seen.command).toBeNull();
-    expect(seen.startedBy).toBeNull();
-    expect(seen.name).toBeNull();
+    expect(seen.pid).toBeNull();
     expect(seen.canManage).toBe(false);
+    expect(seen.name).toBe("postgres");
+    expect(seen.startedBy).toBe("user-someone-else");
   });
 
   it("leaves the caller's own service whole", () => {

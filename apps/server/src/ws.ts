@@ -825,18 +825,39 @@ export function redactForeignService<
     readonly command: string | null;
     readonly startedBy: string | null;
     readonly name: string | null;
+    readonly ownershipReason: string;
     readonly canManage: boolean;
   },
 >(service: Service, viewerUserId: string): Service {
+  // Your own service, in full.
   if (service.ownership === "ours" && service.startedBy === viewerUserId) {
     return service;
   }
+
+  // A service T3 started for somebody else.
+  //
+  // Cutting this down to nothing was the first attempt, and it was the wrong
+  // axis: the leak is other people's processes on a shared host, not a
+  // colleague's dev server, and blanking a workspace-mate's row leaves a port
+  // occupied by an anonymous nobody. The command line is the part that has to
+  // go — it routinely carries tokens passed as flags — and the rest is what
+  // makes a shared workspace legible.
+  if (service.ownership === "ours") {
+    return { ...service, command: null, pid: null, canManage: false };
+  }
+
+  // Not ours at all: an arbitrary process on the machine. The port and its
+  // state are what a caller legitimately needs, since a port in use is a port
+  // they cannot bind. Everything identifying the process goes, `ownershipReason`
+  // included — it is prose about how the process was recognised and it named
+  // paths and flags of its own.
   return {
     ...service,
     pid: null,
     command: null,
     startedBy: null,
     name: null,
+    ownershipReason: "",
     canManage: false,
   };
 }
@@ -6552,6 +6573,25 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                     port: input.port,
                     asking: serviceRegistryActor,
                   }),
+                ),
+                // The same redaction its sibling `environment.services.list`
+                // runs. This route hands back a verdict carrying the whole
+                // service that holds the port, so leaving it alone meant the
+                // pid and command line walked straight out of the route next
+                // door to the one that was fixed.
+                Effect.map((result) =>
+                  machineOwnerSession || !result.verdict.service
+                    ? result
+                    : {
+                        ...result,
+                        verdict: {
+                          ...result.verdict,
+                          service: redactForeignService(
+                            result.verdict.service,
+                            serviceRegistryActor,
+                          ),
+                        },
+                      },
                 ),
               ),
               (message) => new ServiceRegistryError({ code: "forbidden", message }),
