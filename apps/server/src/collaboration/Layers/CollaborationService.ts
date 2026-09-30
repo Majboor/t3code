@@ -1174,6 +1174,7 @@ const makeCollaborationService = Effect.gen(function* () {
     input,
   ) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const state = yield* Ref.get(stateRef);
       const existing = state.activities.find(
         (activity) =>
@@ -1247,6 +1248,7 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const createSharedPrompt: CollaborationServiceShape["createSharedPrompt"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const now = yield* DateTime.now;
       const record = yield* sharedPrompts
         .create({
@@ -1282,6 +1284,7 @@ const makeCollaborationService = Effect.gen(function* () {
    */
   const createNote: CollaborationServiceShape["createNote"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       if (input.targetType === "prompt") {
         const prompt = yield* sharedPrompts
           .getById({ id: input.targetId })
@@ -1553,6 +1556,7 @@ const makeCollaborationService = Effect.gen(function* () {
     input,
   ) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const settings = yield* resolveSettings(input);
       // Approvers never queue behind themselves, and an open workspace queues
       // nobody, so both cases skip the record entirely.
@@ -2205,6 +2209,7 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const queryUsage: CollaborationServiceShape["queryUsage"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       // The window is half-open — `[since, until)` in SQL — so that two
       // adjacent windows cannot both claim a sample on the boundary. That makes
       // the default upper bound a millisecond in the future rather than `now`:
@@ -2485,6 +2490,7 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const claimBranch: CollaborationServiceShape["claimBranch"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const claim: CollaborationBranchClaim = {
         tenantId: input.tenantId,
         workspaceId: input.workspaceId,
@@ -2523,6 +2529,7 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const releaseBranch: CollaborationServiceShape["releaseBranch"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const key = scopedKey(input.tenantId, input.workspaceId, actor.userId);
       const released = yield* Ref.modify(stateRef, (state) => {
         if (!state.branchClaims.has(key)) {

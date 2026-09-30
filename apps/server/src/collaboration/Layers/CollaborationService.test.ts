@@ -103,6 +103,50 @@ it.effect("lets an organization member write, and still refuses a removed one", 
   }).pipe(Effect.provide(makeLayer())),
 );
 
+// An invite scoped to one workspace mints a TENANT-wide membership, so the only
+// thing standing between workspace A's member and workspace B's data is each
+// read checking the workspace it was actually invited into. Four of the service
+// methods did; the rest did not.
+it.effect("refuses a workspace the caller was never invited into", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    const invite = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "visitor@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const visitor = {
+      userId: UserId.make("user-visitor"),
+      displayName: "Visitor",
+      email: "visitor@example.com",
+    };
+    yield* collaboration.acceptInvite(visitor, { inviteId: invite.invite.id });
+
+    // Same tenant, a workspace they were never invited to.
+    const elsewhere = { ...scope, workspaceId: WorkspaceId.make("workspace-elsewhere") };
+
+    const refusedRead = yield* Effect.flip(collaboration.queryUsage(visitor, elsewhere));
+    assert.ok(refusedRead, "reading another workspace's usage is refused");
+
+    const refusedWrite = yield* Effect.flip(
+      collaboration.claimBranch(visitor, {
+        ...elsewhere,
+        branch: "feature/theirs",
+        baseBranch: "main",
+        worktreePath: "/tmp/theirs",
+      }),
+    );
+    assert.ok(refusedWrite, "claiming a branch in another workspace is refused");
+
+    // Their own workspace still works.
+    const allowed = yield* collaboration.queryUsage(visitor, scope);
+    assert.ok(allowed, "their own workspace is unaffected");
+  }).pipe(Effect.provide(makeLayer())),
+);
+
 it.effect("leaves prompts alone until a workspace turns approvals on", () =>
   Effect.gen(function* () {
     const collaboration = yield* CollaborationService;
