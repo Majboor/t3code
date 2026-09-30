@@ -159,6 +159,7 @@ import { DeploymentRegistry } from "./deploy/Services/DeploymentRegistry.ts";
 import { AnalyticsStore } from "./analytics/Services/AnalyticsStore.ts";
 import { PackEnablementService } from "./packEnablement/Services/PackEnablementService.ts";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
+import type { FilesystemBrowseResult } from "@t3tools/contracts";
 import { OPERATOR_PROVIDED_MARKER } from "./providerAuth/store.ts";
 import { LocalAuthAccountRepository } from "./persistence/Services/LocalAuthAccounts.ts";
 import { ProjectionThreadPreferenceRepository } from "./persistence/Services/ProjectionThreadPreferences.ts";
@@ -3208,6 +3209,64 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             });
             return conflicting ? Effect.fail(toError(forbiddenMessage(permission))) : Effect.void;
           }),
+        );
+      };
+
+      /**
+       * Hides other tenants' project directories from a browse listing.
+       *
+       * Blocking entry into someone else's project root was never the whole
+       * story: the folder NAME is disclosure too, and a hosted account with no
+       * projects of its own browses the server's home directory to find
+       * somewhere to start — which on a shared host lists everybody's work.
+       * Reported from a live instance, where opening the picker showed the
+       * server's own `Desktop`, `runs` and `t3code-src`.
+       *
+       * Filtering rather than refusing is the point. The stricter rule tried
+       * before — veto any directory that so much as contains another tenant's
+       * project — made every shared parent unbrowsable, so new accounts could
+       * not reach anywhere to create a first project and onboarding stopped.
+       * Removing the individual entries keeps the parent navigable, keeps a
+       * person's own folders and unclaimed folders visible, and gives up only
+       * the names that were never theirs to see.
+       *
+       * The machine's own owner is exempt: on their computer every path is
+       * theirs, and a picker that hid their own directories would be a bug.
+       */
+      const withoutOtherTenantsProjects = (
+        result: FilesystemBrowseResult,
+      ): Effect.Effect<FilesystemBrowseResult, never> => {
+        const tenantSession = hostedTenantSession;
+        if (machineOwnerSession || !tenantSession) {
+          return Effect.succeed(result);
+        }
+        return orchestrationEngine.getReadModel().pipe(
+          // A read model we could not load must not widen the listing: fail
+          // closed to "show nothing but the parent" rather than showing
+          // everything.
+          Effect.map((readModel) => {
+            const otherTenantRoots = readModel.projects.flatMap((project) =>
+              project.ownership !== undefined &&
+              project.ownership.tenantId !== tenantSession.tenantId
+                ? [project.workspaceRoot]
+                : [],
+            );
+            if (otherTenantRoots.length === 0) {
+              return result;
+            }
+            return {
+              ...result,
+              entries: result.entries.filter(
+                (entry) =>
+                  !otherTenantRoots.some(
+                    (root) =>
+                      isPathInsideRoot(entry.fullPath, root) &&
+                      isPathInsideRoot(root, entry.fullPath),
+                  ),
+              ),
+            };
+          }),
+          Effect.catchCause(() => Effect.succeed({ ...result, entries: [] })),
         );
       };
 
@@ -6302,6 +6361,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                           cause,
                         }),
                     ),
+                    Effect.flatMap(withoutOtherTenantsProjects),
                   ),
                 ),
               ),
