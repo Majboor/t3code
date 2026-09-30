@@ -179,8 +179,35 @@ async function waitUntil<T>(check: () => T | null, timeoutMs: number, descriptio
   }
 }
 
+// `filterProviderLaunchBaseEnv` drops HOME so a child cannot reach the
+// operator's ~/.codex/auth.json, ~/.claude or ~/.ssh — and `glmSpawnEnv` used to
+// put it straight back. A GLM thread is something any signed-in account can
+// open, and the agent's own bash tool spawns through this registry, so the
+// server's home was one `cat` away.
+it("gives the agent's commands a scratch HOME, not the server's", async () => {
+  const scratchHome = await mkdtemp(join(tmpdir(), "t3-glm-home-"));
+  const registry = new GlmTerminalRegistry(process.cwd(), scratchHome);
+
+  const terminalId = registry.create({
+    command: process.execPath,
+    args: ["-e", "console.log(process.env.HOME)"],
+  });
+  const result = await waitUntil(
+    () => {
+      const current = registry.output(terminalId);
+      return current.exitStatus !== null ? current : null;
+    },
+    5000,
+    "terminal command to exit",
+  );
+
+  assert.equal(result.output.trim(), scratchHome);
+  assert.notEqual(result.output.trim(), process.env["HOME"]);
+  registry.release(terminalId);
+});
+
 it("terminal/create runs a real short-lived command and terminal/output eventually shows its output and a non-null exitStatus", async () => {
-  const registry = new GlmTerminalRegistry(process.cwd());
+  const registry = new GlmTerminalRegistry(process.cwd(), process.cwd());
   const terminalId = registry.create({
     command: process.execPath,
     args: ["-e", "console.log('hello-from-terminal')"],
@@ -204,7 +231,7 @@ it("terminal/create runs a real short-lived command and terminal/output eventual
 });
 
 it("wait_for_exit resolves with the correct exit code for both a success and a failure command", async () => {
-  const registry = new GlmTerminalRegistry(process.cwd());
+  const registry = new GlmTerminalRegistry(process.cwd(), process.cwd());
 
   const successId = registry.create({ command: process.execPath, args: ["-e", "process.exit(0)"] });
   const successStatus = await registry.waitForExit(successId);
@@ -218,7 +245,7 @@ it("wait_for_exit resolves with the correct exit code for both a success and a f
 });
 
 it("kill actually terminates a genuinely long-running command, not just returns", async () => {
-  const registry = new GlmTerminalRegistry(process.cwd());
+  const registry = new GlmTerminalRegistry(process.cwd(), process.cwd());
   const terminalId = registry.create({ command: "sleep", args: ["30"] });
 
   const startedAt = Date.now();
@@ -253,7 +280,7 @@ it("kill actually terminates a genuinely long-running command, not just returns"
 
 it("rejects a cwd that resolves outside the session's own cwd", () => {
   const sessionCwd = mkdtempSync(join(tmpdir(), "glm-terminal-test-"));
-  const registry = new GlmTerminalRegistry(sessionCwd);
+  const registry = new GlmTerminalRegistry(sessionCwd, sessionCwd);
 
   assert.throws(
     () => registry.create({ command: process.execPath, args: ["-e", ""], cwd: "/etc" }),
@@ -270,7 +297,7 @@ it("accepts a cwd inside the session's own cwd, and defaults to it when omitted"
   const sessionCwd = mkdtempSync(join(tmpdir(), "glm-terminal-test-"));
   const nestedCwd = join(sessionCwd, "nested");
   mkdirSync(nestedCwd);
-  const registry = new GlmTerminalRegistry(sessionCwd);
+  const registry = new GlmTerminalRegistry(sessionCwd, sessionCwd);
 
   const nestedId = registry.create({
     command: process.execPath,
@@ -293,7 +320,7 @@ it("accepts a cwd inside the session's own cwd, and defaults to it when omitted"
 });
 
 it("disposeAll kills every still-tracked terminal", async () => {
-  const registry = new GlmTerminalRegistry(process.cwd());
+  const registry = new GlmTerminalRegistry(process.cwd(), process.cwd());
   const terminalId = registry.create({ command: "sleep", args: ["30"] });
 
   // Registered while the process is still running (and the terminal still
@@ -625,7 +652,7 @@ it("terminal/create does not hand the agent's command the server's own secrets",
   process.env["T3CODE_HOME"] = "/tmp/t3-home-under-test";
 
   try {
-    const registry = new GlmTerminalRegistry(process.cwd());
+    const registry = new GlmTerminalRegistry(process.cwd(), process.cwd());
     const terminalId = registry.create({
       command: process.execPath,
       args: [

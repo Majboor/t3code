@@ -604,9 +604,12 @@ interface GlmTerminalEntry {
 export class GlmTerminalRegistry {
   private readonly terminals = new Map<string, GlmTerminalEntry>();
   private readonly sessionCwd: string;
+  /** The scratch home every command spawned here sees, instead of the server's. */
+  private readonly isolatedHomeDir: string;
 
-  constructor(sessionCwd: string) {
+  constructor(sessionCwd: string, isolatedHomeDir: string) {
     this.sessionCwd = sessionCwd;
+    this.isolatedHomeDir = isolatedHomeDir;
   }
 
   /** Spawns `options.command`, returning a new terminal id. Throws `RequestError.invalidParams` if `options.cwd` resolves outside the session's own cwd. */
@@ -614,7 +617,7 @@ export class GlmTerminalRegistry {
     const cwd = this.resolveCwd(options.cwd);
     // The agent chose this command; it does not get the server's secrets to run
     // it with. See `glmSpawnEnv`.
-    const env: NodeJS.ProcessEnv = glmSpawnEnv(process.env);
+    const env: NodeJS.ProcessEnv = glmSpawnEnv(process.env, this.isolatedHomeDir);
     for (const variable of options.env ?? []) {
       env[variable.name] = variable.value;
     }
@@ -773,7 +776,7 @@ export class GlmAcpManager extends EventEmitter {
     const child = spawn(input.opencodeBinaryPath, ["acp", "--pure", "--cwd", input.cwd], {
       cwd: input.cwd,
       env: {
-        ...glmSpawnEnv(process.env),
+        ...glmSpawnEnv(process.env, configDir),
         XDG_CONFIG_HOME: configDir,
         ...(shimmedPath !== undefined ? { PATH: shimmedPath } : {}),
       },
@@ -808,7 +811,7 @@ export class GlmAcpManager extends EventEmitter {
     });
 
     const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
-    const terminals = new GlmTerminalRegistry(input.cwd);
+    const terminals = new GlmTerminalRegistry(input.cwd, configDir);
     const pendingElicitations = new Map<ApprovalRequestId, PendingElicitation>();
     const app = client({ name: "t3-logicpacks-glm" });
 
@@ -1317,7 +1320,7 @@ const GLM_ALLOWED_T3CODE_ENV_KEYS = new Set(["T3CODE_HOME"]);
  * cache directory or a git config, which breaks the turn rather than securing
  * it.
  */
-function glmSpawnEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function glmSpawnEnv(baseEnv: NodeJS.ProcessEnv, isolatedHomeDir: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(filterProviderLaunchBaseEnv(baseEnv))) {
     const normalizedKey = key.toUpperCase();
@@ -1332,10 +1335,15 @@ function glmSpawnEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     }
     env[key] = value;
   }
-  const home = baseEnv["HOME"];
-  if (home !== undefined) {
-    env["HOME"] = home;
-  }
+  // An isolated home, never the server's.
+  //
+  // `filterProviderLaunchBaseEnv` drops `HOME` precisely so a child cannot
+  // reach the operator's `~/.codex/auth.json`, `~/.claude` or `~/.ssh`, and
+  // putting it straight back handed all of that to a GLM subprocess — and to
+  // every command the agent's own bash tool spawns inside it, which is a thing
+  // any signed-in account can ask for. The tools genuinely need *a* home, so
+  // they get a scratch one belonging to this session.
+  env["HOME"] = isolatedHomeDir;
   return env;
 }
 
