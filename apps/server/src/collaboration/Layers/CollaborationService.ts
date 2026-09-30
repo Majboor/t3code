@@ -460,6 +460,57 @@ export function toAvatarInitials(displayName: string): string {
   return initials.length > 0 ? initials : "?";
 }
 
+/**
+ * The workspaces one tenant membership actually reaches, or `null` when it
+ * reaches the whole tenant.
+ *
+ * `TenantMembership` records a tenant, a user and roles, and nothing
+ * narrower. So the membership `acceptInvite` mints for an invite that named
+ * exactly one workspace is byte-for-byte the same thing as one minted for the
+ * whole tenant, and every read below filters on the `workspaceId` the CALLER
+ * asked for. A contractor invited to workspace A therefore asked for
+ * workspace B and was answered: B's held approvals carry the full prompt
+ * text, and the roster, activity feed, shared prompts and per-member token
+ * spend all came with it.
+ *
+ * The invite is the record of what was actually offered, and invites are
+ * persisted alongside the memberships, so the scope is recovered from them
+ * rather than from a column the repository schema would have to grow.
+ *
+ * `null` — reaches everything — is returned in two cases, and they are
+ * different on purpose:
+ *   - an accepted invite named no workspace, which is what a tenant-scoped
+ *     invite is;
+ *   - there is no accepted invite at all, so this membership was not minted
+ *     here. The tenant owner's own bootstrap row is the case that matters,
+ *     and narrowing it to nothing would lock an owner out of their own
+ *     tenant. It also keeps the single-user desktop install working, where
+ *     nobody was ever invited to anything.
+ */
+function membershipWorkspaceReach(
+  state: CollaborationState,
+  tenantId: string,
+  userId: string,
+): ReadonlySet<string> | null {
+  const accepted = Array.from(state.invites.values()).filter(
+    (invite) =>
+      invite.tenantId === tenantId &&
+      invite.acceptedAt !== null &&
+      invite.acceptedByUserId === userId,
+  );
+  if (accepted.length === 0) {
+    return null;
+  }
+  const reach = new Set<string>();
+  for (const invite of accepted) {
+    if (invite.workspaceId === null) {
+      return null;
+    }
+    reach.add(invite.workspaceId);
+  }
+  return reach;
+}
+
 /** The lead approves by definition; everyone else has to be named. */
 function isApprover(settings: CollaborationWorkspaceSettings, userId: UserId): boolean {
   if (settings.leadUserId === userId) {
@@ -474,7 +525,10 @@ function isApprover(settings: CollaborationWorkspaceSettings, userId: UserId): b
  * without naming a replacement, has none — queuing a prompt there would
  * block its author forever with nobody able to help them.
  */
-function hasEligibleApprover(settings: CollaborationWorkspaceSettings, requesterId: UserId): boolean {
+function hasEligibleApprover(
+  settings: CollaborationWorkspaceSettings,
+  requesterId: UserId,
+): boolean {
   if (settings.leadUserId !== null && settings.leadUserId !== requesterId) {
     return true;
   }
@@ -733,6 +787,50 @@ const makeCollaborationService = Effect.gen(function* () {
         }),
     ),
   );
+
+  /**
+   * Refuses a read of a workspace the caller was never invited into.
+   *
+   * Deliberately NOT softened by "unless they are this workspace's lead or an
+   * approver": somebody invited only to workspace A is nobody in workspace B
+   * until B invites them, and an approver list is not an invite. Being wrong in
+   * that direction costs one more invite; being wrong in the other direction is
+   * the leak this exists to close.
+   */
+  const ensureWorkspaceReach = (
+    actor: CollaborationActor,
+    input: { readonly tenantId: string; readonly workspaceId: string },
+  ): Effect.Effect<void, CollaborationError> =>
+    Ref.get(stateRef).pipe(
+      Effect.flatMap((state) => {
+        const reach = membershipWorkspaceReach(state, input.tenantId, actor.userId);
+        if (reach === null) {
+          // Not somebody this service invited: the owner's bootstrap row, or a
+          // desktop install where nobody was invited to anything. Unchanged.
+          return Effect.void;
+        }
+        // From here on the caller is an invited collaborator, and two things
+        // have to still be true: the invite named THIS workspace, and the
+        // membership it minted is still there and still enabled. The second
+        // half is what makes `removeMember` mean something to a read —
+        // deleting the membership row used to leave the activity feed, roster,
+        // shared prompts and held prompt text just as readable as before.
+        const membership = Array.from(state.memberships.values()).find(
+          (candidate) =>
+            candidate.tenantId === input.tenantId &&
+            candidate.userId === actor.userId &&
+            candidate.disabledAt === null,
+        );
+        return reach.has(input.workspaceId) && membership !== undefined
+          ? Effect.void
+          : Effect.fail(
+              new CollaborationError({
+                code: "invalid-membership-rule",
+                message: "You are not a member of this workspace.",
+              }),
+            );
+      }),
+    );
 
   const upsertPresence: CollaborationServiceShape["upsertPresence"] = (actor, input) => {
     const createdAt = nowIso();
@@ -1053,7 +1151,8 @@ const makeCollaborationService = Effect.gen(function* () {
   };
 
   const listActivity: CollaborationServiceShape["listActivity"] = (actor, input) =>
-    Ref.get(stateRef).pipe(
+    ensureWorkspaceReach(actor, input).pipe(
+      Effect.andThen(Ref.get(stateRef)),
       Effect.map((state) => {
         const limit = Math.min(input.limit ?? DEFAULT_ACTIVITY_LIMIT, MAX_ACTIVITY_LIMIT);
         const activities = state.activities.filter(
@@ -1166,8 +1265,9 @@ const makeCollaborationService = Effect.gen(function* () {
       return { sharedPrompt };
     });
 
-  const listSharedPrompts: CollaborationServiceShape["listSharedPrompts"] = (_actor, input) =>
+  const listSharedPrompts: CollaborationServiceShape["listSharedPrompts"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const records = yield* sharedPrompts
         .listForWorkspace({ tenantId: input.tenantId, workspaceId: input.workspaceId })
         .pipe(Effect.mapError(mapPersistenceError("Failed to list shared prompts.")));
@@ -1357,10 +1457,7 @@ const makeCollaborationService = Effect.gen(function* () {
           case "note-resolved":
             // `null` tenant/workspace means a direct message, which is not
             // workspace-scoped and is never delivered through this stream.
-            return (
-              event.tenantId === input.tenantId &&
-              event.workspaceId === input.workspaceId
-            );
+            return event.tenantId === input.tenantId && event.workspaceId === input.workspaceId;
           case "shared-prompt-created":
             return (
               event.sharedPrompt.tenantId === input.tenantId &&
@@ -1512,6 +1609,9 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const listApprovals: CollaborationServiceShape["listApprovals"] = (actor, input) =>
     Effect.gen(function* () {
+      // A held approval carries the prompt verbatim, which makes this the most
+      // expensive thing in the service to answer for the wrong workspace.
+      yield* ensureWorkspaceReach(actor, input);
       const settings = yield* resolveSettings(input);
       const state = yield* Ref.get(stateRef);
       const limit = Math.min(input.limit ?? DEFAULT_ACTIVITY_LIMIT, MAX_ACTIVITY_LIMIT);
@@ -1753,23 +1853,102 @@ const makeCollaborationService = Effect.gen(function* () {
     actor,
     input,
   ) =>
-    Ref.get(stateRef).pipe(
-      Effect.map((state) => {
-        const roles =
-          Array.from(state.memberships.values()).find(
-            (membership) =>
-              membership.tenantId === input.tenantId &&
-              membership.userId === actor.userId &&
-              membership.disabledAt === null,
-          )?.roles ?? [];
-        // Nobody is locked out by having no membership recorded; only an
-        // explicit viewer-and-nothing-else role is read-only.
-        return { mayRun: roles.length === 0 || roles.some((role) => role !== "viewer") };
-      }),
-    );
+    Effect.gen(function* () {
+      const state = yield* Ref.get(stateRef);
+      const membership = Array.from(state.memberships.values()).find(
+        (candidate) =>
+          candidate.tenantId === input.tenantId &&
+          candidate.userId === actor.userId &&
+          candidate.disabledAt === null,
+      );
+
+      if (membership !== undefined) {
+        // A membership minted by an invite into workspace A says nothing about
+        // workspace B; see `membershipWorkspaceReach`.
+        const reach = membershipWorkspaceReach(state, input.tenantId, actor.userId);
+        if (reach !== null && !reach.has(input.workspaceId)) {
+          return { mayRun: false };
+        }
+        // Only a viewer-and-nothing-else role is read-only. An empty role list
+        // is refused rather than waved through: a membership that grants
+        // nothing grants nothing.
+        return { mayRun: membership.roles.some((role) => role !== "viewer") };
+      }
+
+      // Nobody with a membership on record.
+      //
+      // This used to answer `true`, on the reading that an unrecorded
+      // membership means "not governed yet". `removeMember` DELETES the
+      // membership row, so that reading handed a removed member write access
+      // back the instant they were removed: their next turn found no row, took
+      // the same branch, and ran. Removal has to mean removal.
+      //
+      // A workspace with no lead is still genuinely ungoverned — nobody has
+      // configured it and it has no owner on record — and that is the
+      // single-user desktop case, where refusing would lock the only person on
+      // the machine out of their own work. Once a workspace HAS a lead, not
+      // being in it means not being in it, and the lead and its approvers are
+      // let through because that is who they are.
+      //
+      // Read here rather than through `resolveSettings` for one reason: that
+      // helper answers "no lead" when the workspace list cannot be READ, and
+      // "no lead" is the branch that lets a stranger write. A lookup that
+      // failed is not permission, so a failed read refuses instead.
+      // An organization member has no row here at all.
+      //
+      // `state.memberships` comes from `loadCollaboration()`, which reads only
+      // `tenant_memberships WHERE organization_id IS NULL` — the personal side.
+      // Somebody who belongs to a tenant through an ORGANIZATION is recorded in
+      // the other half of that table and is legitimately absent from this map.
+      // Refusing them here would have taken the ability to start a turn away
+      // from every organization-scoped member, which is a far worse outcome
+      // than the leak this branch exists to close.
+      const organizationRoles = yield* repository.loadOrganizations().pipe(
+        Effect.map((snapshot) =>
+          snapshot.memberships
+            .filter(
+              (candidate) =>
+                candidate.tenantId === input.tenantId &&
+                candidate.userId === actor.userId &&
+                candidate.disabledAt === null,
+            )
+            .flatMap((candidate) => candidate.roles),
+        ),
+        // A membership table we could not read is not permission. Fall through
+        // to the lead check rather than inventing roles.
+        Effect.catchCause(() => Effect.succeed<ReadonlyArray<string>>([])),
+      );
+      if (organizationRoles.length > 0) {
+        // Same rule the personal branch applies: viewer-and-nothing-else is
+        // read-only, anything more may write.
+        return { mayRun: organizationRoles.some((role) => role !== "viewer") };
+      }
+
+      const stored = state.settings.get(workspaceKey(input.tenantId, input.workspaceId));
+      const settings =
+        stored ??
+        (yield* repository.loadWorkspaces().pipe(
+          Effect.map((snapshot) =>
+            defaultSettings({
+              tenantId: input.tenantId,
+              workspaceId: input.workspaceId,
+              leadUserId:
+                snapshot.workspaces.find((workspace) => workspace.id === input.workspaceId)
+                  ?.ownerUserId ?? null,
+              updatedAt: nowIso(),
+            }),
+          ),
+          Effect.catchCause(() => Effect.succeed(null)),
+        ));
+      if (settings === null) {
+        return { mayRun: false };
+      }
+      return { mayRun: settings.leadUserId === null || isApprover(settings, actor.userId) };
+    });
 
   const listMembers: CollaborationServiceShape["listMembers"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const settings = yield* resolveSettings(input);
       const members = yield* buildMembers({ ...input, viewerUserId: actor.userId });
       return {
@@ -1913,18 +2092,16 @@ const makeCollaborationService = Effect.gen(function* () {
       // every personal membership on the instance and reinstating only the ones
       // this service happened to be holding — which destroyed the rows of every
       // account provisioned since it booted.
-      yield* repository
-        .deleteMemberships(removedMembershipIds)
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new CollaborationError({
-                code: "invalid-membership-rule",
-                message: "Failed to remove the member.",
-                cause,
-              }),
-          ),
-        );
+      yield* repository.deleteMemberships(removedMembershipIds).pipe(
+        Effect.mapError(
+          (cause) =>
+            new CollaborationError({
+              code: "invalid-membership-rule",
+              message: "Failed to remove the member.",
+              cause,
+            }),
+        ),
+      );
       yield* persist;
       yield* PubSub.publish(events, {
         type: "member-removed",

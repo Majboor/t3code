@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { TenantId, ThreadId, UserId, WorkspaceId } from "@t3tools/contracts";
+import { TenantId, ThreadId, UserId, WorkspaceId,
+  MembershipId,
+  OrganizationId,
+} from "@t3tools/contracts";
 import { decideFilePresence } from "@t3tools/shared/filePresence";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
@@ -16,6 +19,7 @@ import {
 import { CollaborationService } from "../Services/CollaborationService.ts";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
+import { TenancyRepository } from "../../persistence/Services/Tenancy.ts";
 import type { CollaborationMemberUsageRecord } from "../../persistence/Services/Tenancy.ts";
 import {
   ActivityNoteRepositoryLive,
@@ -40,13 +44,64 @@ const delegate = { userId: UserId.make("user-delegate"), displayName: "Delegate"
 function makeLayer() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-collab-governance-"));
   return CollaborationServiceLive.pipe(
-    Layer.provide(TenancyRepositoryLive),
+    // `provideMerge` rather than `provide`: a couple of tests need to write
+    // through the repository directly (an organization membership lives in a
+    // table the collaboration service never writes), so it has to stay in the
+    // context rather than being consumed on the way in.
+    Layer.provideMerge(TenancyRepositoryLive),
     Layer.provide(ActivityNoteRepositoryLive),
     Layer.provide(SharedPromptRepositoryLive),
     Layer.provide(makeSqlitePersistenceLive(path.join(tempDir, "tenancy.sqlite"))),
     Layer.provideMerge(NodeServices.layer),
   );
 }
+
+// Removal has to mean removal — a removed member used to get write access back
+// the instant their row was deleted, because "no membership on record" was read
+// as "not governed yet". But the fix for that nearly took the ability to start a
+// turn away from every ORGANIZATION-scoped member, who legitimately has no row
+// in the collaboration map: `loadCollaboration()` reads only
+// `organization_id IS NULL`, and they live in the other half of the table.
+it.effect("lets an organization member write, and still refuses a removed one", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    const repository = yield* TenancyRepository;
+
+    // A lead exists, so the workspace is governed and the ungoverned-desktop
+    // allowance does not apply.
+    yield* collaboration.updateSettings(lead, { ...scope, approvalMode: "open" });
+
+    const orgMember = {
+      userId: UserId.make("user-org-member"),
+      displayName: "Org Member",
+    };
+
+    // Nobody at all: refused, which is the removed-member case.
+    const stranger = yield* collaboration.checkWriteAccessForTurn(orgMember, scope);
+    assert.strictEqual(stranger.mayRun, false, "a caller with no membership anywhere may not write");
+
+    // Now give them a membership through the ORGANIZATION side of the table.
+    const organizations = yield* repository.loadOrganizations();
+    yield* repository.saveOrganizations({
+      ...organizations,
+      memberships: [
+        ...organizations.memberships,
+        {
+          id: MembershipId.make("membership:org-member"),
+          tenantId: scope.tenantId,
+          userId: orgMember.userId,
+          organizationId: OrganizationId.make("org-1"),
+          roles: ["developer"],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          disabledAt: null,
+        },
+      ],
+    });
+
+    const allowed = yield* collaboration.checkWriteAccessForTurn(orgMember, scope);
+    assert.strictEqual(allowed.mayRun, true, "an organization member may start a turn");
+  }).pipe(Effect.provide(makeLayer())),
+);
 
 it.effect("leaves prompts alone until a workspace turns approvals on", () =>
   Effect.gen(function* () {
@@ -1107,5 +1162,108 @@ it.effect("does not warn about an agent's own claim, only a person's", () =>
 
     const result = yield* collaboration.warnBeforeAgentWrites(lead.userId, scope);
     assert.deepStrictEqual(result.heldPaths, []);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+// Removal used to mean "your row is gone", and a missing row was read as "not
+// governed yet", which handed the removed member write access straight back:
+// their next turn found no membership, took the ungoverned branch and ran.
+it.effect("refuses a removed member's next turn instead of waving it through", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    // Configuring the workspace is what makes this caller the lead.
+    yield* collaboration.updateSettings(lead, { ...scope, approvalMode: "open" });
+
+    const invite = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "member@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    yield* collaboration.acceptInvite(member, { inviteId: invite.invite.id });
+    const before = yield* collaboration.checkWriteAccessForTurn(member, scope);
+    assert.strictEqual(before.mayRun, true);
+
+    yield* collaboration.removeMember(lead, { ...scope, userId: member.userId });
+
+    const after = yield* collaboration.checkWriteAccessForTurn(member, scope);
+    assert.strictEqual(after.mayRun, false);
+
+    // And the reads close with the turn. The invite row survives removal, so
+    // the workspace's history would otherwise stay just as readable.
+    const refused = yield* Effect.flip(collaboration.listActivity(member, scope));
+    assert.strictEqual(refused.code, "invalid-membership-rule");
+
+    // The lead is untouched: they hold no membership row either, and the whole
+    // point of the old branch was not to strand them.
+    const leadStillWrites = yield* collaboration.checkWriteAccessForTurn(lead, scope);
+    assert.strictEqual(leadStillWrites.mayRun, true);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+// An invite names one workspace. The membership it mints names only a tenant,
+// so the workspace it was scoped to used to be forgotten the moment it was
+// redeemed — and every read here filters on the workspace the CALLER asked
+// for. A contractor invited to one workspace asked for the next one along.
+it.effect("keeps an invite scoped to one workspace out of the tenant's others", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    const otherScope = { tenantId, workspaceId: WorkspaceId.make("workspace-collab-other") };
+
+    // A second workspace in the same tenant, holding a prompt for review.
+    yield* collaboration.updateSettings(lead, { ...otherScope, approvalMode: "blocking" });
+    const held = yield* collaboration.submitPromptForApproval(delegate, {
+      ...otherScope,
+      prompt: "rotate the production signing key",
+    });
+    assert.strictEqual(held.approval?.status, "pending");
+
+    // The contractor is invited to the FIRST workspace and nothing else.
+    yield* collaboration.updateSettings(lead, { ...scope, approvalMode: "open" });
+    const invite = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "member@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    yield* collaboration.acceptInvite(member, { inviteId: invite.invite.id });
+
+    // Their own workspace still answers.
+    const mine = yield* collaboration.listApprovals(member, scope);
+    assert.deepEqual(mine.approvals, []);
+
+    // The one they were never invited into does not — not an empty list, a
+    // refusal, because the held prompt text is the thing being protected.
+    const refusedApprovals = yield* Effect.flip(collaboration.listApprovals(member, otherScope));
+    assert.strictEqual(refusedApprovals.code, "invalid-membership-rule");
+
+    const refusedActivity = yield* Effect.flip(collaboration.listActivity(member, otherScope));
+    assert.strictEqual(refusedActivity.code, "invalid-membership-rule");
+
+    const refusedMembers = yield* Effect.flip(collaboration.listMembers(member, otherScope));
+    assert.strictEqual(refusedMembers.code, "invalid-membership-rule");
+
+    const refusedPrompts = yield* Effect.flip(collaboration.listSharedPrompts(member, otherScope));
+    assert.strictEqual(refusedPrompts.code, "invalid-membership-rule");
+
+    // And it is not a turn they may start either.
+    const write = yield* collaboration.checkWriteAccessForTurn(member, otherScope);
+    assert.strictEqual(write.mayRun, false);
+
+    // A tenant-wide invite still reaches the whole tenant, which is what it is
+    // for — this is a narrowing of workspace-scoped invites, not of all of them.
+    const tenantWide = yield* collaboration.createInvite(lead, {
+      ...scope,
+      workspaceId: null,
+      email: "delegate@example.com",
+      scope: "tenant",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    yield* collaboration.acceptInvite(delegate, { inviteId: tenantWide.invite.id });
+    const everywhere = yield* collaboration.listApprovals(delegate, otherScope);
+    assert.strictEqual(everywhere.approvals.length, 1);
   }).pipe(Effect.provide(makeLayer())),
 );
