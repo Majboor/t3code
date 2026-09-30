@@ -2746,14 +2746,35 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
       // tenant plus every workspace they were invited into. Authorize against the
       // roles they hold in the tenant that actually owns the path, not just the
       // tenant that happens to be active on the session.
-      const resolveWorkspaceRootTenantRoles = (
+      /**
+       * Who this path answers to, keeping two very different answers apart.
+       *
+       * This used to return `null` for both "no tenant owns this path" and "a
+       * tenant owns it and you are nobody there", and the caller read `null` as
+       * the first one — falling through to the permissive provider-session
+       * branch for somebody who had just been told, in effect, that the path
+       * was not theirs. A member removed from a workspace kept file access to
+       * its project roots that way, because removal leaves exactly that state:
+       * the project still has ownership, and they no longer have a role in it.
+       *
+       * The same conflation was fixed in `workspace/fileHttp.ts`, where the
+       * comment calls it out as a deliberate divergence from this function.
+       * This is that divergence closed.
+       */
+      type WorkspaceRootTenancy =
+        /** No tenant claims this path; provider-session isolation decides. */
+        | { readonly _tag: "unowned" }
+        /** A tenant claims it, and these are the caller's roles there — possibly none. */
+        | { readonly _tag: "owned"; readonly roles: ReadonlyArray<TenantRole> };
+
+      const resolveWorkspaceRootTenancy = (
         cwd: string,
-      ): Effect.Effect<ReadonlyArray<TenantRole> | null, never> =>
+      ): Effect.Effect<WorkspaceRootTenancy, never> =>
         Effect.all({
           readModel: orchestrationEngine.getReadModel(),
           memberships: actorMemberships(),
         }).pipe(
-          Effect.map(({ readModel, memberships }) => {
+          Effect.map(({ readModel, memberships }): WorkspaceRootTenancy => {
             const owningTenantIds = new Set(
               readModel.projects
                 .filter(
@@ -2763,14 +2784,19 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 .map((project) => project.ownership!.tenantId),
             );
             if (owningTenantIds.size === 0) {
-              return null;
+              return { _tag: "unowned" };
             }
-            const roles = memberships
-              .filter((membership) => owningTenantIds.has(membership.tenantId))
-              .flatMap((membership) => membership.roles);
-            return roles.length > 0 ? roles : null;
+            return {
+              _tag: "owned",
+              roles: memberships
+                .filter((membership) => owningTenantIds.has(membership.tenantId))
+                .flatMap((membership) => membership.roles),
+            };
           }),
-          Effect.catchCause(() => Effect.succeed(null)),
+          // A read model we could not load must not widen anything: claim
+          // ownership by nobody-in-particular so the caller refuses rather than
+          // falling through to the permissive branch.
+          Effect.catchCause(() => Effect.succeed<WorkspaceRootTenancy>({ _tag: "owned", roles: [] })),
         );
 
       const ensureTenantWorkspacePermission = <E>(
@@ -2787,14 +2813,17 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
 
         const tenantSession = hostedTenantSession;
         if (tenantSession) {
-          return resolveWorkspaceRootTenantRoles(cwd).pipe(
-            Effect.flatMap((owningRoles) => {
-              if (owningRoles !== null) {
-                return hasTenantPermission({ roles: owningRoles, permission })
+          return resolveWorkspaceRootTenancy(cwd).pipe(
+            Effect.flatMap((tenancy) => {
+              if (tenancy._tag === "owned") {
+                // Owned by a tenant. The caller's roles *there* decide, and no
+                // roles means no, rather than dropping through to the branch
+                // below — which is how a removed member kept their access.
+                return hasTenantPermission({ roles: tenancy.roles, permission })
                   ? Effect.void
                   : Effect.fail(toError(forbiddenMessage(permission)));
               }
-              // Unowned path: fall back to provider-session isolation.
+              // Genuinely unowned: fall back to provider-session isolation.
               return hasTenantPermission({ roles: tenantSession.roles, permission })
                 ? ensureProviderSessionGrantsWorkspaceRoot(cwd, permission, toError)
                 : Effect.fail(toError(forbiddenMessage(permission)));
