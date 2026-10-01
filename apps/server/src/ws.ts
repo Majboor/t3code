@@ -5733,7 +5733,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             WS_METHODS.collaborationFilesTouchList,
             withRateLimit(
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
-                Effect.flatMap(() => collaboration.listFileTouches(input)),
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listFileTouches(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),
@@ -5773,7 +5774,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             WS_METHODS.collaborationFilesPresenceList,
             withRateLimit(
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
-                Effect.flatMap(() => collaboration.listFilePresence(input)),
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listFilePresence(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),
@@ -5872,16 +5874,22 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             withRateLimitedStream(
               Stream.unwrap(
                 ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
-                  Effect.as(
+                  Effect.flatMap(() => resolveCollaborationActor),
+                  Effect.map((actor) =>
                     // `collaboration.stream` filters on the tenant and
-                    // workspace ids the CLIENT supplied and consults no
-                    // membership of its own, so this re-check is the only
-                    // thing standing between a removed member and the
+                    // workspace ids the CLIENT supplied, so the re-check is
+                    // what stands between a removed member and the
                     // workspace's shared prompts, notes, approvals and invites
-                    // continuing to arrive on their open socket.
+                    // continuing to arrive on their open socket. The tenant
+                    // permission alone was not enough: an invite scoped to one
+                    // workspace mints a tenant-wide membership, so the stream
+                    // also has to keep agreeing that the actor reaches THIS
+                    // workspace, which is what `stream` now checks.
                     withLiveAccessRecheck(
-                      collaboration.stream(input),
-                      ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view"),
+                      collaboration.stream(actor, input),
+                      ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
+                        Effect.flatMap(() => collaboration.ensureWorkspaceAccess(actor, input)),
+                      ),
                     ),
                   ),
                 ),
@@ -7440,9 +7448,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 gitRpcError(input.cwd, message),
               ).pipe(
                 Effect.flatMap(() =>
-                  git
-                    .resolveConflicts(input)
-                    .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+                  git.resolveConflicts(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
                 ),
               ),
               (message) => gitRpcError(input.cwd, message),

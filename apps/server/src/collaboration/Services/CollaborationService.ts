@@ -103,6 +103,18 @@ export interface CollaborationActor {
 }
 
 export interface CollaborationServiceShape {
+  /**
+   * Whether this actor may read this workspace at all — the same check every
+   * read below makes for itself, exposed because a long-lived SUBSCRIPTION has
+   * to keep asking. `ws.ts` re-runs it per event on the collaboration stream,
+   * so that narrowing somebody's reach, or removing them, closes a socket that
+   * is already open, not only the next one they open.
+   */
+  readonly ensureWorkspaceAccess: (
+    actor: CollaborationActor,
+    input: { readonly tenantId: string; readonly workspaceId: string },
+  ) => Effect.Effect<void, CollaborationError>;
+
   readonly upsertPresence: (
     actor: CollaborationActor,
     input: CollaborationPresenceUpsertInput,
@@ -187,6 +199,7 @@ export interface CollaborationServiceShape {
   ) => Effect.Effect<CollaborationDirectMessageListResult, CollaborationError>;
 
   readonly stream: (
+    actor: CollaborationActor,
     input: CollaborationStreamInput,
   ) => Stream.Stream<CollaborationStreamEvent, CollaborationError>;
 
@@ -278,6 +291,7 @@ export interface CollaborationServiceShape {
   ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;
 
   readonly listFileTouches: (
+    actor: CollaborationActor,
     input: CollaborationFileTouchListInput,
   ) => Effect.Effect<CollaborationFileTouchResult, CollaborationError>;
 
@@ -320,6 +334,7 @@ export interface CollaborationServiceShape {
 
   /** What is live in this workspace. Expired claims are never handed out. */
   readonly listFilePresence: (
+    actor: CollaborationActor,
     input: CollaborationFilePresenceListInput,
   ) => Effect.Effect<CollaborationFilePresenceResult, CollaborationError>;
 

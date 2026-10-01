@@ -13,7 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { decideFilePresence } from "@t3tools/shared/filePresence";
 import { assert, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option, Stream } from "effect";
 
 import {
   CollaborationServiceLive,
@@ -575,7 +575,7 @@ it.effect("remembers that two people touched the same file, not just the last on
     yield* collaboration.touchFiles(member, { ...scope, paths: ["app.py"] });
     yield* collaboration.touchFiles(lead, { ...scope, paths: ["app.py"] });
 
-    const listed = yield* collaboration.listFileTouches(scope);
+    const listed = yield* collaboration.listFileTouches(member, scope);
     const authors = listed.touches
       .filter((touch) => touch.path === "app.py")
       .map((touch) => touch.userId);
@@ -598,7 +598,7 @@ it.effect("attributes an agent's writes to the person whose turn it was", () =>
 
     yield* collaboration.touchFilesForUser(member.userId, { ...scope, paths: ["agent.py"] });
 
-    const listed = yield* collaboration.listFileTouches(scope);
+    const listed = yield* collaboration.listFileTouches(member, scope);
     const touch = listed.touches.find((entry) => entry.path === "agent.py");
     assert.strictEqual(touch?.userId, member.userId);
     assert.strictEqual(touch?.displayName, member.displayName);
@@ -615,7 +615,7 @@ it.effect("lets a turn fill in an unclaimed file but never take somebody else's"
       paths: ["app.py", "worker.py"],
     });
 
-    const listed = yield* collaboration.listFileTouches(scope);
+    const listed = yield* collaboration.listFileTouches(member, scope);
     const authorsOfApp = listed.touches
       .filter((touch) => touch.path === "app.py")
       .map((touch) => touch.userId);
@@ -640,7 +640,7 @@ it.effect("keeps one entry per person per file, however often they touch it", ()
     yield* collaboration.touchFiles(member, { ...scope, paths: ["app.py"] });
     yield* collaboration.touchFiles(member, { ...scope, paths: ["app.py"] });
 
-    const listed = yield* collaboration.listFileTouches(scope);
+    const listed = yield* collaboration.listFileTouches(member, scope);
     assert.strictEqual(listed.touches.filter((touch) => touch.path === "app.py").length, 1);
   }).pipe(Effect.provide(makeLayer())),
 );
@@ -802,7 +802,7 @@ it.effect("keeps every author of a path, and the latest is still recoverable", (
     yield* collaboration.touchFiles(member, { ...scope, paths: ["a.txt", "b.txt"] });
     yield* collaboration.touchFiles(lead, { ...scope, paths: ["a.txt"] });
 
-    const touches = yield* collaboration.listFileTouches(scope);
+    const touches = yield* collaboration.listFileTouches(member, scope);
     // This used to keep one entry per path, which read as "the latest author"
     // and quietly threw away the fact that two people had been in a.txt. The
     // latest is still derivable; the second author is not recoverable once
@@ -1076,7 +1076,7 @@ it.effect("tells a person in a file apart from an agent writing it", () =>
       sourceId: "thread:1",
     });
 
-    const { presence } = yield* collaboration.listFilePresence(scope);
+    const { presence } = yield* collaboration.listFilePresence(member, scope);
     assert.strictEqual(presence.length, 2);
     assert.deepStrictEqual(presence.map((entry) => entry.kind).toSorted(), ["agent", "person"]);
 
@@ -1107,7 +1107,7 @@ it.effect("keeps a person and their own agent as two claims on one file", () =>
       sourceId: "thread:1",
     });
 
-    const { presence } = yield* collaboration.listFilePresence(scope);
+    const { presence } = yield* collaboration.listFilePresence(member, scope);
     assert.strictEqual(presence.length, 2);
   }).pipe(Effect.provide(makeLayer())),
 );
@@ -1127,7 +1127,7 @@ it.effect("treats a heartbeat as one claim, not a second body", () =>
       sourceId: "page:1",
     });
 
-    const { presence } = yield* collaboration.listFilePresence(scope);
+    const { presence } = yield* collaboration.listFilePresence(member, scope);
     assert.strictEqual(presence.length, 1);
     // The deadline moves; how long they have been in the file does not.
     assert.strictEqual(again.presence[0]?.startedAt, first.presence[0]?.startedAt);
@@ -1151,7 +1151,7 @@ it.effect("lets a page give up everything it holds without naming the files", ()
 
     yield* collaboration.releaseFilePresence(member, { ...scope, paths: [], sourceId: "page:1" });
 
-    const { presence } = yield* collaboration.listFilePresence(scope);
+    const { presence } = yield* collaboration.listFilePresence(member, scope);
     // Only that page's claims went. The other person is still in the file.
     assert.strictEqual(presence.length, 1);
     assert.strictEqual(presence[0]?.userId, lead.userId);
@@ -1169,7 +1169,7 @@ it.effect("does not hand out a claim from another workspace", () =>
       sourceId: "page:1",
     });
 
-    const { presence } = yield* collaboration.listFilePresence({
+    const { presence } = yield* collaboration.listFilePresence(member, {
       tenantId,
       workspaceId: otherWorkspace,
     });
@@ -1358,7 +1358,7 @@ it.effect("refuses foreign presence and narrows a tenant-wide invite listing", (
     yield* collaboration.upsertPresence(delegate, {
       ...elsewhere,
       threadId,
-      status: "online",
+      status: "active",
     });
 
     const refusedPresence = yield* Effect.flip(collaboration.listPresence(visitor, elsewhere));
@@ -1429,5 +1429,92 @@ it.effect("hands a direct-message thread only to the two people in it", () =>
         `${party.displayName} reads their own thread`,
       );
     }
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+// The remaining workspace-scoped reads. Each one takes a tenant and a
+// workspace from the client, and a workspace-scoped invite mints a tenant-wide
+// membership, so every one of these answered a workspace the caller was never
+// invited to: who leads it and who may approve there, which branches are held
+// and at which worktree PATHS on disk, which files have been touched and by
+// whom, who has a file open right now — and the live stream, which is all of
+// the above as it happens plus held prompt text.
+// `it.live` rather than `it.effect`: the stream below is given a real deadline,
+// and the test clock never reaches one on its own.
+it.live("refuses the workspace-scoped reads for a workspace outside the caller's reach", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    const invite = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "visitor@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const visitor = {
+      userId: UserId.make("user-visitor"),
+      displayName: "Visitor",
+      email: "visitor@example.com",
+    };
+    yield* collaboration.acceptInvite(visitor, { inviteId: invite.invite.id });
+
+    const elsewhere = { ...scope, workspaceId: WorkspaceId.make("workspace-elsewhere") };
+
+    // Put something in the foreign workspace worth stealing.
+    yield* collaboration.updateSettings(lead, { ...elsewhere, approvalMode: "blocking" });
+    yield* collaboration.claimBranch(lead, {
+      ...elsewhere,
+      branch: "feature/secret",
+      baseBranch: "main",
+      worktreePath: "/Users/someone/secret-client",
+    });
+    yield* collaboration.touchFiles(lead, { ...elsewhere, paths: ["secret/plan.md"] });
+    yield* collaboration.markFilePresence(lead, {
+      ...elsewhere,
+      paths: ["secret/plan.md"],
+      sourceId: "page:1",
+    });
+
+    // Every read is attempted and reported, rather than flipped one at a time:
+    // a flip on a read that wrongly SUCCEEDED is a defect that ends the test
+    // there, which would leave the reads after it unproven.
+    const reads = [
+      ["getSettings", collaboration.getSettings(visitor, elsewhere)],
+      ["listBranchClaims", collaboration.listBranchClaims(visitor, elsewhere)],
+      ["listFileTouches", collaboration.listFileTouches(visitor, elsewhere)],
+      ["listFilePresence", collaboration.listFilePresence(visitor, elsewhere)],
+      ["ensureWorkspaceAccess", collaboration.ensureWorkspaceAccess(visitor, elsewhere)],
+      // A refused subscribe fails; an accepted one just waits for its first
+      // event, and an unguarded stream of a workspace nobody is working in
+      // waits forever. So the subscribe gets a deadline, and reaching it means
+      // the subscription was ACCEPTED, which is the thing being refused here.
+      [
+        "stream",
+        Stream.runHead(collaboration.stream(visitor, elsewhere)).pipe(
+          // `raceFirst`, not `race`: `race` waits to see whether the other
+          // side succeeds before reporting a failure, so the deadline would
+          // swallow the refusal this is here to observe.
+          Effect.raceFirst(Effect.sleep("250 millis").pipe(Effect.as(Option.none()))),
+        ),
+      ],
+    ] as const;
+    const outcomes: Array<string> = [];
+    for (const [name, read] of reads) {
+      const exit = yield* Effect.exit(read);
+      outcomes.push(`${name}: ${exit._tag === "Failure" ? "refused" : "ANSWERED"}`);
+    }
+    assert.deepStrictEqual(
+      outcomes,
+      reads.map(([name]) => `${name}: refused`),
+      "every workspace-scoped read refuses a workspace outside the caller's reach",
+    );
+
+    // Their own workspace is untouched by any of it.
+    const own = yield* collaboration.getSettings(visitor, scope);
+    assert.ok(own.settings, "their own workspace still reads");
+    yield* collaboration.listBranchClaims(visitor, scope);
+    yield* collaboration.listFileTouches(visitor, scope);
+    yield* collaboration.listFilePresence(visitor, scope);
   }).pipe(Effect.provide(makeLayer())),
 );

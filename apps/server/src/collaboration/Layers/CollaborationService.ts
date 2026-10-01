@@ -12,6 +12,7 @@ import {
   type CollaborationPresence,
   type CollaborationPromptApproval,
   type CollaborationStreamEvent,
+  type CollaborationStreamInput,
   type CollaborationUsageCostEstimate,
   type CollaborationUsageQueryResult,
   type CollaborationUsageTotals,
@@ -1462,7 +1463,17 @@ const makeCollaborationService = Effect.gen(function* () {
       return { messages: records.map(toContractNote) };
     });
 
-  const stream: CollaborationServiceShape["stream"] = (input) =>
+  /**
+   * The workspace check has to happen inside the stream, not before it: the
+   * caller is a subscription that stays open, and `ws.ts` re-runs its own
+   * tenant check on every event for exactly that reason. `Stream.unwrap` over
+   * `ensureWorkspaceReach` refuses at subscribe time and surfaces as a failed
+   * stream, which is what a refused read looks like to the client either way.
+   */
+  const stream: CollaborationServiceShape["stream"] = (actor, input) =>
+    Stream.unwrap(ensureWorkspaceReach(actor, input).pipe(Effect.as(workspaceEvents(input))));
+
+  const workspaceEvents = (input: CollaborationStreamInput) =>
     Stream.fromPubSub(events).pipe(
       Stream.filter((event) => {
         switch (event.type) {
@@ -1565,7 +1576,8 @@ const makeCollaborationService = Effect.gen(function* () {
   });
 
   const getSettings: CollaborationServiceShape["getSettings"] = (actor, input) =>
-    resolveSettings(input).pipe(
+    ensureWorkspaceReach(actor, input).pipe(
+      Effect.flatMap(() => resolveSettings(input)),
       Effect.map((settings) => ({
         settings,
         canManage: isApprover(settings, actor.userId),
@@ -2589,7 +2601,8 @@ const makeCollaborationService = Effect.gen(function* () {
     });
 
   const listBranchClaims: CollaborationServiceShape["listBranchClaims"] = (actor, input) =>
-    Ref.get(stateRef).pipe(
+    ensureWorkspaceReach(actor, input).pipe(
+      Effect.flatMap(() => Ref.get(stateRef)),
       Effect.map((state) => {
         const claims = Array.from(state.branchClaims.values()).filter(
           (claim) => claim.tenantId === input.tenantId && claim.workspaceId === input.workspaceId,
@@ -2969,8 +2982,9 @@ const makeCollaborationService = Effect.gen(function* () {
       paths: input.paths,
     });
 
-  const listFilePresence: CollaborationServiceShape["listFilePresence"] = (input) =>
+  const listFilePresence: CollaborationServiceShape["listFilePresence"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const nowMs = Date.now();
       const { expired, live } = yield* Ref.modify(stateRef, (state) => {
         const { kept, expired: dropped } = pruneFilePresence(state.filePresence, nowMs);
@@ -3045,8 +3059,9 @@ const makeCollaborationService = Effect.gen(function* () {
       return { heldPaths };
     });
 
-  const listFileTouches: CollaborationServiceShape["listFileTouches"] = (input) =>
-    Ref.get(stateRef).pipe(
+  const listFileTouches: CollaborationServiceShape["listFileTouches"] = (actor, input) =>
+    ensureWorkspaceReach(actor, input).pipe(
+      Effect.flatMap(() => Ref.get(stateRef)),
       Effect.map((state) => ({
         touches: Array.from(state.fileTouches.values()).filter(
           (touch) => touch.tenantId === input.tenantId && touch.workspaceId === input.workspaceId,
@@ -3055,6 +3070,7 @@ const makeCollaborationService = Effect.gen(function* () {
     );
 
   return {
+    ensureWorkspaceAccess: ensureWorkspaceReach,
     upsertPresence,
     listPresence,
     createInvite,
