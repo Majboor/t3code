@@ -1305,7 +1305,7 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
         CommandId.make(`server:${tag}:${crypto.randomUUID()}`);
 
       const deriveProjectOwnershipForCommand = (
-        command: Extract<OrchestrationCommand, { type: "project.create" }>,
+        command: Extract<OrchestrationCommand, { type: "project.create" | "project.meta.update" }>,
       ): Effect.Effect<
         OrchestrationProjectOwnership | undefined,
         OrchestrationDispatchCommandError
@@ -1376,7 +1376,10 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               tenantId: tenantSession.tenantId,
               tenantDisplayName: tenant?.displayName ?? String(tenantSession.tenantId),
               workspaceId: targetWorkspaceId,
-              workspaceTitle: workspace?.title ?? command.title,
+              // `project.meta.update` may carry no title at all, where
+              // `project.create` always does — and the workspace's own title is
+              // the better answer either way.
+              workspaceTitle: workspace?.title ?? command.title ?? String(targetWorkspaceId),
               organizationId: tenantSession.organizationId,
               organizationDisplayName: organization?.displayName ?? null,
               ownerUserId: tenantSession.userId,
@@ -1413,10 +1416,29 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           : Effect.fail(new OrchestrationDispatchCommandError({ message: refusal }));
       };
 
+      /**
+       * Replaces whatever ownership the client sent with ownership derived
+       * from their own session.
+       *
+       * `ownership` is a denormalized snapshot — tenant, workspace, owner and
+       * all their display names — and it is what every later check reads to
+       * decide who a project belongs to. It travelled on `project.meta.update`
+       * as well as `project.create`, and only the create path was ever
+       * re-derived, so an edit could write any tenant id and any owner name
+       * into a project's stamp: hand your own project to somebody else's
+       * tenant, or forge the owner the UI shows for it.
+       *
+       * `project.meta.update` only re-derives when the client actually sent an
+       * ownership, because deriving one unasked would re-home a project to
+       * whoever happened to rename it.
+       */
       const attachProjectOwnership = (
         command: OrchestrationCommand,
       ): Effect.Effect<OrchestrationCommand, OrchestrationDispatchCommandError> => {
-        if (command.type !== "project.create") {
+        if (command.type !== "project.create" && command.type !== "project.meta.update") {
+          return Effect.succeed(command);
+        }
+        if (command.type === "project.meta.update" && command.ownership === undefined) {
           return Effect.succeed(command);
         }
         return deriveProjectOwnershipForCommand(command).pipe(
@@ -4421,7 +4443,41 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 ),
               ),
             );
-          case "project.meta.update":
+          case "project.meta.update": {
+            // `ensureProjectAccess` authorizes the project's CURRENT root,
+            // which says nothing about the one this command is about to put
+            // there. So `project.edit` on one project of your own was enough to
+            // repoint it at another tenant's directory, or at the server's own
+            // home, or at `/` — and a project root is the thing every other
+            // check measures a path against, so afterwards the file routes, the
+            // browse listing and `ensureWorkspaceRoot` all agreed the caller
+            // reached it. The same two checks `project.create` makes about a
+            // path it is claiming apply to a path being claimed later; this is
+            // the project-root twin of what `ensureThreadWorktreePathAllowed`
+            // already does for a thread's worktree.
+            const nextRoot = command.workspaceRoot;
+            return checkRateLimit(
+              (message) => new OrchestrationDispatchCommandError({ message }),
+            ).pipe(
+              Effect.flatMap(() => ensureProjectAccess(command.projectId, "project.edit")),
+              Effect.flatMap(() =>
+                nextRoot === undefined
+                  ? Effect.void
+                  : ensureWorkspaceRootClaimable(
+                      nextRoot,
+                      (message) => new OrchestrationDispatchCommandError({ message }),
+                    ).pipe(
+                      Effect.flatMap(() =>
+                        ensureWorkspaceRootNotClaimedByOtherTenant(
+                          nextRoot,
+                          "project.edit",
+                          (message) => new OrchestrationDispatchCommandError({ message }),
+                        ),
+                      ),
+                    ),
+              ),
+            );
+          }
           case "project.delete":
             return checkRateLimit(
               (message) => new OrchestrationDispatchCommandError({ message }),

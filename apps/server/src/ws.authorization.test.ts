@@ -435,6 +435,33 @@ describe("ws.ts gates that are wired rather than decided", () => {
     expect(authorize.match(/ensureThreadWorktreePathAllowed\(/g)?.length).toBe(3);
   });
 
+  // `project.create` checked the path it was claiming; `project.meta.update`
+  // checked nothing about the path it was about to claim instead. So
+  // `project.edit` on one project of your own repointed it at another tenant's
+  // directory, the server's own home, or `/` — and a project root is what every
+  // other check measures a path against.
+  it("checks the new root a project edit names, not only the old one", () => {
+    const authorize = slice(
+      "const ensureOrchestrationCommandAuthorized =",
+      "const toBootstrapDispatchCommandCauseError",
+    );
+    const start = authorize.indexOf('case "project.meta.update":');
+    expect(start, "project.meta.update case not found").toBeGreaterThan(-1);
+    const end = authorize.indexOf('case "project.delete":', start);
+    expect(end, "project.delete case not found").toBeGreaterThan(start);
+    const metaUpdate = authorize.slice(start, end);
+    expect(metaUpdate).toContain("ensureWorkspaceRootClaimable");
+    expect(metaUpdate).toContain("ensureWorkspaceRootNotClaimedByOtherTenant");
+  });
+
+  // `ownership` is the denormalized stamp every later check reads to decide
+  // whose a project is, and on an edit it arrived from the client with nothing
+  // re-deriving it from the session.
+  it("re-derives a project's ownership stamp on an edit as well as a create", () => {
+    const attach = slice("const attachProjectOwnership =", "const attachMessageAuthor");
+    expect(attach).toContain('command.type !== "project.meta.update"');
+  });
+
   it("redacts other people's processes from the service list", () => {
     expect(
       slice("[WS_METHODS.environmentServicesList]:", "[WS_METHODS.environmentServicesRegister]:"),
