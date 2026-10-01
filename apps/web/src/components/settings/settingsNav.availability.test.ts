@@ -3,11 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  availableSettingsSectionPaths,
-  isSettingsSectionAvailable,
-  SETTINGS_SECTION_PATHS,
-} from "./settingsNav.logic";
+import { isSettingsSectionAvailable, SETTINGS_SECTION_PATHS } from "./settingsNav.logic";
 
 describe("isSettingsSectionAvailable", () => {
   it("hides Billing only when we know this instance has no gateway", () => {
@@ -54,15 +50,6 @@ describe("isSettingsSectionAvailable", () => {
       if (gated.has(path)) continue;
       expect(isSettingsSectionAvailable(path, allOff)).toBe(true);
     }
-  });
-});
-
-describe("availableSettingsSectionPaths", () => {
-  it("drops exactly one entry when billing is unavailable", () => {
-    const withGateway = availableSettingsSectionPaths({ billingAvailable: true });
-    const withoutGateway = availableSettingsSectionPaths({ billingAvailable: false });
-    expect(withGateway).toEqual(SETTINGS_SECTION_PATHS);
-    expect(withoutGateway).toEqual(SETTINGS_SECTION_PATHS.filter((p) => p !== "/settings/billing"));
   });
 });
 

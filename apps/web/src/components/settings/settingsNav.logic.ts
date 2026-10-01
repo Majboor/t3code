@@ -65,12 +65,6 @@ export function isSettingsSectionAvailable(
   }
 }
 
-export function availableSettingsSectionPaths(
-  availability: SettingsSectionAvailability,
-): readonly SettingsSectionPath[] {
-  return SETTINGS_SECTION_PATHS.filter((to) => isSettingsSectionAvailable(to, availability));
-}
-
 function normalizePathname(pathname: string): string {
   return pathname.replace(/\/+$/, "") || "/";
 }
