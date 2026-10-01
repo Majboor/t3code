@@ -224,7 +224,7 @@ export function CollaborationPanel({
         {section === "people" ? (
           <div className="grid gap-3">
             <CollaborationWorkingPills presence={presence} />
-            <CollaborationPeople roster={roster} sharingOverview={overview} />
+            <CollaborationPeople roster={roster} />
           </div>
         ) : null}
 
