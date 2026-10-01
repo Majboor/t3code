@@ -4,6 +4,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CollaborationError,
   TenantId,
   ThreadId,
   UserId,
@@ -1516,5 +1517,134 @@ it.live("refuses the workspace-scoped reads for a workspace outside the caller's
     yield* collaboration.listBranchClaims(visitor, scope);
     yield* collaboration.listFileTouches(visitor, scope);
     yield* collaboration.listFilePresence(visitor, scope);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+// The write side of the same rule. `updateSettings` is the one that mattered
+// most: an unconfigured workspace has no lead, so the first caller to
+// configure it becomes one — and lead is approver, approver decides queued
+// prompts, edits members and removes them. Seizing a workspace you were never
+// invited to was one call.
+it.effect("refuses the workspace-scoped writes for a workspace outside the caller's reach", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    const invite = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "visitor@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const visitor = {
+      userId: UserId.make("user-visitor"),
+      displayName: "Visitor",
+      email: "visitor@example.com",
+    };
+    yield* collaboration.acceptInvite(visitor, { inviteId: invite.invite.id });
+
+    const elsewhere = { ...scope, workspaceId: WorkspaceId.make("workspace-elsewhere") };
+    const theirInvite = yield* collaboration.createInvite(lead, {
+      ...elsewhere,
+      email: "someone-elses-hire@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    // Annotated rather than `as const`: the ten results have ten different
+    // shapes, and only whether each was refused is under test.
+    const writes: ReadonlyArray<readonly [string, Effect.Effect<unknown, CollaborationError>]> = [
+      // `workspace-elsewhere` has no settings row yet, so this is the
+      // seize-an-unconfigured-workspace case, not merely an unauthorised edit.
+      [
+        "updateSettings",
+        collaboration.updateSettings(visitor, { ...elsewhere, approvalMode: "blocking" }),
+      ],
+      [
+        "upsertPresence",
+        collaboration.upsertPresence(visitor, { ...elsewhere, threadId, status: "active" }),
+      ],
+      [
+        "recordSharedPrompt",
+        collaboration.recordSharedPrompt(visitor, { ...elsewhere, threadId, prompt: "hello" }),
+      ],
+      ["touchFiles", collaboration.touchFiles(visitor, { ...elsewhere, paths: ["theirs.md"] })],
+      [
+        "markFilePresence",
+        collaboration.markFilePresence(visitor, {
+          ...elsewhere,
+          paths: ["theirs.md"],
+          sourceId: "page:1",
+        }),
+      ],
+      [
+        "releaseFilePresence",
+        collaboration.releaseFilePresence(visitor, {
+          ...elsewhere,
+          paths: ["theirs.md"],
+          sourceId: "page:1",
+        }),
+      ],
+      [
+        "recordUsage",
+        collaboration.recordUsage(visitor, { ...elsewhere, threadId, totalTokens: 10 }),
+      ],
+      [
+        "updateConsent",
+        collaboration.updateConsent(visitor, {
+          ...elsewhere,
+          shareProfile: true,
+          shareUsage: true,
+        }),
+      ],
+      [
+        "createInvite",
+        collaboration.createInvite(visitor, {
+          ...elsewhere,
+          email: "a-friend@example.com",
+          scope: "workspace",
+          roles: ["developer"],
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      ],
+      // Only the invite id is sent, so the workspace has to come off the
+      // invite itself.
+      [
+        "revokeInvite",
+        collaboration.revokeInvite(visitor, { tenantId, inviteId: theirInvite.invite.id }),
+      ],
+    ];
+
+    const outcomes: Array<string> = [];
+    for (const [name, write] of writes) {
+      const exit = yield* Effect.exit(write);
+      outcomes.push(`${name}: ${exit._tag === "Failure" ? "refused" : "ACCEPTED"}`);
+    }
+    assert.deepStrictEqual(
+      outcomes,
+      writes.map(([name]) => `${name}: refused`),
+      "every workspace-scoped write refuses a workspace outside the caller's reach",
+    );
+
+    // Nothing landed in the foreign workspace, read as somebody who may see it.
+    const settings = yield* collaboration.getSettings(lead, elsewhere);
+    assert.strictEqual(settings.settings.leadUserId, null, "the workspace is still unclaimed");
+    const presence = yield* collaboration.listPresence(lead, elsewhere);
+    assert.deepStrictEqual(presence.users, [], "no phantom presence");
+    const touches = yield* collaboration.listFileTouches(lead, elsewhere);
+    assert.deepStrictEqual(touches.touches, [], "no phantom file touches");
+    const stillPending = yield* collaboration.listInvites(lead, elsewhere);
+    assert.deepStrictEqual(
+      stillPending.invites.map((entry) => entry.email),
+      ["someone-elses-hire@example.com"],
+      "their invite was neither revoked nor joined by another",
+    );
+
+    // Their own workspace still accepts all of it.
+    yield* collaboration.updateSettings(visitor, { ...scope, approvalMode: "open" });
+    yield* collaboration.upsertPresence(visitor, { ...scope, threadId, status: "active" });
+    yield* collaboration.touchFiles(visitor, { ...scope, paths: ["ours.md"] });
+    yield* collaboration.updateConsent(visitor, { ...scope, shareProfile: true, shareUsage: true });
   }).pipe(Effect.provide(makeLayer())),
 );

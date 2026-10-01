@@ -870,40 +870,43 @@ const makeCollaborationService = Effect.gen(function* () {
       status: input.status,
       lastSeenAt: createdAt,
     };
-    return Ref.update(stateRef, (state) => {
-      const nextPresence = new Map(state.presence);
-      nextPresence.set(
-        presenceKey({
-          tenantId: input.tenantId,
-          workspaceId: input.workspaceId,
-          threadId: input.threadId,
-          userId: actor.userId,
-        }),
-        presence,
-      );
+    return ensureWorkspaceReach(actor, input).pipe(
+      Effect.flatMap(() =>
+        Ref.update(stateRef, (state) => {
+          const nextPresence = new Map(state.presence);
+          nextPresence.set(
+            presenceKey({
+              tenantId: input.tenantId,
+              workspaceId: input.workspaceId,
+              threadId: input.threadId,
+              userId: actor.userId,
+            }),
+            presence,
+          );
 
-      const activityKind = input.status === "offline" ? "left" : "joined";
-      return appendActivity(
-        {
-          ...state,
-          presence: nextPresence,
-        },
-        {
-          id: newActivityId(),
-          tenantId: input.tenantId,
-          workspaceId: input.workspaceId,
-          threadId: input.threadId,
-          userId: actor.userId,
-          kind: activityKind,
-          hiddenAt: null,
-          summary:
-            input.status === "offline"
-              ? `${actor.displayName} left the workspace.`
-              : `${actor.displayName} is present in the workspace.`,
-          createdAt,
-        },
-      );
-    }).pipe(
+          const activityKind = input.status === "offline" ? "left" : "joined";
+          return appendActivity(
+            {
+              ...state,
+              presence: nextPresence,
+            },
+            {
+              id: newActivityId(),
+              tenantId: input.tenantId,
+              workspaceId: input.workspaceId,
+              threadId: input.threadId,
+              userId: actor.userId,
+              kind: activityKind,
+              hiddenAt: null,
+              summary:
+                input.status === "offline"
+                  ? `${actor.displayName} left the workspace.`
+                  : `${actor.displayName} is present in the workspace.`,
+              createdAt,
+            },
+          );
+        }),
+      ),
       Effect.flatMap(() => persist),
       Effect.tap(() => PubSub.publish(events, { type: "presence-upserted", presence })),
       Effect.as({ presence }),
@@ -926,6 +929,17 @@ const makeCollaborationService = Effect.gen(function* () {
   const createInvite: CollaborationServiceShape["createInvite"] = (actor, input) =>
     Effect.gen(function* () {
       yield* validateInviteScope(input);
+      // A workspace-scoped invite names a workspace, and the inviter has to
+      // reach it: otherwise one workspace's contractor could hand out access
+      // to every other workspace in the tenant. A TENANT-scoped invite names
+      // none, so there is no workspace to check — the tenant permission ws.ts
+      // already required is the whole of its authority.
+      if (input.workspaceId !== null) {
+        yield* ensureWorkspaceReach(actor, {
+          tenantId: input.tenantId,
+          workspaceId: input.workspaceId,
+        });
+      }
       const createdAt = nowIso();
       const invite: TenantInvite = {
         id: InviteId.make(`invite:${crypto.randomUUID()}`),
@@ -1142,6 +1156,18 @@ const makeCollaborationService = Effect.gen(function* () {
         });
       }
 
+      // Checked against the INVITE's workspace, not a workspace the caller
+      // named: the id is the only thing they send, so a tenant-wide
+      // `workspace.invite` permission let anybody cancel any pending invite in
+      // the tenant — including the owner's invites into workspaces the caller
+      // has never been able to see.
+      if (invite.workspaceId !== null) {
+        yield* ensureWorkspaceReach(actor, {
+          tenantId: invite.tenantId,
+          workspaceId: invite.workspaceId,
+        });
+      }
+
       if (invite.revokedAt !== null) {
         return {
           invite,
@@ -1204,7 +1230,8 @@ const makeCollaborationService = Effect.gen(function* () {
       hiddenAt: null,
       createdAt: nowIso(),
     };
-    return Ref.update(stateRef, (state) => appendActivity(state, activity)).pipe(
+    return ensureWorkspaceReach(actor, input).pipe(
+      Effect.flatMap(() => Ref.update(stateRef, (state) => appendActivity(state, activity))),
       Effect.flatMap(() => persist),
       Effect.tap(() => PubSub.publish(events, { type: "activity-appended", activity })),
       Effect.as({ activity }),
@@ -1586,6 +1613,13 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const updateSettings: CollaborationServiceShape["updateSettings"] = (actor, input) =>
     Effect.gen(function* () {
+      // Before the bootstrap allowance below, not after it: an unconfigured
+      // workspace has no lead, so the first caller becomes one — and without
+      // this, "the first caller" included anybody holding a workspace-scoped
+      // invite to somewhere ELSE in the tenant. Lead is approver, and approver
+      // decides queued prompts, edits members and removes them, so seizing an
+      // unconfigured workspace was the whole chain in one call.
+      yield* ensureWorkspaceReach(actor, input);
       const current = yield* resolveSettings(input);
       // A workspace with no owner on record has nobody who could ever qualify,
       // so let the first caller configure it rather than locking it forever.
@@ -2205,6 +2239,7 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const recordUsage: CollaborationServiceShape["recordUsage"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const key = usageKey(input.tenantId, input.workspaceId, actor.userId, input.threadId);
       const observedAt = nowIso();
       const snapshot: ThreadTokenSnapshot = {
@@ -2489,6 +2524,10 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const updateConsent: CollaborationServiceShape["updateConsent"] = (actor, input) =>
     Effect.gen(function* () {
+      // A consent row is this one person's own decision, but writing one puts
+      // them in `buildMembers` for the workspace it names — so an unguarded
+      // write stood a stranger up in a roster they were never invited to.
+      yield* ensureWorkspaceReach(actor, input);
       const decidedAt = nowIso();
       const key = scopedKey(input.tenantId, input.workspaceId, actor.userId);
       yield* Ref.update(stateRef, (state) => {
@@ -2645,6 +2684,7 @@ const makeCollaborationService = Effect.gen(function* () {
 
   const touchFiles: CollaborationServiceShape["touchFiles"] = (actor, input) =>
     Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
       const touchedAt = nowIso();
       const touches: ReadonlyArray<CollaborationFileTouch> = input.paths.map((path) => ({
         tenantId: input.tenantId,
@@ -2924,14 +2964,17 @@ const makeCollaborationService = Effect.gen(function* () {
     });
 
   const markFilePresence: CollaborationServiceShape["markFilePresence"] = (actor, input) =>
-    writeFilePresence({
-      tenantId: input.tenantId,
-      workspaceId: input.workspaceId,
-      userId: actor.userId,
-      displayName: actor.displayName,
-      kind: "person",
-      sourceId: sourceOf(input, `session:${actor.userId}`),
-      paths: input.paths,
+    Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
+      return yield* writeFilePresence({
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        userId: actor.userId,
+        displayName: actor.displayName,
+        kind: "person",
+        sourceId: sourceOf(input, `session:${actor.userId}`),
+        paths: input.paths,
+      });
     });
 
   const markFilePresenceForAgent: CollaborationServiceShape["markFilePresenceForAgent"] = (
@@ -2960,13 +3003,16 @@ const makeCollaborationService = Effect.gen(function* () {
     });
 
   const releaseFilePresence: CollaborationServiceShape["releaseFilePresence"] = (actor, input) =>
-    dropFilePresence({
-      tenantId: input.tenantId,
-      workspaceId: input.workspaceId,
-      userId: actor.userId,
-      kind: "person",
-      sourceId: sourceOf(input, `session:${actor.userId}`),
-      paths: input.paths,
+    Effect.gen(function* () {
+      yield* ensureWorkspaceReach(actor, input);
+      return yield* dropFilePresence({
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        userId: actor.userId,
+        kind: "person",
+        sourceId: sourceOf(input, `session:${actor.userId}`),
+        paths: input.paths,
+      });
     });
 
   const releaseFilePresenceForAgent: CollaborationServiceShape["releaseFilePresenceForAgent"] = (
