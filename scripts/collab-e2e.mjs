@@ -596,15 +596,24 @@ try {
   // workspace says so while they are both still in it.
   const contendedFile = `contended-${RUN_ID}.txt`;
   check("B creates the file", await createFileViaUi(accountB.page, contendedFile));
-  check(
-    "A edits the same file",
-    (
-      await editFileViaUi(accountA2.page, {
-        file: contendedFile,
-        contents: `a was here ${RUN_ID}\n`,
-      })
-    ).ok,
+  // A has to have the file before A can open it, and this suite has a check for
+  // exactly that question a few phases up. Without it the step clicked a tree
+  // row that was not there yet and reported "A edits the same file FAILED",
+  // which reads as an editing problem rather than as what it is: whether a file
+  // another person just made reaches an already-open session, live.
+  checkLiveTreeUpdate(
+    "A sees the file B created",
+    await waitForFileInTree(accountA2.page, contendedFile),
   );
+  const contendedEdit = await editFileViaUi(accountA2.page, {
+    file: contendedFile,
+    contents: `a was here ${RUN_ID}\n`,
+  });
+  // The reason travels: this step has three distinct ways to fail — no editor,
+  // stuck in diff review, or a save that never enabled — and they call for
+  // different fixes. Reporting only the boolean made the run say "A edits the
+  // same file FAILED" twice with nothing to act on.
+  check("A edits the same file", contendedEdit.ok, contendedEdit.why || "edited");
   const contention = await waitForCollabElement(accountA2.page, "collaboration-contention", 30_000);
   check("the workspace says two people are in one file", contention);
   if (contention) {
