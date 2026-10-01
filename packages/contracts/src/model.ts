@@ -70,11 +70,32 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, string> = {
 };
 
 /**
- * The provider a fresh thread runs on when nobody has chosen one. Claude is the
- * default on shared servers: it is the account the operator connects first and
- * the one whose credential survives per-user copies.
+ * The provider a fresh thread runs on when nobody has chosen one.
+ *
+ * LogicPacks, because it is the only one a new account already has. Codex and
+ * Claude both need that person to connect their own subscription first — the
+ * operator's login is deliberately not lent out any more — so defaulting to
+ * either puts a fresh thread on a provider that reports unavailable until they
+ * go and sign in somewhere else. GLM is provisioned at signup and is the free
+ * tier, so it is the one answer that is true for everybody on arrival.
+ *
+ * This was Claude, on the reasoning that it is the account an operator connects
+ * first and whose credential survives per-user copies. That reasoning belonged
+ * to the arrangement where the operator's credential was shared, which is the
+ * thing that was removed.
+ *
+ * It is a default and not a restriction: anyone who has connected Codex or
+ * Claude picks them in the composer, and a thread that already names a provider
+ * keeps it.
+ *
+ * An instance with no gateway configured (no `T3CODE_GATEWAY_URL` /
+ * `T3CODE_GATEWAY_PROVISION_TOKEN`) cannot provision anybody, so GLM reports
+ * unavailable there and this default points at it anyway. That is a
+ * configuration gap rather than a reason to default elsewhere: on such an
+ * instance every provider is unavailable to a fresh account, and pointing at
+ * the one that is *meant* to work says so.
  */
-export const DEFAULT_PROVIDER: ProviderKind = "claudeAgent";
+export const DEFAULT_PROVIDER: ProviderKind = "glm";
 
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER];
 
