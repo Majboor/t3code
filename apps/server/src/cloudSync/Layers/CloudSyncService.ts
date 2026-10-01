@@ -31,6 +31,7 @@ import {
   type CloudSyncFileRecord,
   type ProjectCloudSyncRecord,
 } from "../../persistence/Services/CloudSync.ts";
+import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 import {
   blobStoreRoot,
@@ -260,6 +261,7 @@ const makeCloudSyncService = Effect.gen(function* () {
   const collaboration = yield* CollaborationService;
   const projects = yield* ProjectionProjectRepository;
   const config = yield* ServerConfig;
+  const localAuthAccounts = yield* LocalAuthAccountRepository;
 
   /**
    * Membership, from the collaboration roster and nowhere else — the same
@@ -302,10 +304,18 @@ const makeCloudSyncService = Effect.gen(function* () {
    *
    * So the exemption is conditioned on exactly the same fact `subscribeShell`
    * and the project-visibility filter in ws.ts already use to decide whether an
-   * unowned project belongs on somebody else's dashboard
-   * (`unownedProjectsAreShared = !config.publishedBeyondLoopback`, see
-   * `isProjectOwnershipVisible`). Duplicated as one boolean rather than
-   * imported, because ws.ts imports this service.
+   * unowned project belongs on somebody else's dashboard (see
+   * `isProjectOwnershipVisible`). Duplicated rather than imported, because
+   * ws.ts imports this service.
+   *
+   * "Published" is not the whole of that fact. A loopback-only install with a
+   * second local password account on it has a second person who can sign in,
+   * and the exemption handed them the same full read, download and write-back
+   * into the host's own root — `isSoleOccupantSession`, which the file routes
+   * and the attachment route decide this with, counts those accounts for
+   * exactly that reason. Read per call rather than once: a sync is long-lived,
+   * and an account added while one is running is a second occupant from then
+   * on. Fail closed, so a count that cannot be read is never "just me".
    */
   const readProjectRoot = (scope: CloudSyncProjectScope) =>
     projects.getById({ projectId: scope.projectId }).pipe(
@@ -315,14 +325,20 @@ const makeCloudSyncService = Effect.gen(function* () {
           return Effect.fail(notFound("There is no such project in this workspace."));
         }
         const ownership = project.value.ownership;
-        const unownedProjectsAreShared = !config.publishedBeyondLoopback;
-        const belongsHere =
-          ownership === null
-            ? unownedProjectsAreShared
-            : ownership.tenantId === scope.tenantId && ownership.workspaceId === scope.workspaceId;
-        return belongsHere
-          ? Effect.succeed(nodePath.resolve(project.value.workspaceRoot))
-          : Effect.fail(notFound("There is no such project in this workspace."));
+        if (ownership !== null) {
+          return ownership.tenantId === scope.tenantId &&
+            ownership.workspaceId === scope.workspaceId
+            ? Effect.succeed(nodePath.resolve(project.value.workspaceRoot))
+            : Effect.fail(notFound("There is no such project in this workspace."));
+        }
+        return localAuthAccounts.countEnabled().pipe(
+          Effect.catch(() => Effect.succeed(Number.POSITIVE_INFINITY)),
+          Effect.flatMap((localAccountCount) =>
+            !config.publishedBeyondLoopback && localAccountCount <= 1
+              ? Effect.succeed(nodePath.resolve(project.value.workspaceRoot))
+              : Effect.fail(notFound("There is no such project in this workspace.")),
+          ),
+        );
       }),
     );
 
@@ -1156,5 +1172,9 @@ const makeCloudSyncService = Effect.gen(function* () {
 export const CloudSyncServiceLive: Layer.Layer<
   CloudSyncService,
   never,
-  CloudSyncRepository | CollaborationService | ProjectionProjectRepository | ServerConfig
+  | CloudSyncRepository
+  | CollaborationService
+  | LocalAuthAccountRepository
+  | ProjectionProjectRepository
+  | ServerConfig
 > = Layer.effect(CloudSyncService, makeCloudSyncService);

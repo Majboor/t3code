@@ -145,6 +145,7 @@ import { DeviceEnrollmentRepositoryLive } from "./persistence/Layers/DeviceEnrol
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
 import { CloudSyncRepositoryLive } from "./persistence/Layers/CloudSync.ts";
 import { CloudSyncServiceLive } from "./cloudSync/Layers/CloudSyncService.ts";
+import { LocalAuthAccountRepositoryLive } from "./persistence/Layers/LocalAuthAccounts.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import {
   ProviderSharingRepository,
@@ -397,6 +398,7 @@ const cloudSyncServiceTestLayer = CloudSyncServiceLive.pipe(
   Layer.provide(CloudSyncRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
   Layer.provide(collaborationTestLayer),
   Layer.provide(ProjectionProjectRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+  Layer.provide(LocalAuthAccountRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
 );
 
 const providerUsageRequestTestLayer = ProviderUsageRequestRepositoryLive.pipe(

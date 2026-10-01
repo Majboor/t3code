@@ -13,6 +13,8 @@ import { CollaborationServiceLive } from "../../collaboration/Layers/Collaborati
 import { CollaborationService } from "../../collaboration/Services/CollaborationService.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { CloudSyncRepositoryLive } from "../../persistence/Layers/CloudSync.ts";
+import { LocalAuthAccountRepositoryLive } from "../../persistence/Layers/LocalAuthAccounts.ts";
+import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuthAccounts.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { TenancyRepositoryLive } from "../../persistence/Layers/Tenancy.ts";
@@ -36,6 +38,7 @@ const layer = CloudSyncServiceLive.pipe(
   Layer.provideMerge(CloudSyncRepositoryLive),
   Layer.provideMerge(CollaborationServiceLive),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(LocalAuthAccountRepositoryLive),
   Layer.provideMerge(TenancyRepositoryLive),
   Layer.provideMerge(ActivityNoteRepositoryLive),
   Layer.provideMerge(SharedPromptRepositoryLive),
@@ -602,6 +605,27 @@ it.effect("forgets a live copy when a new pass begins, rather than offering last
  * is the one fact that decides who an UNOWNED project belongs to, so it is the
  * only thing this layer changes.
  */
+/**
+ * The same loopback install as `layer`, with a second local password account
+ * on it. "Not published" stops meaning "only me" the moment somebody else can
+ * sign in, which is why `isSoleOccupantSession` counts these accounts and why
+ * this service has to as well.
+ */
+const sharedLoopbackLayer = CloudSyncServiceLive.pipe(
+  Layer.provideMerge(CloudSyncRepositoryLive),
+  Layer.provideMerge(CollaborationServiceLive),
+  Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(
+    Layer.mock(LocalAuthAccountRepository)({ countEnabled: () => Effect.succeed(2) }),
+  ),
+  Layer.provideMerge(TenancyRepositoryLive),
+  Layer.provideMerge(ActivityNoteRepositoryLive),
+  Layer.provideMerge(SharedPromptRepositoryLive),
+  Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-cloud-sync-shared-" })),
+  Layer.provideMerge(NodeServices.layer),
+);
+
 const publishedConfig = Layer.effect(
   ServerConfig,
   Effect.gen(function* () {
@@ -616,6 +640,7 @@ const publishedLayer = CloudSyncServiceLive.pipe(
   Layer.provideMerge(CloudSyncRepositoryLive),
   Layer.provideMerge(CollaborationServiceLive),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(LocalAuthAccountRepositoryLive),
   Layer.provideMerge(TenancyRepositoryLive),
   Layer.provideMerge(ActivityNoteRepositoryLive),
   Layer.provideMerge(SharedPromptRepositoryLive),
@@ -693,4 +718,31 @@ it.effect("still syncs an unowned project on a machine only its owner can reach"
     });
     assert.strictEqual(started.sync.mode, "mirror");
   }).pipe(Effect.provide(layer)),
+);
+
+// The gap between the two tests above: a loopback install is not automatically
+// a one-person install. With a second local password account on it, the
+// "there is no second tenant for it to leak to" reasoning no longer holds, and
+// the exemption handed that second account the host's own root to read, download
+// and write back into. `isSoleOccupantSession` — which the file routes and the
+// attachment route decide the identical question with — has counted those
+// accounts all along.
+it.effect("will not sync the host's own project once a second account can sign in", () =>
+  Effect.gen(function* () {
+    const cloudSync = yield* CloudSyncService;
+    yield* beVisible(stranger);
+    yield* makeUnownedProject;
+
+    const unownedScope = { tenantId, workspaceId, projectId: unownedProjectId };
+
+    const refusedStart = yield* cloudSync
+      .start(stranger, { ...unownedScope, mode: "mirror" })
+      .pipe(Effect.flip);
+    assert.strictEqual(refusedStart.code, "not-found");
+
+    const refusedAccess = yield* cloudSync
+      .requireProjectAccess(stranger, unownedScope)
+      .pipe(Effect.flip);
+    assert.strictEqual(refusedAccess.code, "not-found");
+  }).pipe(Effect.provide(sharedLoopbackLayer)),
 );

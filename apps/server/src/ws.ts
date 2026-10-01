@@ -2065,11 +2065,21 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             if (visibleTenantIds === null) {
               return Effect.succeed<VisibleProjectIds>(null);
             }
-            // On a server published to other people an unowned project is the
-            // host's own, and showing it to a tenant would hand them the
-            // host's files; on a desktop install it is the owner's and has to
-            // stay reachable. Same rule `subscribeShell` streams by.
-            const unownedProjectsAreShared = !config.publishedBeyondLoopback;
+            // An unowned project is the host's own — the cwd the server was
+            // started from, a CLI-added path, a project registered before
+            // tenancy — so it is shared exactly with the session that owns the
+            // whole machine, and with nobody else. Same rule `subscribeShell`
+            // streams by.
+            //
+            // `machineOwnerSession` rather than `!publishedBeyondLoopback`:
+            // the file routes, the attachment route and
+            // `sessionMayReachWorkspacePath` all decide the same question with
+            // the local account count folded in, so keying this on the publish
+            // flag alone made a loopback install with two accounts list these
+            // projects to both of them and then refuse both of them every file
+            // and every inline image inside — offered on the dashboard,
+            // unopenable.
+            const unownedProjectsAreShared = machineOwnerSession;
             return orchestrationEngine.getReadModel().pipe(
               Effect.map(
                 (readModel): VisibleProjectIds =>
@@ -5221,11 +5231,13 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                * predates the concept. `ShareLinkService.readProject` makes the
                * same allowance for the same reason.
                */
-              // On a server published to other people, an unowned project is
-              // the host's own (the cwd it was started from, a CLI-added path)
-              // and belongs on nobody else's dashboard: showing it handed every
-              // fresh account a second project with the host's files behind it.
-              const unownedProjectsAreShared = !config.publishedBeyondLoopback;
+              // An unowned project is the host's own (the cwd it was started
+              // from, a CLI-added path) and belongs on nobody else's dashboard:
+              // showing it handed every fresh account a second project with the
+              // host's files behind it. `machineOwnerSession`, not the publish
+              // flag — see `sessionVisibleProjectIds` for why the two answers
+              // have to agree.
+              const unownedProjectsAreShared = machineOwnerSession;
               const isOwnershipVisible = (
                 ownership: OrchestrationProjectShell["ownership"] | null | undefined,
               ): boolean =>

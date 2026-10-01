@@ -175,6 +175,7 @@ import { ProviderSharingRepositoryLive } from "./persistence/Layers/ProviderShar
 import { ProviderUsageRequestRepositoryLive } from "./persistence/Layers/ProviderUsageRequests.ts";
 import { ShareLinkRepositoryLive } from "./persistence/Layers/ShareLinks.ts";
 import { CloudSyncRepositoryLive } from "./persistence/Layers/CloudSync.ts";
+import { LocalAuthAccountRepositoryLive } from "./persistence/Layers/LocalAuthAccounts.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import { ShareLinkServiceLive } from "./shareLinks/Layers/ShareLinkService.ts";
 import { CloudSyncServiceLive } from "./cloudSync/Layers/CloudSyncService.ts";
@@ -555,6 +556,9 @@ const CloudSyncLayerLive = CloudSyncServiceLive.pipe(
   Layer.provide(CloudSyncRepositoryLayerLive),
   Layer.provide(CollaborationLayerLive),
   Layer.provide(ProjectionProjectRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
+  // How many people can sign in here decides whether a project with no
+  // ownership stamp is "the only person's own" or "the host's".
+  Layer.provide(LocalAuthAccountRepositoryLive.pipe(Layer.provide(PersistenceLayerLive))),
 );
 
 const ShareLinkLayerLive = ShareLinkServiceLive.pipe(

@@ -462,6 +462,22 @@ describe("ws.ts gates that are wired rather than decided", () => {
     expect(attach).toContain('command.type !== "project.meta.update"');
   });
 
+  // `isProjectOwnershipVisible` decides whether an unowned project is "the only
+  // person's own" or "the host's", and the file routes, the attachment route
+  // and cloud sync decide the identical question with `isSoleOccupantSession`,
+  // which counts the local accounts that can sign in. Keyed on the publish flag
+  // alone, a loopback install with two accounts listed those projects to both
+  // of them and then refused both of them every file and every inline image
+  // inside — offered on the dashboard, unopenable.
+  it("shares an unowned project only with the session that owns the machine", () => {
+    const sites = source.match(/const unownedProjectsAreShared = [^;]+;/g) ?? [];
+    expect(sites.length, "both visibility sites").toBe(2);
+    for (const site of sites) {
+      expect(site).toContain("machineOwnerSession");
+      expect(site).not.toContain("publishedBeyondLoopback");
+    }
+  });
+
   it("redacts other people's processes from the service list", () => {
     expect(
       slice("[WS_METHODS.environmentServicesList]:", "[WS_METHODS.environmentServicesRegister]:"),
