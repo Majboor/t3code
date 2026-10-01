@@ -3769,7 +3769,17 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
                 isPathInsideRoot(project.workspaceRoot, cwd)
               );
             });
-            return conflicting ? Effect.fail(toError(forbiddenMessage(permission))) : Effect.void;
+            // Not `forbiddenMessage`: the session does have the permission, and
+            // saying it does not sent people hunting through roles for an hour
+            // over a path they could have changed in a second. The folder is
+            // what is wrong, so the sentence says so.
+            return conflicting
+              ? Effect.fail(
+                  toError(
+                    "That folder overlaps a project somebody else on this server already has. Pick a folder of your own — one inside it, or a new one beside it.",
+                  ),
+                )
+              : Effect.void;
           }),
         );
       };

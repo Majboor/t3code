@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
+  addProjectInitialQuery,
   buildThreadActionItems,
   filterCommandPaletteGroups,
   type CommandPaletteGroup,
@@ -162,5 +163,36 @@ describe("buildThreadActionItems", () => {
     });
 
     expect(items.map((item) => item.value)).toEqual(["thread:thread-active"]);
+  });
+});
+
+// The prefilled path was the server's home, and on a server with more than one
+// account that is a trap: everyone's projects accumulate under it, so pressing
+// Enter on it claims a directory containing somebody else's project. The server
+// refuses that, correctly, and the person sees "does not have project.create"
+// for a permission they hold.
+describe("addProjectInitialQuery", () => {
+  it("gives a workspace its own directory under the base", () => {
+    expect(
+      addProjectInitialQuery("~/", {
+        ownership: { workspaceId: "workspace:fa49e335-1f06-413d-83bb-cac4c8808f57" },
+      }),
+    ).toBe("~/workspace-fa49e335/");
+  });
+
+  it("does not double the separator when the base already ends in one", () => {
+    expect(
+      addProjectInitialQuery("/srv/projects/", {
+        ownership: { workspaceId: "workspace:abcdef12-0000" },
+      }),
+    ).toBe("/srv/projects/workspace-abcdef12/");
+  });
+
+  // Nothing to be unique about: a desktop install picking a folder that already
+  // exists is exactly this case, and it must keep landing where it used to.
+  it("leaves the base alone without a workspace", () => {
+    expect(addProjectInitialQuery("~/", null)).toBe("~/");
+    expect(addProjectInitialQuery("~/", undefined)).toBe("~/");
+    expect(addProjectInitialQuery("~/", { ownership: {} })).toBe("~/");
   });
 });

@@ -357,3 +357,39 @@ export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): str
       return "Enter path (e.g. ~/projects/my-app)";
   }
 }
+
+/**
+ * Where "Add project" should start typing, given the workspace it is adding to.
+ *
+ * The base on its own is the server's home directory, and on a server with more
+ * than one account that is a trap: every account's projects accumulate under it,
+ * so the first person to press Enter on the prefilled path claims a directory
+ * that CONTAINS somebody else's project. The server refuses that — correctly,
+ * since claiming a parent would hand over read and write on everything beneath
+ * it — and the refusal arrives as "does not have project.create", which is both
+ * opaque and untrue: the session has the permission, the path is the problem.
+ *
+ * So a workspace gets its own directory under the base. It is unique per
+ * workspace, it contains nobody else's project, and the server creates it on
+ * demand for a hosted project.
+ *
+ * Without a workspace there is nothing to be unique about and the base is
+ * returned unchanged — a desktop install adding a folder that already exists is
+ * exactly that case.
+ */
+export function addProjectInitialQuery(
+  base: string,
+  workspace: { readonly ownership?: { readonly workspaceId?: string } } | null | undefined,
+): string {
+  const workspaceId = workspace?.ownership?.workspaceId;
+  if (!workspaceId) {
+    return base;
+  }
+  // The id's own suffix, which is a uuid: short enough to type and unique
+  // without carrying a title somebody may later rename.
+  const suffix = workspaceId.split(":").pop()?.slice(0, 8) ?? "";
+  if (suffix.length === 0) {
+    return base;
+  }
+  return `${base.replace(/\/+$/, "")}/workspace-${suffix}/`;
+}

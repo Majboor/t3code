@@ -83,6 +83,7 @@ import {
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import {
+  addProjectInitialQuery,
   ADDON_ICON_CLASS,
   buildBrowseGroups,
   buildProjectActionItems,
@@ -659,7 +660,10 @@ function OpenCommandPaletteDialog() {
       pushPaletteView({
         addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
         groups: [],
-        initialQuery: getAddProjectInitialQueryForEnvironment(environmentId),
+        initialQuery: addProjectInitialQuery(
+          getAddProjectInitialQueryForEnvironment(environmentId),
+          workspaceContext,
+        ),
       });
     },
     [getAddProjectInitialQueryForEnvironment],
