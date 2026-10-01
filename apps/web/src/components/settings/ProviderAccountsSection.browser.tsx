@@ -168,6 +168,29 @@ describe("ProviderAccountsSection", () => {
     }
   });
 
+  // The dead end: an account row exists but nothing on it is usable — a sign-in
+  // abandoned half-way, a credential that has since gone, a login the operator
+  // lent and then stopped lending. The line says "turns will not run until you
+  // connect an account", and keyed on the account LIST being empty the button
+  // to connect one was not rendered, so the panel asked for something it gave
+  // no way to do.
+  it("offers the sign-in when an account exists but none of it can run", async () => {
+    installFetch(() => ({
+      connections: [connection("codex", [account("codex", "acc-stale", { connected: false })])],
+    }));
+    const screen = await render(<ProviderAccountsSection />);
+    try {
+      await expect
+        .element(page.getByText("Codex turns will not run until you connect an account."))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: "Open Codex sign-in" }))
+        .toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("waits for the account being connected, not for the provider", async () => {
     let secondConnected = false;
     installFetch((call) =>

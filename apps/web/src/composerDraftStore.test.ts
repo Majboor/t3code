@@ -858,14 +858,14 @@ describe("composerDraftStore modelSelection", () => {
     const store = useComposerDraftStore.getState();
     store.setModelSelection(
       threadRef,
-      modelSelection("codex", "gpt-5.3-codex", {
+      modelSelection("codex", "gpt-6-astra", {
         reasoningEffort: "xhigh",
         fastMode: true,
       }),
     );
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider.codex).toEqual(
-      modelSelection("codex", "gpt-5.3-codex", {
+      modelSelection("codex", "gpt-6-astra", {
         reasoningEffort: "xhigh",
         fastMode: true,
       }),
@@ -874,10 +874,10 @@ describe("composerDraftStore modelSelection", () => {
 
   it("keeps default-only model selections on the draft", () => {
     const store = useComposerDraftStore.getState();
-    store.setModelSelection(threadRef, modelSelection("codex", "gpt-5.4"));
+    store.setModelSelection(threadRef, modelSelection("codex", "gpt-6-astra"));
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider.codex).toEqual(
-      modelSelection("codex", "gpt-5.4"),
+      modelSelection("codex", "gpt-6-astra"),
     );
   });
 
@@ -944,7 +944,7 @@ describe("composerDraftStore modelSelection", () => {
   it("keeps explicit off/default codex overrides on the selection", () => {
     const store = useComposerDraftStore.getState();
 
-    store.setModelSelection(threadRef, modelSelection("codex", "gpt-5.4", { fastMode: true }));
+    store.setModelSelection(threadRef, modelSelection("codex", "gpt-6-astra", { fastMode: true }));
 
     store.setProviderModelOptions(threadRef, "codex", {
       reasoningEffort: "high",
@@ -952,7 +952,7 @@ describe("composerDraftStore modelSelection", () => {
     });
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider.codex).toEqual(
-      modelSelection("codex", "gpt-5.4", {
+      modelSelection("codex", "gpt-6-astra", {
         reasoningEffort: "high",
         fastMode: false,
       }),
@@ -1028,7 +1028,7 @@ describe("composerDraftStore modelSelection", () => {
   it("creates the first sticky snapshot from provider option changes", () => {
     const store = useComposerDraftStore.getState();
 
-    store.setModelSelection(threadRef, modelSelection("codex", "gpt-5.4"));
+    store.setModelSelection(threadRef, modelSelection("codex", "gpt-6-astra"));
 
     store.setProviderModelOptions(
       threadRef,
@@ -1040,7 +1040,7 @@ describe("composerDraftStore modelSelection", () => {
     );
 
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toEqual(
-      modelSelection("codex", "gpt-5.4", {
+      modelSelection("codex", "gpt-6-astra", {
         fastMode: true,
       }),
     );
@@ -1088,10 +1088,10 @@ describe("composerDraftStore setModelSelection", () => {
   it("keeps explicit model overrides instead of coercing to null", () => {
     const store = useComposerDraftStore.getState();
 
-    store.setModelSelection(threadRef, modelSelection("codex", "gpt-5.3-codex"));
+    store.setModelSelection(threadRef, modelSelection("codex", "gpt-6-astra"));
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider.codex).toEqual(
-      modelSelection("codex", "gpt-5.3-codex"),
+      modelSelection("codex", "gpt-6-astra"),
     );
   });
 });
@@ -1105,14 +1105,14 @@ describe("composerDraftStore sticky composer settings", () => {
     const store = useComposerDraftStore.getState();
 
     store.setStickyModelSelection(
-      modelSelection("codex", "gpt-5.3-codex", {
+      modelSelection("codex", "gpt-6-astra", {
         reasoningEffort: "medium",
         fastMode: true,
       }),
     );
 
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toEqual(
-      modelSelection("codex", "gpt-5.3-codex", {
+      modelSelection("codex", "gpt-6-astra", {
         reasoningEffort: "medium",
         fastMode: true,
       }),
@@ -1123,10 +1123,10 @@ describe("composerDraftStore sticky composer settings", () => {
   it("normalizes empty sticky model options by dropping selection options", () => {
     const store = useComposerDraftStore.getState();
 
-    store.setStickyModelSelection(modelSelection("codex", "gpt-5.4"));
+    store.setStickyModelSelection(modelSelection("codex", "gpt-6-astra"));
 
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toEqual(
-      modelSelection("codex", "gpt-5.4"),
+      modelSelection("codex", "gpt-6-astra"),
     );
     expect(useComposerDraftStore.getState().stickyActiveProvider).toBe("codex");
   });
@@ -1160,14 +1160,14 @@ describe("composerDraftStore provider-scoped option updates", () => {
     const store = useComposerDraftStore.getState();
     store.setModelSelection(
       threadRef,
-      modelSelection("codex", "gpt-5.3-codex", {
+      modelSelection("codex", "gpt-6-astra", {
         reasoningEffort: "medium",
       }),
     );
     store.setProviderModelOptions(threadRef, "claudeAgent", { effort: "max" });
     const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
     expect(draft?.modelSelectionByProvider.codex).toEqual(
-      modelSelection("codex", "gpt-5.3-codex", { reasoningEffort: "medium" }),
+      modelSelection("codex", "gpt-6-astra", { reasoningEffort: "medium" }),
     );
     expect(draft?.modelSelectionByProvider.claudeAgent?.options).toEqual({ effort: "max" });
     expect(draft?.activeProvider).toBe("codex");

@@ -685,7 +685,15 @@ export function ProviderAccountsSection() {
                           : `${connection.label} turns will not run until you connect an account.`}
                       </div>
                     </div>
-                    {connection.accounts.length === 0 ? (
+                    {/* Keyed on `runsOn`, not on the list being empty, so the
+                        button and the line above it agree. An account row can
+                        exist while nothing on it is usable — a sign-in that was
+                        abandoned half-way, a credential that has since gone, a
+                        login the operator lent and then stopped lending — and
+                        keyed on the length this told that person "turns will not
+                        run until you connect an account" and then gave them no
+                        way to connect one. */}
+                    {runsOn === null ? (
                       <Button
                         size="xs"
                         disabled={busyKey !== null}

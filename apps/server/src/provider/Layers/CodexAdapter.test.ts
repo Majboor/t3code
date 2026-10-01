@@ -216,7 +216,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         provider: "codex",
         threadId: asThreadId("thread-1"),
         binaryPath: "codex",
-        model: "gpt-5.3-codex",
+        model: "gpt-6-astra",
         serviceTier: "fast",
         runtimeMode: "full-access",
       });
@@ -316,7 +316,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       assert.deepStrictEqual(sessionErrorManager.sendTurnImpl.mock.calls[0]?.[0], {
         threadId: asThreadId("sess-missing"),
         input: "hello",
-        model: "gpt-5.3-codex",
+        model: "gpt-6-astra",
         effort: "high",
         serviceTier: "fast",
       });

@@ -22,11 +22,7 @@
     "extractedBy": {
       "type": "agent",
       "provider": "anthropic",
-      "model": "claude-sonnet-5",
-      "actingFor": {
-        "type": "user",
-        "displayName": "t3demo"
-      }
+      "model": "claude-sonnet-5"
     },
     "handover": {
       "path": "handover.md",
@@ -256,5 +252,13 @@
         "bytes": 6657
       }
     ]
+  },
+  "signature": {
+    "keyId": "472393d85b830fe4fa2d99ceabc8f51a",
+    "algorithm": "ed25519",
+    "publicKey": "MCowBQYDK2VwAyEA1bCFimWtyklfp93IJQhzKONqPlG/0FeRBAIgKtPl9QE=",
+    "manifestSha256": "43a9e18dada48e3f0efeaa57a024e905bdf7d02bc5e3dbde07738529e1eac8d6",
+    "signature": "tKmyN6y46/LxejnOxKj9GRQ42/99yqeEXZmTUFKhMISuI6YfUZpjKdj97+M6OnDJopNmkHOIEUUoiVHcYyDcDA==",
+    "signedAt": "2026-10-01T07:43:36.608Z"
   }
 }

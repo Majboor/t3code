@@ -10,6 +10,7 @@ import readline from "node:readline";
 
 import {
   ApprovalRequestId,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   ProviderItemId,
   ProviderRequestKind,
@@ -340,8 +341,12 @@ export function normalizeCodexModelSlug(
     return undefined;
   }
 
+  // Normalized as well, not returned raw. Every `-codex` slug is now an alias
+  // for the one model the ChatGPT-account CLI accepts, so handing one straight
+  // through is handing the CLI a model it answers "model not supported" to —
+  // the exact failure the alias table exists to prevent, routed around.
   if (preferredId?.endsWith("-codex") && preferredId !== normalized) {
-    return preferredId;
+    return normalizeModelSlug(preferredId) ?? normalized;
   }
 
   return normalized;
@@ -364,7 +369,10 @@ function buildCodexCollaborationMode(input: {
   if (input.interactionMode === undefined) {
     return undefined;
   }
-  const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
+  // The canonical default rather than a literal: `gpt-5.3-codex` was retired
+  // with the rest, so a turn that reached this fallback asked the CLI for a
+  // model it no longer serves.
+  const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL_BY_PROVIDER.codex;
   return {
     mode: input.interactionMode,
     settings: {
@@ -466,7 +474,11 @@ function findCodexRollout(sessionsDir: string, providerThreadId: string, depth =
   }
   for (const entry of entries) {
     const full = join(sessionsDir, entry.name);
-    if (entry.isFile() && entry.name.startsWith("rollout-") && entry.name.endsWith(`-${providerThreadId}.jsonl`)) {
+    if (
+      entry.isFile() &&
+      entry.name.startsWith("rollout-") &&
+      entry.name.endsWith(`-${providerThreadId}.jsonl`)
+    ) {
       return full;
     }
     if (entry.isDirectory() && depth < 4) {

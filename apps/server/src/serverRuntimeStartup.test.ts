@@ -1,5 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { DEFAULT_MODEL_BY_PROVIDER, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Option, Ref, Stream } from "effect";
 
@@ -19,11 +24,55 @@ import {
   ServerRuntimeStartupError,
 } from "./serverRuntimeStartup.ts";
 
-it("uses the canonical Codex default for auto-bootstrapped model selection", () => {
+// Written against DEFAULT_PROVIDER rather than naming one: the canonical
+// default moved from Codex to Claude, and a test that spells the provider out
+// goes red on that move instead of on the thing it is checking — that bootstrap
+// takes the canonical default rather than a second opinion of its own.
+it("uses the canonical default for auto-bootstrapped model selection", () => {
   assert.deepStrictEqual(getAutoBootstrapDefaultModelSelection(), {
-    provider: "codex",
-    model: DEFAULT_MODEL_BY_PROVIDER.codex,
+    provider: DEFAULT_PROVIDER,
+    model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
   });
+});
+
+// The instance override is the half worth pinning: it is read from the
+// environment on every call, so a server started with it set bootstraps on
+// that provider and its own default model.
+it("follows the instance default-provider override", () => {
+  const previous = process.env["T3CODE_DEFAULT_PROVIDER"];
+  process.env["T3CODE_DEFAULT_PROVIDER"] = "codex";
+  try {
+    assert.deepStrictEqual(getAutoBootstrapDefaultModelSelection(), {
+      provider: "codex",
+      model: DEFAULT_MODEL_BY_PROVIDER.codex,
+    });
+  } finally {
+    if (previous === undefined) {
+      delete process.env["T3CODE_DEFAULT_PROVIDER"];
+    } else {
+      process.env["T3CODE_DEFAULT_PROVIDER"] = previous;
+    }
+  }
+});
+
+// An unknown value is ignored rather than taken: `Schema.is(ProviderKind)`
+// decides, so a typo falls back to the canonical default instead of
+// bootstrapping every thread onto a provider that does not exist.
+it("ignores an override that is not a provider", () => {
+  const previous = process.env["T3CODE_DEFAULT_PROVIDER"];
+  process.env["T3CODE_DEFAULT_PROVIDER"] = "not-a-provider";
+  try {
+    assert.deepStrictEqual(getAutoBootstrapDefaultModelSelection(), {
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER],
+    });
+  } finally {
+    if (previous === undefined) {
+      delete process.env["T3CODE_DEFAULT_PROVIDER"];
+    } else {
+      process.env["T3CODE_DEFAULT_PROVIDER"] = previous;
+    }
+  }
 });
 
 it.effect("enqueueCommand waits for readiness and then drains queued work", () =>

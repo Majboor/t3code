@@ -258,18 +258,23 @@ describe("process stderr events", () => {
 });
 
 describe("normalizeCodexModelSlug", () => {
-  it("maps 5.3 aliases to gpt-5.3-codex", () => {
-    expect(normalizeCodexModelSlug("5.3")).toBe("gpt-5.3-codex");
-    expect(normalizeCodexModelSlug("gpt-5.3")).toBe("gpt-5.3-codex");
+  // Every prior slug now maps to the one model the ChatGPT-account Codex CLI
+  // accepts, so a thread that saved an old one recovers instead of failing with
+  // "model not supported" — see MODEL_SLUG_ALIASES_BY_PROVIDER.codex.
+  it("maps retired slugs to the one model Codex still accepts", () => {
+    expect(normalizeCodexModelSlug("5.3")).toBe("gpt-6-astra");
+    expect(normalizeCodexModelSlug("gpt-5.3")).toBe("gpt-6-astra");
+    expect(normalizeCodexModelSlug("gpt-5.2-codex")).toBe("gpt-6-astra");
   });
 
   it("prefers codex id when model differs", () => {
-    expect(normalizeCodexModelSlug("gpt-5.3", "gpt-5.3-codex")).toBe("gpt-5.3-codex");
+    expect(normalizeCodexModelSlug("gpt-5.3", "gpt-5.3-codex")).toBe("gpt-6-astra");
   });
 
-  it("keeps non-aliased models as-is", () => {
-    expect(normalizeCodexModelSlug("gpt-5.2-codex")).toBe("gpt-5.2-codex");
-    expect(normalizeCodexModelSlug("gpt-5.2")).toBe("gpt-5.2");
+  // A slug the alias table has never heard of has to survive: it is how a
+  // model added upstream reaches the CLI before this table knows about it.
+  it("keeps a slug the alias table does not name as-is", () => {
+    expect(normalizeCodexModelSlug("gpt-7-not-yet-released")).toBe("gpt-7-not-yet-released");
   });
 });
 
@@ -672,7 +677,7 @@ describe("sendTurn", () => {
           url: "data:image/png;base64,AAAA",
         },
       ],
-      model: "gpt-5.3-codex",
+      model: "gpt-6-astra",
       serviceTier: "fast",
       effort: "high",
     });
@@ -704,7 +709,7 @@ describe("sendTurn", () => {
           url: "data:image/png;base64,BBBB",
         },
       ],
-      model: "gpt-5.3-codex",
+      model: "gpt-6-astra",
     });
   });
 
@@ -726,11 +731,11 @@ describe("sendTurn", () => {
           text_elements: [],
         },
       ],
-      model: "gpt-5.3-codex",
+      model: "gpt-6-astra",
       collaborationMode: {
         mode: "plan",
         settings: {
-          model: "gpt-5.3-codex",
+          model: "gpt-6-astra",
           reasoning_effort: "medium",
           developer_instructions: expectInstructions(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS),
         },
@@ -756,11 +761,11 @@ describe("sendTurn", () => {
           text_elements: [],
         },
       ],
-      model: "gpt-5.3-codex",
+      model: "gpt-6-astra",
       collaborationMode: {
         mode: "default",
         settings: {
-          model: "gpt-5.3-codex",
+          model: "gpt-6-astra",
           reasoning_effort: "medium",
           developer_instructions: expectInstructions(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS),
         },
@@ -787,11 +792,11 @@ describe("sendTurn", () => {
           text_elements: [],
         },
       ],
-      model: "gpt-5.2-codex",
+      model: "gpt-6-astra",
       collaborationMode: {
         mode: "plan",
         settings: {
-          model: "gpt-5.2-codex",
+          model: "gpt-6-astra",
           reasoning_effort: "medium",
           developer_instructions: expectInstructions(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS),
         },

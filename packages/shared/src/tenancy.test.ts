@@ -193,7 +193,9 @@ describe("tenant usage limits", () => {
       maxRpcRequestsPerMinutePerTenant: 6_000,
       maxRpcRequestBytes: 12 * 1024 * 1024,
       maxFileUploadBytes: 10 * 1024 * 1024,
-      maxFileReadBytes: 2 * 1024 * 1024,
+      // Raised from 2MB in 495a259fd6: a 2.6MB zip already blew past it with
+      // no way around it short of downloading outside the app.
+      maxFileReadBytes: 10 * 1024 * 1024,
       maxDirectoryEntries: 1_000,
       maxDiffBytes: 2 * 1024 * 1024,
       maxActiveTurnsPerUser: 4,

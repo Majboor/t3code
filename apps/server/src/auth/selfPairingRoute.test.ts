@@ -96,11 +96,36 @@ it.effect("carries whatever subject the caller actually has", () =>
   }).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect("refuses a client session: it may not hand out an owner-shaped credential", () =>
+// A `client` session may hand itself to a browser — on a published host every
+// signed-in person is a `client`, and refusing them left the browser unable to
+// reach its own enrolled machines through the relay, which needs a bearer for
+// the person the cookie already names. What must not happen is the credential
+// coming back OWNER-shaped, which is the escalation this guards: it carries
+// the caller's own role and subject, so the handoff gains them nothing.
+it.effect("hands a client session a client-shaped credential, never an owner one", () =>
   Effect.gen(function* () {
     const issued: IssueCall[] = [];
     yield* buildAppUnderTest({
       session: makeSession({ role: "client", subject: "paired-client:abc" }),
+      issued,
+    });
+
+    const result = yield* mintSelfPairingCredential;
+
+    assert.equal(result.status, 200);
+    assert.deepEqual(issued, [
+      { role: "client", subject: "paired-client:abc", label: BROWSER_HANDOFF_PAIRING_LABEL },
+    ]);
+  }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+// Every other role still is refused, so the allowance above is exactly two
+// roles wide rather than "whoever authenticated".
+it.effect("refuses a session that is neither an owner nor a client", () =>
+  Effect.gen(function* () {
+    const issued: IssueCall[] = [];
+    yield* buildAppUnderTest({
+      session: makeSession({ role: "viewer" as AuthenticatedSession["role"] }),
       issued,
     });
 

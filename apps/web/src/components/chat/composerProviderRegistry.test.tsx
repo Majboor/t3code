@@ -8,7 +8,7 @@ import {
 
 const CODEX_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
-    slug: "gpt-5.4",
+    slug: "gpt-6-astra",
     name: "GPT-5.4",
     isCustom: false,
     capabilities: {
@@ -114,7 +114,7 @@ describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
       provider: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6-astra",
       models: CODEX_MODELS,
       prompt: "",
       modelOptions: undefined,
@@ -132,7 +132,7 @@ describe("getComposerProviderState", () => {
   it("normalizes codex dispatch options while preserving the selected effort", () => {
     const state = getComposerProviderState({
       provider: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6-astra",
       models: CODEX_MODELS,
       prompt: "",
       modelOptions: {
@@ -156,7 +156,7 @@ describe("getComposerProviderState", () => {
   it("preserves codex fast mode when it is the only active option", () => {
     const state = getComposerProviderState({
       provider: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6-astra",
       models: CODEX_MODELS,
       prompt: "",
       modelOptions: {
@@ -179,7 +179,7 @@ describe("getComposerProviderState", () => {
   it("preserves codex default effort explicitly in dispatch options", () => {
     const state = getComposerProviderState({
       provider: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6-astra",
       models: CODEX_MODELS,
       prompt: "",
       modelOptions: {
@@ -426,7 +426,7 @@ describe("provider traits render guards", () => {
   it("returns null for codex traits picker when no thread target is provided", () => {
     const content = renderProviderTraitsPicker({
       provider: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6-astra",
       models: CODEX_MODELS,
       modelOptions: undefined,
       prompt: "",

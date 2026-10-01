@@ -190,36 +190,43 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
         ),
       );
 
-      it.effect("returns the codex plan type in auth and keeps spark for supported plans", () =>
-        Effect.gen(function* () {
-          yield* withTempCodexHome();
-          const status = yield* checkCodexProviderStatus(() =>
-            Effect.succeed({
-              type: "chatgpt" as const,
-              planType: "pro" as const,
-              sparkEnabled: true,
-            }),
-          );
+      it.effect(
+        "returns the codex plan type in auth and offers the one model the CLI accepts",
+        () =>
+          Effect.gen(function* () {
+            yield* withTempCodexHome();
+            const status = yield* checkCodexProviderStatus(() =>
+              Effect.succeed({
+                type: "chatgpt" as const,
+                planType: "pro" as const,
+                sparkEnabled: true,
+              }),
+            );
 
-          assert.strictEqual(status.provider, "codex");
-          assert.strictEqual(status.status, "ready");
-          assert.strictEqual(status.auth.status, "authenticated");
-          assert.strictEqual(status.auth.type, "pro");
-          assert.strictEqual(status.auth.label, "ChatGPT Pro Subscription");
-          assert.deepStrictEqual(
-            status.models.some((model) => model.slug === "gpt-5.3-codex-spark"),
-            true,
-          );
-        }).pipe(
-          Effect.provide(
-            mockSpawnerLayer((args) => {
-              const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-              if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
-              throw new Error(`Unexpected args: ${joined}`);
-            }),
+            assert.strictEqual(status.provider, "codex");
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.auth.status, "authenticated");
+            assert.strictEqual(status.auth.type, "pro");
+            assert.strictEqual(status.auth.label, "ChatGPT Pro Subscription");
+            // A spark-enabled plan no longer earns a spark MODEL: the installed
+            // CLI rejects every gpt-5.x name with a ChatGPT-account login, so
+            // `BUILT_IN_MODELS` is the one slug it does accept and the plan type
+            // above is the whole of what the plan still changes here.
+            assert.deepStrictEqual(
+              status.models.map((model) => model.slug),
+              ["gpt-6-astra"],
+            );
+          }).pipe(
+            Effect.provide(
+              mockSpawnerLayer((args) => {
+                const joined = args.join(" ");
+                if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+                if (joined === "login status")
+                  return { stdout: "Logged in\n", stderr: "", code: 0 };
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
           ),
-        ),
       );
 
       it.effect("includes probed codex skills in the provider snapshot", () =>
