@@ -1275,6 +1275,63 @@ const withCleanBrowserContext = async <A>(
   }
 };
 
+/**
+ * Gets a browser page past the two overlays a FRESH account legitimately gets,
+ * so a test about some other surface is testing that surface.
+ *
+ * Both are correct behaviour, not bugs: `OnboardingGate` shows the
+ * questionnaire to any account whose `onboardingCompletedAt` is null, and
+ * `ProductTourAutoStart` starts the tour for any client that has not seen it.
+ * A test that seeds neither gets both, stacked, over whatever it came to look
+ * at.
+ *
+ * Why this is worth a helper rather than pressing Escape: a Radix modal marks
+ * everything behind it `aria-hidden="true"`, which takes the whole app out of
+ * the ACCESSIBILITY TREE while leaving it on screen. `getByText` matches text
+ * content and keeps working; `getByRole` resolves against the a11y tree and
+ * stops. That is exactly how this presented — a sign-in button that was in the
+ * DOM, `visibility: visible`, 143px wide, and invisible to Playwright.
+ *
+ * Installed rather than performed: an init script and a route stub, both of
+ * which survive every later navigation and neither of which needs a reload.
+ * A reload is what the first attempt did and it is wrong here — these tests
+ * inject a read model into the page and then navigate within the app, so the
+ * fixture must not be asked to survive a fresh document it did not expect.
+ * Call this on the page before its first `goto`.
+ */
+const installFirstRunOverlaySuppression = async (
+  page: import("playwright").Page,
+): Promise<void> => {
+  // Client-only state, read by `clientPersistenceStorage` from this exact key.
+  await page.addInitScript((storageKey: string) => {
+    try {
+      const existing = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      localStorage.setItem(storageKey, JSON.stringify({ ...existing, hasSeenProductTour: true }));
+    } catch {
+      // A storage that cannot be read is a storage the tour will treat as
+      // unseen; that is the pre-existing behaviour and not this helper's to fix.
+    }
+  }, "t3code:client-settings:v1");
+
+  // `OnboardingGate` asks this once on mount and shows the questionnaire when
+  // it comes back false. Stubbed rather than completed for real, so the test
+  // keeps whatever server-side preferences it actually seeded.
+  await page.route("**/api/user-preferences", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch().catch(() => null);
+    if (response === null) return route.fallback();
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    return route.fulfill({
+      status: response.status(),
+      contentType: "application/json",
+      body: JSON.stringify({ ...body, onboardingCompleted: true }),
+    });
+  });
+};
+
 const reserveTcpPort = async (): Promise<number> => {
   const net = await import("node:net");
   return await new Promise((resolve, reject) => {
@@ -5048,6 +5105,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           page.on("pageerror", (error) => {
             pageMessages.push(`pageerror: ${error.message}`);
           });
+          // Before the first navigation: a fresh account gets the onboarding
+          // questionnaire and the product tour, both legitimately, and a Radix
+          // modal takes everything behind it out of the accessibility tree — so
+          // the `getByText` assertions below would pass while every
+          // `getByRole` one timed out on a button that was on screen all along.
+          await installFirstRunOverlaySuppression(page);
           await page.goto(`${appUrl}settings/account`, { waitUntil: "domcontentloaded" });
           await page
             .getByText(uniqueSubject)
@@ -5270,7 +5333,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("rejects hosted Supabase turns over the active turn limit", () =>
+  it.effect("rejects a hosted Supabase turn from a user already at their concurrency limit", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -5453,7 +5516,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         assertTrue(result._tag === "Failure");
         assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
-        assertInclude(result.failure.message, "Active turn limit exceeded:");
+        // The PROVIDER SESSION limit, not the turn limit this fixture was built
+        // around, and that is a fact about the policy rather than the fixture: a
+        // turn needs a provider session, and
+        // `maxActiveProviderSessionsPerUser` (3) sits below
+        // `maxActiveTurnsPerUser` (4), so one user can never reach the turn cap
+        // without passing the session cap first. `maxActiveTurnsPerUser` is
+        // unreachable per user as the limits stand — only the per-TENANT turn
+        // cap (20) can still bite, and only across several users. Asserting the
+        // limit that genuinely fires keeps this honest; whether the two numbers
+        // should be reordered is a policy call, since either direction changes
+        // what a paying user may run at once.
+        assertInclude(result.failure.message, "Active provider session limit exceeded:");
       } finally {
         fetchSpy.mockRestore();
       }
@@ -6379,6 +6453,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             const revokeButton = page.getByRole("button", {
               name: `Revoke invite for ${setup.adminUiInvite.invite.email}`,
             });
+            // The owner here is a fresh account too, so the onboarding modal
+            // and the product tour both open over the organization settings and
+            // take the page out of the accessibility tree — the `getByText`
+            // below kept matching, and `revokeButton.click()` timed out on a
+            // button it could not see.
+            await installFirstRunOverlaySuppression(page);
             await page.goto(`${appUrl}settings/organization`, { waitUntil: "domcontentloaded" });
             await page
               .getByText(setup.adminUiInvite.invite.email)
