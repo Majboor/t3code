@@ -123,7 +123,13 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "opus-4.6": "claude-opus-4-6",
     "claude-opus-4.6": "claude-opus-4-6",
     "claude-opus-4-6-20251117": "claude-opus-4-6",
+    // Bare `sonnet` still lands on 4.6 on purpose: it is what
+    // DEFAULT_MODEL_BY_PROVIDER.claudeAgent points at, so repointing the bare
+    // alias alone would make `--model sonnet` and a brand-new thread disagree
+    // about which Sonnet they mean. 5.5 is reachable by its own aliases below.
     sonnet: "claude-sonnet-4-6",
+    "sonnet-5.5": "claude-sonnet-5-5",
+    "claude-sonnet-5.5": "claude-sonnet-5-5",
     "sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4-6-20251117": "claude-sonnet-4-6",

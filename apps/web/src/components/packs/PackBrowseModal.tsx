@@ -104,7 +104,8 @@ export function PackBrowseModal({
   const candidates = useQuery({
     enabled: open,
     queryKey: ["packBrowseModal", debouncedQuery],
-    queryFn: () => packDirectory.browsePacks({ query: debouncedQuery, limit: PACK_BROWSE_MODAL_LIMIT }),
+    queryFn: () =>
+      packDirectory.browsePacks({ query: debouncedQuery, limit: PACK_BROWSE_MODAL_LIMIT }),
   });
 
   const packs = useMemo(() => {
@@ -114,7 +115,10 @@ export function PackBrowseModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-4xl w-[min(64rem,calc(100vw-2rem))]" data-testid="pack-browse-modal">
+      <DialogPopup
+        className="max-w-4xl w-[min(64rem,calc(100vw-2rem))]"
+        data-testid="pack-browse-modal"
+      >
         <DialogHeader>
           <div className="flex items-center gap-1.5">
             <CompassIcon className="size-4 text-muted-foreground" aria-hidden />
@@ -197,10 +201,16 @@ export function PackBrowseModal({
           </div>
 
           {candidates.error ? (
-            <Card className="p-6 text-center" render={<section />} data-testid="pack-browse-modal-error">
+            <Card
+              className="p-6 text-center"
+              render={<section />}
+              data-testid="pack-browse-modal-error"
+            >
               <CardTitle className="text-base">Could not load packs</CardTitle>
               <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-                {candidates.error instanceof Error ? candidates.error.message : "Something went wrong."}
+                {candidates.error instanceof Error
+                  ? candidates.error.message
+                  : "Something went wrong."}
               </p>
             </Card>
           ) : candidates.isPending ? (
@@ -218,7 +228,11 @@ export function PackBrowseModal({
               </p>
 
               {packs.length === 0 ? (
-                <Card className="p-6 text-center" render={<section />} data-testid="pack-browse-modal-empty">
+                <Card
+                  className="p-6 text-center"
+                  render={<section />}
+                  data-testid="pack-browse-modal-empty"
+                >
                   <PackageSearchIcon className="mx-auto size-6 text-muted-foreground" />
                   <CardTitle className="mt-2 text-base">Nothing matches that</CardTitle>
                   <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">

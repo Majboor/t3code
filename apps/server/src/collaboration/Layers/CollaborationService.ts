@@ -144,6 +144,10 @@ export const MODEL_TOKEN_RATES_USD: Readonly<Record<string, ModelTokenRate>> = {
   "claude-opus-4-7": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
   "claude-opus-4-6": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
   "claude-opus-4-5": { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
+  // Sonnet 5.5 is the same $2/$10 as Sonnet 5, not the $3/$15 the 4.6
+  // generation charges — without a rate here the cost panel reports every
+  // Sonnet 5.5 turn as unpriced instead of cheaper than Sonnet 4.6.
+  "claude-sonnet-5-5": { inputPerMillionUsd: 2, outputPerMillionUsd: 10 },
   // Was priced at the Sonnet 4.6 rate ($3/$15) — Sonnet 5 is actually $2/$10;
   // confirmed against both the pricing page and LiteLLM's table 2026-09-16.
   "claude-sonnet-5": { inputPerMillionUsd: 2, outputPerMillionUsd: 10 },

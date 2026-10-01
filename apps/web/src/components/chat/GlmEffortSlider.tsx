@@ -28,12 +28,16 @@ export const GlmEffortSlider = memo(function GlmEffortSlider({
 }: GlmEffortSliderProps) {
   const initialTier = tierForGlmModel(model) ?? "high";
   const initialIndex = GLM_EFFORT_TIERS.indexOf(initialTier);
-  const [index, setIndex] = useState(initialIndex === -1 ? GLM_EFFORT_TIERS.length - 1 : initialIndex);
+  const [index, setIndex] = useState(
+    initialIndex === -1 ? GLM_EFFORT_TIERS.length - 1 : initialIndex,
+  );
   const tier = GLM_EFFORT_TIERS[index] ?? "high";
 
   return (
     <div className="px-3 py-2.5">
-      <div className="mb-2 text-center font-medium text-sm">{GLM_EFFORT_TIER_MODEL_LABEL[tier]}</div>
+      <div className="mb-2 text-center font-medium text-sm">
+        {GLM_EFFORT_TIER_MODEL_LABEL[tier]}
+      </div>
       <Slider
         value={index}
         min={0}

@@ -73,7 +73,8 @@ export function AccountMachinesSection({
           <p className="text-sm text-muted-foreground">Looking for your machines…</p>
         ) : links.length === 0 ? (
           <p className="text-sm text-muted-foreground" data-testid="account-machines-empty">
-            No machines yet. Install the app on a computer and approve it here, and it appears in this list.
+            No machines yet. Install the app on a computer and approve it here, and it appears in
+            this list.
           </p>
         ) : (
           <ul className="divide-y divide-border/60">
@@ -112,7 +113,9 @@ export function AccountMachinesSection({
                     size="sm"
                     title={online ? undefined : "Open the app on that machine first."}
                   >
-                    {opening === link.environmentId ? <Loader2Icon className="animate-spin" /> : null}
+                    {opening === link.environmentId ? (
+                      <Loader2Icon className="animate-spin" />
+                    ) : null}
                     Open
                   </Button>
                 </li>
@@ -121,7 +124,12 @@ export function AccountMachinesSection({
           </ul>
         )}
         <div className="mt-2 flex justify-end">
-          <Button data-testid="account-machines-refresh" onClick={() => void refresh()} size="xs" variant="ghost">
+          <Button
+            data-testid="account-machines-refresh"
+            onClick={() => void refresh()}
+            size="xs"
+            variant="ghost"
+          >
             <RefreshCwIcon />
             Refresh
           </Button>

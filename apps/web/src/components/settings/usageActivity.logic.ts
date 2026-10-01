@@ -47,8 +47,13 @@ export interface HeatmapCell {
  */
 export function buildHeatmapCells(daily: ReadonlyArray<GatewayDailyActivity>): HeatmapCell[] {
   const byDay = new Map(daily.map((d) => [d.day, d.requests]));
-  const nonZero = daily.map((d) => d.requests).filter((n) => n > 0).sort((a, b) => a - b);
-  const thresholds = [0.25, 0.5, 0.75].map((q) => nonZero[Math.floor(q * (nonZero.length - 1))] ?? 0);
+  const nonZero = daily
+    .map((d) => d.requests)
+    .filter((n) => n > 0)
+    .sort((a, b) => a - b);
+  const thresholds = [0.25, 0.5, 0.75].map(
+    (q) => nonZero[Math.floor(q * (nonZero.length - 1))] ?? 0,
+  );
 
   const levelFor = (requests: number): 0 | 1 | 2 | 3 | 4 => {
     if (requests <= 0) return 0;

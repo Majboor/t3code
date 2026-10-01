@@ -8,6 +8,7 @@ import {
   type ProjectCloudSync,
 } from "@t3tools/contracts";
 
+import { APP_BASE_NAME } from "../../branding";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 
 /**
@@ -91,15 +92,115 @@ export const CLOUD_SYNC_MODE_CHOICES: readonly CloudSyncModeChoice[] = [
   },
 ];
 
-export function readCloudSyncModeChoice(mode: CloudSyncMode): CloudSyncModeChoice {
-  return (
-    CLOUD_SYNC_MODE_CHOICES.find((choice) => choice.mode === mode) ?? CLOUD_SYNC_MODE_CHOICES[0]!
-  );
-}
-
 /** Short enough for a button, used where the panel has already explained itself. */
 export function cloudSyncModeLabel(mode: CloudSyncMode): string {
   return mode === "handoff" ? "Handoff" : "Mirror";
+}
+
+/**
+ * The question people actually ask about a shared project, in their words.
+ *
+ * Exported so the two places that answer it — the sync control, and the share
+ * control that just handed somebody a link — ask it identically. Two phrasings
+ * of one question read as two different questions with two different answers.
+ */
+export const CLOUD_SYNC_OFFLINE_QUESTION = "Can somebody else open this when this machine is off?";
+
+/**
+ * What a quick tunnel is, said once.
+ *
+ * `docs/cloud-sync-spec.md` starts the tunnel and the sync together, so the
+ * moment after sharing is exactly the moment a person concludes the link is
+ * durable: there is a public https address, it works, and nothing on screen
+ * distinguishes it from a cloud one. It dies with the lid, and by then the link
+ * is in somebody else's inbox where nobody can fix it.
+ */
+export const CLOUD_SYNC_TUNNEL_IS_NOT_A_COPY =
+  "A live link is a tunnel out of this machine, not a copy of it: close the lid, quit the app or lose the network and it stops working for everyone you already sent it to.";
+
+export type CloudSyncOfflineAnswer = "yes" | "not-yet" | "no";
+
+export interface CloudSyncOfflineReachability {
+  readonly answer: CloudSyncOfflineAnswer;
+  /** True only when a copy somebody else can open outlives this machine going off. */
+  readonly reachable: boolean;
+  /** Badge-sized, for where the question is implied rather than written out. */
+  readonly short: string;
+  readonly title: string;
+  readonly detail: string;
+  readonly tone: "ok" | "pending" | "warning";
+}
+
+/**
+ * Whether anyone else can open this project once this machine is off.
+ *
+ * The only thing that makes the answer yes is a completed first pass, so the
+ * test is `lastAgreedAt` and nothing else. Not the status: a sync that has
+ * agreed once and is now `paused` or `error` still has a whole copy in the
+ * cloud, and telling that person "no" would push them into leaving a laptop
+ * open for no reason. Not the mode either — `handoff` and `mirror` differ in
+ * which copy is canonical, never in whether the cloud one is servable.
+ *
+ * A live tunnel never contributes a yes, in any state. It is the one input that
+ * looks like reachability and is not, and the whole point of this function is
+ * to refuse to launder it into one.
+ */
+export function describeOfflineReachability(input: {
+  readonly sync: ProjectCloudSync | null;
+  /** The Cloudflare quick tunnel publishing this machine, when one is up. */
+  readonly liveLinkRunning: boolean;
+}): CloudSyncOfflineReachability {
+  const { sync, liveLinkRunning } = input;
+
+  if (sync && sync.lastAgreedAt !== null) {
+    return {
+      answer: "yes",
+      reachable: true,
+      short: "Yes",
+      title: `Yes — ${APP_BASE_NAME} has a complete copy`,
+      detail:
+        sync.mode === "handoff"
+          ? `The whole project is in ${APP_BASE_NAME} and that copy is the real one, so a link keeps working with this machine off. The folder here is a dormant snapshot and is no longer part of it.`
+          : `The whole project is in ${APP_BASE_NAME}, so a link keeps working with this machine off. Anything a collaborator changes meanwhile reaches this folder the next time the machine is on.`,
+      tone: "ok",
+    };
+  }
+
+  if (sync) {
+    // A sync exists and has never agreed in full, so the cloud holds part of a
+    // tree. Distinct from "no" because the advice differs: waiting fixes this
+    // one, and nothing fixes the other except starting a sync.
+    return {
+      answer: "not-yet",
+      reachable: false,
+      short: "Not yet",
+      title: "Not yet — the first upload has not finished",
+      detail: `${APP_BASE_NAME} only has part of this project so far. Shut this machine before the first pass completes and anyone holding the link is told the person sharing it closed their laptop.${
+        liveLinkRunning ? ` ${CLOUD_SYNC_TUNNEL_IS_NOT_A_COPY}` : ""
+      }`,
+      tone: "pending",
+    };
+  }
+
+  if (liveLinkRunning) {
+    return {
+      answer: "no",
+      reachable: false,
+      short: "No",
+      title: "No — the live link dies with this machine",
+      detail: `The only copy of this project is the one on this machine. ${CLOUD_SYNC_TUNNEL_IS_NOT_A_COPY} A copy in ${APP_BASE_NAME} is what makes a link outlive the lid.`,
+      tone: "warning",
+    };
+  }
+
+  return {
+    answer: "no",
+    reachable: false,
+    short: "No",
+    title: "No — this project is only on this machine",
+    detail: `Nothing has been uploaded to ${APP_BASE_NAME}, so with this machine off there is nothing for anybody to open.`,
+    tone: "warning",
+  };
 }
 
 export type CloudSyncTone = "idle" | "busy" | "paused" | "error";
@@ -133,7 +234,11 @@ export function describeCloudSyncHeadline(sync: ProjectCloudSync | null): CloudS
         detail: "Working out what differs between this machine and the cloud copy.",
       };
     case "transferring":
-      return { tone: "busy", label: "Transferring", detail: "Moving the files that differ." };
+      return {
+        tone: "busy",
+        label: "Transferring",
+        detail: "Moving the files that differ.",
+      };
     case "paused":
       return {
         tone: "paused",
@@ -153,7 +258,11 @@ export function describeCloudSyncHeadline(sync: ProjectCloudSync | null): CloudS
       };
     case "idle":
       return sync.lastAgreedAt
-        ? { tone: "idle", label: "Up to date", detail: "Both sides agree on every file." }
+        ? {
+            tone: "idle",
+            label: "Up to date",
+            detail: "Both sides agree on every file.",
+          }
         : {
             tone: "idle",
             label: "Waiting to start",
@@ -502,7 +611,12 @@ export function deriveVisitorView(
   now: Date = new Date(),
 ): CloudSyncVisitorView {
   if (!sync) {
-    return { state: "not-syncing", sync: null, liveCopy: null, turnsAllowed: true };
+    return {
+      state: "not-syncing",
+      sync: null,
+      liveCopy: null,
+      turnsAllowed: true,
+    };
   }
   if (sync.lastAgreedAt !== null) {
     // Agreed once means the tree is whole. A later pass only means some files

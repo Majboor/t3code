@@ -48,7 +48,8 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
   glm: {
     provider: "glm",
     title: "LogicPacks",
-    description: "Save additional LogicPacks gateway model slugs for the picker and `/model` command.",
+    description:
+      "Save additional LogicPacks gateway model slugs for the picker and `/model` command.",
     placeholder: "your-glm-model-slug",
     example: "z-ai/glm-5.3",
   },

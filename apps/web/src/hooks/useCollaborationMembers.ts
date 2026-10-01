@@ -251,8 +251,5 @@ export function useCollaborationMembers(input: {
   // visible row re-rendered on every streaming delta of every turn. The map
   // inside was already memoized; the wrapper around it was not.
   const hasScope = environmentId !== null && scope !== null;
-  return useMemo(
-    () => ({ byUserId, viewerUserId, hasScope }),
-    [byUserId, hasScope, viewerUserId],
-  );
+  return useMemo(() => ({ byUserId, viewerUserId, hasScope }), [byUserId, hasScope, viewerUserId]);
 }

@@ -1398,6 +1398,18 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
        * build of the browser app, a reconnecting tab that cached the old
        * capability — quietly puts someone's project on the shared box. The
        * setting has to be enforced where the work would actually be done.
+       *
+       * This deliberately says nothing about the project's *kind*, and both
+       * halves of that are decisions rather than omissions. `hosted` needs no
+       * rule of its own: a `paired-environment` server holds no workspaces at
+       * all, so the check below already turns away every `project.create` here
+       * whatever kind it asks for, and a kind-shaped copy would only be a second
+       * thing to keep in step. `joined` is refused by
+       * `decideProjectKindRefusal`, which `normalizeDispatchCommand` runs one
+       * line after this one — before it creates the workspace directory, which
+       * is the ordering this comment is about — and again in the decider, which
+       * every entry point reaches. Adding a third call site here would buy
+       * nothing and give the rule one more place to rot.
        */
       const refuseHostingWhenPairedEnvironment = (
         // Runs before normalization, so this sees the client's command shape

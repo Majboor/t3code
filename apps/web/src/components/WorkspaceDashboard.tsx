@@ -35,6 +35,14 @@ import {
   type WorkspaceDashboardWorkspace,
 } from "./WorkspaceDashboard.logic";
 import {
+  describeProjectKindChoice,
+  resolveProjectKindAvailability,
+  resolveProjectKindChoices,
+  type CreatableProjectKind,
+  type ProjectKindChoice,
+} from "./projectKind.logic";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import {
   Dialog,
   DialogDescription,
   DialogFooter,
@@ -47,6 +55,7 @@ import { SidebarInset, SidebarTrigger } from "./ui/sidebar";
 import { toastManager } from "./ui/toast";
 import { WorkspacePageHeader } from "./WorkspacePageHeader";
 import { useCommandPaletteStore } from "../commandPaletteStore";
+import { useServerConfig } from "../rpc/serverState";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -89,6 +98,7 @@ export function WorkspaceDashboard() {
   const [createdSetupUrl, setCreatedSetupUrl] = useState<string | null>(null);
   const environmentRuntimeById = useSavedEnvironmentRuntimeStore((store) => store.byId);
   const primaryEnvironmentDescriptor = readPrimaryEnvironmentDescriptor();
+  const primaryServerConfig = useServerConfig();
   const getEnvironmentLabel = useCallback(
     (environmentId: EnvironmentId): string => {
       const runtimeLabel = environmentRuntimeById[environmentId]?.descriptor?.label;
@@ -179,7 +189,10 @@ export function WorkspaceDashboard() {
   const projectOwnershipKey = useMemo(
     () =>
       projects
-        .map((project) => `${project.environmentId}:${project.id}:${project.ownership?.workspaceId ?? "-"}`)
+        .map(
+          (project) =>
+            `${project.environmentId}:${project.id}:${project.ownership?.workspaceId ?? "-"}`,
+        )
         .toSorted()
         .join("|"),
     [projects],
@@ -237,16 +250,44 @@ export function WorkspaceDashboard() {
     },
     [setThreadFavorite],
   );
+  /**
+   * Which kinds of project a given workspace can hold, and the copy for each.
+   *
+   * The auth descriptor comes from the environment the workspace lives on rather
+   * than from the page's own server, because the dashboard routinely lists
+   * workspaces on several environments at once and only one of them is the
+   * server serving this page. `projectKind.logic.ts` owns what the two inputs
+   * mean, so that this menu and the palette's picker cannot disagree about what
+   * this instance can do.
+   */
+  const resolveWorkspaceProjectKindChoices = useCallback(
+    (workspace: WorkspaceDashboardWorkspace | null): readonly ProjectKindChoice[] => {
+      const environmentId = workspace?.environmentId ?? primaryEnvironmentDescriptor?.environmentId;
+      const auth =
+        environmentId && environmentId === primaryEnvironmentDescriptor?.environmentId
+          ? (primaryServerConfig?.auth ?? null)
+          : environmentId
+            ? (environmentRuntimeById[environmentId]?.serverConfig?.auth ?? null)
+            : null;
+      return resolveProjectKindChoices(
+        resolveProjectKindAvailability({ auth, ownership: workspace?.ownership ?? null }),
+      );
+    },
+    [environmentRuntimeById, primaryEnvironmentDescriptor?.environmentId, primaryServerConfig],
+  );
   const handleAddProjectToWorkspace = useCallback(
-    (workspace: WorkspaceDashboardWorkspace) => {
+    (workspace: WorkspaceDashboardWorkspace, projectKind: CreatableProjectKind) => {
       if (workspace.ownership) {
-        openAddProject({
-          environmentId: workspace.environmentId,
-          ownership: workspace.ownership,
-        });
+        openAddProject(
+          {
+            environmentId: workspace.environmentId,
+            ownership: workspace.ownership,
+          },
+          projectKind,
+        );
         return;
       }
-      openAddProject();
+      openAddProject(undefined, projectKind);
     },
     [openAddProject],
   );
@@ -351,8 +392,9 @@ export function WorkspaceDashboard() {
             {model.workspaceCount === 0 && !model.hasFilter ? (
               <EmptyDashboard
                 canCreateWorkspace={model.createTargets.length > 0}
+                projectKindChoices={resolveWorkspaceProjectKindChoices(null)}
                 onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
-                onAddProject={openAddProject}
+                onAddProject={(projectKind) => openAddProject(undefined, projectKind)}
               />
             ) : (
               <div className="grid min-h-0 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
@@ -371,6 +413,7 @@ export function WorkspaceDashboard() {
                             entry,
                             getEnvironmentLabel(entry.environmentId),
                           )}
+                          projectKindChoices={resolveWorkspaceProjectKindChoices(entry)}
                           onAddProject={handleAddProjectToWorkspace}
                           onInvite={(workspace) => {
                             setCreatedInviteUrl(null);
@@ -629,16 +672,79 @@ function DashboardEmptyResult({ label }: { label: string }) {
   return <div className="px-4 py-8 text-sm text-muted-foreground">{label}</div>;
 }
 
+/**
+ * "Add project", asked as the question it has always silently been.
+ *
+ * One component for both places on this page that start a project, for the same
+ * reason the copy lives in one module: the empty state and a workspace row must
+ * not end up offering different options or different words for them.
+ *
+ * A kind this instance cannot do stays on the menu, disabled, with the reason
+ * where the description goes. Hiding it would leave somebody who has heard of
+ * hosting hunting for a control that is not there, and hunting is what the
+ * feature is supposed to end.
+ */
+function AddProjectKindMenu({
+  choices,
+  label,
+  testId,
+  onChoose,
+}: {
+  choices: readonly ProjectKindChoice[];
+  label: string;
+  testId?: string;
+  onChoose: (kind: CreatableProjectKind) => void;
+}) {
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <button
+            type="button"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none"
+            {...(testId ? { "data-testid": testId } : {})}
+          />
+        }
+      >
+        <FolderPlusIcon className="size-3.5" />
+        <span>{label}</span>
+      </MenuTrigger>
+      <MenuPopup align="end" className="max-w-80">
+        {choices.map((choice) => (
+          <MenuItem
+            key={choice.kind}
+            disabled={!choice.available}
+            className="flex-col items-start gap-0.5 py-2"
+            onClick={() => {
+              if (!choice.available) {
+                return;
+              }
+              onChoose(choice.kind);
+            }}
+          >
+            <span className="text-xs font-medium text-foreground">{choice.label}</span>
+            <span className="text-[11px] leading-snug text-muted-foreground whitespace-normal">
+              {choice.unavailableReason ?? describeProjectKindChoice(choice)}
+            </span>
+          </MenuItem>
+        ))}
+      </MenuPopup>
+    </Menu>
+  );
+}
+
 function WorkspaceRow({
   entry,
   ownershipLabel,
+  projectKindChoices,
   onAddProject,
   onInvite,
   onOpenProject,
 }: {
   entry: WorkspaceDashboardWorkspace;
   ownershipLabel: string;
-  onAddProject: (entry: WorkspaceDashboardWorkspace) => void;
+  projectKindChoices: readonly ProjectKindChoice[];
+  onAddProject: (entry: WorkspaceDashboardWorkspace, projectKind: CreatableProjectKind) => void;
   onInvite: (entry: WorkspaceDashboardWorkspace) => void;
   onOpenProject: (entry: WorkspaceDashboardProject) => void;
 }) {
@@ -660,10 +766,11 @@ function WorkspaceRow({
       try {
         for (const file of files) {
           const relativePath = file.name.trim().replaceAll("\\", "/").replace(/^\/+/, "");
-          const response = await fetch(
-            workspaceFileUrl(projectEntry.project.cwd, relativePath),
-            { method: "POST", credentials: "same-origin", body: file },
-          );
+          const response = await fetch(workspaceFileUrl(projectEntry.project.cwd, relativePath), {
+            method: "POST",
+            credentials: "same-origin",
+            body: file,
+          });
           if (!response.ok) {
             throw new Error(
               (await response.text().catch(() => "")) || `Upload failed (${response.status}).`,
@@ -724,14 +831,11 @@ function WorkspaceRow({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
-          <button
-            type="button"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none"
-            onClick={() => onAddProject(entry)}
-          >
-            <FolderPlusIcon className="size-3.5" />
-            <span>Add project</span>
-          </button>
+          <AddProjectKindMenu
+            choices={projectKindChoices}
+            label="Add project"
+            onChoose={(projectKind) => onAddProject(entry, projectKind)}
+          />
           <button
             type="button"
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-muted-foreground"
@@ -784,90 +888,90 @@ function WorkspaceRow({
             const isDropTarget = dropTargetProjectKey === projectKey;
             const isUploading = uploadingProjectKey === projectKey;
             return (
-            <div
-              key={projectKey}
-              className={cn(
-                "group flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-background/70 pr-1.5 text-xs transition-colors hover:bg-accent/70",
-                isDropTarget && "border-ring bg-accent/70",
-              )}
-              onDragOver={(event) => {
-                if (![...event.dataTransfer.items].some((item) => item.kind === "file")) {
-                  return;
+              <div
+                key={projectKey}
+                className={cn(
+                  "group flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-background/70 pr-1.5 text-xs transition-colors hover:bg-accent/70",
+                  isDropTarget && "border-ring bg-accent/70",
+                )}
+                onDragOver={(event) => {
+                  if (![...event.dataTransfer.items].some((item) => item.kind === "file")) {
+                    return;
+                  }
+                  event.preventDefault();
+                  setDropTargetProjectKey(projectKey);
+                }}
+                onDragLeave={() =>
+                  setDropTargetProjectKey((current) => (current === projectKey ? null : current))
                 }
-                event.preventDefault();
-                setDropTargetProjectKey(projectKey);
-              }}
-              onDragLeave={() =>
-                setDropTargetProjectKey((current) => (current === projectKey ? null : current))
-              }
-              onDrop={(event) => {
-                if (![...event.dataTransfer.items].some((item) => item.kind === "file")) {
-                  return;
-                }
-                event.preventDefault();
-                setDropTargetProjectKey(null);
-                void uploadFilesToProject(projectEntry, [...event.dataTransfer.files]);
-              }}
-            >
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none"
-                data-testid="dashboard-workspace-project-link"
-                onClick={() => onOpenProject(projectEntry)}
-              >
-                <FolderIcon className="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground" />
-                <span className="min-w-0 flex-1 truncate text-foreground">
-                  {projectEntry.project.name}
-                </span>
-                <span className="shrink-0 text-muted-foreground">
-                  {isUploading
-                    ? "Uploading…"
-                    : projectEntry.threadCount > 0
-                      ? formatCount(projectEntry.threadCount, "session")
-                      : "Start session"}
-                </span>
-              </button>
-              {/* Labelled rather than an icon alone: publishing was reachable
-                  only from this row, by a 14px glyph whose sole label was a
-                  tooltip, and nobody found it. */}
-              <button
-                type="button"
-                aria-label={`Publish ${projectEntry.project.name} as a pack`}
-                title="Publish as a pack"
-                className="flex shrink-0 items-center gap-1 rounded-sm border border-border/70 px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground focus-visible:outline-none"
-                data-testid="dashboard-workspace-publish-pack"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setPublishingProject(projectEntry);
+                onDrop={(event) => {
+                  if (![...event.dataTransfer.items].some((item) => item.kind === "file")) {
+                    return;
+                  }
+                  event.preventDefault();
+                  setDropTargetProjectKey(null);
+                  void uploadFilesToProject(projectEntry, [...event.dataTransfer.files]);
                 }}
               >
-                <PackagePlusIcon className="size-3.5" />
-                Publish
-              </button>
-              <Link
-                to="/infra/$projectId"
-                params={{ projectId: projectEntry.project.id }}
-                aria-label={`Infrastructure for ${projectEntry.project.name}`}
-                title="Infrastructure"
-                className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
-                data-testid="dashboard-workspace-infra-link"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <ServerIcon className="size-3.5" />
-              </Link>
-              {/* Reachable from the project it belongs to, or nobody finds it. */}
-              <Link
-                to="/analytics/$projectId"
-                params={{ projectId: projectEntry.project.id }}
-                aria-label={`Analytics for ${projectEntry.project.name}`}
-                title="Analytics"
-                className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
-                data-testid="dashboard-workspace-analytics-link"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <ChartNoAxesColumnIcon className="size-3.5" />
-              </Link>
-            </div>
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none"
+                  data-testid="dashboard-workspace-project-link"
+                  onClick={() => onOpenProject(projectEntry)}
+                >
+                  <FolderIcon className="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-foreground">
+                    {projectEntry.project.name}
+                  </span>
+                  <span className="shrink-0 text-muted-foreground">
+                    {isUploading
+                      ? "Uploading…"
+                      : projectEntry.threadCount > 0
+                        ? formatCount(projectEntry.threadCount, "session")
+                        : "Start session"}
+                  </span>
+                </button>
+                {/* Labelled rather than an icon alone: publishing was reachable
+                  only from this row, by a 14px glyph whose sole label was a
+                  tooltip, and nobody found it. */}
+                <button
+                  type="button"
+                  aria-label={`Publish ${projectEntry.project.name} as a pack`}
+                  title="Publish as a pack"
+                  className="flex shrink-0 items-center gap-1 rounded-sm border border-border/70 px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground focus-visible:outline-none"
+                  data-testid="dashboard-workspace-publish-pack"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setPublishingProject(projectEntry);
+                  }}
+                >
+                  <PackagePlusIcon className="size-3.5" />
+                  Publish
+                </button>
+                <Link
+                  to="/infra/$projectId"
+                  params={{ projectId: projectEntry.project.id }}
+                  aria-label={`Infrastructure for ${projectEntry.project.name}`}
+                  title="Infrastructure"
+                  className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
+                  data-testid="dashboard-workspace-infra-link"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <ServerIcon className="size-3.5" />
+                </Link>
+                {/* Reachable from the project it belongs to, or nobody finds it. */}
+                <Link
+                  to="/analytics/$projectId"
+                  params={{ projectId: projectEntry.project.id }}
+                  aria-label={`Analytics for ${projectEntry.project.name}`}
+                  title="Analytics"
+                  className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
+                  data-testid="dashboard-workspace-analytics-link"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <ChartNoAxesColumnIcon className="size-3.5" />
+                </Link>
+              </div>
             );
           })}
           {entry.projects.length > 4 ? (
@@ -999,12 +1103,14 @@ function ArchivedSessionRow({
 
 function EmptyDashboard({
   canCreateWorkspace,
+  projectKindChoices,
   onCreateWorkspace,
   onAddProject,
 }: {
   canCreateWorkspace: boolean;
+  projectKindChoices: readonly ProjectKindChoice[];
   onCreateWorkspace: () => void;
-  onAddProject: () => void;
+  onAddProject: (projectKind: CreatableProjectKind) => void;
 }) {
   return (
     <section className="flex min-h-72 items-center justify-center rounded-lg border border-border bg-card/35 px-6 py-10 text-center">
@@ -1027,14 +1133,12 @@ function EmptyDashboard({
             <PlusIcon className="size-3.5" />
             <span>Create Workspace</span>
           </button>
-          <button
-            type="button"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none"
-            onClick={onAddProject}
-          >
-            <FolderPlusIcon className="size-3.5" />
-            <span>Add Project</span>
-          </button>
+          <AddProjectKindMenu
+            choices={projectKindChoices}
+            label="Add Project"
+            testId="dashboard-empty-add-project"
+            onChoose={onAddProject}
+          />
         </div>
         {/*
          * Only in a browser, which is what it says and was not what it did.

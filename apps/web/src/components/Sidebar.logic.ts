@@ -392,8 +392,8 @@ export function buildSidebarWorkspaceFilterOptions(
     }
   }
 
-  return Array.from(workspacesById, ([value, label]) => ({ value, label })).toSorted((left, right) =>
-    left.label.localeCompare(right.label),
+  return Array.from(workspacesById, ([value, label]) => ({ value, label })).toSorted(
+    (left, right) => left.label.localeCompare(right.label),
   );
 }
 
@@ -404,9 +404,7 @@ export function doesSidebarProjectWorkspaceMatch(
   if (filter === "all") {
     return true;
   }
-  return getProjectOwnershipEntries(project).some(
-    (ownership) => ownership.workspaceId === filter,
-  );
+  return getProjectOwnershipEntries(project).some((ownership) => ownership.workspaceId === filter);
 }
 
 export function doesSidebarThreadMatchQuery(

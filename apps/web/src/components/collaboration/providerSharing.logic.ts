@@ -131,3 +131,127 @@ export function readMemberAccess(
   const policy = overview.policies.find((entry) => entry.provider === provider) ?? null;
   return { access: policy?.mode === "shared" ? "workspace" : "own", isExplicit: false };
 }
+
+export interface WorkspaceBacking {
+  /** Which providers' turns this workspace currently runs on their account. */
+  readonly providers: readonly ProviderAuthKind[];
+  /**
+   * `null` for a member who cannot see the workspace roster. The policy names
+   * the owner to everybody, but only an admin is sent the account index that
+   * turns a user id into a name, so the badge stays unnamed rather than
+   * printing a raw id at somebody who has no way to read it.
+   */
+  readonly displayName: string | null;
+  /**
+   * The account labels backing each provider, in `providers` order. Labels
+   * only — the credential itself is never part of the overview, and nothing
+   * here may be widened into one. Empty for a member who cannot see the roster.
+   */
+  readonly accountLabels: readonly string[];
+  readonly isViewer: boolean;
+  /**
+   * The policy still names them but the account has been disconnected or
+   * withdrawn, so turns are already falling back to each member's own. Only an
+   * admin can see this: without the roster there is no account to compare the
+   * policy against, and guessing would accuse a working contributor of a fault.
+   */
+  readonly broken: boolean;
+}
+
+export interface WorkspaceCarrier extends WorkspaceBacking {
+  readonly userId: string;
+}
+
+interface CarrierDraft {
+  providers: ProviderAuthKind[];
+  labels: string[];
+  broken: boolean;
+  name: string | null;
+}
+
+/**
+ * Who is actually paying for this workspace's turns.
+ *
+ * Read off `policies`, not off `isWorkspaceDefault`, for two reasons. The
+ * policy is sent to every member while the account roster is admin-only, so
+ * this is the one rule that answers the question for everybody. And it is the
+ * same rule the turn resolver uses — `shared` mode with an owner named — so a
+ * badge can never claim somebody's quota is being spent when it is not; the
+ * roster flag is set from the policy's pointers without checking the mode, so
+ * it can still be true on an account a policy has stopped spending.
+ *
+ * Sharing an account and backing the workspace are deliberately kept apart
+ * here. Somebody who has switched their account on has offered it; until the
+ * policy names it, nothing of theirs is being spent, and badging the offer
+ * would point the whole workspace's gratitude — and its "can I have some too" —
+ * at the wrong person.
+ */
+export function readWorkspaceCarriers(
+  overview: ProviderSharingOverviewResult,
+): readonly WorkspaceCarrier[] {
+  const byUser = new Map<string, CarrierDraft>();
+
+  for (const provider of PROVIDERS) {
+    const policy = overview.policies.find((entry) => entry.provider === provider) ?? null;
+    if (!policy || policy.mode !== "shared" || policy.sharedOwnerUserId === null) {
+      continue;
+    }
+    const ownerId = policy.sharedOwnerUserId as string;
+    const account =
+      policy.sharedAccountId === null
+        ? null
+        : (overview.workspaceAccounts.find(
+            (entry) =>
+              entry.provider === provider &&
+              (entry.userId as string) === ownerId &&
+              entry.accountId === policy.sharedAccountId,
+          ) ?? null);
+
+    const draft = byUser.get(ownerId) ?? { providers: [], labels: [], broken: false, name: null };
+    draft.providers.push(provider);
+    if (account) {
+      draft.labels.push(account.label);
+      draft.name = account.displayName;
+      // `isShared` false is the owner having withdrawn the account under a
+      // policy that still points at it: turns fall back, and an admin is the
+      // only person who can put it right, so only they are told.
+      draft.broken = draft.broken || !account.isShared;
+    } else if (overview.canManage) {
+      // The roster is visible and still has no such account: it is gone.
+      draft.broken = true;
+    }
+    byUser.set(ownerId, draft);
+  }
+
+  return [...byUser.entries()].map(([userId, draft]) => ({
+    userId,
+    providers: draft.providers,
+    displayName: draft.name,
+    accountLabels: draft.labels,
+    isViewer: userId === (overview.viewerUserId as string),
+    broken: draft.broken,
+  }));
+}
+
+/**
+ * The badge for one roster row, or null when that person carries nothing.
+ *
+ * Separate from {@link readWorkspaceCarriers} so a member list can ask about
+ * one person without re-deriving the rule, and so the two can never disagree:
+ * this is a lookup into that same answer, not a second implementation of it.
+ */
+export function readMemberBacking(
+  overview: ProviderSharingOverviewResult,
+  userId: string,
+): WorkspaceBacking | null {
+  return readWorkspaceCarriers(overview).find((entry) => entry.userId === userId) ?? null;
+}
+
+/**
+ * What the badge says. One short phrase, because it sits on a roster row next
+ * to a name and has to be readable at a glance: "Backing Claude", or both.
+ */
+export function describeBacking(backing: WorkspaceBacking): string {
+  const names = backing.providers.map((provider) => PROVIDER_LABEL[provider]);
+  return `Backing ${names.length === 2 ? `${names[0]} and ${names[1]}` : names.join("")}`;
+}

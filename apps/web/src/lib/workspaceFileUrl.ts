@@ -6,9 +6,30 @@ export type WorkspaceMediaKind = "image" | "video" | "audio" | "pdf" | "office";
 
 /** Office formats the server renders to PDF with LibreOffice for the inline viewer. */
 export const OFFICE_EXTENSIONS = new Set([
-  "doc", "docx", "dot", "dotx", "odt", "ott", "rtf", "wps",
-  "ppt", "pptx", "pps", "ppsx", "pot", "potx", "odp", "otp", "key",
-  "xls", "xlsx", "xlsm", "ods", "ots", "numbers", "pages",
+  "doc",
+  "docx",
+  "dot",
+  "dotx",
+  "odt",
+  "ott",
+  "rtf",
+  "wps",
+  "ppt",
+  "pptx",
+  "pps",
+  "ppsx",
+  "pot",
+  "potx",
+  "odp",
+  "otp",
+  "key",
+  "xls",
+  "xlsx",
+  "xlsm",
+  "ods",
+  "ots",
+  "numbers",
+  "pages",
 ]);
 
 export function fileExtension(path: string): string {
@@ -18,7 +39,8 @@ export function fileExtension(path: string): string {
 /** Which media element (if any) can preview a file by its extension. */
 export function mediaKindForPath(path: string): WorkspaceMediaKind | null {
   const ext = fileExtension(path);
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"].includes(ext)) return "image";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"].includes(ext))
+    return "image";
   if (["mp4", "webm", "mov", "m4v", "ogv"].includes(ext)) return "video";
   if (["mp3", "wav", "ogg", "oga", "m4a", "flac", "aac"].includes(ext)) return "audio";
   if (ext === "pdf") return "pdf";
@@ -45,7 +67,10 @@ export function workspaceFileViewUrl(cwd: string, relativePath: string): string 
 }
 
 /** Relative path of an absolute file inside `cwd`, or null when it lives elsewhere. */
-export function relativeWorkspacePath(cwd: string | undefined, absolutePath: string): string | null {
+export function relativeWorkspacePath(
+  cwd: string | undefined,
+  absolutePath: string,
+): string | null {
   if (!cwd) return null;
   const root = cwd.endsWith("/") ? cwd : `${cwd}/`;
   return absolutePath.startsWith(root) ? absolutePath.slice(root.length) : null;

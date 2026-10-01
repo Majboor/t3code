@@ -9,6 +9,7 @@ import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "~/environments/runtime";
+import { APP_BASE_NAME } from "~/branding";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
@@ -17,6 +18,7 @@ import { toastManager } from "../ui/toast";
 import {
   classifyEnvironmentFailure,
   describeListedEnvironment,
+  groupEnvironmentsByPlacement,
   type ListedEnvironmentTone,
 } from "./environmentConnect.logic";
 
@@ -208,6 +210,11 @@ function EnvironmentRow({
  * Adapted from upstream's `CloudEnvironmentConnectRows`: status dot, one line
  * of state under the name, and the action that matters on the right. The
  * states differ because ours are reached directly rather than through a relay.
+ *
+ * Grouped by where the work runs, because a flat list made a laptop and a
+ * hosted instance look like the same kind of thing. The grouping reads
+ * `workspaceSource` off each environment's own auth descriptor and nothing
+ * else — no new connection mechanics, just a name on what was already true.
  */
 export function EnvironmentConnectList({
   emptyState,
@@ -217,16 +224,30 @@ export function EnvironmentConnectList({
   readonly onSelect?: (environmentId: EnvironmentId) => void;
 }) {
   const savedById = useSavedEnvironmentRegistryStore((state) => state.byId);
+  const runtimeById = useSavedEnvironmentRuntimeStore((state) => state.byId);
   const activeEnvironmentId = useStore((state) => state.activeEnvironmentId);
-  const environmentIds = useMemo(
+  /*
+    The auth descriptor is the only place an environment says whether it hosts
+    the work itself, and it arrives with the server config on the first
+    successful connection. An environment this browser has never reached has no
+    descriptor at all, which `resolveEnvironmentPlacement` deliberately reads as
+    "hosts its own projects" rather than as a third unknown state.
+  */
+  const groups = useMemo(
     () =>
-      Object.values(savedById)
-        .toSorted((left, right) => left.label.localeCompare(right.label))
-        .map((record) => record.environmentId),
-    [savedById],
+      groupEnvironmentsByPlacement(
+        Object.values(savedById)
+          .toSorted((left, right) => left.label.localeCompare(right.label))
+          .map((record) => ({
+            environmentId: record.environmentId,
+            auth: runtimeById[record.environmentId]?.serverConfig?.auth ?? null,
+          })),
+        APP_BASE_NAME,
+      ),
+    [savedById, runtimeById],
   );
 
-  if (environmentIds.length === 0) {
+  if (groups.length === 0) {
     return (
       emptyState ?? (
         <div className="flex flex-col items-center gap-2 px-5 py-9 text-center">
@@ -241,16 +262,41 @@ export function EnvironmentConnectList({
     );
   }
 
+  /*
+    The heading is rendered even when there is only one group. It reads as
+    redundant to whoever already knows the answer, and it is the entire point
+    for whoever does not: a single unlabelled list is exactly the surface that
+    left people guessing which of their machines the work was running on.
+  */
   return (
-    <ul className="flex flex-col">
-      {environmentIds.map((environmentId) => (
-        <EnvironmentRow
-          key={environmentId}
-          environmentId={environmentId}
-          isActive={activeEnvironmentId === environmentId}
-          onSelect={onSelect}
-        />
+    <div className="flex flex-col">
+      {groups.map((group) => (
+        <section
+          key={group.placement}
+          className="border-t border-border/60 first:border-t-0"
+          data-testid="environment-group"
+          data-environment-placement={group.placement}
+        >
+          <div className="bg-muted/25 px-4 py-2.5 sm:px-5">
+            <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+              {group.title}
+            </p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground/80">
+              {group.description}
+            </p>
+          </div>
+          <ul className="flex flex-col">
+            {group.environmentIds.map((environmentId) => (
+              <EnvironmentRow
+                key={environmentId}
+                environmentId={environmentId}
+                isActive={activeEnvironmentId === environmentId}
+                onSelect={onSelect}
+              />
+            ))}
+          </ul>
+        </section>
       ))}
-    </ul>
+    </div>
   );
 }

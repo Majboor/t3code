@@ -34,7 +34,8 @@ import type {
 } from "@t3tools/contracts";
 import { autoUpdater } from "electron-updater";
 
-import type { ContextMenuItem } from "@t3tools/contracts";
+import type { ContextMenuItem, MachineRole } from "@t3tools/contracts";
+import { RUNNER_PROVIDER_SETUP_EXEMPTION, resolveMachineRole } from "@t3tools/contracts";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DEFAULT_DESKTOP_BACKEND_PORT, resolveDesktopBackendPort } from "./backendPort.ts";
@@ -2429,8 +2430,104 @@ function resolveEnrollmentFallbackLabel(baseUrl: string): string {
   }
 }
 
+/**
+ * What this machine was approved *as*, once it has been approved.
+ *
+ * Held in memory and not on disk on purpose. The only screen that reads it is
+ * the connect window, which exists for the length of one enrollment and is
+ * never shown again on a machine that already has an account — so persisting it
+ * would add a file whose staleness nobody would ever notice.
+ *
+ * It starts at `workspace-host` and every failure leaves it there, which is the
+ * same asymmetry `resolveMachineRole` encodes: `workspace-host` is the role that
+ * gets asked for a provider account, and a role this build could not read must
+ * never be able to talk the app out of asking.
+ */
+let enrolledMachineRole: MachineRole = "workspace-host";
+
+/**
+ * Asks the portal what role the approver chose for this machine.
+ *
+ * `/collect` already answers this in the same breath as the credential, but the
+ * collect decoder reads only the fields it needs to store a session and drops
+ * `machineRole` on the floor. Rather than widening that decoder from here, the
+ * answer is read back from the machine list with the credential that has just
+ * arrived: the row the server marks `current` is, by construction, the session
+ * this process is holding.
+ *
+ * Never throws. This runs inside the enrollment `persist` callback, where a
+ * throw is read as "the credential could not be saved" and turns a successful
+ * connection into a visible failure with a fresh code. A machine that could not
+ * find out what it is has still joined the account.
+ *
+ * Reading this changes what the machine *asks its owner for* and nothing else.
+ * The role is a statement of purpose and must never become a permission
+ * boundary: nothing here is consulted when a turn is dispatched, and a turn from
+ * a machine of either role still resolves a real per-user credential or is
+ * refused, somewhere else entirely.
+ */
+async function readApprovedMachineRole(sessionToken: string): Promise<MachineRole> {
+  try {
+    // Built the way the enrollment client builds its URLs — trailing slashes
+    // stripped and the path appended — so a portal served under a sub-path is
+    // reached the same way here as it is for every other call in this flow.
+    const base = enrollmentCloudBaseUrl.replace(/\/+$/, "");
+    const response = await fetch(`${base}/api/devices/machines`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${sessionToken}`, accept: "application/json" },
+      // Bounded because it sits in front of the "connected" screen. A portal
+      // that has stopped answering must cost a sentence on that screen, not the
+      // end of the flow.
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      return "workspace-host";
+    }
+    const body: unknown = await response.json();
+    const machines =
+      typeof body === "object" && body !== null
+        ? (body as Record<string, unknown>)["machines"]
+        : null;
+    if (!Array.isArray(machines)) {
+      return "workspace-host";
+    }
+    const mine = machines.find(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === "object" &&
+        entry !== null &&
+        (entry as Record<string, unknown>)["current"] === true,
+    );
+    const role = mine === undefined ? null : mine["role"];
+    // Resolved rather than read, so this file never becomes a second place that
+    // decides what an absent or unrecognised role means.
+    return resolveMachineRole({ role: typeof role === "string" ? role : null });
+  } catch (error) {
+    writeDesktopLogHeader(
+      `device enrollment could not read this machine's role message=${formatErrorMessage(error)}`,
+    );
+    return "workspace-host";
+  }
+}
+
 function presentDeviceEnrollmentState(state: DeviceEnrollmentState): void {
-  deviceEnrollmentWindow?.present(resolveEnrollmentView(state, enrollmentDeviceLabel));
+  const view = resolveEnrollmentView(state, enrollmentDeviceLabel);
+  /**
+   * The one place the machine acts on its own role, and it acts in one
+   * direction only.
+   *
+   * A runner is told, on the machine itself, that it will not be asked for a
+   * Claude or Codex account — the same sentence the browser that approved it
+   * shows, from the same constant, so the two surfaces cannot drift into
+   * disagreeing about whether a deploy box needs a login. A workspace host's
+   * screen is left exactly as it was: this process does not know whether its
+   * owner already has a provider account connected, and inventing a nudge for
+   * somebody with two subscriptions would be worse than the silence it replaced.
+   */
+  deviceEnrollmentWindow?.present(
+    state.phase === "connected" && enrolledMachineRole === "runner"
+      ? { ...view, detail: `${view.detail} ${RUNNER_PROVIDER_SETUP_EXEMPTION}` }
+      : view,
+  );
 }
 
 /**
@@ -2469,12 +2566,19 @@ function ensureDeviceEnrollmentSurface(): DeviceEnrollmentController {
         record,
         sessionToken: credential.sessionToken,
       });
+      // Awaited here rather than left to settle later, because the controller
+      // commits `connected` as soon as this callback returns — and the role has
+      // to be known before the screen that reports it is drawn.
+      enrolledMachineRole = await readApprovedMachineRole(credential.sessionToken);
+      writeDesktopLogHeader(`device enrollment role resolved role=${enrolledMachineRole}`);
       // The same credential lets the embedded server dial the portal as a box,
       // which is what puts this machine on the portal's Environments page.
       // Restart the server so it picks up the hub address and the token.
       try {
         writeHubSessionTokenForBackend(credential.sessionToken);
-        writeDesktopLogHeader("device enrollment stored hub credential; restarting backend to dial the portal");
+        writeDesktopLogHeader(
+          "device enrollment stored hub credential; restarting backend to dial the portal",
+        );
         void stopBackendAndWaitForExit().then(() => startBackend());
       } catch (error) {
         writeDesktopLogHeader(

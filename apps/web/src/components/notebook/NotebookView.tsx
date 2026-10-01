@@ -1,5 +1,12 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { PlayIcon, PlusIcon, Trash2Icon, ChevronUpIcon, ChevronDownIcon, SquareIcon } from "lucide-react";
+import {
+  PlayIcon,
+  PlusIcon,
+  Trash2Icon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  SquareIcon,
+} from "lucide-react";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { cn } from "~/lib/utils";
@@ -171,7 +178,9 @@ function MarkdownCell({
   const [editing, setEditing] = useState(cell.source.trim().length === 0);
   return (
     <div className="flex gap-2">
-      <div className="w-10 shrink-0 pt-1.5 text-center font-mono text-[10px] text-muted-foreground/50">md</div>
+      <div className="w-10 shrink-0 pt-1.5 text-center font-mono text-[10px] text-muted-foreground/50">
+        md
+      </div>
       <div className="min-w-0 flex-1">
         {editing ? (
           <textarea
@@ -233,7 +242,10 @@ function NotebookView({ value, onChange, cwd, execute, onRestartKernel }: Notebo
     (type: NotebookCellType) => commit([...cells, makeEmptyCell(type)]),
     [cells, commit],
   );
-  const deleteCell = useCallback((id: string) => commit(cells.filter((c) => c.id !== id)), [cells, commit]);
+  const deleteCell = useCallback(
+    (id: string) => commit(cells.filter((c) => c.id !== id)),
+    [cells, commit],
+  );
   const moveCell = useCallback(
     (id: string, delta: number) => {
       const index = cells.findIndex((c) => c.id === id);
@@ -269,7 +281,18 @@ function NotebookView({ value, onChange, cwd, execute, onRestartKernel }: Notebo
         } else if (event.type === "error") {
           live = live.map((c) =>
             c.id === cell.id
-              ? { ...c, outputs: [...c.outputs, { kind: "error", ename: "KernelError", evalue: event.message, traceback: event.message }] }
+              ? {
+                  ...c,
+                  outputs: [
+                    ...c.outputs,
+                    {
+                      kind: "error",
+                      ename: "KernelError",
+                      evalue: event.message,
+                      traceback: event.message,
+                    },
+                  ],
+                }
               : c,
           );
           commit(live);
@@ -304,7 +327,8 @@ function NotebookView({ value, onChange, cwd, execute, onRestartKernel }: Notebo
     return (
       <div className="flex h-full flex-col gap-2 overflow-auto p-4">
         <p className="text-xs text-destructive/80">
-          Couldn&rsquo;t read this notebook ({parsedRef.current.error ?? "invalid"}). Showing raw JSON.
+          Couldn&rsquo;t read this notebook ({parsedRef.current.error ?? "invalid"}). Showing raw
+          JSON.
         </p>
         <pre className="overflow-auto rounded-md border border-border/60 bg-background/70 p-3 font-mono text-[11px] text-muted-foreground/85">
           {value}
@@ -361,7 +385,10 @@ function NotebookView({ value, onChange, cwd, execute, onRestartKernel }: Notebo
       ) : null}
       <div className="flex-1 space-y-3 overflow-auto p-3">
         {cells.map((cell) => (
-          <div key={cell.id} className="group/cell rounded-lg border border-transparent hover:border-border/40">
+          <div
+            key={cell.id}
+            className="group/cell rounded-lg border border-transparent hover:border-border/40"
+          >
             <div className="flex items-start">
               <div className="min-w-0 flex-1">
                 {cell.cellType === "code" ? (

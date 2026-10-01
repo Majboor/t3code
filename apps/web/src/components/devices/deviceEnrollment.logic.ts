@@ -214,6 +214,68 @@ export const MACHINE_ROLE_CHOICES = [
 }>;
 
 /**
+ * What a person can still do about a role once the machine is already
+ * connected, said on the row that shows it.
+ *
+ * The role is written by exactly one act — the approval — and nothing edits it
+ * afterwards, so the honest answer next to a badge is a procedure rather than a
+ * control. Saying it in place is the whole point: until this existed a person
+ * who had approved their deploy box as a workspace saw the wrong badge, no way
+ * forward, and no reason to believe it mattered.
+ *
+ * It lives here, beside `MACHINE_ROLE_CHOICES`, and quotes it rather than
+ * restating it. Two screens describing the same two roles in their own words is
+ * the disagreement this module exists to prevent, and the screen that can
+ * change a role and the screen that shows one are the likeliest pair to drift.
+ *
+ * Nothing here is a permission. The role is a statement of purpose and must
+ * never become a boundary: `decideProviderAccount` does not read it, and a turn
+ * dispatched from a machine of either role still resolves a real per-user
+ * credential or is refused. Every sentence below is about what the product
+ * *asks* for, never about what a session may reach — which is why the
+ * consequence of a wrong role is a missing prompt and never a locked door.
+ */
+export interface MachineRoleChangeGuidance {
+  /** The role this machine is not, which is usually the one somebody wanted. */
+  readonly otherRole: MachineRole;
+  /** That other role, in the approval screen's own sentence. */
+  readonly otherDetail: string;
+  /** The only way to move it today, stated as steps rather than as a button. */
+  readonly steps: string;
+  /** What living with the current answer actually costs. */
+  readonly consequence: string;
+}
+
+/**
+ * One sentence, shared by both roles, because the procedure does not depend on
+ * which way you are going. It names the approval screen explicitly: that is
+ * where the choice is offered, and a person who does not know that reads
+ * "connect it again" as busywork rather than as the place the question is asked.
+ */
+const MACHINE_ROLE_CHANGE_STEPS =
+  "Disconnect it here, then connect it again from the machine itself. The approval screen asks which kind it is, and the answer you give there replaces this one.";
+
+export function describeMachineRoleChange(role: MachineRole): MachineRoleChangeGuidance {
+  const other =
+    MACHINE_ROLE_CHOICES.find((choice) => choice.role !== role) ?? MACHINE_ROLE_CHOICES[0];
+  return {
+    otherRole: other.role,
+    otherDetail: other.detail,
+    steps: MACHINE_ROLE_CHANGE_STEPS,
+    /**
+     * Worded as a missing prompt in both directions, never as a refusal,
+     * because that is what it is. A runner is not blocked from anything; it is
+     * simply not walked into provider setup. A workspace host is not granted
+     * anything by being asked; it is asked because somebody will work there.
+     */
+    consequence:
+      role === "runner"
+        ? "As a runner it is never asked for a Claude or Codex account. If you do sit down and work on this machine, that prompt is the one you are missing — a turn here still runs on an account of your own."
+        : "As a workspace it is asked for a Claude or Codex account, because turns run on yours. If nothing here ever runs a turn, that is a setup step you will never need.",
+  };
+}
+
+/**
  * How long the request has left, from epoch millis rather than an ISO string.
  *
  * A missing or unparseable deadline says so instead of rendering "Expired" — we

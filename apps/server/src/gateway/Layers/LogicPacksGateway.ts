@@ -21,13 +21,81 @@ import { LocalAuthAccountRepository } from "../../persistence/Services/LocalAuth
 import {
   GatewayError,
   LogicPacksGateway,
+  type GatewayInstance,
+  type GatewayPlanOffer,
   type GatewayRedeemResult,
   type GatewayUsageResult,
   type LogicPacksGatewayShape,
 } from "../Services/LogicPacksGateway.ts";
 
+/**
+ * The catalogue is a property of the instance, not of the user, and it changes
+ * about as often as pricing does — so re-fetching it on every Settings visit
+ * would be one wasted round trip per page load for a value that is identical
+ * for everybody. A failed fetch is cached too, deliberately: a gateway build
+ * that has no `/v1/plans` yet must not be hammered once per request forever.
+ */
+const PLAN_CATALOGUE_TTL_MS = 5 * 60_000;
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+/**
+ * Reads a plan catalogue out of whatever the gateway sent.
+ *
+ * Deliberately structural rather than schema-strict: this is the one place
+ * where a *separate* app's response shape crosses into ours, and a field it
+ * renames or an extra key it adds must cost us a missing dash on one tile, not
+ * an empty Billing page. Anything unrecognisable collapses to `[]`, which the
+ * UI already has to handle for the no-catalogue case.
+ *
+ * Accepts either a bare array or `{ plans: [...] }`, and tolerates the two
+ * spellings of a monthly price the gateway has used.
+ */
+export function parseGatewayPlanCatalogue(input: unknown): ReadonlyArray<GatewayPlanOffer> {
+  const rows = Array.isArray(input)
+    ? input
+    : input && typeof input === "object" && Array.isArray((input as { plans?: unknown }).plans)
+      ? ((input as { plans: ReadonlyArray<unknown> }).plans as ReadonlyArray<unknown>)
+      : null;
+  if (!rows) return [];
+
+  const offers: GatewayPlanOffer[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const record = row as Record<string, unknown>;
+    const code = asNonEmptyString(record.code);
+    if (!code) continue;
+    offers.push({
+      code,
+      name: asNonEmptyString(record.name) ?? code,
+      priceUsdMonthly:
+        asFiniteNumber(record.price_usd_monthly) ??
+        asFiniteNumber(record.price_usd) ??
+        asFiniteNumber(record.priceUsdMonthly),
+      includedTokens:
+        asNonEmptyString(record.included_tokens) ?? asNonEmptyString(record.includedTokens),
+      description: asNonEmptyString(record.description),
+    });
+  }
+  return offers;
+}
+
 const GatewayEnvConfig = Config.all({
-  gatewayUrl: Config.url("T3CODE_GATEWAY_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  gatewayUrl: Config.url("T3CODE_GATEWAY_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   provisionToken: Config.string("T3CODE_GATEWAY_PROVISION_TOKEN").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -74,6 +142,12 @@ interface MeResponse {
     readonly processed_tokens: number;
     readonly longest_streak_days: number;
   };
+  /**
+   * Optional: newer gateway builds inline the catalogue here so a Settings
+   * visit costs one round trip instead of two. Older ones omit it and we fall
+   * back to `/v1/plans`.
+   */
+  readonly plans?: unknown;
 }
 
 type RedeemResponse =
@@ -113,7 +187,11 @@ const makeLogicPacksGateway = Effect.gen(function* () {
             }),
           }),
         catch: (cause) =>
-          new GatewayError({ message: "The LogicPacks API gateway did not respond.", status: 502, cause }),
+          new GatewayError({
+            message: "The LogicPacks API gateway did not respond.",
+            status: 502,
+            cause,
+          }),
       }).pipe(Effect.catch(() => Effect.succeed(undefined)));
       if (!response) return;
 
@@ -125,7 +203,11 @@ const makeLogicPacksGateway = Effect.gen(function* () {
       const body = yield* Effect.tryPromise({
         try: () => response.json() as Promise<ProvisionResponse>,
         catch: (cause) =>
-          new GatewayError({ message: "The gateway returned an unreadable response.", status: 502, cause }),
+          new GatewayError({
+            message: "The gateway returned an unreadable response.",
+            status: 502,
+            cause,
+          }),
       }).pipe(Effect.catch(() => Effect.succeed(undefined)));
 
       // The idempotent-retry branch (account already existed on the gateway)
@@ -167,7 +249,9 @@ const makeLogicPacksGateway = Effect.gen(function* () {
     localAccounts.getByUserId({ userId }).pipe(
       Effect.catch(() => Effect.succeed(Option.none())),
       Effect.flatMap((account) =>
-        Option.isSome(account) ? provisionForUser({ userId, email: account.value.email }) : Effect.void,
+        Option.isSome(account)
+          ? provisionForUser({ userId, email: account.value.email })
+          : Effect.void,
       ),
     );
 
@@ -178,7 +262,8 @@ const makeLogicPacksGateway = Effect.gen(function* () {
         .getByUserId({ userId })
         .pipe(
           Effect.mapError(
-            (cause) => new GatewayError({ message: "Failed to load gateway account.", status: 502, cause }),
+            (cause) =>
+              new GatewayError({ message: "Failed to load gateway account.", status: 502, cause }),
           ),
         );
       if (Option.isNone(row)) {
@@ -198,26 +283,98 @@ const makeLogicPacksGateway = Effect.gen(function* () {
           headers: { ...init?.headers, authorization: `Bearer ${apiKey}` },
         }),
       catch: (cause) =>
-        new GatewayError({ message: "The LogicPacks API gateway did not respond.", status: 502, cause }),
+        new GatewayError({
+          message: "The LogicPacks API gateway did not respond.",
+          status: 502,
+          cause,
+        }),
+    });
+
+  // Instance-wide, so a single slot is enough; see PLAN_CATALOGUE_TTL_MS.
+  let cachedCatalogue: { value: ReadonlyArray<GatewayPlanOffer>; expiresAt: number } | null = null;
+
+  const rememberCatalogue = (value: ReadonlyArray<GatewayPlanOffer>) => {
+    cachedCatalogue = { value, expiresAt: Date.now() + PLAN_CATALOGUE_TTL_MS };
+    return value;
+  };
+
+  /**
+   * `apiKey` is the user's key when we have one; the provision token stands in
+   * for the instance itself when we don't, because the catalogue is public
+   * pricing rather than anybody's account data.
+   */
+  const loadPlanCatalogue = (
+    apiKey: string | null,
+  ): Effect.Effect<ReadonlyArray<GatewayPlanOffer>> =>
+    Effect.gen(function* () {
+      if (!configured) return [];
+      if (cachedCatalogue && cachedCatalogue.expiresAt > Date.now()) return cachedCatalogue.value;
+
+      const response = yield* gatewayFetch("/v1/plans", apiKey ?? config.provisionToken ?? "").pipe(
+        Effect.catch(() => Effect.succeed(null)),
+      );
+      if (!response?.ok) return rememberCatalogue([]);
+
+      const body = yield* Effect.tryPromise({
+        try: () => response.json() as Promise<unknown>,
+        catch: (cause) =>
+          new GatewayError({
+            message: "The gateway returned an unreadable response.",
+            status: 502,
+            cause,
+          }),
+      }).pipe(Effect.catch(() => Effect.succeed(null)));
+
+      return rememberCatalogue(parseGatewayPlanCatalogue(body));
+    });
+
+  const fetchInstance: LogicPacksGatewayShape["fetchInstance"] = () =>
+    Effect.gen(function* () {
+      // No gateway means no catalogue and no fetch: an instance without the
+      // integration must never pay a network timeout to be told so.
+      if (!configured) return { configured: false, planCatalogue: [] } satisfies GatewayInstance;
+      const planCatalogue = yield* loadPlanCatalogue(null);
+      return { configured: true, planCatalogue } satisfies GatewayInstance;
     });
 
   const fetchUsage: LogicPacksGatewayShape["fetchUsage"] = (userId) =>
     Effect.gen(function* () {
       if (!configured) {
-        return yield* new GatewayError({ message: "The LogicPacks API integration is not configured.", status: 404 });
+        return yield* new GatewayError({
+          message: "The LogicPacks API integration is not configured.",
+          status: 404,
+        });
       }
       yield* selfHeal(userId);
       const apiKey = yield* requireApiKey(userId);
       const response = yield* gatewayFetch("/v1/me", apiKey);
       if (!response.ok) {
-        return yield* new GatewayError({ message: "Could not load usage from the gateway.", status: 502 });
+        return yield* new GatewayError({
+          message: "Could not load usage from the gateway.",
+          status: 502,
+        });
       }
       const body = (yield* Effect.tryPromise({
         try: () => response.json() as Promise<MeResponse>,
-        catch: (cause) => new GatewayError({ message: "The gateway returned an unreadable response.", status: 502, cause }),
+        catch: (cause) =>
+          new GatewayError({
+            message: "The gateway returned an unreadable response.",
+            status: 502,
+            cause,
+          }),
       })) satisfies MeResponse;
 
+      // An inlined catalogue is authoritative and free; it also refreshes the
+      // cache that `fetchInstance` reads, so the two never disagree.
+      const inlineCatalogue = parseGatewayPlanCatalogue(body.plans);
+      const planCatalogue =
+        inlineCatalogue.length > 0
+          ? rememberCatalogue(inlineCatalogue)
+          : yield* loadPlanCatalogue(apiKey);
+
       return {
+        configured: true,
+        planCatalogue,
         balance: body.balance,
         plan: body.plan
           ? {
@@ -267,7 +424,10 @@ const makeLogicPacksGateway = Effect.gen(function* () {
   const redeemCode: LogicPacksGatewayShape["redeemCode"] = (userId, code) =>
     Effect.gen(function* () {
       if (!configured) {
-        return yield* new GatewayError({ message: "The LogicPacks API integration is not configured.", status: 404 });
+        return yield* new GatewayError({
+          message: "The LogicPacks API integration is not configured.",
+          status: 404,
+        });
       }
       yield* selfHeal(userId);
       const apiKey = yield* requireApiKey(userId);
@@ -278,13 +438,21 @@ const makeLogicPacksGateway = Effect.gen(function* () {
       });
       if (!response.ok) {
         return yield* new GatewayError({
-          message: response.status === 400 ? "That code is invalid or already used." : "Could not redeem the code.",
+          message:
+            response.status === 400
+              ? "That code is invalid or already used."
+              : "Could not redeem the code.",
           status: response.status === 400 ? 400 : 502,
         });
       }
       const body = (yield* Effect.tryPromise({
         try: () => response.json() as Promise<RedeemResponse>,
-        catch: (cause) => new GatewayError({ message: "The gateway returned an unreadable response.", status: 502, cause }),
+        catch: (cause) =>
+          new GatewayError({
+            message: "The gateway returned an unreadable response.",
+            status: 502,
+            cause,
+          }),
       })) satisfies RedeemResponse;
 
       return (
@@ -302,7 +470,8 @@ const makeLogicPacksGateway = Effect.gen(function* () {
         .getByUserId({ userId })
         .pipe(
           Effect.mapError(
-            (cause) => new GatewayError({ message: "Failed to load gateway account.", status: 502, cause }),
+            (cause) =>
+              new GatewayError({ message: "Failed to load gateway account.", status: 502, cause }),
           ),
         );
       return Option.isSome(row) ? Option.some(row.value.apiKey) : Option.none();
@@ -311,6 +480,7 @@ const makeLogicPacksGateway = Effect.gen(function* () {
   return {
     provisionForUser,
     fetchUsage,
+    fetchInstance,
     redeemCode,
     getApiKey,
   } satisfies LogicPacksGatewayShape;

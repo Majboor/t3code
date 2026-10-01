@@ -912,12 +912,7 @@ export default function GitActionsControl({
   return (
     <>
       {!isRepo ? (
-        <Button
-          variant="outline"
-          size="xs"
-          disabled={initMutation.isPending}
-          onClick={runInit}
-        >
+        <Button variant="outline" size="xs" disabled={initMutation.isPending} onClick={runInit}>
           {initMutation.isPending ? "Initializing..." : "Initialize Git"}
         </Button>
       ) : (

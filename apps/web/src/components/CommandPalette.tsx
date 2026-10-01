@@ -34,6 +34,13 @@ import {
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import {
+  describeProjectKindChoice,
+  resolveProjectKindAvailability,
+  resolveProjectKindChoices,
+  resolveSelectedProjectKind,
+  type CreatableProjectKind,
+} from "./projectKind.logic";
 import { useCommandPaletteStore, type AddProjectWorkspaceContext } from "../commandPaletteStore";
 import { readEnvironmentApi } from "../environmentApi";
 import { readPrimaryEnvironmentDescriptor, usePrimaryEnvironmentId } from "../environments/primary";
@@ -94,7 +101,11 @@ import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
-import { useDefaultProviderOverride, useServerKeybindings } from "../rpc/serverState";
+import {
+  useDefaultProviderOverride,
+  useServerConfig,
+  useServerKeybindings,
+} from "../rpc/serverState";
 import { resolveShortcutCommand } from "../keybindings";
 import {
   Command,
@@ -232,8 +243,18 @@ function OpenCommandPaletteDialog() {
   );
   const [addProjectWorkspaceContext, setAddProjectWorkspaceContext] =
     useState<AddProjectWorkspaceContext | null>(null);
+  /**
+   * The kind the person asked for, before it has been checked against the
+   * environment they end up creating on. `null` means they have not been asked
+   * yet, which is not the same as having chosen `local` — the difference is what
+   * lets a kind requested by the dashboard survive being carried in here.
+   */
+  const [requestedProjectKind, setRequestedProjectKind] = useState<CreatableProjectKind | null>(
+    null,
+  );
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryServerConfig = useServerConfig();
   const primaryEnvironmentLabel = readPrimaryEnvironmentDescriptor()?.label ?? null;
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((state) => state.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((state) => state.byId);
@@ -301,6 +322,48 @@ function OpenCommandPaletteDialog() {
           : null;
     return getEnvironmentBrowsePlatform(os);
   }, [browseEnvironmentId, primaryEnvironmentId, savedEnvironmentRuntimeById]);
+  /**
+   * What kinds of project the environment being browsed can actually hold.
+   *
+   * Read from the environment the project would be created *on*, not from the
+   * server the browser is talking to, because those are routinely different: the
+   * palette lets somebody add a project to a paired laptop from a page served by
+   * an account server. The two inputs are the auth descriptor of that
+   * environment and the workspace the project is being added to; the rules about
+   * what they mean live in `projectKind.logic.ts`.
+   */
+  const projectKindAvailability = useMemo(() => {
+    const auth =
+      browseEnvironmentId && primaryEnvironmentId && browseEnvironmentId === primaryEnvironmentId
+        ? (primaryServerConfig?.auth ?? null)
+        : browseEnvironmentId
+          ? (savedEnvironmentRuntimeById[browseEnvironmentId]?.serverConfig?.auth ?? null)
+          : null;
+    return resolveProjectKindAvailability({
+      auth,
+      ownership: addProjectWorkspaceContext?.ownership ?? null,
+    });
+  }, [
+    addProjectWorkspaceContext,
+    browseEnvironmentId,
+    primaryEnvironmentId,
+    primaryServerConfig,
+    savedEnvironmentRuntimeById,
+  ]);
+  const projectKindChoices = useMemo(
+    () => resolveProjectKindChoices(projectKindAvailability),
+    [projectKindAvailability],
+  );
+  /**
+   * The kind that will actually be dispatched. Re-resolved on every render
+   * rather than stored, so that switching the target environment mid-flow
+   * downgrades a no-longer-possible `hosted` to `local` instead of sending it.
+   */
+  const selectedProjectKind = resolveSelectedProjectKind(
+    projectKindAvailability,
+    requestedProjectKind,
+  );
+
   const isBrowsing = isFilesystemBrowseQuery(query, browseEnvironmentPlatform);
   const paletteMode = getCommandPaletteMode({ currentView, isBrowsing });
   const getAddProjectInitialQueryForEnvironment = useCallback(
@@ -560,6 +623,7 @@ function OpenCommandPaletteDialog() {
     if (viewStack.length <= 1) {
       setAddProjectEnvironmentId(null);
       setAddProjectWorkspaceContext(null);
+      setRequestedProjectKind(null);
     }
     setViewStack((previousViews) => previousViews.slice(0, -1));
     setHighlightedItemValue(null);
@@ -578,9 +642,14 @@ function OpenCommandPaletteDialog() {
     (
       environmentId: EnvironmentId,
       workspaceContext: AddProjectWorkspaceContext | null = null,
+      projectKind: CreatableProjectKind | null = null,
     ): void => {
       setAddProjectEnvironmentId(environmentId);
       setAddProjectWorkspaceContext(workspaceContext);
+      // A kind the dashboard already asked for arrives here; anything else
+      // starts unasked so the picker shows the default rather than whatever the
+      // last person to open the palette happened to choose.
+      setRequestedProjectKind(projectKind);
       pushPaletteView({
         addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
         groups: [],
@@ -600,7 +669,10 @@ function OpenCommandPaletteDialog() {
       icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
       keepOpen: true,
       run: async () => {
-        startAddProjectBrowse(option.environmentId);
+        // Carry a kind chosen before the environment question was asked. The
+        // person answered it once; asking again because they also had to pick a
+        // machine would be the duplication this whole slice removes.
+        startAddProjectBrowse(option.environmentId, null, requestedProjectKind);
       },
     }),
   );
@@ -617,14 +689,18 @@ function OpenCommandPaletteDialog() {
   );
 
   const openAddProjectFlow = useCallback(
-    (workspaceContext: AddProjectWorkspaceContext | null = null) => {
+    (
+      workspaceContext: AddProjectWorkspaceContext | null = null,
+      projectKind: CreatableProjectKind | null = null,
+    ) => {
       if (workspaceContext) {
-        startAddProjectBrowse(workspaceContext.environmentId, workspaceContext);
+        startAddProjectBrowse(workspaceContext.environmentId, workspaceContext, projectKind);
         return;
       }
 
       if (addProjectEnvironmentOptions.length > 1) {
         setAddProjectWorkspaceContext(null);
+        setRequestedProjectKind(projectKind);
         pushPaletteView({
           addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
           groups: addProjectEnvironmentGroups,
@@ -642,7 +718,7 @@ function OpenCommandPaletteDialog() {
         return;
       }
 
-      startAddProjectBrowse(environmentId);
+      startAddProjectBrowse(environmentId, null, projectKind);
     },
     [
       addProjectEnvironmentGroups,
@@ -657,7 +733,7 @@ function OpenCommandPaletteDialog() {
       return;
     }
     clearOpenIntent();
-    openAddProjectFlow(openIntent.workspace ?? null);
+    openAddProjectFlow(openIntent.workspace ?? null, openIntent.projectKind ?? null);
   }, [clearOpenIntent, openAddProjectFlow, openIntent]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
@@ -836,6 +912,12 @@ function OpenCommandPaletteDialog() {
           title: inferProjectTitleFromPath(cwd),
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: true,
+          // Sent unconditionally, including when it is `local`. An omitted kind
+          // still *resolves* to `local`, but the column cannot then tell a
+          // project somebody deliberately kept on their machine from one created
+          // before the question was ever asked, and telling those apart is the
+          // reason migration 074 refused to backfill.
+          kind: selectedProjectKind,
           ...(addProjectWorkspaceContext
             ? { ownership: addProjectWorkspaceContext.ownership }
             : {}),
@@ -876,6 +958,7 @@ function OpenCommandPaletteDialog() {
       handleNewThread,
       openExistingProject,
       projects,
+      selectedProjectKind,
       setOpen,
       settings.defaultThreadEnvMode,
     ],
@@ -1131,6 +1214,69 @@ function OpenCommandPaletteDialog() {
             </Button>
           ) : null}
         </div>
+        {/*
+          Asked here because here is where the project is made.
+          Only while browsing, because browsing is the only state that ends in a
+          `project.create`: every other palette view opens something that already
+          exists. The chosen option's sentence sits under the row rather than in a
+          tooltip, because the sentence is the whole point — a label reading
+          "Hosted on LogicPacks" next to one reading "On this computer" is exactly
+          the ambiguity this feature exists to end.
+        */}
+        {isBrowsing ? (
+          <div
+            className="border-b border-border px-3 py-2.5"
+            data-testid="command-palette-project-kind"
+          >
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              role="radiogroup"
+              aria-label="Where this project lives"
+            >
+              {projectKindChoices.map((choice) => {
+                const isSelected = choice.kind === selectedProjectKind;
+                return (
+                  <button
+                    key={choice.kind}
+                    type="button"
+                    tabIndex={-1}
+                    role="radio"
+                    aria-checked={isSelected}
+                    disabled={!choice.available}
+                    title={choice.unavailableReason ?? describeProjectKindChoice(choice)}
+                    className={cn(
+                      "rounded-md border px-2 py-1 text-xs transition-colors",
+                      isSelected
+                        ? "border-primary/60 bg-primary/10 text-foreground"
+                        : "border-border/70 text-muted-foreground hover:text-foreground",
+                      choice.available ? "cursor-pointer" : "cursor-not-allowed opacity-45",
+                    )}
+                    // The palette's input must keep focus: the person is
+                    // halfway through typing a path and Enter has to stay
+                    // wired to "add this folder".
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                    }}
+                    onClick={() => {
+                      if (!choice.available) {
+                        return;
+                      }
+                      setRequestedProjectKind(choice.kind);
+                    }}
+                  >
+                    {choice.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-xs leading-snug text-muted-foreground/80">
+              {describeProjectKindChoice(
+                projectKindChoices.find((choice) => choice.kind === selectedProjectKind) ??
+                  projectKindChoices[0]!,
+              )}
+            </p>
+          </div>
+        ) : null}
         <CommandPanel className="max-h-[min(28rem,70vh)]">
           <CommandPaletteResults
             groups={displayedGroups}

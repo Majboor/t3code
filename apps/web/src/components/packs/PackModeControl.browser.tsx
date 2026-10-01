@@ -12,9 +12,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 vi.mock("@tanstack/react-query", async () => {
-  const actual = await vi.importActual<typeof import("@tanstack/react-query")>(
-    "@tanstack/react-query",
-  );
+  const actual =
+    await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
   return {
     ...actual,
     useQuery: vi.fn(() => ({ data: [], error: null, isPending: false })),
@@ -36,10 +35,9 @@ describe("PackModeControl → Browse all packs", () => {
   it("opens the browse modal on top of the still-open pack-mode popover", async () => {
     const host = document.createElement("div");
     document.body.append(host);
-    const screen = await render(
-      <PackModeControl prompt="" onInsertPrompt={() => undefined} />,
-      { container: host },
-    );
+    const screen = await render(<PackModeControl prompt="" onInsertPrompt={() => undefined} />, {
+      container: host,
+    });
 
     try {
       // Open the small popover.
@@ -47,9 +45,7 @@ describe("PackModeControl → Browse all packs", () => {
       expect(trigger, "pack-mode-trigger should render").toBeTruthy();
       (trigger as HTMLElement).click();
 
-      await expect
-        .poll(() => byTestId("pack-mode-browse-all"))
-        .toBeTruthy();
+      await expect.poll(() => byTestId("pack-mode-browse-all")).toBeTruthy();
 
       // The popover's own filter row should be visible before anything else opens.
       expect(byTestId("pack-mode-scope")).toBeTruthy();

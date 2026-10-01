@@ -467,8 +467,7 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
     deploys: {
       listTargets: (input) =>
         transport.request((client) => client[WS_METHODS.deployListTargets](input)),
-      listRuns: (input) =>
-        transport.request((client) => client[WS_METHODS.deployListRuns](input)),
+      listRuns: (input) => transport.request((client) => client[WS_METHODS.deployListRuns](input)),
       listDeployments: (input) =>
         transport.request((client) => client[WS_METHODS.deployListDeployments](input)),
     },

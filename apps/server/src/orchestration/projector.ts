@@ -183,6 +183,13 @@ export function projectEvent(
             id: payload.projectId,
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
+            // Without this line the kind reaches the durable event and then
+            // stops: the read model every in-process caller asks
+            // (`orchestrationEngine.getReadModel()`) would rebuild the project
+            // without it, so a replay would quietly downgrade a hosted project
+            // to no-kind-stated. Conditional for the same reason as `ownership`
+            // — an event that never mentioned a kind must not gain the key.
+            ...(payload.kind !== undefined ? { kind: payload.kind } : {}),
             ...(payload.ownership !== undefined ? { ownership: payload.ownership } : {}),
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,

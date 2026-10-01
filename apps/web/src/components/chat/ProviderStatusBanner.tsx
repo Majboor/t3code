@@ -169,7 +169,9 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   }
 
   const connection =
-    providerName === null ? null : (connections?.find((entry) => entry.provider === providerName) ?? null);
+    providerName === null
+      ? null
+      : (connections?.find((entry) => entry.provider === providerName) ?? null);
   const connectedAccounts = connection?.accounts.filter((account) => account.connected) ?? [];
   const myDefault = connection ? defaultAccountOf(connection) : null;
 

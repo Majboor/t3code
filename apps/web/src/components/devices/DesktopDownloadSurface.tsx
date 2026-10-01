@@ -127,9 +127,7 @@ export function DesktopDownloadSurface({
                   size="sm"
                   variant="outline"
                   render={
-                    <a
-                      href={`logicpacks://enroll?server=${encodeURIComponent(portalOrigin)}`}
-                    />
+                    <a href={`logicpacks://enroll?server=${encodeURIComponent(portalOrigin)}`} />
                   }
                 >
                   <MonitorSmartphoneIcon />

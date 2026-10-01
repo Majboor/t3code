@@ -36,9 +36,49 @@ export interface GatewayDailyActivity {
   readonly processedTokens: number;
 }
 
+/**
+ * One plan as the gateway itself describes it.
+ *
+ * Prices belong to the gateway and to nothing else. The moment a price is
+ * copied into the UI it becomes a second source of truth, and it goes stale
+ * silently on the day pricing changes — in the user's favour or in ours, and
+ * either way we only find out from a complaint. So every number here comes
+ * down the wire, and `null` means "the gateway did not say", which renders as
+ * a dash rather than as a figure we invented.
+ */
+export interface GatewayPlanOffer {
+  readonly code: string;
+  readonly name: string;
+  readonly priceUsdMonthly: number | null;
+  readonly includedTokens: string | null;
+  readonly description: string | null;
+}
+
+/**
+ * What this *instance* can do, as opposed to what this *user* has.
+ *
+ * An instance with no `T3CODE_GATEWAY_URL` / `T3CODE_GATEWAY_PROVISION_TOKEN`
+ * has no billing at all — there is nothing to buy, nothing to redeem against
+ * and no plan to be on. The UI needs that told apart from "the gateway is
+ * configured but unreachable", because the first means "hide the page" and the
+ * second means "say it is down".
+ */
+export interface GatewayInstance {
+  readonly configured: boolean;
+  readonly planCatalogue: ReadonlyArray<GatewayPlanOffer>;
+}
+
 export interface GatewayUsageResult {
   readonly balance: { readonly nanos: string; readonly usd: number };
   readonly plan: GatewayUsagePlan | null;
+  /**
+   * False only on an instance with no gateway configured. A usage payload from
+   * such an instance carries no real numbers, so a reader that sees `false`
+   * should say so rather than render zeroes as if they were measurements.
+   */
+  readonly configured: boolean;
+  /** The plans the gateway sells; empty when it publishes no catalogue. */
+  readonly planCatalogue: ReadonlyArray<GatewayPlanOffer>;
   /** Null when the active plan (if any) defines no session limit. */
   readonly sessionWindow: GatewaySessionWindow | null;
   readonly usage30d: {
@@ -78,6 +118,13 @@ export interface LogicPacksGatewayShape {
     readonly email: string;
   }) => Effect.Effect<void>;
   readonly fetchUsage: (userId: UserId) => Effect.Effect<GatewayUsageResult, GatewayError>;
+  /**
+   * Answers "is there a gateway here at all, and what does it sell" without
+   * touching the user's account. Never fails: a caller asking whether to show
+   * a Billing page must get an answer even when the gateway is down, and a
+   * gateway that is merely down is still a gateway (`configured: true`).
+   */
+  readonly fetchInstance: () => Effect.Effect<GatewayInstance>;
   readonly redeemCode: (
     userId: UserId,
     code: string,

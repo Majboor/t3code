@@ -3,12 +3,26 @@ import { useEffect, useState } from "react";
 import { ActivityIcon } from "lucide-react";
 
 import { readEnvironmentApi } from "../../environmentApi";
-import { fetchGatewayUsage, usePrimaryEnvironmentId, type GatewayUsageResult } from "../../environments/primary";
+import {
+  fetchGatewayUsage,
+  usePrimaryEnvironmentId,
+  type GatewayUsageResult,
+} from "../../environments/primary";
 import { useCollaborationUsage } from "../../hooks/useCollaborationUsage";
 import { UsagePanel } from "../collaboration/usage/UsagePanel";
-import { SettingsPageContainer, SettingsRow, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
+import {
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+  useRelativeTimeTick,
+} from "./settingsLayout";
 import { UsageActivityHeatmap } from "./UsageActivityHeatmap";
-import { formatCompactCount, formatResetsIn, isLimitReached, percentUsed } from "./usageActivity.logic";
+import {
+  formatCompactCount,
+  formatResetsIn,
+  isLimitReached,
+  percentUsed,
+} from "./usageActivity.logic";
 
 /**
  * A bar rendered from percent alone reads the same at 96% and at "actually
@@ -97,7 +111,9 @@ export function UsageActivitySettings() {
     const load = () =>
       fetchGatewayUsage()
         .then(setGatewayUsage)
-        .catch((err: unknown) => setGatewayError(err instanceof Error ? err.message : "Failed to load usage."));
+        .catch((err: unknown) =>
+          setGatewayError(err instanceof Error ? err.message : "Failed to load usage."),
+        );
 
     load();
     // A page opened before hitting the 5-hour burst limit — or just left open
@@ -120,15 +136,25 @@ export function UsageActivitySettings() {
           <>
             <SettingsRow
               title="Monthly plan allowance"
-              description={gatewayUsage.plan ? `${gatewayUsage.plan.name} plan` : "No active plan — billed from balance."}
+              description={
+                gatewayUsage.plan
+                  ? `${gatewayUsage.plan.name} plan`
+                  : "No active plan — billed from balance."
+              }
             >
               {gatewayUsage.plan ? (
                 <div className="pb-4">
                   <LimitBar
                     label="Monthly allowance"
-                    percent={percentUsed(Number(gatewayUsage.plan.tokensUsed), Number(gatewayUsage.plan.includedTokens))}
+                    percent={percentUsed(
+                      Number(gatewayUsage.plan.tokensUsed),
+                      Number(gatewayUsage.plan.includedTokens),
+                    )}
                     resetsLabel={formatResetsIn(gatewayUsage.plan.periodEnd, nowMs)}
-                    reached={isLimitReached(Number(gatewayUsage.plan.tokensUsed), Number(gatewayUsage.plan.includedTokens))}
+                    reached={isLimitReached(
+                      Number(gatewayUsage.plan.tokensUsed),
+                      Number(gatewayUsage.plan.includedTokens),
+                    )}
                   />
                 </div>
               ) : null}
@@ -141,13 +167,21 @@ export function UsageActivitySettings() {
                 <div className="pb-4">
                   <LimitBar
                     label="Current 5h window"
-                    percent={percentUsed(gatewayUsage.sessionWindow.tokensUsed, gatewayUsage.sessionWindow.tokensLimit)}
+                    percent={percentUsed(
+                      gatewayUsage.sessionWindow.tokensUsed,
+                      gatewayUsage.sessionWindow.tokensLimit,
+                    )}
                     resetsLabel={formatResetsIn(gatewayUsage.sessionWindow.resetsAt, nowMs)}
-                    reached={isLimitReached(gatewayUsage.sessionWindow.tokensUsed, gatewayUsage.sessionWindow.tokensLimit)}
+                    reached={isLimitReached(
+                      gatewayUsage.sessionWindow.tokensUsed,
+                      gatewayUsage.sessionWindow.tokensLimit,
+                    )}
                   />
                 </div>
               ) : (
-                <div className="pb-4 text-xs text-muted-foreground">No session limit on this plan.</div>
+                <div className="pb-4 text-xs text-muted-foreground">
+                  No session limit on this plan.
+                </div>
               )}
             </SettingsRow>
           </>

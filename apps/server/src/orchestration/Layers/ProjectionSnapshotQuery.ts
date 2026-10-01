@@ -21,6 +21,7 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
   ModelSelection,
+  parseProjectKind,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -65,11 +66,24 @@ import {
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
 const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
+// `kind` is added here rather than on `ProjectionProject` itself because this
+// query is the only reader that carries it to the client; the project
+// repository's own upsert does not write it yet, and a field on the shared row
+// schema that nothing populates would just be a hole for somebody to fall into.
+//
+// Typed as plain `Schema.String`, deliberately, and not as `ProjectKind`. The
+// column has no `CHECK` constraint (see migration 074), so a row written by a
+// newer binary that learned a fifth kind would fail the literal union and take
+// the entire snapshot down with it — every project, every thread, on the one
+// payload that paints the project list. `parseProjectKind` narrows it on the
+// way out instead, which turns an unreadable kind into one project that looks
+// unclassified rather than an app that will not load.
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     ownership: Schema.NullOr(Schema.fromJsonString(OrchestrationProjectOwnership)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    kind: Schema.NullOr(Schema.String),
   }),
 );
 const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
@@ -224,11 +238,30 @@ function mapProjectShellRow(
     title: row.title,
     workspaceRoot: row.workspaceRoot,
     ...(row.ownership !== null ? { ownership: row.ownership } : {}),
+    kind: parseProjectKind(row.kind),
     repositoryIdentity,
     defaultModelSelection: row.defaultModelSelection,
     scripts: row.scripts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+/**
+ * The full project row, which is the shell plus `deletedAt`.
+ *
+ * Written in terms of `mapProjectShellRow` rather than beside it because the
+ * field list used to exist three times by hand — here, in `getSnapshot` and in
+ * `getActiveProjectByWorkspaceRoot` — and a column added to one copy silently
+ * missed the others.
+ */
+function mapProjectRow(
+  row: Schema.Schema.Type<typeof ProjectionProjectDbRowSchema>,
+  repositoryIdentity: OrchestrationProject["repositoryIdentity"],
+): OrchestrationProject {
+  return {
+    ...mapProjectShellRow(row, repositoryIdentity),
+    deletedAt: row.deletedAt,
   };
 }
 
@@ -256,6 +289,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ownership_json AS "ownership",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
+          project_kind AS "kind",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -503,6 +537,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ownership_json AS "ownership",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
+          project_kind AS "kind",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -526,6 +561,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ownership_json AS "ownership",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
+          project_kind AS "kind",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -642,24 +678,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-/**
- * How many activity rows this query reads for one thread.
- *
- * The response was already bounded — `SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD`
- * is applied after the fact — but the *read* was not: every row a thread had
- * ever accumulated was fetched from SQLite and schema-decoded, and all but the
- * newest 200 were then thrown away. On a long-lived thread that is thousands of
- * rows of work per open, and this is the query behind the endpoint traced in
- * the 2026-09-14 incident, where a caller re-reading orchestration state every
- * 15-20 seconds put ~9Mbps of continuous outbound on the uplink until the
- * WebSocket collapsed.
- *
- * Deliberately the same number as the cap rather than a larger one: any excess
- * read here is read only to be discarded. A send limit, never a retention
- * policy — every row stays on disk, so nothing is destroyed and a later reader
- * with a reason to want the whole log can still have it.
- */
-const THREAD_ACTIVITY_ROW_LIMIT = SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD;
+  /**
+   * How many activity rows this query reads for one thread.
+   *
+   * The response was already bounded — `SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD`
+   * is applied after the fact — but the *read* was not: every row a thread had
+   * ever accumulated was fetched from SQLite and schema-decoded, and all but the
+   * newest 200 were then thrown away. On a long-lived thread that is thousands of
+   * rows of work per open, and this is the query behind the endpoint traced in
+   * the 2026-09-14 incident, where a caller re-reading orchestration state every
+   * 15-20 seconds put ~9Mbps of continuous outbound on the uplink until the
+   * WebSocket collapsed.
+   *
+   * Deliberately the same number as the cap rather than a larger one: any excess
+   * read here is read only to be discarded. A send limit, never a retention
+   * policy — every row stays on disk, so nothing is destroyed and a later reader
+   * with a reason to want the whole log can still have it.
+   */
+  const THREAD_ACTIVITY_ROW_LIMIT = SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD;
 
   const listThreadActivityRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
@@ -1002,18 +1038,9 @@ const THREAD_ACTIVITY_ROW_LIMIT = SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD;
                 ),
               );
 
-              const projects: ReadonlyArray<OrchestrationProject> = projectRows.map((row) => ({
-                id: row.projectId,
-                title: row.title,
-                workspaceRoot: row.workspaceRoot,
-                ...(row.ownership !== null ? { ownership: row.ownership } : {}),
-                repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
-                defaultModelSelection: row.defaultModelSelection,
-                scripts: row.scripts,
-                createdAt: row.createdAt,
-                updatedAt: row.updatedAt,
-                deletedAt: row.deletedAt,
-              }));
+              const projects: ReadonlyArray<OrchestrationProject> = projectRows.map((row) =>
+                mapProjectRow(row, repositoryIdentities.get(row.projectId) ?? null),
+              );
 
               const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
                 id: row.threadId,
@@ -1237,24 +1264,13 @@ const THREAD_ACTIVITY_ROW_LIMIT = SNAPSHOT_ACTIVITY_HISTORY_LIMIT_PER_THREAD;
         Effect.flatMap((option) =>
           Option.isNone(option)
             ? Effect.succeed(Option.none<OrchestrationProject>())
-            : repositoryIdentityResolver.resolve(option.value.workspaceRoot).pipe(
-                Effect.map((repositoryIdentity) =>
-                  Option.some({
-                    id: option.value.projectId,
-                    title: option.value.title,
-                    workspaceRoot: option.value.workspaceRoot,
-                    ...(option.value.ownership !== null
-                      ? { ownership: option.value.ownership }
-                      : {}),
-                    repositoryIdentity,
-                    defaultModelSelection: option.value.defaultModelSelection,
-                    scripts: option.value.scripts,
-                    createdAt: option.value.createdAt,
-                    updatedAt: option.value.updatedAt,
-                    deletedAt: option.value.deletedAt,
-                  } satisfies OrchestrationProject),
+            : repositoryIdentityResolver
+                .resolve(option.value.workspaceRoot)
+                .pipe(
+                  Effect.map((repositoryIdentity) =>
+                    Option.some(mapProjectRow(option.value, repositoryIdentity)),
+                  ),
                 ),
-              ),
         ),
       );
 

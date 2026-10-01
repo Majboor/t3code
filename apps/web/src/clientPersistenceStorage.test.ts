@@ -123,9 +123,8 @@ describe("clientPersistenceStorage", () => {
     writeBrowserClientSettings({ ...DEFAULT_CLIENT_SETTINGS, hasSeenProductTour: true });
 
     vi.resetModules();
-    const { readBrowserClientSettings: readAfterReload } = await import(
-      "./clientPersistenceStorage"
-    );
+    const { readBrowserClientSettings: readAfterReload } =
+      await import("./clientPersistenceStorage");
 
     expect(readAfterReload()).toEqual({ ...DEFAULT_CLIENT_SETTINGS, hasSeenProductTour: true });
   });

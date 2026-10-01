@@ -86,6 +86,7 @@ import Migration0070 from "./Migrations/070_DeployTargetsCloudflare.ts";
 import Migration0071 from "./Migrations/071_PromptbarTestSet.ts";
 import Migration0072 from "./Migrations/072_PromptbarTelemetry.ts";
 import Migration0073 from "./Migrations/073_PackPhrasingFts.ts";
+import Migration0074 from "./Migrations/074_ProjectKind.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -171,6 +172,7 @@ export const migrationEntries = [
   [71, "PromptbarTestSet", Migration0071],
   [72, "PromptbarTelemetry", Migration0072],
   [73, "PackPhrasingFts", Migration0073],
+  [74, "ProjectKind", Migration0074],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

@@ -169,7 +169,10 @@ export function CollaborationBranchClaims({
     try {
       const result = await api.git.resolveConflicts({
         cwd: workspaceRoot,
-        resolutions: paths.map((path) => ({ path, side: choices[`${branch}:${path}`] ?? "theirs" })),
+        resolutions: paths.map((path) => ({
+          path,
+          side: choices[`${branch}:${path}`] ?? "theirs",
+        })),
         message: `Merge ${branch} (conflicts decided from the workspace panel)`,
       });
       if (result.status === "conflicts") {
@@ -207,7 +210,11 @@ export function CollaborationBranchClaims({
         const { [branch]: _removed, ...rest } = current;
         return rest;
       });
-      toastManager.add({ type: "success", title: "Merge abandoned", description: `${branch} was left as it was.` });
+      toastManager.add({
+        type: "success",
+        title: "Merge abandoned",
+        description: `${branch} was left as it was.`,
+      });
     } catch (error) {
       toastManager.add({
         type: "error",
@@ -308,8 +315,8 @@ export function CollaborationBranchClaims({
             {branch} needs somebody to decide
           </div>
           <div className="mt-0.5 text-[10px] text-muted-foreground">
-            Both sides changed the same lines. Pick which side each file keeps, or open the file
-            and decide line by line, then finish the merge.
+            Both sides changed the same lines. Pick which side each file keeps, or open the file and
+            decide line by line, then finish the merge.
           </div>
           <div className="mt-1 grid gap-1">
             {paths.map((path) => {

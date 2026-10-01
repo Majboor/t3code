@@ -87,6 +87,38 @@ const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
     } satisfies ModelCapabilities,
   },
   {
+    // Sonnet 5.5 carries the whole effort ladder, including `xhigh` and `max`,
+    // but its levels are recalibrated from the 4.6 generation, so `high` stays
+    // the default rather than being pushed up the way Opus 4.7's is. Fast mode
+    // is an Opus-only premium tier, hence false here.
+    //
+    // Deliberately NOT version-gated. `MINIMUM_CLAUDE_OPUS_4_7_VERSION` exists
+    // because that floor is known; no verified floor is known for Sonnet 5.5,
+    // and a guessed one would hide the model from every install that is
+    // actually new enough to run it. A CLI too old to accept the slug fails the
+    // turn loudly, which is the better failure than a silently missing entry.
+    slug: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5",
+    isCustom: false,
+    capabilities: {
+      reasoningEffortLevels: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High", isDefault: true },
+        { value: "xhigh", label: "Extra High" },
+        { value: "max", label: "Max" },
+        { value: "ultrathink", label: "Ultrathink" },
+      ],
+      supportsFastMode: false,
+      supportsThinkingToggle: false,
+      contextWindowOptions: [
+        { value: "200k", label: "200k", isDefault: true },
+        { value: "1m", label: "1M" },
+      ],
+      promptInjectedEffortLevels: ["ultrathink"],
+    } satisfies ModelCapabilities,
+  },
+  {
     slug: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6",
     isCustom: false,

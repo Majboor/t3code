@@ -23,7 +23,12 @@ const SAMPLE = JSON.stringify({
         { output_type: "stream", name: "stdout", text: ["hi\n"] },
         { output_type: "execute_result", data: { "text/plain": ["42"] } },
         { output_type: "display_data", data: { "image/png": "AAAA" } },
-        { output_type: "error", ename: "ValueError", evalue: "bad", traceback: ["[31mTrace[0m", "line2"] },
+        {
+          output_type: "error",
+          ename: "ValueError",
+          evalue: "bad",
+          traceback: ["[31mTrace[0m", "line2"],
+        },
       ],
     },
   ],
@@ -66,7 +71,12 @@ describe("serializeNotebook round-trip", () => {
     expect(again.valid).toBe(true);
     expect(again.cells.map((c) => c.source)).toEqual(nb.cells.map((c) => c.source));
     expect((again.raw?.metadata as Record<string, unknown>)?.["kernelspec"]).toBeDefined();
-    expect(again.cells[1]?.outputs.map((o) => o.kind)).toEqual(["stream", "text", "image", "error"]);
+    expect(again.cells[1]?.outputs.map((o) => o.kind)).toEqual([
+      "stream",
+      "text",
+      "image",
+      "error",
+    ]);
   });
 
   it("writes an added cell", () => {

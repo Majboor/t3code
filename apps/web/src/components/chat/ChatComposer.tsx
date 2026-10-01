@@ -64,7 +64,10 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { PackQuickView } from "../packSuggestions/PackQuickView";
-import { PackSuggestionBar, type PackSuggestionBarHandle } from "../packSuggestions/PackSuggestionBar";
+import {
+  PackSuggestionBar,
+  type PackSuggestionBarHandle,
+} from "../packSuggestions/PackSuggestionBar";
 import { usePackSuggestionSettings } from "../packSuggestions/usePackSuggestionSettings";
 import { useWorkspacePacks } from "../packSuggestions/useWorkspacePacks";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./ProviderModelPicker";
@@ -1699,8 +1702,7 @@ export const ChatComposer = memo(
         dragDepthRef.current = 0;
         setIsDragOverComposer(false);
         const trimmed = prompt.trimEnd();
-        const merged =
-          trimmed.length === 0 ? `${mention} ` : `${trimmed} ${mention} `;
+        const merged = trimmed.length === 0 ? `${mention} ` : `${trimmed} ${mention} `;
         onPromptChange(merged, merged.length, merged.length, false, []);
         focusComposer();
       }

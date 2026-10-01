@@ -31,7 +31,10 @@ import { type EnvironmentId, type ScopedThreadRef, type ThreadId } from "@t3tool
  */
 export function resolveCanonicalThreadRef(input: {
   readonly promotedTo: ScopedThreadRef | null | undefined;
-  readonly serverThread: { readonly environmentId: EnvironmentId; readonly id: ThreadId } | null | undefined;
+  readonly serverThread:
+    | { readonly environmentId: EnvironmentId; readonly id: ThreadId }
+    | null
+    | undefined;
 }): ScopedThreadRef | null {
   if (input.promotedTo) {
     return input.promotedTo;

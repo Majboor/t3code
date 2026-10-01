@@ -263,6 +263,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           id: asProjectId("project-1"),
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
+          // Present and null, not absent: this row predates `project_kind`, and
+          // the wire says so rather than guessing on its behalf. What null means
+          // is `resolveProjectKind`'s single call to make.
+          kind: null,
           ownership: {
             tenantId: TenantId.make("tenant-acme"),
             tenantDisplayName: "Acme",
@@ -385,6 +389,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           id: asProjectId("project-1"),
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
+          // Present and null, not absent: this row predates `project_kind`, and
+          // the wire says so rather than guessing on its behalf. What null means
+          // is `resolveProjectKind`'s single call to make.
+          kind: null,
           ownership: {
             tenantId: TenantId.make("tenant-acme"),
             tenantDisplayName: "Acme",

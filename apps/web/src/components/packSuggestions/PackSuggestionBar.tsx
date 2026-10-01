@@ -120,7 +120,10 @@ export const PackSuggestionBar = forwardRef<
      */
     readonly packModeEnabled: boolean;
     readonly layout?: "inline" | "stacked";
-    readonly onChangeSettings?: (next: { enabled?: boolean; layout?: "inline" | "stacked" }) => void;
+    readonly onChangeSettings?: (next: {
+      enabled?: boolean;
+      layout?: "inline" | "stacked";
+    }) => void;
     /**
      * Whether this is the first message of the current thread/session.
      * Passed through verbatim to `POST /api/promptbar/resolve` on every call
@@ -250,10 +253,7 @@ export const PackSuggestionBar = forwardRef<
             ? "There's a pack for this"
             : "Packs for this"}
         {showTabHint ? (
-          <span
-            className="italic text-muted-foreground/80"
-            data-testid="pack-suggestion-tab-hint"
-          >
+          <span className="italic text-muted-foreground/80" data-testid="pack-suggestion-tab-hint">
             — Tab to accept
           </span>
         ) : null}

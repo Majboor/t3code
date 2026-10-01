@@ -57,7 +57,8 @@ export interface ParsedNotebook {
 /** nbformat stores source/text as a string or an array of line strings. */
 function joinMultiline(value: unknown): string {
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map((line) => (typeof line === "string" ? line : "")).join("");
+  if (Array.isArray(value))
+    return value.map((line) => (typeof line === "string" ? line : "")).join("");
   return "";
 }
 
@@ -97,7 +98,11 @@ export function normalizeNotebookOutput(raw: unknown): NotebookOutput | null {
       const data = (o["data"] ?? {}) as Record<string, unknown>;
       const imageMime = IMAGE_MIMES.find((mime) => data[mime] !== undefined);
       if (imageMime) {
-        return { kind: "image", mime: imageMime, base64: joinMultiline(data[imageMime]).replace(/\s+/g, "") };
+        return {
+          kind: "image",
+          mime: imageMime,
+          base64: joinMultiline(data[imageMime]).replace(/\s+/g, ""),
+        };
       }
       if (data["text/html"] !== undefined) {
         return { kind: "html", html: joinMultiline(data["text/html"]) };
@@ -128,7 +133,12 @@ export function parseNotebook(json: string): ParsedNotebook {
   try {
     raw = JSON.parse(json) as Record<string, unknown>;
   } catch (error) {
-    return { valid: false, cells: [], raw: null, error: error instanceof Error ? error.message : "Invalid JSON" };
+    return {
+      valid: false,
+      cells: [],
+      raw: null,
+      error: error instanceof Error ? error.message : "Invalid JSON",
+    };
   }
   const rawCells = Array.isArray(raw["cells"]) ? (raw["cells"] as unknown[]) : null;
   if (!rawCells) {
@@ -140,7 +150,9 @@ export function parseNotebook(json: string): ParsedNotebook {
       c["cell_type"] === "markdown" ? "markdown" : c["cell_type"] === "raw" ? "raw" : "code";
     const outputs =
       cellType === "code" && Array.isArray(c["outputs"])
-        ? (c["outputs"] as unknown[]).map(normalizeNotebookOutput).filter((o): o is NotebookOutput => o !== null)
+        ? (c["outputs"] as unknown[])
+            .map(normalizeNotebookOutput)
+            .filter((o): o is NotebookOutput => o !== null)
         : [];
     return {
       id: typeof c["id"] === "string" ? (c["id"] as string) : `cell-${index}`,
@@ -158,10 +170,13 @@ export function parseNotebook(json: string): ParsedNotebook {
 export function toSourceLines(source: string): string[] {
   if (source === "") return [];
   const parts = source.split("\n");
-  return parts.map((line, index) => (index < parts.length - 1 ? `${line}\n` : line)).filter((_, i, arr) =>
-    // drop a trailing empty string produced by a final newline
-    !(i === arr.length - 1 && arr[i] === ""),
-  );
+  return parts
+    .map((line, index) => (index < parts.length - 1 ? `${line}\n` : line))
+    .filter(
+      (_, i, arr) =>
+        // drop a trailing empty string produced by a final newline
+        !(i === arr.length - 1 && arr[i] === ""),
+    );
 }
 
 function outputToNbformat(output: NotebookOutput): Record<string, unknown> {
@@ -176,7 +191,11 @@ function outputToNbformat(output: NotebookOutput): Record<string, unknown> {
         traceback: output.traceback.split("\n"),
       };
     case "image":
-      return { output_type: "execute_result", data: { [output.mime]: output.base64 }, metadata: {} };
+      return {
+        output_type: "execute_result",
+        data: { [output.mime]: output.base64 },
+        metadata: {},
+      };
     case "html":
       return { output_type: "execute_result", data: { "text/html": output.html }, metadata: {} };
     case "text":

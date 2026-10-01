@@ -15,6 +15,7 @@ import {
   requireThreadNotArchived,
   requireWorkspaceRootUnclaimed,
 } from "./commandInvariants.ts";
+import { decideProjectKindRefusal } from "./projectKindRules.ts";
 
 const nowIso = () => new Date().toISOString();
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
@@ -60,6 +61,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 > {
   switch (command.type) {
     case "project.create": {
+      // Checked before the read-model invariants because it is not a question
+      // about this server's state at all: no arrangement of existing projects
+      // could make "create a project somebody else shared with me" coherent, so
+      // answering that first gives the caller the reason that actually applies
+      // instead of a duplicate-id or folder-taken complaint that would send them
+      // off fixing the wrong thing.
+      const kindRefusal = decideProjectKindRefusal({ kind: command.kind });
+      if (kindRefusal !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: kindRefusal,
+        });
+      }
+
       yield* requireProjectAbsent({
         readModel,
         command,
@@ -85,6 +100,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           projectId: command.projectId,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
+          // Spread conditionally rather than defaulted, exactly like
+          // `ownership` beneath it. Neither `null` nor `"local"` would do: a
+          // stored `local` is a choice somebody made, and the whole reason the
+          // column is nullable is that the *next* slice has to tell a chosen
+          // kind apart from an absent one when it decides what to say about a
+          // project. Absent stays absent; only a stated kind is written down.
+          ...(command.kind !== undefined ? { kind: command.kind } : {}),
           ...(command.ownership !== undefined ? { ownership: command.ownership } : {}),
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],

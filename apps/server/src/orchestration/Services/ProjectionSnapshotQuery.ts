@@ -46,6 +46,12 @@ export interface ProjectionSnapshotQueryShape {
    *
    * Rehydrates from projection tables and derives snapshot sequence from
    * projector cursor state.
+   *
+   * Projects come back carrying `kind` straight off the column, narrowed to a
+   * known kind or `null` and nothing more. It is not resolved here on purpose:
+   * absence means something (`resolveProjectKind` in `@t3tools/contracts` says
+   * what), and a snapshot that resolved it would hand every consumer a value
+   * indistinguishable from one somebody chose.
    */
   readonly getSnapshot: () => Effect.Effect<OrchestrationReadModel, ProjectionRepositoryError>;
 

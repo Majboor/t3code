@@ -30,7 +30,9 @@ const PROVIDER_DESCRIPTION: Record<IntegrationProvider, string> = {
 export function ExternalIntegrationsSection() {
   const [status, setStatus] = useState<IntegrationsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [disconnectingProvider, setDisconnectingProvider] = useState<IntegrationProvider | null>(null);
+  const [disconnectingProvider, setDisconnectingProvider] = useState<IntegrationProvider | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +42,9 @@ export function ExternalIntegrationsSection() {
       })
       .catch((fetchError: unknown) => {
         if (!cancelled) {
-          setError(fetchError instanceof Error ? fetchError.message : "Failed to load connections.");
+          setError(
+            fetchError instanceof Error ? fetchError.message : "Failed to load connections.",
+          );
         }
       });
     return () => {
@@ -59,7 +63,8 @@ export function ExternalIntegrationsSection() {
       toastManager.add({
         type: "error",
         title: `Could not disconnect ${PROVIDER_LABEL[provider]}`,
-        description: disconnectError instanceof Error ? disconnectError.message : "The request failed.",
+        description:
+          disconnectError instanceof Error ? disconnectError.message : "The request failed.",
       });
     } finally {
       setDisconnectingProvider(null);
@@ -79,9 +84,7 @@ export function ExternalIntegrationsSection() {
               key={provider}
               title={PROVIDER_LABEL[provider]}
               description={
-                isConnected
-                  ? (connection?.label ?? "Connected")
-                  : PROVIDER_DESCRIPTION[provider]
+                isConnected ? (connection?.label ?? "Connected") : PROVIDER_DESCRIPTION[provider]
               }
               control={
                 isConnected ? (

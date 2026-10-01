@@ -137,7 +137,9 @@ export const makeServerAuth = Effect.gen(function* () {
   // tenant that no longer exists ("Project workspace ownership must belong to
   // the active tenant." on the next project-create). Serializing per user id
   // makes every request after the first just see the one the first created.
-  const personalTenantLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+  const personalTenantLocksRef = yield* SynchronizedRef.make(
+    new Map<string, Semaphore.Semaphore>(),
+  );
   const getPersonalTenantLock = (userId: string) =>
     SynchronizedRef.modifyEffect(personalTenantLocksRef, (current) => {
       const existing = Option.fromNullishOr(current.get(userId));
@@ -716,11 +718,13 @@ export const makeServerAuth = Effect.gen(function* () {
   const getUserPreferences: ServerAuthShape["getUserPreferences"] = (request) =>
     authenticateRequest(request).pipe(
       Effect.flatMap((session) =>
-        userPreferences.getBySubject({ subject: session.subject }).pipe(
-          Effect.map((record) =>
-            toUserPreferences(Option.isSome(record) ? record.value : undefined),
+        userPreferences
+          .getBySubject({ subject: session.subject })
+          .pipe(
+            Effect.map((record) =>
+              toUserPreferences(Option.isSome(record) ? record.value : undefined),
+            ),
           ),
-        ),
       ),
       Effect.mapError((cause) =>
         cause instanceof AuthError
@@ -1480,5 +1484,7 @@ export const ServerAuthLive = Layer.effect(ServerAuth, makeServerAuth).pipe(
   // ExternalIntegrations only needs ExternalConnectionRepository, which nothing
   // else consumes directly — provide it privately (Layer.provide, not
   // provideMerge) so it's not separately exposed in ServerAuthLive's output.
-  Layer.provideMerge(ExternalIntegrationsLive.pipe(Layer.provide(ExternalConnectionRepositoryLive))),
+  Layer.provideMerge(
+    ExternalIntegrationsLive.pipe(Layer.provide(ExternalConnectionRepositoryLive)),
+  ),
 );

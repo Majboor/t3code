@@ -25,7 +25,13 @@ export interface RelayLink {
   readonly detail: string | null;
 }
 
-const STATES: ReadonlySet<string> = new Set(["offline", "connecting", "connected", "unhealthy", "revoked"]);
+const STATES: ReadonlySet<string> = new Set([
+  "offline",
+  "connecting",
+  "connected",
+  "unhealthy",
+  "revoked",
+]);
 
 export function parseRelayLinks(value: unknown): ReadonlyArray<RelayLink> {
   if (typeof value !== "object" || value === null) return [];
@@ -35,14 +41,22 @@ export function parseRelayLinks(value: unknown): ReadonlyArray<RelayLink> {
   for (const row of rows) {
     if (typeof row !== "object" || row === null) continue;
     const record = row as Record<string, unknown>;
-    if (typeof record["environmentId"] !== "string" || typeof record["machineId"] !== "string") continue;
-    const state = typeof record["state"] === "string" && STATES.has(record["state"]) ? record["state"] : "offline";
+    if (typeof record["environmentId"] !== "string" || typeof record["machineId"] !== "string")
+      continue;
+    const state =
+      typeof record["state"] === "string" && STATES.has(record["state"])
+        ? record["state"]
+        : "offline";
     links.push({
       environmentId: record["environmentId"],
-      label: typeof record["label"] === "string" && record["label"].length > 0 ? record["label"] : record["environmentId"],
+      label:
+        typeof record["label"] === "string" && record["label"].length > 0
+          ? record["label"]
+          : record["environmentId"],
       machineId: record["machineId"],
       firstBoundAt: typeof record["firstBoundAt"] === "string" ? record["firstBoundAt"] : null,
-      lastConnectedAt: typeof record["lastConnectedAt"] === "string" ? record["lastConnectedAt"] : null,
+      lastConnectedAt:
+        typeof record["lastConnectedAt"] === "string" ? record["lastConnectedAt"] : null,
       state: state as RelayLinkState,
       detail: typeof record["detail"] === "string" ? record["detail"] : null,
     });
@@ -60,7 +74,10 @@ export async function fetchRelayLinks(): Promise<ReadonlyArray<RelayLink>> {
   return parseRelayLinks(await response.json().catch(() => null));
 }
 
-export function describeRelayLinkState(state: RelayLinkState): { readonly label: string; readonly tone: "good" | "warn" | "muted" } {
+export function describeRelayLinkState(state: RelayLinkState): {
+  readonly label: string;
+  readonly tone: "good" | "warn" | "muted";
+} {
   switch (state) {
     case "connected":
       return { label: "Online", tone: "good" };

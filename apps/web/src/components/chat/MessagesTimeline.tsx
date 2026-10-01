@@ -601,21 +601,19 @@ function WorkingStatus({
   return (
     <span className="inline-flex items-center gap-2">
       <span>
-        {isRetrying
-          ? "Retrying…"
-          : isSlow
-            ? "Still waiting on the LLM provider — this can happen occasionally"
-            : isSessionStarting
-              ? (
-                  <>
-                    Starting AI session… <WorkingTimer createdAt={createdAt} />
-                  </>
-                )
-              : (
-                  <>
-                    Working for <WorkingTimer createdAt={createdAt} />
-                  </>
-                )}
+        {isRetrying ? (
+          "Retrying…"
+        ) : isSlow ? (
+          "Still waiting on the LLM provider — this can happen occasionally"
+        ) : isSessionStarting ? (
+          <>
+            Starting AI session… <WorkingTimer createdAt={createdAt} />
+          </>
+        ) : (
+          <>
+            Working for <WorkingTimer createdAt={createdAt} />
+          </>
+        )}
       </span>
       {isSlow && !isRetrying && (
         <button

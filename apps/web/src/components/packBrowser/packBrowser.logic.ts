@@ -62,17 +62,14 @@ export function splitPackCardTags(tags: ReadonlyArray<string>): PackCardTags {
  * refetch — normalized and case-insensitive, since the registry's own match
  * is not case-sensitive either.
  */
-export function samePackSearchQuery(
-  left: string | undefined,
-  right: string | undefined,
-): boolean {
+export function samePackSearchQuery(left: string | undefined, right: string | undefined): boolean {
   return (left ?? "").toLowerCase() === (right ?? "").toLowerCase();
 }
 
 /** A stable sort for display: by name, so a re-fetch does not reshuffle the grid under someone reading it. */
-export function sortPackResultsByName<Entry extends Pick<PackRegistryEntry, "displayName" | "name">>(
-  packs: ReadonlyArray<Entry>,
-): ReadonlyArray<Entry> {
+export function sortPackResultsByName<
+  Entry extends Pick<PackRegistryEntry, "displayName" | "name">,
+>(packs: ReadonlyArray<Entry>): ReadonlyArray<Entry> {
   return packs.toSorted((left, right) =>
     (left.displayName || left.name).localeCompare(right.displayName || right.name),
   );

@@ -6,8 +6,11 @@ import {
   classifyEnvironmentFailure,
   classifyEnvironmentInput,
   describeListedEnvironment,
+  groupEnvironmentsByPlacement,
   resolveAddEnvironmentNextStep,
+  resolveEnvironmentPlacement,
   type AddEnvironmentDraft,
+  type EnvironmentPlacementInput,
 } from "./environmentConnect.logic";
 
 function draft(overrides: Partial<AddEnvironmentDraft>): AddEnvironmentDraft {
@@ -279,5 +282,90 @@ describe("canBrowserSatisfyAuthGate", () => {
 
   it("is true when the server offers a password sign-in", () => {
     expect(canBrowserSatisfyAuthGate(auth({ localPassword: { enabled: true } }))).toBe(true);
+  });
+});
+
+describe("resolveEnvironmentPlacement", () => {
+  it("puts a server that hosts its own projects on the person's own hardware", () => {
+    expect(resolveEnvironmentPlacement({ workspaceSource: "this-server" })).toBe("this-machine");
+  });
+
+  it("puts a pairing shell under the hosted heading", () => {
+    expect(resolveEnvironmentPlacement({ workspaceSource: "paired-environment" })).toBe(
+      "logicpacks",
+    );
+  });
+
+  it("reads an absent workspace source as this-server, because that is what an older server is", () => {
+    // Optional field: every server built before it existed genuinely hosts its
+    // own projects, so absence must not invent a hosted row out of nothing.
+    expect(resolveEnvironmentPlacement({})).toBe("this-machine");
+  });
+
+  it("reads a never-connected environment the same way", () => {
+    // No descriptor at all, because this browser has not reached it yet.
+    expect(resolveEnvironmentPlacement(null)).toBe("this-machine");
+    expect(resolveEnvironmentPlacement(undefined)).toBe("this-machine");
+  });
+});
+
+describe("groupEnvironmentsByPlacement", () => {
+  const entry = (
+    environmentId: string,
+    auth: EnvironmentPlacementInput["auth"],
+  ): EnvironmentPlacementInput => ({ environmentId, auth }) as unknown as EnvironmentPlacementInput;
+
+  it("names both groups and keeps own hardware first", () => {
+    const groups = groupEnvironmentsByPlacement(
+      [
+        entry("hosted", { workspaceSource: "paired-environment" }),
+        entry("laptop", { workspaceSource: "this-server" }),
+      ],
+      "LogicPacks",
+    );
+
+    expect(groups.map((group) => group.placement)).toEqual(["this-machine", "logicpacks"]);
+    expect(groups[0]?.title).toBe("On this machine");
+    expect(groups[0]?.environmentIds).toEqual(["laptop"]);
+    expect(groups[1]?.title).toBe("On LogicPacks");
+    expect(groups[1]?.environmentIds).toEqual(["hosted"]);
+  });
+
+  it("uses the product name it is given, so a renamed desktop build agrees with itself", () => {
+    const groups = groupEnvironmentsByPlacement(
+      [entry("hosted", { workspaceSource: "paired-environment" })],
+      "Acme Code",
+    );
+
+    expect(groups[0]?.title).toBe("On Acme Code");
+    expect(groups[0]?.description).toContain("Acme Code");
+  });
+
+  it("leaves an empty group out rather than rendering a heading over nothing", () => {
+    const groups = groupEnvironmentsByPlacement(
+      [entry("laptop", null), entry("desk", { workspaceSource: "this-server" })],
+      "LogicPacks",
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.placement).toBe("this-machine");
+    expect(groups[0]?.environmentIds).toEqual(["laptop", "desk"]);
+  });
+
+  it("returns nothing at all for an empty list", () => {
+    expect(groupEnvironmentsByPlacement([], "LogicPacks")).toEqual([]);
+  });
+
+  it("preserves the order it was handed inside a group", () => {
+    const groups = groupEnvironmentsByPlacement(
+      [
+        entry("a", { workspaceSource: "this-server" }),
+        entry("b", { workspaceSource: "paired-environment" }),
+        entry("c", { workspaceSource: "this-server" }),
+      ],
+      "LogicPacks",
+    );
+
+    expect(groups[0]?.environmentIds).toEqual(["a", "c"]);
   });
 });

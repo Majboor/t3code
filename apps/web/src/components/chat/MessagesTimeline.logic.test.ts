@@ -570,7 +570,7 @@ describe("resolveMessageAuthor", () => {
       ["user-grace", grace],
     ]),
     viewerUserId: "user-grace",
-      hasScope: true,
+    hasScope: true,
   };
 
   it("names the colleague who sent a message", () => {

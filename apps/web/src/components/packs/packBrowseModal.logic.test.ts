@@ -71,10 +71,7 @@ describe("sortPacksForBrowse", () => {
   });
 
   it("orders unverified packs by deployments, most first", () => {
-    const packs = [
-      makePack("a", {}, { deployments: 10 }),
-      makePack("b", {}, { deployments: 200 }),
-    ];
+    const packs = [makePack("a", {}, { deployments: 10 }), makePack("b", {}, { deployments: 200 })];
     expect(sortPacksForBrowse(packs).map((p) => p.id)).toEqual(["b", "a"]);
   });
 

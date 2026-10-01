@@ -1,8 +1,10 @@
 import type { CloudSyncConflict, CloudSyncVisitorView, ProjectCloudSync } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
+import { APP_BASE_NAME } from "../../branding";
 import {
   CLOUD_SYNC_MODE_CHOICES,
+  CLOUD_SYNC_TUNNEL_IS_NOT_A_COPY,
   cloudSyncWaitBadgeLabel,
   describeActivelyChanging,
   describeCloudSyncFailure,
@@ -12,9 +14,9 @@ import {
   deriveVisitorView,
   describeConflict,
   describeConflictCount,
+  describeOfflineReachability,
   formatSyncBytes,
   readCloudSyncErrorCode,
-  readCloudSyncModeChoice,
 } from "./cloudSync.logic";
 
 function makeSync(overrides: Partial<ProjectCloudSync> = {}): ProjectCloudSync {
@@ -38,20 +40,24 @@ function makeSync(overrides: Partial<ProjectCloudSync> = {}): ProjectCloudSync {
   } as ProjectCloudSync;
 }
 
+/** The wording the mode picker shows, by mode. */
+const choiceFor = (mode: "handoff" | "mirror") =>
+  CLOUD_SYNC_MODE_CHOICES.find((choice) => choice.mode === mode)!;
+
 describe("mode wording", () => {
   it("offers exactly the two modes the contract has", () => {
     expect(CLOUD_SYNC_MODE_CHOICES.map((choice) => choice.mode)).toEqual(["handoff", "mirror"]);
   });
 
   it("warns that handoff stops watching the local folder without deleting it", () => {
-    const handoff = readCloudSyncModeChoice("handoff");
+    const handoff = choiceFor("handoff");
     expect(handoff.consequence).toMatch(/left exactly as it is/i);
     expect(handoff.consequence).toMatch(/stops writing/i);
     expect(handoff.consequence).toMatch(/will not reach the cloud/i);
   });
 
   it("says in as many words that a mirror is not a backup", () => {
-    const mirror = readCloudSyncModeChoice("mirror");
+    const mirror = choiceFor("mirror");
     expect(mirror.consequence).toContain("A mirror is not a backup");
     expect(mirror.consequence).toMatch(/deletes it in the cloud/i);
   });
@@ -115,7 +121,12 @@ describe("describeCloudSyncHeadline", () => {
 describe("describeCloudSyncProgress", () => {
   it("reports the current pass only and prefers bytes for the bar", () => {
     const progress = describeCloudSyncProgress(
-      makeSync({ filesDone: 3, filesTotal: 10, bytesDone: 512, bytesTotal: 1024 }),
+      makeSync({
+        filesDone: 3,
+        filesTotal: 10,
+        bytesDone: 512,
+        bytesTotal: 1024,
+      }),
     );
     expect(progress.filesLabel).toBe("3 of 10 files");
     expect(progress.bytesLabel).toBe("512 B of 1.0 KB");
@@ -288,7 +299,13 @@ describe("describeCloudSyncWait", () => {
 
   it("counts the files left while the first upload is moving", () => {
     const wait = describeCloudSyncWait(
-      view({ sync: makeSync({ status: "transferring", filesTotal: 12, filesDone: 9 }) }),
+      view({
+        sync: makeSync({
+          status: "transferring",
+          filesTotal: 12,
+          filesDone: 9,
+        }),
+      }),
     );
     expect(wait.blocked).toBe(true);
     expect(wait.detail).toContain("3 files left to upload");
@@ -339,5 +356,93 @@ describe("describeCloudSyncWait", () => {
       cloudSyncWaitBadgeLabel(describeCloudSyncWait(view({ state: "not-syncing", sync: null }))),
     ).toBeNull();
     expect(cloudSyncWaitBadgeLabel(describeCloudSyncWait(view({})))).toBe("Uploading");
+  });
+});
+
+describe("describeOfflineReachability", () => {
+  it("says no, and why, when the only thing published is a tunnel out of this machine", () => {
+    const reach = describeOfflineReachability({
+      sync: null,
+      liveLinkRunning: true,
+    });
+    expect(reach.answer).toBe("no");
+    expect(reach.reachable).toBe(false);
+    expect(reach.title).toMatch(/dies with this machine/i);
+    expect(reach.detail).toContain(CLOUD_SYNC_TUNNEL_IS_NOT_A_COPY);
+    expect(reach.detail).toContain(APP_BASE_NAME);
+  });
+
+  it("does not talk about a link that is not there when nothing is published at all", () => {
+    const reach = describeOfflineReachability({
+      sync: null,
+      liveLinkRunning: false,
+    });
+    expect(reach.answer).toBe("no");
+    expect(reach.detail).not.toContain(CLOUD_SYNC_TUNNEL_IS_NOT_A_COPY);
+    expect(reach.detail).toMatch(/nothing has been uploaded/i);
+  });
+
+  it("answers yes once the two sides have agreed in full", () => {
+    const reach = describeOfflineReachability({
+      sync: makeSync({ lastAgreedAt: "2026-08-02T00:00:00.000Z" }),
+      liveLinkRunning: false,
+    });
+    expect(reach.answer).toBe("yes");
+    expect(reach.reachable).toBe(true);
+    expect(reach.short).toBe("Yes");
+  });
+
+  it("keeps saying yes when a later pass is paused or broken, because the copy is whole", () => {
+    for (const status of ["paused", "error"] as const) {
+      const reach = describeOfflineReachability({
+        sync: makeSync({ status, lastAgreedAt: "2026-08-02T00:00:00.000Z" }),
+        liveLinkRunning: false,
+      });
+      expect(reach.answer).toBe("yes");
+      expect(reach.reachable).toBe(true);
+    }
+  });
+
+  it("names the dormant snapshot under handoff and the return trip under mirror", () => {
+    const agreed = { lastAgreedAt: "2026-08-02T00:00:00.000Z" } as const;
+    expect(
+      describeOfflineReachability({
+        sync: makeSync({ ...agreed, mode: "handoff" }),
+        liveLinkRunning: false,
+      }).detail,
+    ).toMatch(/dormant snapshot/i);
+    expect(
+      describeOfflineReachability({
+        sync: makeSync({ ...agreed, mode: "mirror" }),
+        liveLinkRunning: false,
+      }).detail,
+    ).toMatch(/next time the machine is on/i);
+  });
+
+  it("separates an unfinished first pass from a project nobody ever synced", () => {
+    const reach = describeOfflineReachability({
+      sync: makeSync({ status: "transferring", lastAgreedAt: null }),
+      liveLinkRunning: false,
+    });
+    expect(reach.answer).toBe("not-yet");
+    expect(reach.reachable).toBe(false);
+    expect(reach.detail).toMatch(/closed their laptop/i);
+  });
+
+  it("still warns about the tunnel while the first pass is running behind it", () => {
+    const reach = describeOfflineReachability({
+      sync: makeSync({ status: "transferring", lastAgreedAt: null }),
+      liveLinkRunning: true,
+    });
+    expect(reach.answer).toBe("not-yet");
+    expect(reach.detail).toContain(CLOUD_SYNC_TUNNEL_IS_NOT_A_COPY);
+  });
+
+  // The one claim this function exists to refuse: a tunnel is transport, never
+  // a copy, so it can never be the thing that makes an answer reachable.
+  it("never lets a live tunnel alone count as reachable", () => {
+    for (const sync of [null, makeSync({ status: "scanning" }), makeSync({ status: "paused" })]) {
+      expect(describeOfflineReachability({ sync, liveLinkRunning: true }).reachable).toBe(false);
+    }
   });
 });

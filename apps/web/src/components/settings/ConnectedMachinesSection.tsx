@@ -14,6 +14,7 @@ import {
   sortAccountMachines,
   type AccountMachine,
 } from "../devices/accountMachines.logic";
+import { describeMachineRoleChange } from "../devices/deviceEnrollment.logic";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -47,6 +48,22 @@ import { SettingsSection, useRelativeTimeTick } from "./settingsLayout";
  * box" are the two things on this list somebody most needs to tell apart before
  * pressing Disconnect, and until the badge existed they were the two rows most
  * likely to look identical — same account, same platform, similar name.
+ *
+ * The badge also used to be a dead end. It is the one field on the row a person
+ * is likely to disagree with — approving a deploy box as a workspace takes one
+ * mis-click and then asks its owner for a Claude account forever — and the row
+ * said nothing about what to do next. Each row now opens, in place, onto what
+ * the other role would mean, what this one is costing, and the steps that move
+ * it. The steps are a procedure rather than a control because the role is
+ * written by an approval and nothing edits it afterwards; a control here would
+ * have to invent a route that does not exist, and a button that fails on press
+ * is worse than a row that explains itself.
+ *
+ * None of this is a permission. The role says what a machine is *for*, and it
+ * must never become a boundary: `decideProviderAccount` does not read it, and a
+ * turn dispatched from either kind of machine still resolves a real per-user
+ * credential or is refused. Everything on this panel is about what the product
+ * asks for, never about what a session may reach.
  */
 
 const ITEM_ROW_CLASSNAME = "border-t border-border/60 px-4 py-4 first:border-t-0 sm:px-5";
@@ -57,17 +74,25 @@ const ITEM_ROW_INNER_CLASSNAME =
 type ConnectedMachineRowProps = {
   machine: AccountMachine;
   isDisconnecting: boolean;
+  /** Whether this row's role panel is the open one. At most one is. */
+  isRoleOpen: boolean;
+  onToggleRole: (machineId: string) => void;
   onRequestDisconnect: (machine: AccountMachine) => void;
 };
 
 const ConnectedMachineRow = memo(function ConnectedMachineRow({
   machine,
   isDisconnecting,
+  isRoleOpen,
+  onToggleRole,
   onRequestDisconnect,
 }: ConnectedMachineRowProps) {
   const described = describeAccountMachine(machine);
   const role = describeMachineRole(machine.role);
+  const roleChange = describeMachineRoleChange(machine.role);
+  const otherRole = describeMachineRole(roleChange.otherRole);
   const lastSeen = formatMachineLastSeen(machine.lastSeenAt);
+  const rolePanelId = `machine-role-panel-${machine.machineId}`;
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -78,14 +103,23 @@ const ConnectedMachineRow = memo(function ConnectedMachineRow({
             {/* Always drawn, for both roles. A badge that appeared only on
                 runners would make its absence carry meaning, and absence on
                 this page already means "an older server said nothing" — which
-                is a different thing from "this is a workspace". */}
-            <span
-              className="shrink-0 rounded-md border border-border/50 bg-muted/50 px-1 py-0.5 text-[10px] text-muted-foreground/80"
+                is a different thing from "this is a workspace".
+
+                It is also the control. A person who disagrees with a role
+                reaches for the thing that states it, not for a separate word
+                further along the row, so making the badge itself open the role
+                panel puts the way in where it is already being looked at. */}
+            <button
+              type="button"
+              className="shrink-0 rounded-md border border-border/50 bg-muted/50 px-1 py-0.5 text-[10px] text-muted-foreground/80 hover:border-border hover:text-foreground"
               title={role.detail}
+              aria-expanded={isRoleOpen}
+              aria-controls={rolePanelId}
               data-testid="machine-role"
+              onClick={() => onToggleRole(machine.machineId)}
             >
               {role.badge}
-            </span>
+            </button>
             {machine.current ? (
               <span className="rounded-md border border-border/50 bg-muted/50 px-1 py-0.5 text-[10px] text-muted-foreground/80">
                 This device
@@ -97,6 +131,20 @@ const ConnectedMachineRow = memo(function ConnectedMachineRow({
           </p>
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+          {/* Spelled out as well as sitting on the badge, because "Workspace"
+              does not read as something you can press. Offered on the current
+              device too: the machine you are reading this on is as likely to
+              have been approved as the wrong kind as any other. */}
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-expanded={isRoleOpen}
+            aria-controls={rolePanelId}
+            data-testid="machine-role-toggle"
+            onClick={() => onToggleRole(machine.machineId)}
+          >
+            {isRoleOpen ? "Hide role" : "Change role"}
+          </Button>
           {/* Never offered for the current device: the first thing a Disconnect
               button in a list of look-alikes does is sign somebody out of the
               page they would have used to undo it. */}
@@ -112,6 +160,22 @@ const ConnectedMachineRow = memo(function ConnectedMachineRow({
           )}
         </div>
       </div>
+      {/* Steps first. Somebody who opened this already knows they want the other
+          role; the reasoning underneath is for the person who is not sure yet. */}
+      {isRoleOpen ? (
+        <div
+          id={rolePanelId}
+          data-testid="machine-role-panel"
+          className="mt-3 space-y-2 rounded-md border border-border/50 bg-muted/30 p-3"
+        >
+          <p className="text-xs text-muted-foreground">{roleChange.steps}</p>
+          <p className="text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{otherRole.badge}</span>{" "}
+            {roleChange.otherDetail}
+          </p>
+          <p className="text-xs text-muted-foreground">{roleChange.consequence}</p>
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -122,6 +186,13 @@ export function ConnectedMachinesSection() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pendingDisconnect, setPendingDisconnect] = useState<AccountMachine | null>(null);
   const [disconnectingMachineId, setDisconnectingMachineId] = useState<string | null>(null);
+  /**
+   * One panel at a time, held by id rather than by index. Ids survive the
+   * refresh this page does on a timer and after a disconnect; an index does
+   * not, and a list that re-sorts under an open panel would leave the
+   * explanation of one machine's role attached to a different machine's row.
+   */
+  const [openRoleMachineId, setOpenRoleMachineId] = useState<string | null>(null);
 
   // "Last seen 3 minutes ago" is only true while the page is watching the
   // clock; without this it silently ages into a lie.
@@ -147,6 +218,10 @@ export function ConnectedMachinesSection() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const handleToggleRole = useCallback((machineId: string) => {
+    setOpenRoleMachineId((current) => (current === machineId ? null : machineId));
+  }, []);
 
   const handleConfirmDisconnect = useCallback(async () => {
     const machine = pendingDisconnect;
@@ -202,6 +277,8 @@ export function ConnectedMachinesSection() {
           key={machine.machineId}
           machine={machine}
           isDisconnecting={disconnectingMachineId === machine.machineId}
+          isRoleOpen={openRoleMachineId === machine.machineId}
+          onToggleRole={handleToggleRole}
           onRequestDisconnect={setPendingDisconnect}
         />
       ))}

@@ -1,5 +1,11 @@
 import { CheckIcon, EyeIcon, ShieldCheckIcon, UserMinusIcon } from "lucide-react";
-import type { CollaborationMember, EnvironmentId, TenantId, WorkspaceId } from "@t3tools/contracts";
+import type {
+  CollaborationMember,
+  EnvironmentId,
+  ProviderSharingOverviewResult,
+  TenantId,
+  WorkspaceId,
+} from "@t3tools/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
@@ -10,6 +16,7 @@ import {
   MEMBER_COLORS,
   ROSTER_REFRESH_DEBOUNCE_MS,
 } from "./collaborationRoster.logic";
+import { describeBacking, readMemberBacking, type WorkspaceBacking } from "./providerSharing.logic";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 
@@ -75,6 +82,7 @@ function MemberRow({
   member,
   canManage,
   isViewer,
+  backing,
   onSetColor,
   onToggleApprover,
   onToggleReadOnly,
@@ -83,6 +91,13 @@ function MemberRow({
   member: CollaborationMember;
   canManage: boolean;
   isViewer: boolean;
+  /**
+   * Whose account the workspace policy actually spends, when it is this
+   * person's. The sharing section lists the carriers as a group; this is the
+   * same answer on the row of the person it is about, which is where somebody
+   * reading the roster is looking when they wonder who is paying.
+   */
+  backing: WorkspaceBacking | null;
   onSetColor: (color: string) => void;
   onToggleApprover: () => void;
   onToggleReadOnly: () => void;
@@ -100,7 +115,26 @@ function MemberRow({
       >
         <CollaborationAvatar member={member} showStatus />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs text-foreground">{member.displayName}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-xs text-foreground">{member.displayName}</span>
+            {backing ? (
+              <span
+                className={
+                  backing.broken
+                    ? "shrink-0 rounded-sm border border-warning/40 px-1 py-px text-[9px] font-medium text-warning"
+                    : "shrink-0 rounded-sm border border-success/30 px-1 py-px text-[9px] font-medium text-success"
+                }
+                data-testid="collaboration-member-backing"
+                title={
+                  backing.broken
+                    ? "The workspace policy names this account and it is not usable right now."
+                    : "The workspace policy spends this account."
+                }
+              >
+                {backing.broken ? "Backing, unavailable" : describeBacking(backing)}
+              </span>
+            ) : null}
+          </span>
           <span className="block truncate text-[10px] text-muted-foreground">
             {member.isLead
               ? "Lead"
@@ -356,7 +390,18 @@ export function useCollaborationRoster({
  * Everyone in the workspace, with the controls a lead needs: recolour someone,
  * hand them approval rights, make them read-only, or remove them.
  */
-export function CollaborationPeople({ roster }: { roster: CollaborationRoster }) {
+export function CollaborationPeople({
+  roster,
+  sharingOverview,
+}: {
+  roster: CollaborationRoster;
+  /**
+   * Optional: the roster renders without it, badge-less, which is what every
+   * caller that has no sharing overview to hand should get rather than a row
+   * that silently claims nobody is carrying anything.
+   */
+  sharingOverview?: ProviderSharingOverviewResult | null | undefined;
+}) {
   const { members, canManage, viewerUserId } = roster;
 
   if (members.length === 0) {
@@ -382,6 +427,7 @@ export function CollaborationPeople({ roster }: { roster: CollaborationRoster })
             member={member}
             canManage={canManage}
             isViewer={member.userId === viewerUserId}
+            backing={sharingOverview ? readMemberBacking(sharingOverview, member.userId) : null}
             onSetColor={(color) => roster.updateMember(member.userId, { color })}
             onToggleApprover={() =>
               roster.updateMember(member.userId, { isApprover: !member.isApprover })

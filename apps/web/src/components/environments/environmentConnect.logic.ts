@@ -1,4 +1,9 @@
-import type { AuthSessionState } from "@t3tools/contracts";
+import {
+  resolveWorkspaceSource,
+  type AuthSessionState,
+  type EnvironmentId,
+  type ServerAuthDescriptor,
+} from "@t3tools/contracts";
 
 /**
  * Pure branching behind the add-environment surface.
@@ -396,4 +401,125 @@ export function canBrowserSatisfyAuthGate(auth: AuthSessionState["auth"]): boole
     return true;
   }
   return auth.bootstrapMethods.includes("one-time-token");
+}
+
+/**
+ * Where the work behind an environment row actually happens.
+ *
+ * The list has always been flat, so the laptop on the desk and the hosted
+ * instance sat next to each other looking identical. That is the single thing
+ * people have reported being unable to tell, and every follow-on question —
+ * is this reachable from my phone, does it survive closing the lid, whose
+ * hardware is this running on — is unanswerable until it is said out loud.
+ *
+ * - `this-machine`: the server on the other end holds the projects itself.
+ * - `logicpacks`: the server holds accounts, share links and packs, and keeps
+ *   no workspace of its own.
+ */
+export type EnvironmentPlacement = "this-machine" | "logicpacks";
+
+export interface EnvironmentPlacementInput {
+  readonly environmentId: EnvironmentId;
+  /**
+   * The environment's own auth descriptor, as its `server.getConfig` reported
+   * it, or null when this browser has not managed to talk to it yet. Null is
+   * not a third answer — see `resolveEnvironmentPlacement`.
+   */
+  readonly auth: Pick<ServerAuthDescriptor, "workspaceSource"> | null;
+}
+
+export interface EnvironmentPlacementGroup {
+  readonly placement: EnvironmentPlacement;
+  /** The heading over the group. */
+  readonly title: string;
+  /** One sentence saying what being in this group means for the person. */
+  readonly description: string;
+  readonly environmentIds: ReadonlyArray<EnvironmentId>;
+}
+
+/**
+ * Which group a row belongs in, from the one field that already says so.
+ *
+ * Delegates to `resolveWorkspaceSource` rather than reading
+ * `auth.workspaceSource` here, because that field is optional and its absence
+ * is meaningful: a server built before the field existed genuinely does host
+ * its own projects, so an unconnected or older environment has to land on
+ * `this-machine` rather than on some third "we don't know" state that would
+ * put a row under a heading that is not true of it.
+ *
+ * Written as a positive test for `paired-environment` for the same reason
+ * `resolveMachineRole` is: a value this build has never heard of must fall to
+ * the ordinary answer, not to the hosted one.
+ */
+export function resolveEnvironmentPlacement(
+  auth: Pick<ServerAuthDescriptor, "workspaceSource"> | null | undefined,
+): EnvironmentPlacement {
+  return resolveWorkspaceSource(auth ?? undefined) === "paired-environment"
+    ? "logicpacks"
+    : "this-machine";
+}
+
+/**
+ * The copy for a group heading.
+ *
+ * `productName` is passed in rather than imported so this file stays free of
+ * the branding module's window lookups — the desktop build can rename the
+ * product, and a heading that hard-coded the name would disagree with the rest
+ * of the app the moment it did.
+ */
+function describeEnvironmentPlacement(
+  placement: EnvironmentPlacement,
+  productName: string,
+): { readonly title: string; readonly description: string } {
+  if (placement === "logicpacks") {
+    return {
+      title: `On ${productName}`,
+      description: `Hosted. ${productName} holds your account, share links and packs; it keeps no projects of its own, so work runs on an environment connected to it.`,
+    };
+  }
+  return {
+    title: "On this machine",
+    description:
+      "The projects live on the machine itself. They are here while it is awake, and they go quiet when it sleeps or leaves the network.",
+  };
+}
+
+/**
+ * Splits saved environments into the two honest groups, in the order a person
+ * reads them: their own hardware first, hosted second.
+ *
+ * A group with nothing in it is left out entirely rather than rendered empty —
+ * "On LogicPacks (none)" is an invitation to wonder what is missing, and the
+ * common case is that every environment is of one kind.
+ */
+export function groupEnvironmentsByPlacement(
+  environments: ReadonlyArray<EnvironmentPlacementInput>,
+  productName: string,
+): ReadonlyArray<EnvironmentPlacementGroup> {
+  const order: ReadonlyArray<EnvironmentPlacement> = ["this-machine", "logicpacks"];
+  const byPlacement = new Map<EnvironmentPlacement, EnvironmentId[]>();
+
+  for (const environment of environments) {
+    const placement = resolveEnvironmentPlacement(environment.auth);
+    const bucket = byPlacement.get(placement);
+    if (bucket) {
+      bucket.push(environment.environmentId);
+    } else {
+      byPlacement.set(placement, [environment.environmentId]);
+    }
+  }
+
+  const groups: EnvironmentPlacementGroup[] = [];
+  for (const placement of order) {
+    const environmentIds = byPlacement.get(placement);
+    if (!environmentIds || environmentIds.length === 0) {
+      continue;
+    }
+    groups.push({
+      placement,
+      ...describeEnvironmentPlacement(placement, productName),
+      environmentIds,
+    });
+  }
+  return groups;
 }

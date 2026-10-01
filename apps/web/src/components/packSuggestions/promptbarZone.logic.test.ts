@@ -48,7 +48,9 @@ describe("deriveZoneDecision", () => {
   });
 
   it("shows nothing in the silent zone, per the confidence table", () => {
-    expect(deriveZoneDecision(resolution({ zone: "silent", confidence: 0.1, candidates: [] }))).toBeNull();
+    expect(
+      deriveZoneDecision(resolution({ zone: "silent", confidence: 0.1, candidates: [] })),
+    ).toBeNull();
   });
 
   it("suppresses QUESTION intent — documentation search is a separate surface", () => {
@@ -56,7 +58,9 @@ describe("deriveZoneDecision", () => {
   });
 
   it("suppresses STATEMENT intent", () => {
-    expect(deriveZoneDecision(resolution({ intent: "STATEMENT", zone: "silent", candidates: [] }))).toBeNull();
+    expect(
+      deriveZoneDecision(resolution({ intent: "STATEMENT", zone: "silent", candidates: [] })),
+    ).toBeNull();
   });
 
   it("suppresses CONTINUATION intent", () => {

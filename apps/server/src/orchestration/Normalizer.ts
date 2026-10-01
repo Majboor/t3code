@@ -10,6 +10,7 @@ import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import { WorkspacePaths } from "../workspace/Services/WorkspacePaths.ts";
+import { decideProjectKindRefusal } from "./projectKindRules.ts";
 
 export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
   Effect.gen(function* () {
@@ -46,8 +47,30 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         );
 
     if (command.type === "project.create") {
+      // Refused here, ahead of the line below it, because
+      // `normalizeProjectWorkspaceRootForCreate` is the call that makes the
+      // directory when the caller asked for one. The decider states the same
+      // rule and is the authoritative one — it is on every path to a durable
+      // event, including the CLI's and the bootstrap's direct dispatch into the
+      // engine — but by the time the decider runs, the folder is already on
+      // disk. Refusing afterwards would leave an empty directory behind for a
+      // project the server just said it will not create, which is the same
+      // reasoning the socket uses for the paired-environment hosting refusal.
+      //
+      // One rule, stated once in `projectKindRules.ts` and checked at the two
+      // points that need it, rather than two rules that can drift apart.
+      const kindRefusal = decideProjectKindRefusal({ kind: command.kind });
+      if (kindRefusal !== null) {
+        return yield* new OrchestrationDispatchCommandError({ message: kindRefusal });
+      }
+
       return {
         ...command,
+        // `kind` rides along in the spread above. Spelled out here only as a
+        // reminder that it is deliberate: an omitted kind must stay omitted
+        // rather than being settled to `local`, because the whole point of the
+        // nullable column is that "nobody chose" and "somebody chose local" are
+        // different facts.
         workspaceRoot: yield* normalizeProjectWorkspaceRootForCreate(
           command.workspaceRoot,
           command.createWorkspaceRootIfMissing,

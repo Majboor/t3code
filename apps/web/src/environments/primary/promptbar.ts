@@ -82,7 +82,12 @@ function parsePromptbarErrorMessage(text: string): string | null {
   if (!trimmed) return null;
   try {
     const parsed = JSON.parse(trimmed) as unknown;
-    if (parsed && typeof parsed === "object" && "error" in parsed && typeof parsed.error === "string") {
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "error" in parsed &&
+      typeof parsed.error === "string"
+    ) {
       return parsed.error;
     }
   } catch {
@@ -91,7 +96,10 @@ function parsePromptbarErrorMessage(text: string): string | null {
   return null;
 }
 
-async function readPromptbarErrorMessage(response: Response, fallbackMessage: string): Promise<string> {
+async function readPromptbarErrorMessage(
+  response: Response,
+  fallbackMessage: string,
+): Promise<string> {
   const text = await response.text();
   return parsePromptbarErrorMessage(text) ?? fallbackMessage;
 }

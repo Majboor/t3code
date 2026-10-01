@@ -35,7 +35,10 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { Effect } from "effect";
 
-import { PromptbarTestSetRepository, type PromptbarTestSetRow } from "./Services/PromptbarTestSet.ts";
+import {
+  PromptbarTestSetRepository,
+  type PromptbarTestSetRow,
+} from "./Services/PromptbarTestSet.ts";
 import { PromptbarClient, type PromptbarZone } from "./Services/PromptbarClient.ts";
 
 // ---------------------------------------------------------------------------
@@ -213,7 +216,9 @@ export const computeReport = (
   const failedCases = cases.length - resolved.length;
 
   const ranked = resolved.filter((testCase) => testCase.correctPackId !== null);
-  const ranks = ranked.map((testCase) => rankOfCorrectCandidate(testCase.outcome.candidates, testCase.correctPackId));
+  const ranks = ranked.map((testCase) =>
+    rankOfCorrectCandidate(testCase.outcome.candidates, testCase.correctPackId),
+  );
 
   const falseAttachCases: ReadonlyArray<FalseAttachCase> = resolved.map((testCase) => ({
     zone: testCase.outcome.zone,
@@ -263,21 +268,27 @@ export const computeReport = (
  * doesn't exist yet or the query otherwise fails, since "telemetry isn't
  * landed yet" is an expected, non-fatal state for this harness to run in.
  */
-export const readTelemetryEventCounts: Effect.Effect<TelemetryEventCounts | null, never, SqlClient.SqlClient> =
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql`
+export const readTelemetryEventCounts: Effect.Effect<
+  TelemetryEventCounts | null,
+  never,
+  SqlClient.SqlClient
+> = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql`
       SELECT event, COUNT(*) AS n FROM promptbar_telemetry GROUP BY event
     `;
-    const counts = { accept: 0, dismiss: 0, abstain: 0 };
-    for (const row of rows as ReadonlyArray<{ readonly event: string; readonly n: number | string }>) {
-      const n = Number(row.n);
-      if (row.event === "accept") counts.accept = n;
-      else if (row.event === "dismiss") counts.dismiss = n;
-      else if (row.event === "abstain") counts.abstain = n;
-    }
-    return counts;
-  }).pipe(Effect.catch(() => Effect.succeed(null)));
+  const counts = { accept: 0, dismiss: 0, abstain: 0 };
+  for (const row of rows as ReadonlyArray<{
+    readonly event: string;
+    readonly n: number | string;
+  }>) {
+    const n = Number(row.n);
+    if (row.event === "accept") counts.accept = n;
+    else if (row.event === "dismiss") counts.dismiss = n;
+    else if (row.event === "abstain") counts.abstain = n;
+  }
+  return counts;
+}).pipe(Effect.catch(() => Effect.succeed(null)));
 
 // ---------------------------------------------------------------------------
 // Effectful runner -- calls the real PromptbarClient for every test-set row
@@ -296,28 +307,26 @@ export const resolveTestSetCases = (
   Effect.gen(function* () {
     const client = yield* PromptbarClient;
     return yield* Effect.forEach(rows, (row) =>
-      client
-        .resolve({ text: row.phrasing, isFirstMessageInSession: true, k: 5 })
-        .pipe(
-          Effect.map(
-            (resolution): PromptbarEvalCase => ({
-              phrasing: row.phrasing,
-              correctPackId: row.correctPackId,
-              source: row.source,
-              outcome: { zone: resolution.zone, candidates: resolution.candidates },
-              error: null,
-            }),
-          ),
-          Effect.catch((error) =>
-            Effect.succeed<PromptbarEvalCase>({
-              phrasing: row.phrasing,
-              correctPackId: row.correctPackId,
-              source: row.source,
-              outcome: null,
-              error: String((error as { readonly message?: string })?.message ?? error),
-            }),
-          ),
+      client.resolve({ text: row.phrasing, isFirstMessageInSession: true, k: 5 }).pipe(
+        Effect.map(
+          (resolution): PromptbarEvalCase => ({
+            phrasing: row.phrasing,
+            correctPackId: row.correctPackId,
+            source: row.source,
+            outcome: { zone: resolution.zone, candidates: resolution.candidates },
+            error: null,
+          }),
         ),
+        Effect.catch((error) =>
+          Effect.succeed<PromptbarEvalCase>({
+            phrasing: row.phrasing,
+            correctPackId: row.correctPackId,
+            source: row.source,
+            outcome: null,
+            error: String((error as { readonly message?: string })?.message ?? error),
+          }),
+        ),
+      ),
     );
   });
 

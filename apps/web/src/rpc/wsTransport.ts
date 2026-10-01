@@ -45,7 +45,10 @@ const DISCONNECTED_REQUEST_POLL_MS = 1_000;
 export const DISCONNECTED_REQUEST_MESSAGE =
   "Not connected to the server. It is reconnecting; try again in a moment.";
 
-function rejectWhileDisconnected(): { readonly promise: Promise<never>; readonly cancel: () => void } {
+function rejectWhileDisconnected(): {
+  readonly promise: Promise<never>;
+  readonly cancel: () => void;
+} {
   let disconnectedSinceMs: number | null = null;
   let intervalId: ReturnType<typeof setInterval> | null = null;
   const promise = new Promise<never>((_, reject) => {

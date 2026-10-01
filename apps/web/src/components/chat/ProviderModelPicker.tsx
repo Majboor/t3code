@@ -117,12 +117,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       return (
         <GlmEffortSlider
           model={currentModel}
-          onModelChange={(nextModel) => handleModelChange(provider, nextModel, { closeMenu: false })}
+          onModelChange={(nextModel) =>
+            handleModelChange(provider, nextModel, { closeMenu: false })
+          }
         />
       );
     }
     return (
-      <MenuRadioGroup value={currentModel} onValueChange={(value) => handleModelChange(provider, value)}>
+      <MenuRadioGroup
+        value={currentModel}
+        onValueChange={(value) => handleModelChange(provider, value)}
+      >
         {props.modelOptionsByProvider[provider].map((modelOption) => (
           <MenuRadioItem
             key={`${provider}:${modelOption.slug}`}
@@ -204,7 +209,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                           >
                             <OptionIcon
                               aria-hidden="true"
-                              className={cn("size-4 shrink-0 opacity-40", providerIconClassName(option.value, ""))}
+                              className={cn(
+                                "size-4 shrink-0 opacity-40",
+                                providerIconClassName(option.value, ""),
+                              )}
                             />
                             <span>{option.label}</span>
                           </TooltipTrigger>
@@ -258,7 +266,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               const accountProviderName = ACCOUNT_PROVIDER_NAME_OF[option.value];
               const connection = connections?.find((c) => c.provider === accountProviderName);
               const isDisconnected =
-                accountProviderName !== undefined && connections !== null && connection?.connected !== true;
+                accountProviderName !== undefined &&
+                connections !== null &&
+                connection?.connected !== true;
 
               if (isDisconnected) {
                 return (
@@ -274,10 +284,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                     >
                       <OptionIcon
                         aria-hidden="true"
-                        className={cn("size-4 shrink-0 opacity-50", providerIconClassName(option.value, ""))}
+                        className={cn(
+                          "size-4 shrink-0 opacity-50",
+                          providerIconClassName(option.value, ""),
+                        )}
                       />
                       <span>{option.label}</span>
-                      <span className="ms-auto text-[11px] uppercase tracking-[0.08em]">Not connected</span>
+                      <span className="ms-auto text-[11px] uppercase tracking-[0.08em]">
+                        Not connected
+                      </span>
                     </TooltipTrigger>
                     <TooltipPopup side="right">Connect {option.label}</TooltipPopup>
                   </Tooltip>

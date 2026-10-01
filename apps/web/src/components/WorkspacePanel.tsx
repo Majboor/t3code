@@ -1023,7 +1023,10 @@ export default function WorkspacePanel({
             if (output) onEvent({ type: "output", output });
           }
         } catch (error) {
-          onEvent({ type: "error", message: error instanceof Error ? error.message : "Kernel request failed." });
+          onEvent({
+            type: "error",
+            message: error instanceof Error ? error.message : "Kernel request failed.",
+          });
         } finally {
           onEvent({ type: "status", busy: false });
         }
@@ -3010,9 +3013,7 @@ export default function WorkspacePanel({
   const beginRenameEntry = useCallback((relativePath: string) => {
     const separatorIndex = relativePath.lastIndexOf("/");
     setRenamingEntryPath(relativePath);
-    setRenameEntryValue(
-      separatorIndex < 0 ? relativePath : relativePath.slice(separatorIndex + 1),
-    );
+    setRenameEntryValue(separatorIndex < 0 ? relativePath : relativePath.slice(separatorIndex + 1));
   }, []);
 
   const cancelRenameEntry = useCallback(() => {
@@ -3146,7 +3147,9 @@ export default function WorkspacePanel({
                   ? `${formatUploadedBytes(loaded)} / ${formatUploadedBytes(total)}`
                   : formatUploadedBytes(loaded);
               toastManager.update(toastId, {
-                description: multiple ? `${file.name} (${index + 1}/${files.length}) — ${sizeText}` : sizeText,
+                description: multiple
+                  ? `${file.name} (${index + 1}/${files.length}) — ${sizeText}`
+                  : sizeText,
               });
             },
           );
@@ -3783,7 +3786,13 @@ export default function WorkspacePanel({
                     });
                     if (kind === "image") {
                       // eslint-disable-next-line @next/next/no-img-element -- workspace media, no host
-                      return <img alt={basenameOfPath(activeFilePath)} className="max-h-full max-w-full object-contain" src={src} />;
+                      return (
+                        <img
+                          alt={basenameOfPath(activeFilePath)}
+                          className="max-h-full max-w-full object-contain"
+                          src={src}
+                        />
+                      );
                     }
                     if (kind === "video") {
                       return <video className="max-h-full max-w-full" src={src} controls />;
@@ -3791,7 +3800,13 @@ export default function WorkspacePanel({
                     if (kind === "audio") {
                       return <audio className="w-full max-w-lg" src={src} controls />;
                     }
-                    return <iframe title={basenameOfPath(activeFilePath)} className="h-full w-full border-0" src={src} />;
+                    return (
+                      <iframe
+                        title={basenameOfPath(activeFilePath)}
+                        className="h-full w-full border-0"
+                        src={src}
+                      />
+                    );
                   })()}
                 </div>
               ) : activeFileState?.isBinary ? (
@@ -3804,7 +3819,9 @@ export default function WorkspacePanel({
                   {activeWorkspaceRoot ? (
                     <a
                       className="mt-2 rounded-md border border-border/70 bg-card/70 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-card"
-                      href={workspaceFileUrl(activeWorkspaceRoot, activeFilePath, { download: true })}
+                      href={workspaceFileUrl(activeWorkspaceRoot, activeFilePath, {
+                        download: true,
+                      })}
                       download={basenameOfPath(activeFilePath)}
                     >
                       Download file

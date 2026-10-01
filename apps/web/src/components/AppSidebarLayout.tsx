@@ -200,15 +200,15 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         open={projectSidebarOpen}
       >
         {desktopLayoutDefinition.layout === "dev" ? children : projectSidebarShell}
-      {desktopLayoutDefinition.layout === "dev" ? projectSidebarShell : children}
-      {!isMobile && (
-        <ProjectSidebarDesktopToggle
-          open={projectSidebarOpen}
-          side={projectSidebarSide}
-          shortcutLabel={projectsToggleShortcutLabel}
-          onToggle={() => toggleProjectSidebar((open) => !open)}
-        />
-      )}
+        {desktopLayoutDefinition.layout === "dev" ? projectSidebarShell : children}
+        {!isMobile && (
+          <ProjectSidebarDesktopToggle
+            open={projectSidebarOpen}
+            side={projectSidebarSide}
+            shortcutLabel={projectsToggleShortcutLabel}
+            onToggle={() => toggleProjectSidebar((open) => !open)}
+          />
+        )}
       </SidebarProvider>
     </>
   );

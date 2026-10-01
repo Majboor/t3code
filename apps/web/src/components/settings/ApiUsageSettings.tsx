@@ -42,7 +42,9 @@ function ApiKeyReveal() {
     if (!isOpen || apiKey !== null) return;
     fetchGatewayApiKey()
       .then(setApiKey)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load API key."));
+      .catch((err: unknown) =>
+        setError(err instanceof Error ? err.message : "Failed to load API key."),
+      );
   }, [isOpen, apiKey]);
 
   return (
@@ -52,8 +54,8 @@ function ApiKeyReveal() {
         <DialogHeader>
           <DialogTitle>Your LogicPacks API key</DialogTitle>
           <DialogDescription>
-            Use it with any OpenAI-compatible client — including OpenCode — by pointing the base
-            URL at the LogicPacks API gateway and passing this key as the bearer token.
+            Use it with any OpenAI-compatible client — including OpenCode — by pointing the base URL
+            at the LogicPacks API gateway and passing this key as the bearer token.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
@@ -101,7 +103,9 @@ export function ApiUsageSettings() {
   useEffect(() => {
     fetchGatewayUsage()
       .then(setUsage)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load API usage."));
+      .catch((err: unknown) =>
+        setError(err instanceof Error ? err.message : "Failed to load API usage."),
+      );
   }, []);
 
   return (

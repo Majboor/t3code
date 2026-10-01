@@ -201,10 +201,103 @@ export type OrchestrationProjectOwnership = typeof OrchestrationProjectOwnership
 // with `!== undefined`.
 const OptionalProjectOwnership = Schema.optional(OrchestrationProjectOwnership);
 
+/**
+ * What a project *is*, said out loud instead of inferred from its surroundings.
+ *
+ * Until now a project's nature was implied by three unrelated things: whether
+ * cloud sync happened to be switched on, whether the server answered
+ * `this-server` or `paired-environment` (docs/web-and-cloud-scope.md), and
+ * whether somebody had sent a share link. Nothing put those together, so nobody
+ * could tell what lived on their laptop, what lived on LogicPacks, and what
+ * survived closing the lid. That confusion is the single most-reported thing
+ * about this product.
+ *
+ * None of the four kinds is new machinery. Each names a combination people
+ * already end up in, usually by accident:
+ *
+ * - `local`: lives on this machine only. Nothing is uploaded. Close the laptop
+ *   and it is gone from everyone else.
+ * - `hosted`: lives on LogicPacks. Nothing runs on the person's own machine, so
+ *   it is reachable whether or not their computer is on. This is cloud sync's
+ *   `handoff` mode (docs/cloud-sync-spec.md) over a workspace that is not this
+ *   machine.
+ * - `self-hosted`: a local root the person hosts for others who join. Their
+ *   machine and their files, other people's sessions.
+ * - `joined`: somebody else's shared project that this account joined. A share
+ *   link produced it, and sharing and pairing stay deliberately different acts.
+ *
+ * The kind is a statement about where the work lives, and it must never become a
+ * permission. It decides what the product *says* and offers; what anybody is
+ * allowed to do is still decided by ownership and collaboration governance.
+ */
+export const PROJECT_KINDS = ["local", "hosted", "self-hosted", "joined"] as const;
+
+export const ProjectKind = Schema.Literals(PROJECT_KINDS);
+export type ProjectKind = typeof ProjectKind.Type;
+
+/**
+ * What a project carrying no kind is.
+ *
+ * Every project that exists today predates the column, so this value describes
+ * the entire installed base and has to keep describing it truthfully rather than
+ * quietly reclassifying it. `local` is the only honest answer, and the reason is
+ * asymmetry rather than frequency: of the four, `local` is the one that promises
+ * least. Resolving absence to `hosted` would tell somebody their work is
+ * reachable with the lid shut; to `self-hosted`, that other people can reach it;
+ * to `joined`, that it is not theirs. Each of those is a claim made on no
+ * evidence, and each is the kind of claim a person acts on before discovering it
+ * was false. Understating a hosted project costs a correction; overstating a
+ * local one costs work.
+ */
+const PROJECT_KIND_WHEN_UNSET: ProjectKind = "local";
+
+/**
+ * Recognise a stored kind, or admit that it is not one.
+ *
+ * Deliberately separate from `resolveProjectKind`: this one only answers "is
+ * this string a kind this build knows", and returns `null` for a value written
+ * by a newer server that learned a fifth kind. Keeping recognition apart from
+ * resolution is what lets the persistence layer store the column as plain TEXT
+ * with no `CHECK` constraint — the same call this codebase made for
+ * `machine_role` — without an unreadable value being able to fail the payload
+ * that paints somebody's project list.
+ */
+export function parseProjectKind(value: string | null | undefined): ProjectKind | null {
+  return PROJECT_KINDS.find((kind) => kind === value) ?? null;
+}
+
+/**
+ * The single place that answers what kind a project is.
+ *
+ * Callers must not test `project.kind` themselves, for exactly the reason they
+ * must not test `descriptor.workspaceSource` or `machine.role`: the field is
+ * optional and nullable, so a `=== "hosted"` test quietly does the right thing
+ * while a `!== "local"` test quietly does the wrong one against every project
+ * created before the kind existed. One function, one answer, one place to change
+ * it the day the next slice starts writing values.
+ */
+export function resolveProjectKind(
+  project: { readonly kind?: string | null | undefined } | null | undefined,
+): ProjectKind {
+  return parseProjectKind(project?.kind) ?? PROJECT_KIND_WHEN_UNSET;
+}
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  /**
+   * Optional *and* nullable, and both halves are load-bearing. Optional because
+   * every project stored before this field existed has no kind and a required
+   * field would have to invent one for all of them; nullable because the column
+   * behind it is nullable and because an unrecognised stored value is narrowed
+   * to `null` on the way out (see `parseProjectKind`) rather than being allowed
+   * to fail the snapshot decode.
+   *
+   * Absent does not mean "unknown, ask later". It resolves, in exactly one
+   * place, through `resolveProjectKind`.
+   */
+  kind: Schema.optional(Schema.NullOr(ProjectKind)),
   ownership: OptionalProjectOwnership,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
@@ -379,6 +472,18 @@ export const OrchestrationProjectShell = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  /**
+   * Optional *and* nullable, and both halves are load-bearing. Optional because
+   * every project stored before this field existed has no kind and a required
+   * field would have to invent one for all of them; nullable because the column
+   * behind it is nullable and because an unrecognised stored value is narrowed
+   * to `null` on the way out (see `parseProjectKind`) rather than being allowed
+   * to fail the snapshot decode.
+   *
+   * Absent does not mean "unknown, ask later". It resolves, in exactly one
+   * place, through `resolveProjectKind`.
+   */
+  kind: Schema.optional(Schema.NullOr(ProjectKind)),
   ownership: OptionalProjectOwnership,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
@@ -470,6 +575,24 @@ export const ProjectCreateCommand = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  /**
+   * The kind the creator chose, or nothing when nobody chose.
+   *
+   * Optional *and* nullable for the same reason as the field on
+   * `OrchestrationProject`: `t3 project add`, the SDK, and every browser build
+   * that predates kinds send none, and a required field would force all of them
+   * to invent an answer. Absent is not the same as `local` here — it means
+   * unstated, and it stays unstated the whole way down so that a kind somebody
+   * actually picked never becomes indistinguishable from one nobody did.
+   *
+   * `joined` is deliberately inside the accepted union rather than excluded by
+   * the schema. A schema that could not express it would refuse with a decode
+   * issue — "expected local | hosted | self-hosted" — which reports what the
+   * parser wanted rather than why the request makes no sense. The rule is a
+   * statement about the product (a joined project is what accepting a share
+   * link produces), so it is refused by the decider, with a sentence.
+   */
+  kind: Schema.optional(Schema.NullOr(ProjectKind)),
   ownership: OptionalProjectOwnership,
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
@@ -827,6 +950,17 @@ export const ProjectCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  /**
+   * The kind the create command carried, recorded as part of the fact.
+   *
+   * On the event rather than only in the projection because the event log is
+   * what the projection is rebuilt from: a kind that lived only in the SQLite
+   * row would vanish the first time somebody replayed, and "what kind did they
+   * choose when they made it" is exactly the sort of question a rebuild has to
+   * be able to answer. Optional and nullable to match the command — no kind was
+   * stated is a truthful thing for a historical event to say.
+   */
+  kind: Schema.optional(Schema.NullOr(ProjectKind)),
   ownership: OptionalProjectOwnership,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),

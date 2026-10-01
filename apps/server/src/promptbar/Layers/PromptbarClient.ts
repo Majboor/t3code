@@ -1,7 +1,11 @@
 import { Config, Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { defaultPacksDir, loadPromptbarPacks, type PromptbarPackDefinition } from "../PackSource.ts";
+import {
+  defaultPacksDir,
+  loadPromptbarPacks,
+  type PromptbarPackDefinition,
+} from "../PackSource.ts";
 import { rebuildFtsIndex, searchFtsPhrasings, type FtsHit } from "../PackFts.ts";
 import { resolveEffectiveIntent, zoneForConfidence, type IntentScores } from "../intentRouting.ts";
 import {
@@ -34,7 +38,9 @@ const PromptbarEnvConfig = Config.all({
   embeddingUrl: Config.string("T3CODE_EMBEDDING_URL").pipe(
     Config.withDefault("http://192.168.18.201:9400"),
   ),
-  qdrantUrl: Config.string("T3CODE_QDRANT_URL").pipe(Config.withDefault("http://192.168.18.201:6333")),
+  qdrantUrl: Config.string("T3CODE_QDRANT_URL").pipe(
+    Config.withDefault("http://192.168.18.201:6333"),
+  ),
 });
 
 /**
@@ -60,7 +66,9 @@ const PromptbarDecisionEnvConfig = Config.all({
   decisionApiUrl: Config.string("T3CODE_DECISION_API_URL").pipe(
     Config.withDefault("https://openrouter.ai/api/alpha/decisions"),
   ),
-  decisionModel: Config.string("T3CODE_DECISION_MODEL").pipe(Config.withDefault("typesafe/jev-1.13")),
+  decisionModel: Config.string("T3CODE_DECISION_MODEL").pipe(
+    Config.withDefault("typesafe/jev-1.13"),
+  ),
 });
 
 /** Each hybrid-retrieval leg pulls this many phrasing-level hits before fusion; the spec calls for "top ~20". */
@@ -103,7 +111,10 @@ function isEmbedResponse(value: unknown): value is EmbedResponse {
 
 interface DecisionApiResponse {
   readonly answers: Readonly<
-    Record<string, { readonly noul?: unknown; readonly choice?: unknown; readonly probabilities?: unknown }>
+    Record<
+      string,
+      { readonly noul?: unknown; readonly choice?: unknown; readonly probabilities?: unknown }
+    >
   >;
 }
 
@@ -133,11 +144,17 @@ const make = Effect.gen(function* () {
   yield* rebuildFtsIndex(packs).pipe(
     Effect.provideService(SqlClient.SqlClient, sql),
     Effect.mapError(
-      (error) => new PromptbarError({ message: `Failed to build the pack phrasing index: ${error.message}` }),
+      (error) =>
+        new PromptbarError({
+          message: `Failed to build the pack phrasing index: ${error.message}`,
+        }),
     ),
   );
 
-  yield* Effect.log("promptbar.packs.indexed", { count: packs.length, ids: packs.map((p) => p.id) });
+  yield* Effect.log("promptbar.packs.indexed", {
+    count: packs.length,
+    ids: packs.map((p) => p.id),
+  });
 
   const postJson = (url: string, body: unknown, extraHeaders?: Record<string, string>) =>
     Effect.tryPromise({
@@ -147,7 +164,8 @@ const make = Effect.gen(function* () {
           headers: { "content-type": "application/json", ...extraHeaders },
           body: JSON.stringify(body),
         }),
-      catch: (cause) => new PromptbarError({ message: `Request to ${url} failed: ${describeCause(cause)}` }),
+      catch: (cause) =>
+        new PromptbarError({ message: `Request to ${url} failed: ${describeCause(cause)}` }),
     }).pipe(
       Effect.flatMap((response) =>
         response.ok
@@ -171,13 +189,20 @@ const make = Effect.gen(function* () {
       Effect.flatMap((response) =>
         Effect.tryPromise({
           try: () => response.json() as Promise<unknown>,
-          catch: (cause) => new PromptbarError({ message: `Decision model returned an unreadable response: ${describeCause(cause)}` }),
+          catch: (cause) =>
+            new PromptbarError({
+              message: `Decision model returned an unreadable response: ${describeCause(cause)}`,
+            }),
         }),
       ),
       Effect.flatMap((json) =>
         isDecisionApiResponse(json)
           ? Effect.succeed(json)
-          : Effect.fail(new PromptbarError({ message: "The decision model's response did not match the expected shape." })),
+          : Effect.fail(
+              new PromptbarError({
+                message: "The decision model's response did not match the expected shape.",
+              }),
+            ),
       ),
     );
 
@@ -192,11 +217,16 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (Option.isNone(decisionConfig.apiKey)) {
         return yield* new PromptbarError({
-          message: "The intent decision model is not configured (T3CODE_OPENROUTER_API_KEY missing).",
+          message:
+            "The intent decision model is not configured (T3CODE_OPENROUTER_API_KEY missing).",
         });
       }
       const state = buildDecisionState(recentContext, text);
-      const response = yield* callDecisionModel(decisionConfig.apiKey.value, state, buildIntentQuestion());
+      const response = yield* callDecisionModel(
+        decisionConfig.apiKey.value,
+        state,
+        buildIntentQuestion(),
+      );
       const parsed = parseIntentAnswer(response.answers);
       if (parsed === null) {
         return yield* new PromptbarError({
@@ -217,13 +247,20 @@ const make = Effect.gen(function* () {
       Effect.flatMap((response) =>
         Effect.tryPromise({
           try: () => response.json() as Promise<unknown>,
-          catch: (cause) => new PromptbarError({ message: `The embedding service returned an unreadable response: ${describeCause(cause)}` }),
+          catch: (cause) =>
+            new PromptbarError({
+              message: `The embedding service returned an unreadable response: ${describeCause(cause)}`,
+            }),
         }),
       ),
       Effect.flatMap((json) =>
         isEmbedResponse(json)
           ? Effect.succeed(json.vector)
-          : Effect.fail(new PromptbarError({ message: "The embedding service's response did not match the expected shape." })),
+          : Effect.fail(
+              new PromptbarError({
+                message: "The embedding service's response did not match the expected shape.",
+              }),
+            ),
       ),
     );
 
@@ -236,12 +273,17 @@ const make = Effect.gen(function* () {
       Effect.flatMap((response) =>
         Effect.tryPromise({
           try: () => response.json() as Promise<QdrantSearchResponse>,
-          catch: (cause) => new PromptbarError({ message: `Qdrant returned an unreadable response: ${describeCause(cause)}` }),
+          catch: (cause) =>
+            new PromptbarError({
+              message: `Qdrant returned an unreadable response: ${describeCause(cause)}`,
+            }),
         }),
       ),
       Effect.map(
         (body): ReadonlyArray<RetrievalHit> =>
-          body.result.flatMap((point) => (point.payload?.pack_id ? [{ packId: point.payload.pack_id }] : [])),
+          body.result.flatMap((point) =>
+            point.payload?.pack_id ? [{ packId: point.payload.pack_id }] : [],
+          ),
       ),
     );
 
@@ -274,7 +316,9 @@ const make = Effect.gen(function* () {
 
   const retrieveCandidates = (text: string, k: number) =>
     Effect.gen(function* () {
-      const [dense, bm25] = yield* Effect.all([denseLeg(text), bm25Leg(text)], { concurrency: "unbounded" });
+      const [dense, bm25] = yield* Effect.all([denseLeg(text), bm25Leg(text)], {
+        concurrency: "unbounded",
+      });
 
       const fused = reciprocalRankFusion([bestRankPerPack(bm25), bestRankPerPack(dense)]);
       const normalized = normalizeRrfScores(fused, 2);

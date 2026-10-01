@@ -6,11 +6,15 @@ import { useState } from "react";
 import type { ProviderSharing } from "../../hooks/useProviderSharing";
 import { cn } from "../../lib/utils";
 import {
+  describeBacking,
   PROVIDER_LABEL,
   PROVIDERS,
   readViewerSharing,
+  readWorkspaceCarriers,
   type ViewerProviderSharing,
+  type WorkspaceCarrier,
 } from "./providerSharing.logic";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
@@ -155,6 +159,52 @@ function ProviderRow({
 }
 
 /**
+ * One person the workspace is currently running on.
+ *
+ * The roster never showed this, so the only way to find out whose quota was
+ * paying for everybody's turns was to open the admin dialog — which most
+ * members cannot — and read a policy off it. A name and a badge answer it in
+ * a line, next to the switches that decide it.
+ *
+ * A member who cannot see the account roster gets the badge without the name,
+ * because the policy tells everybody that somebody is carrying this and tells
+ * only an admin who. Half an answer beats the silence that was here before,
+ * and it does not invent the other half.
+ */
+function CarrierRow({ carrier }: { carrier: WorkspaceCarrier }) {
+  const name = carrier.isViewer ? "You" : (carrier.displayName ?? "Another member");
+
+  return (
+    <div
+      className="flex items-start justify-between gap-2"
+      data-testid="provider-sharing-carrier"
+      data-user-id={carrier.userId}
+      data-viewer={carrier.isViewer ? "true" : "false"}
+    >
+      <div className="min-w-0">
+        <div className="truncate text-xs font-medium text-foreground">{name}</div>
+        {/* Labels only, never credential material — an account's name is the
+            most even an admin is shown, and members are shown none of it. */}
+        {carrier.accountLabels.length > 0 ? (
+          <div className="truncate text-[10px] text-muted-foreground">
+            {carrier.accountLabels.join(" · ")}
+          </div>
+        ) : null}
+      </div>
+      <Badge
+        size="sm"
+        variant={carrier.broken ? "warning" : "success"}
+        className="shrink-0"
+        data-testid="provider-sharing-backing-badge"
+        data-broken={carrier.broken ? "true" : "false"}
+      >
+        {carrier.broken ? "Backing, but unavailable" : describeBacking(carrier)}
+      </Badge>
+    </div>
+  );
+}
+
+/**
  * The compact half of provider sharing: what this person contributes, to this
  * workspace, and how to stop. Anything that needs a roster or a permission
  * matrix lives in the dialog behind Manage — this popover is 22rem wide.
@@ -186,6 +236,10 @@ export function ProviderSharingSection({
   const workspaceLabel = workspaceTitle?.trim() || "this workspace";
   const views = PROVIDERS.map((provider) => readViewerSharing(overview, provider));
   const anySharing = views.some((view) => view.isSharing);
+  // Who the workspace policy actually spends. Derived from the same overview
+  // the switches above read, so a badge can never disagree with the switch
+  // sitting a few pixels from it.
+  const carriers = readWorkspaceCarriers(overview);
 
   return (
     <div data-testid="provider-sharing-section">
@@ -221,6 +275,22 @@ export function ProviderSharingSection({
           />
         ))}
       </div>
+
+      {carriers.length > 0 ? (
+        <div
+          className="mt-3 border-t border-border/60 pt-2"
+          data-testid="provider-sharing-carriers"
+        >
+          <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+            Who is carrying {workspaceLabel}
+          </div>
+          <div className="grid gap-2">
+            {carriers.map((carrier) => (
+              <CarrierRow key={carrier.userId} carrier={carrier} />
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {anySharing ? (
         <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
