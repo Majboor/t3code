@@ -59,7 +59,9 @@ import {
   isUsableLiveShareEndpoint,
   LiveShareCoordinator,
 } from "./cloudSync/liveShare.ts";
+import { createPassController, type PassController } from "./cloudSync/controller.ts";
 import { scanProject, summariseScan } from "./cloudSync/scan.ts";
+import { createCloudSyncTransport } from "./cloudSync/transport.ts";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness.ts";
 import { showDesktopConfirmDialog } from "./confirmDialog.ts";
 import { resolveDesktopServerExposure } from "./serverExposure.ts";
@@ -1694,6 +1696,44 @@ async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
   });
 }
 
+/**
+ * The renderer's pass request, read defensively.
+ *
+ * Everything here arrives from a renderer, and two of the fields decide where bytes are
+ * read from and which project they are published into — so a missing or wrong-typed one is
+ * refused rather than defaulted.
+ */
+function readPassRequest(rawInput: unknown): {
+  readonly root: string;
+  readonly mode: "handoff" | "mirror";
+  readonly cloudBaseUrl: string;
+  readonly authorization: string;
+  readonly scope: { tenantId: string; workspaceId: string; projectId: string };
+} {
+  const input = rawInput as Record<string, unknown> | null;
+  const root = typeof input?.["root"] === "string" ? input["root"].trim() : "";
+  const mode = input?.["mode"];
+  const cloudBaseUrl =
+    typeof input?.["cloudBaseUrl"] === "string" ? input["cloudBaseUrl"].trim() : "";
+  const authorization = typeof input?.["authorization"] === "string" ? input["authorization"] : "";
+  const scope = input?.["scope"] as Record<string, unknown> | undefined;
+  const tenantId = typeof scope?.["tenantId"] === "string" ? scope["tenantId"] : "";
+  const workspaceId = typeof scope?.["workspaceId"] === "string" ? scope["workspaceId"] : "";
+  const projectId = typeof scope?.["projectId"] === "string" ? scope["projectId"] : "";
+  if (
+    root === "" ||
+    (mode !== "handoff" && mode !== "mirror") ||
+    cloudBaseUrl === "" ||
+    authorization === "" ||
+    tenantId === "" ||
+    workspaceId === "" ||
+    projectId === ""
+  ) {
+    throw new Error("Invalid cloud sync pass payload.");
+  }
+  return { root, mode, cloudBaseUrl, authorization, scope: { tenantId, workspaceId, projectId } };
+}
+
 function registerIpcHandlers(): void {
   ipcMain.removeAllListeners(GET_APP_BRANDING_CHANNEL);
   ipcMain.on(GET_APP_BRANDING_CHANNEL, (event) => {
@@ -1837,11 +1877,14 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(WORKSPACE_SHARE_STOP_CHANNEL);
   ipcMain.handle(WORKSPACE_SHARE_STOP_CHANNEL, async () => workspaceShareController.stop());
 
-  // Cloud sync, laptop half (`src/cloudSync/`). Only the scan is reachable from here: it
-  // reads and hashes, and the worst it can do is take a while. Applying actions is not
-  // exposed until the controller that sequences a pass exists, because the safety of
-  // `apply.ts` depends on being handed a plan that `planLocalPass` agreed to run — a
-  // renderer that could post individual actions could hand it a plan nothing checked.
+  // Cloud sync, laptop half (`src/cloudSync/`).
+  //
+  // Individual actions are still not reachable from a renderer, and that has not changed:
+  // `apply.ts`'s safety depends on being handed a plan something agreed to run, so a
+  // renderer that could post one action at a time could hand it a plan nothing checked.
+  // What exists now is the controller that sequences a whole pass — scan, ask the server to
+  // plan it, upload, apply, commit — so the renderer asks for a PASS and never for a step
+  // inside one.
   const CLOUD_SYNC_SCAN_CHANNEL = "desktop:cloud-sync-scan";
   ipcMain.removeHandler(CLOUD_SYNC_SCAN_CHANNEL);
   ipcMain.handle(CLOUD_SYNC_SCAN_CHANNEL, async (_event, rawRoot: unknown) => {
@@ -1849,6 +1892,57 @@ function registerIpcHandlers(): void {
       throw new Error("Invalid cloud sync scan payload.");
     }
     return summariseScan(await scanProject({ root: rawRoot }));
+  });
+
+  /**
+   * One controller per project root, because a pass must run alone over a tree and two
+   * controllers over one root would be two passes that each think they are the only one.
+   */
+  const cloudSyncControllers = new Map<string, PassController>();
+
+  const CLOUD_SYNC_PASS_CHANNEL = "desktop:cloud-sync-pass";
+  const CLOUD_SYNC_WATCH_START_CHANNEL = "desktop:cloud-sync-watch-start";
+  const CLOUD_SYNC_WATCH_STOP_CHANNEL = "desktop:cloud-sync-watch-stop";
+
+  const controllerFor = (request: ReturnType<typeof readPassRequest>): PassController => {
+    const existing = cloudSyncControllers.get(request.root);
+    if (existing) return existing;
+    const controller = createPassController({
+      root: request.root,
+      mode: request.mode,
+      transport: createCloudSyncTransport({
+        baseUrl: request.cloudBaseUrl,
+        authorization: request.authorization,
+        scope: request.scope,
+      }),
+      onReport: (report) => {
+        writeDesktopLogHeader(`cloud sync pass root=${request.root} outcome=${report.kind}`);
+      },
+    });
+    cloudSyncControllers.set(request.root, controller);
+    return controller;
+  };
+
+  ipcMain.removeHandler(CLOUD_SYNC_PASS_CHANNEL);
+  ipcMain.handle(CLOUD_SYNC_PASS_CHANNEL, async (_event, rawInput: unknown) =>
+    controllerFor(readPassRequest(rawInput)).runPass(),
+  );
+
+  // Watch-driven is what makes a local edit reach the cloud in about the time it takes to
+  // hash it. `watch.ts` already coalesces a burst into one settled batch, so this only has
+  // to run a pass per batch and the controller's single-flight does the rest.
+  ipcMain.removeHandler(CLOUD_SYNC_WATCH_START_CHANNEL);
+  ipcMain.handle(CLOUD_SYNC_WATCH_START_CHANNEL, async (_event, rawInput: unknown) => {
+    controllerFor(readPassRequest(rawInput)).start();
+    return { watching: true };
+  });
+
+  ipcMain.removeHandler(CLOUD_SYNC_WATCH_STOP_CHANNEL);
+  ipcMain.handle(CLOUD_SYNC_WATCH_STOP_CHANNEL, async (_event, rawRoot: unknown) => {
+    const root = typeof rawRoot === "string" ? rawRoot.trim() : "";
+    const controller = root === "" ? undefined : cloudSyncControllers.get(root);
+    controller?.stop();
+    return { watching: false };
   });
 
   // Sharing does not wait for a first pass: starting a sync in the default mode also

@@ -565,3 +565,67 @@ export const CloudSyncHandoffRegisterInput = Schema.Struct({
   canonicalUrl: CloudSyncCopyUrl,
 });
 export type CloudSyncHandoffRegisterInput = typeof CloudSyncHandoffRegisterInput.Type;
+
+/**
+ * The pass/commit exchange, as it travels.
+ *
+ * These were the one part of the cloud-sync contract that stayed inside
+ * `apps/server/src/cloudSync/Services/CloudSyncService.ts`, because for a while
+ * the server was the only thing that had them: the laptop could scan a tree and
+ * reconcile one, and had no way to speak to the server at all. They move here
+ * now that the laptop's transport exists, so there is one definition of the
+ * exchange rather than a server interface and a client's idea of it.
+ *
+ * The field checks mirror `apps/server/src/cloudSync/http.ts`'s own decoders,
+ * which are what actually refuses a malformed request — the ceilings included,
+ * since a manifest silently truncated at the boundary is a commit claiming
+ * agreement on content nobody sent.
+ */
+export const CLOUD_SYNC_MAX_MANIFEST_ENTRIES = 20_000;
+export const CLOUD_SYNC_MAX_NEGOTIATED_HASHES = 5_000;
+export const CLOUD_SYNC_MAX_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** One path with the hash of its content. Sizes are for the progress bar only. */
+export const CloudSyncEntry = Schema.Struct({
+  path: CloudSyncPath,
+  hash: CloudSyncHash,
+  sizeBytes: NonNegativeInt,
+});
+export type CloudSyncEntry = typeof CloudSyncEntry.Type;
+
+/** A path this pass will not carry, and why, so nothing is skipped silently. */
+export const CloudSyncRefusedPath = Schema.Struct({
+  path: Schema.String,
+  reason: Schema.Literals(["excluded", "unsafe-path", "too-large", "missing-blob", "not-agreed"]),
+});
+export type CloudSyncRefusedPath = typeof CloudSyncRefusedPath.Type;
+
+/** What a conflict asks the laptop to do, in the order it has to be done. */
+export const CloudSyncPlannedConflict = Schema.Struct({
+  path: CloudSyncPath,
+  /** Where the local version goes. Move it aside *before* writing the remote one. */
+  conflictedCopyPath: Schema.String,
+  remote: CloudSyncEntry,
+});
+export type CloudSyncPlannedConflict = typeof CloudSyncPlannedConflict.Type;
+
+export const CloudSyncPassRequest = Schema.Struct({
+  ...CloudSyncProjectScope,
+  files: Schema.Array(CloudSyncEntry),
+  /**
+   * Whether the walk that produced `files` ran to the end. A scanner that knows
+   * it was interrupted is cheap to believe and worth believing, because a pass
+   * built on a partial scan sees every unreported path as deleted.
+   */
+  scanComplete: Schema.Boolean,
+});
+export type CloudSyncPassRequest = typeof CloudSyncPassRequest.Type;
+
+export const CloudSyncCommitRequest = Schema.Struct({
+  ...CloudSyncProjectScope,
+  files: Schema.Array(CloudSyncEntry),
+  deletions: Schema.Array(Schema.String),
+  conflicts: Schema.Array(CloudSyncPlannedConflict),
+  final: Schema.Boolean,
+});
+export type CloudSyncCommitRequest = typeof CloudSyncCommitRequest.Type;
