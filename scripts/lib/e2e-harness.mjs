@@ -182,22 +182,102 @@ export function createHarness({
    * see perfectly well: `locator.count()` ignores what is stacked on top of an
    * element and `click()` waits for it to actually receive the event.
    */
+  /**
+   * Clears the two overlays a fresh account meets, and does not return until
+   * they are gone.
+   *
+   * Both are correct behaviour: `OnboardingGate` shows the questionnaire to any
+   * account that has not answered it, and the product tour starts for any
+   * client that has not seen it. What made this flaky is that the gate asks the
+   * server before it mounts, so a dismiss attempted straight after signup finds
+   * nothing to dismiss, the modal arrives a moment later, and the next click
+   * lands on it.
+   *
+   * So it waits for each to appear, clears it, and waits for it to detach. The
+   * appear-wait is short and its timeout is not an error: an account that has
+   * already answered never shows one.
+   */
   async function dismissFirstRunOverlays(page) {
     const skip = page.locator('button:has-text("Skip for now")').first();
+    // Short: the gate asks a local server and mounts well inside this. An
+    // account that has already answered never shows one, so the timeout is the
+    // normal path for every call after the first and must not cost seconds.
+    await skip.waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
     if (await skip.isVisible().catch(() => false)) {
       await skip.click().catch(() => undefined);
-      await sleep(500);
+      await skip.waitFor({ state: "detached", timeout: 8_000 }).catch(() => undefined);
     }
-    // The tour sits below the questionnaire and outlives it.
-    await page.keyboard.press("Escape").catch(() => undefined);
-    await sleep(300);
+    // The tour sits below the questionnaire and outlives it, so it is only
+    // reachable once the questionnaire has gone.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const dialogs = await page.locator('[role="dialog"]').count().catch(() => 0);
+      if (dialogs === 0) break;
+      await page.keyboard.press("Escape").catch(() => undefined);
+      await sleep(400);
+    }
   }
 
+  /**
+   * Adds a project through the command palette.
+   *
+   * The palette is where a project is made, and it asks WHERE the project lives
+   * before the path is typed — a radiogroup of local / hosted / self-hosted,
+   * with the palette's own input keeping focus throughout. The old selector
+   * here (`[data-base-ui-portal] input`) matched a dialog that no longer serves
+   * this flow, so it waited thirty seconds for an input that was never going to
+   * be under that portal.
+   *
+   * Waits for the palette rather than sleeping at it, because the thing that
+   * actually went wrong was a click landing before the previous overlay had
+   * finished leaving.
+   */
   async function addProject(page, workspaceRoot) {
     await dismissFirstRunOverlays(page);
-    await page.locator('button:has-text("Add project")').first().click();
-    await sleep(uiSettleMs);
-    await page.locator("[data-base-ui-portal] input").first().fill(workspaceRoot);
+    const palette = page.locator('[data-testid="command-palette"]');
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await page.locator('button:has-text("Add project")').first().click();
+      // "Add project" is a MENU now, not an action: it asks where the project
+      // lives before anything else happens, and only choosing a kind opens the
+      // palette that takes the path. A harness that clicked the button and
+      // waited for an input waited on a menu, which has none.
+      const localItem = page
+        .locator('[role="menuitem"]')
+        .filter({ hasText: /this computer/i })
+        .first();
+      const menuOpened = await localItem
+        .waitFor({ state: "visible", timeout: 6_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (menuOpened) {
+        // Local, deliberately: it is the only kind that needs no cloud copy and
+        // no second machine, so it is the only one a test can create without
+        // reaching for either.
+        await localItem.click().catch(() => undefined);
+      }
+      const opened = await palette
+        .waitFor({ state: "visible", timeout: 6_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (opened) break;
+      // An overlay was still on its way out when the click landed. Clear
+      // whatever arrived and try once more rather than failing on a race.
+      await dismissFirstRunOverlays(page);
+    }
+    const input = palette.locator("input").first();
+    await input.waitFor({ state: "visible", timeout: 15_000 });
+    // The palette keeps its own picker, pre-set from the menu choice. Assert it
+    // rather than click it again, so a changed default fails here loudly
+    // instead of putting a test project somewhere it was never meant to go.
+    const selectedKind = palette.locator(
+      '[data-testid="command-palette-project-kind"] [role="radio"][aria-checked="true"]',
+    );
+    if ((await selectedKind.count().catch(() => 0)) > 0) {
+      const label = (await selectedKind.first().textContent().catch(() => "")) ?? "";
+      if (!/this computer/i.test(label)) {
+        throw new Error(`Expected the local project kind to be selected, got "${label.trim()}".`);
+      }
+    }
+    await input.fill(workspaceRoot);
     await sleep(3_000);
     await page.keyboard.press("Enter");
     await sleep(navigationMs);

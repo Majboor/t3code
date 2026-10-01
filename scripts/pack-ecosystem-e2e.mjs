@@ -38,7 +38,7 @@ const ACCOUNT = `eco.${RUN_ID}@example.test`;
 const KEEP = process.env["T3_E2E_KEEP_WORKSPACE"] === "1";
 
 const { phase, check, finish } = createReporter();
-const { signUp, addProject } = createHarness({
+const { signUp, addProject, dismissFirstRunOverlays } = createHarness({
   baseUrl: BASE_URL,
   password: PASSWORD,
   probeFile: "seed.txt",
@@ -47,6 +47,11 @@ const { signUp, addProject } = createHarness({
 async function goHome(page) {
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await sleep(7_000);
+  // A fresh account meets the onboarding questionnaire and the product tour
+  // here, both legitimately, and the questionnaire's marketing half covers the
+  // dashboard — so a click on "Create Workspace" is intercepted rather than
+  // missed, which reads as a hung test. Harmless once an account has answered.
+  await dismissFirstRunOverlays(page);
 }
 
 // ── the run ─────────────────────────────────────────────────────────────────
