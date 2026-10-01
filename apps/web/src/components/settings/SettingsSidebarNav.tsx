@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
+import { useGatewayInstance } from "../../hooks/useGatewayInstance";
 import { useUserPreferences } from "../../hooks/useUserPreferences";
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import {
@@ -25,6 +26,7 @@ import {
 } from "../ui/sidebar";
 import {
   isSettingsSectionActive,
+  isSettingsSectionAvailable,
   SETTINGS_SECTION_LABELS,
   SETTINGS_SECTION_PATHS,
   type SettingsSectionPath,
@@ -60,15 +62,20 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const { preferences } = useUserPreferences();
-  // `null` (not loaded yet) reads as "visible" - never flash-hide a section
-  // the user can already see, only hide once we know for sure it's off.
-  const orgSettingsVisible = preferences?.orgSettingsVisible ?? true;
-  const apiUsageTabVisible = preferences?.apiUsageTabVisible ?? true;
-  const visibleNavItems = SETTINGS_NAV_ITEMS.filter((item) => {
-    if (item.to === "/settings/organization") return orgSettingsVisible;
-    if (item.to === "/settings/api-usage") return apiUsageTabVisible;
-    return true;
-  });
+  // Billing is the gateway's: an instance with none has no plan, no balance and
+  // nothing to buy, so the entry led only to a page explaining it cannot work.
+  const { billingAvailable } = useGatewayInstance();
+  // One rule for all three, in `settingsNav.logic`, because the breadcrumb has
+  // to reach the same answer — a section missing from this menu was still
+  // reachable and still titled. `null`/absent reads as visible there: never
+  // flash-hide a section the user can already see.
+  const visibleNavItems = SETTINGS_NAV_ITEMS.filter((item) =>
+    isSettingsSectionAvailable(item.to, {
+      orgSettingsVisible: preferences?.orgSettingsVisible ?? null,
+      apiUsageTabVisible: preferences?.apiUsageTabVisible ?? null,
+      billingAvailable,
+    }),
+  );
 
   return (
     <>

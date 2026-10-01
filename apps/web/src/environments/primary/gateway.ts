@@ -71,7 +71,10 @@ function parseGatewayErrorMessage(text: string): string | null {
   return null;
 }
 
-async function readGatewayErrorMessage(response: Response, fallbackMessage: string): Promise<string> {
+async function readGatewayErrorMessage(
+  response: Response,
+  fallbackMessage: string,
+): Promise<string> {
   const text = await response.text();
   return parseGatewayErrorMessage(text) ?? fallbackMessage;
 }
@@ -114,4 +117,58 @@ export async function redeemGatewayCode(code: string): Promise<GatewayRedeemResu
     );
   }
   return (await response.json()) as GatewayRedeemResult;
+}
+
+export interface GatewayPlanOffer {
+  readonly code: string;
+  readonly name: string;
+  readonly priceUsdMonthly: number | null;
+  readonly includedTokens: string | null;
+  readonly description: string | null;
+}
+
+export interface GatewayInstance {
+  readonly configured: boolean;
+  readonly planCatalogue: ReadonlyArray<GatewayPlanOffer>;
+}
+
+/**
+ * Whether this instance has a gateway at all, and what it sells.
+ *
+ * `null` means "we could not find out" — an older server with no `/status`
+ * route, or a network blip — and that is deliberately NOT the same as
+ * `{ configured: false }`. Not knowing must leave every reader exactly as it
+ * was; only a server that positively says there is no gateway gets to hide
+ * anything.
+ *
+ * The answer is a property of the INSTANCE, not of the person asking, so it is
+ * cached for the life of the tab. Two nav components and the billing page all
+ * want it on mount, and without this they would each ask on every mount of
+ * every settings route.
+ */
+let gatewayInstancePromise: Promise<GatewayInstance | null> | null = null;
+
+export async function fetchGatewayInstance(): Promise<GatewayInstance | null> {
+  gatewayInstancePromise ??= (async () => {
+    try {
+      const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/gateway/status"), {
+        credentials: "include",
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as Partial<GatewayInstance>;
+      if (typeof body.configured !== "boolean") return null;
+      return {
+        configured: body.configured,
+        planCatalogue: Array.isArray(body.planCatalogue) ? body.planCatalogue : [],
+      };
+    } catch {
+      return null;
+    }
+  })().then((result) => {
+    // A failed lookup is not cached: it means "we could not find out", and the
+    // next reader deserves a fresh attempt rather than a tab-lifetime "unknown".
+    if (result === null) gatewayInstancePromise = null;
+    return result;
+  });
+  return gatewayInstancePromise;
 }

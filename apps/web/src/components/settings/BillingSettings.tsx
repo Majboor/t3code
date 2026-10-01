@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  fetchGatewayInstance,
   fetchGatewayUsage,
   redeemGatewayCode,
+  type GatewayInstance,
+  type GatewayPlanOffer,
   type GatewayUsageResult,
 } from "../../environments/primary";
 import { Button } from "../ui/button";
@@ -10,12 +13,63 @@ import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
-const PLAN_TILES = [
-  { code: "free", name: "Free", price: "$0/mo", tokens: "2M tokens/mo" },
-  { code: "starter", name: "Starter", price: "$5/mo", tokens: "60M tokens/mo" },
-  { code: "pro", name: "Pro", price: "$12/mo", tokens: "180M tokens/mo" },
-  { code: "max", name: "Max", price: "$60/mo", tokens: "1B tokens/mo" },
-] as const;
+/**
+ * The shapes `/api/gateway/status` answers with, and the two fields a newer
+ * `/api/gateway/usage` adds. They are declared here rather than in the shared
+ * gateway client because every one of them is optional by design: an older
+ * server sends none of it, and this page has to keep working against one.
+ */
+/** What a server new enough to answer at all adds to the usage payload. */
+type UsageWithCatalogue = GatewayUsageResult &
+  Partial<{
+    readonly configured: boolean;
+    readonly planCatalogue: ReadonlyArray<GatewayPlanOffer>;
+  }>;
+
+/**
+ * Prices come from the gateway or they do not come at all. A plan the gateway
+ * quoted no price for shows a dash: a wrong number is worse than no number,
+ * because someone acts on it.
+ */
+export function formatPlanPrice(priceUsdMonthly: number | null): string {
+  if (priceUsdMonthly === null || !Number.isFinite(priceUsdMonthly)) return "—";
+  if (priceUsdMonthly === 0) return "Free";
+  return Number.isInteger(priceUsdMonthly)
+    ? `$${priceUsdMonthly}/mo`
+    : `$${priceUsdMonthly.toFixed(2)}/mo`;
+}
+
+/** Matches the `12.3M` shorthand the API usage page already uses. */
+export function formatPlanTokens(includedTokens: string | null): string | null {
+  if (includedTokens === null) return null;
+  const n = Number(includedTokens);
+  if (!Number.isFinite(n)) return includedTokens;
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B tokens/mo`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M tokens/mo`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K tokens/mo`;
+  return `${n} tokens/mo`;
+}
+
+/**
+ * The catalogue the page should draw, given both places it can arrive from.
+ * The usage payload wins when it has one — it is the fresher of the two, and
+ * on a server that inlines the catalogue it arrived in the same round trip.
+ */
+export function resolvePlanCatalogue(
+  usage: UsageWithCatalogue | null,
+  instance: GatewayInstance | null,
+): ReadonlyArray<GatewayPlanOffer> {
+  if (usage?.planCatalogue && usage.planCatalogue.length > 0) return usage.planCatalogue;
+  return instance?.planCatalogue ?? [];
+}
+
+/** Only a server that positively said so counts as "there is no gateway here". */
+export function isGatewayAbsent(
+  usage: UsageWithCatalogue | null,
+  instance: GatewayInstance | null,
+): boolean {
+  return instance?.configured === false || usage?.configured === false;
+}
 
 function RedeemCodeForm({ onRedeemed }: { onRedeemed: () => void }) {
   const [code, setCode] = useState("");
@@ -61,16 +115,52 @@ function RedeemCodeForm({ onRedeemed }: { onRedeemed: () => void }) {
 }
 
 export function BillingSettings() {
-  const [usage, setUsage] = useState<GatewayUsageResult | null>(null);
+  const [usage, setUsage] = useState<UsageWithCatalogue | null>(null);
+  const [instance, setInstance] = useState<GatewayInstance | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     fetchGatewayUsage()
-      .then(setUsage)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load billing info."));
+      .then((result) => setUsage(result as UsageWithCatalogue))
+      .catch((err: unknown) =>
+        setError(err instanceof Error ? err.message : "Failed to load billing info."),
+      );
   }, []);
 
   useEffect(() => reload(), [reload]);
+
+  // Asked separately from usage because it answers a different question: usage
+  // is about this person's account and fails when they have none, while this is
+  // about the instance and always answers.
+  useEffect(() => {
+    let cancelled = false;
+    fetchGatewayInstance()
+      .then((result) => {
+        if (!cancelled) setInstance(result);
+      })
+      .catch(() => {
+        // Not knowing is the starting state already; nothing to record.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const gatewayAbsent = isGatewayAbsent(usage, instance);
+  const planCatalogue = resolvePlanCatalogue(usage, instance);
+
+  if (gatewayAbsent) {
+    return (
+      <SettingsPageContainer>
+        <SettingsSection title="Billing">
+          <SettingsRow
+            title="No billing on this instance"
+            description="This T3 Code instance runs without the LogicPacks API gateway, so there is no plan, no balance and nothing to buy here. Model access is whatever the provider logins on this instance allow."
+          />
+        </SettingsSection>
+      </SettingsPageContainer>
+    );
+  }
 
   return (
     <SettingsPageContainer>
@@ -90,17 +180,34 @@ export function BillingSettings() {
       </SettingsSection>
 
       <SettingsSection title="Plans">
-        <div className="grid grid-cols-2 gap-px bg-border/60 sm:grid-cols-4">
-          {PLAN_TILES.map((tile) => (
-            <div key={tile.code} className="space-y-1 bg-card p-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground/80">
-                {tile.name}
-              </div>
-              <div className="text-lg font-semibold">{tile.price}</div>
-              <div className="text-xs text-muted-foreground">{tile.tokens}</div>
-            </div>
-          ))}
-        </div>
+        {planCatalogue.length > 0 ? (
+          <div className="grid grid-cols-2 gap-px bg-border/60 sm:grid-cols-4">
+            {planCatalogue.map((offer) => {
+              const tokens = formatPlanTokens(offer.includedTokens);
+              return (
+                <div key={offer.code} className="space-y-1 bg-card p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground/80">
+                    {offer.name}
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {formatPlanPrice(offer.priceUsdMonthly)}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {tokens ?? offer.description ?? ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          // Previously this grid showed four hardcoded tiles with prices this
+          // app had no way to keep true. An empty catalogue now says nothing
+          // rather than something possibly wrong.
+          <SettingsRow
+            title="Plans"
+            description="The gateway has not published a plan list, so there is nothing to show here yet. Redeeming a code below still works."
+          />
+        )}
         <SettingsRow
           title="Upgrade"
           description="Payment is handled off-platform for now — once confirmed, you'll get a one-time code to redeem below."

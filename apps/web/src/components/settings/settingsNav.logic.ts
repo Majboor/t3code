@@ -25,6 +25,52 @@ export const SETTINGS_SECTION_PATHS = Object.keys(
   SETTINGS_SECTION_LABELS,
 ) as readonly SettingsSectionPath[];
 
+/**
+ * Every reason a settings section can be absent, in one place.
+ *
+ * The sidebar nav decided two of these inline and the breadcrumb knew about
+ * none of them, so a section could be missing from the menu and still be
+ * reachable and titled. One function answers it for both.
+ *
+ * - `orgSettingsVisible` / `apiUsageTabVisible` are user preferences.
+ * - `billingAvailable` is the LogicPacks API gateway: an instance without
+ *   `T3CODE_GATEWAY_URL` / `T3CODE_GATEWAY_PROVISION_TOKEN` has no plan, no
+ *   balance and nothing to buy, so a Billing entry there leads only to a page
+ *   explaining that it cannot work.
+ *
+ * `null` means "not known yet" and reads as VISIBLE throughout: never
+ * flash-hide a section somebody can already see, only hide once we know for
+ * sure it is off. That rule is why these are three-valued rather than booleans
+ * defaulted at the call site.
+ */
+export interface SettingsSectionAvailability {
+  readonly orgSettingsVisible?: boolean | null;
+  readonly apiUsageTabVisible?: boolean | null;
+  readonly billingAvailable?: boolean | null;
+}
+
+export function isSettingsSectionAvailable(
+  to: SettingsSectionPath,
+  availability: SettingsSectionAvailability,
+): boolean {
+  switch (to) {
+    case "/settings/organization":
+      return availability.orgSettingsVisible ?? true;
+    case "/settings/api-usage":
+      return availability.apiUsageTabVisible ?? true;
+    case "/settings/billing":
+      return availability.billingAvailable ?? true;
+    default:
+      return true;
+  }
+}
+
+export function availableSettingsSectionPaths(
+  availability: SettingsSectionAvailability,
+): readonly SettingsSectionPath[] {
+  return SETTINGS_SECTION_PATHS.filter((to) => isSettingsSectionAvailable(to, availability));
+}
+
 function normalizePathname(pathname: string): string {
   return pathname.replace(/\/+$/, "") || "/";
 }

@@ -18,7 +18,6 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import { it, assert, vi } from "@effect/vitest";
-import { assertFailure } from "@effect/vitest/utils";
 
 import { Effect, Fiber, Layer, Metric, Option, PubSub, Ref, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -46,7 +45,6 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
-
 
 /** One enabled account: the desktop case these tests describe. */
 const mockLocalAuthAccounts = Layer.mock(LocalAuthAccountRepository)({
@@ -462,7 +460,7 @@ it.effect(
         Layer.provide(runtimeRepositoryLayer),
       );
       const firstProviderLayer = makeProviderServiceLive().pipe(
-      Layer.provide(mockLocalAuthAccounts),
+        Layer.provide(mockLocalAuthAccounts),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -516,7 +514,7 @@ it.effect(
         Layer.provide(runtimeRepositoryLayer),
       );
       const secondProviderLayer = makeProviderServiceLive().pipe(
-      Layer.provide(mockLocalAuthAccounts),
+        Layer.provide(mockLocalAuthAccounts),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -600,7 +598,7 @@ it.effect(
 
       const providerLayerFor = (codex: ReturnType<typeof makeFakeCodexAdapter>) =>
         makeProviderServiceLive().pipe(
-      Layer.provide(mockLocalAuthAccounts),
+          Layer.provide(mockLocalAuthAccounts),
           Layer.provide(Layer.succeed(ProviderAdapterRegistry, registryFor(codex))),
           Layer.provide(directoryLayer),
           Layer.provide(defaultServerSettingsLayer),
@@ -708,20 +706,20 @@ routing.layer("ProviderServiceLive routing", (it) => {
         numTurns: 0,
       });
 
+      // Stopping keeps the binding and the resume cursor on purpose — deleting
+      // the row was why a stopped, crashed or restarted thread came back with
+      // no memory of itself (see `stopSession`). So the next turn resumes the
+      // provider's transcript rather than being refused for having no route.
       yield* provider.stopSession({ threadId: session.threadId });
-      const sendAfterStop = yield* Effect.result(
-        provider.sendTurn({
-          threadId: session.threadId,
-          input: "after-stop",
-          attachments: [],
-        }),
-      );
-      assertFailure(
-        sendAfterStop,
-        new ProviderValidationError({
-          operation: "ProviderService.sendTurn",
-          issue: `Cannot route thread '${session.threadId}' because no persisted provider binding exists.`,
-        }),
+      const sendAfterStop = yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "after-stop",
+        attachments: [],
+      });
+      assert.strictEqual(
+        sendAfterStop.threadId,
+        session.threadId,
+        "a turn after a stop resumes the same thread",
       );
     }),
   );
@@ -1093,7 +1091,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(runtimeRepositoryLayer),
       );
       const firstProviderLayer = makeProviderServiceLive().pipe(
-      Layer.provide(mockLocalAuthAccounts),
+        Layer.provide(mockLocalAuthAccounts),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -1128,7 +1126,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(runtimeRepositoryLayer),
       );
       const secondProviderLayer = makeProviderServiceLive().pipe(
-      Layer.provide(mockLocalAuthAccounts),
+        Layer.provide(mockLocalAuthAccounts),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),

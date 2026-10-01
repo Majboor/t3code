@@ -58,8 +58,11 @@ export {
 } from "./auth";
 export {
   fetchGatewayApiKey,
+  fetchGatewayInstance,
   fetchGatewayUsage,
   redeemGatewayCode,
+  type GatewayInstance,
+  type GatewayPlanOffer,
   type GatewayRedeemResult,
   type GatewayUsageResult,
   type GatewaySessionWindow,
