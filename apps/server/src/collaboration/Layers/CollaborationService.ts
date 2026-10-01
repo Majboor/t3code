@@ -511,6 +511,45 @@ function membershipWorkspaceReach(
   return reach;
 }
 
+/**
+ * How much of one tenant a caller may read, as the reads below need it.
+ *
+ * `membershipWorkspaceReach` answers "which workspaces was this person
+ * invited to", which is one half of the question. The other half is whether
+ * the membership that invite minted is still there and still enabled, because
+ * `removeMember` deletes the row and leaves the invite behind. Both halves had
+ * to be re-derived at every call site that wanted them, so they live here once:
+ *
+ *   - `everything` — a tenant-scoped invite, the owner's bootstrap row, or a
+ *     desktop install where nobody was invited to anything.
+ *   - `nothing` — an invited collaborator whose membership is gone or disabled.
+ *   - `workspaces` — exactly the workspaces their invites named.
+ */
+type TenantReadReach =
+  | { readonly _tag: "everything" }
+  | { readonly _tag: "nothing" }
+  | { readonly _tag: "workspaces"; readonly workspaceIds: ReadonlySet<string> };
+
+function tenantReadReach(
+  state: CollaborationState,
+  tenantId: string,
+  userId: string,
+): TenantReadReach {
+  const reach = membershipWorkspaceReach(state, tenantId, userId);
+  if (reach === null) {
+    return { _tag: "everything" };
+  }
+  const membership = Array.from(state.memberships.values()).find(
+    (candidate) =>
+      candidate.tenantId === tenantId &&
+      candidate.userId === userId &&
+      candidate.disabledAt === null,
+  );
+  return membership === undefined
+    ? { _tag: "nothing" }
+    : { _tag: "workspaces", workspaceIds: reach };
+}
+
 /** The lead approves by definition; everyone else has to be named. */
 function isApprover(settings: CollaborationWorkspaceSettings, userId: UserId): boolean {
   if (settings.leadUserId === userId) {
@@ -803,25 +842,11 @@ const makeCollaborationService = Effect.gen(function* () {
   ): Effect.Effect<void, CollaborationError> =>
     Ref.get(stateRef).pipe(
       Effect.flatMap((state) => {
-        const reach = membershipWorkspaceReach(state, input.tenantId, actor.userId);
-        if (reach === null) {
-          // Not somebody this service invited: the owner's bootstrap row, or a
-          // desktop install where nobody was invited to anything. Unchanged.
-          return Effect.void;
-        }
-        // From here on the caller is an invited collaborator, and two things
-        // have to still be true: the invite named THIS workspace, and the
-        // membership it minted is still there and still enabled. The second
-        // half is what makes `removeMember` mean something to a read —
-        // deleting the membership row used to leave the activity feed, roster,
-        // shared prompts and held prompt text just as readable as before.
-        const membership = Array.from(state.memberships.values()).find(
-          (candidate) =>
-            candidate.tenantId === input.tenantId &&
-            candidate.userId === actor.userId &&
-            candidate.disabledAt === null,
-        );
-        return reach.has(input.workspaceId) && membership !== undefined
+        const reach = tenantReadReach(state, input.tenantId, actor.userId);
+        const reaches =
+          reach._tag === "everything" ||
+          (reach._tag === "workspaces" && reach.workspaceIds.has(input.workspaceId));
+        return reaches
           ? Effect.void
           : Effect.fail(
               new CollaborationError({
@@ -884,8 +909,9 @@ const makeCollaborationService = Effect.gen(function* () {
     );
   };
 
-  const listPresence: CollaborationServiceShape["listPresence"] = (input) =>
-    Ref.get(stateRef).pipe(
+  const listPresence: CollaborationServiceShape["listPresence"] = (actor, input) =>
+    ensureWorkspaceReach(actor, input).pipe(
+      Effect.flatMap(() => Ref.get(stateRef)),
       Effect.map((state) => ({
         users: Array.from(state.presence.values()).filter(
           (presence) =>
@@ -948,16 +974,50 @@ const makeCollaborationService = Effect.gen(function* () {
       };
     });
 
-  const listInvites: CollaborationServiceShape["listInvites"] = (input) =>
-    Ref.get(stateRef).pipe(
-      Effect.map((state) => ({
-        invites: Array.from(state.invites.values()).filter(
-          (invite) =>
-            invite.tenantId === input.tenantId &&
-            (input.workspaceId === undefined || invite.workspaceId === input.workspaceId),
-        ),
-      })),
-    );
+  /**
+   * An invite carries the address of the person invited, so a listing of them
+   * is a listing of who else is in the tenant. `workspaceId` is optional here,
+   * and the tenant-wide form is the one that leaked: a contractor invited to
+   * workspace A asked for the tenant and was handed every address every other
+   * workspace had invited.
+   *
+   * Asking for one workspace is refused outright when it is not theirs, the
+   * same as every other read. Asking tenant-wide is answered, but narrowed to
+   * what they could have asked for one workspace at a time.
+   */
+  const listInvites: CollaborationServiceShape["listInvites"] = (actor, input) =>
+    Effect.gen(function* () {
+      const workspaceId = input.workspaceId ?? null;
+      if (workspaceId !== null) {
+        yield* ensureWorkspaceReach(actor, { tenantId: input.tenantId, workspaceId });
+      }
+      const state = yield* Ref.get(stateRef);
+      const reach = tenantReadReach(state, input.tenantId, actor.userId);
+      if (reach._tag === "nothing") {
+        return yield* new CollaborationError({
+          code: "invalid-membership-rule",
+          message: "You are not a member of this workspace.",
+        });
+      }
+      return {
+        invites: Array.from(state.invites.values()).filter((invite) => {
+          if (invite.tenantId !== input.tenantId) {
+            return false;
+          }
+          if (workspaceId !== null) {
+            return invite.workspaceId === workspaceId;
+          }
+          // A tenant-scoped invite belongs to no one workspace, so there is no
+          // workspace to be a member of — whoever may read the tenant at all
+          // may read those. A workspace-scoped one needs the workspace.
+          return (
+            reach._tag === "everything" ||
+            invite.workspaceId === null ||
+            reach.workspaceIds.has(invite.workspaceId)
+          );
+        }),
+      };
+    });
 
   const acceptInvite: CollaborationServiceShape["acceptInvite"] = (actor, input) =>
     Effect.gen(function* () {
@@ -1321,11 +1381,26 @@ const makeCollaborationService = Effect.gen(function* () {
       return { note };
     });
 
-  const listNotesForTarget: CollaborationServiceShape["listNotesForTarget"] = (_actor, input) =>
+  const listNotesForTarget: CollaborationServiceShape["listNotesForTarget"] = (actor, input) =>
     Effect.gen(function* () {
-      const records = yield* activityNotes
-        .listForTarget({ targetType: input.targetType, targetId: input.targetId })
-        .pipe(Effect.mapError(mapPersistenceError("Failed to list notes.")));
+      yield* ensureWorkspaceReach(actor, input);
+      // A `user` target is a direct-message thread, and `target_id` names only
+      // the RECIPIENT — so a read by target returned every message anyone had
+      // ever sent that person, to anyone who could name them. The thread a
+      // caller is entitled to is the one they are themselves a party to, which
+      // `listDirectMessagesBetween` already scopes correctly for
+      // `listDirectMessages`; this path just has to use it too.
+      const records = yield* (
+        input.targetType === "user"
+          ? activityNotes.listDirectMessagesBetween({
+              userIdA: actor.userId,
+              userIdB: input.targetId,
+            })
+          : activityNotes.listForTarget({
+              targetType: input.targetType,
+              targetId: input.targetId,
+            })
+      ).pipe(Effect.mapError(mapPersistenceError("Failed to list notes.")));
       return { notes: records.map(toContractNote) };
     });
 

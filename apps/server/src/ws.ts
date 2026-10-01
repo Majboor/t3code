@@ -3235,7 +3235,9 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
           // A read model we could not load must not widen anything: claim
           // ownership by nobody-in-particular so the caller refuses rather than
           // falling through to the permissive branch.
-          Effect.catchCause(() => Effect.succeed<WorkspaceRootTenancy>({ _tag: "owned", roles: [] })),
+          Effect.catchCause(() =>
+            Effect.succeed<WorkspaceRootTenancy>({ _tag: "owned", roles: [] }),
+          ),
         );
 
       const ensureTenantWorkspacePermission = <E>(
@@ -3711,7 +3713,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
               ) {
                 return false;
               }
-              const isExactMatch = isPathInsideRoot(cwd, project.workspaceRoot) &&
+              const isExactMatch =
+                isPathInsideRoot(cwd, project.workspaceRoot) &&
                 isPathInsideRoot(project.workspaceRoot, cwd);
               if (isExactMatch || mode === "exactMatchOnly") {
                 return isExactMatch;
@@ -3919,7 +3922,9 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             : [authHomeDir];
         return Effect.forEach(
           targetDirs.flatMap((dir) =>
-            OPERATOR_PROVIDER_CREDENTIAL_FILES[provider].map((fileName) => [dir, fileName] as const),
+            OPERATOR_PROVIDER_CREDENTIAL_FILES[provider].map(
+              (fileName) => [dir, fileName] as const,
+            ),
           ),
           ([dir, fileName]) =>
             Effect.gen(function* () {
@@ -5405,7 +5410,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             WS_METHODS.collaborationPresenceList,
             withRateLimit(
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.view").pipe(
-                Effect.flatMap(() => collaboration.listPresence(input)),
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listPresence(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),
@@ -5434,7 +5440,8 @@ const makeWsRpcLayer = (session: AuthenticatedSession) =>
             WS_METHODS.collaborationInvitesList,
             withRateLimit(
               ensureTenantPermissionForCollaboration(input.tenantId, "workspace.invite").pipe(
-                Effect.flatMap(() => collaboration.listInvites(input)),
+                Effect.flatMap(() => resolveCollaborationActor),
+                Effect.flatMap((actor) => collaboration.listInvites(actor, input)),
               ),
               (message) => new CollaborationError({ code: "invalid-membership-rule", message }),
             ),

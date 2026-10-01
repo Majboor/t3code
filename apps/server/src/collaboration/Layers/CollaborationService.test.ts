@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { TenantId, ThreadId, UserId, WorkspaceId,
+import {
+  TenantId,
+  ThreadId,
+  UserId,
+  WorkspaceId,
   MembershipId,
   OrganizationId,
 } from "@t3tools/contracts";
@@ -78,7 +82,11 @@ it.effect("lets an organization member write, and still refuses a removed one", 
 
     // Nobody at all: refused, which is the removed-member case.
     const stranger = yield* collaboration.checkWriteAccessForTurn(orgMember, scope);
-    assert.strictEqual(stranger.mayRun, false, "a caller with no membership anywhere may not write");
+    assert.strictEqual(
+      stranger.mayRun,
+      false,
+      "a caller with no membership anywhere may not write",
+    );
 
     // Now give them a membership through the ORGANIZATION side of the table.
     const organizations = yield* repository.loadOrganizations();
@@ -1309,5 +1317,117 @@ it.effect("keeps an invite scoped to one workspace out of the tenant's others", 
     yield* collaboration.acceptInvite(delegate, { inviteId: tenantWide.invite.id });
     const everywhere = yield* collaboration.listApprovals(delegate, otherScope);
     assert.strictEqual(everywhere.approvals.length, 1);
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+// The same workspace-reach rule as above, for the two reads that had no actor
+// to check it against. `listPresence` says who is working where; `listInvites`
+// says which addresses have been invited, and its `workspaceId` is optional —
+// so the tenant-wide form is the shape that leaked, and the fix has to narrow
+// it rather than refuse it, because a tenant-scoped invite belongs to no one
+// workspace and its own members still have to see it.
+it.effect("refuses foreign presence and narrows a tenant-wide invite listing", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+
+    const ours = yield* collaboration.createInvite(lead, {
+      ...scope,
+      email: "visitor@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt,
+    });
+    const visitor = {
+      userId: UserId.make("user-visitor"),
+      displayName: "Visitor",
+      email: "visitor@example.com",
+    };
+    yield* collaboration.acceptInvite(visitor, { inviteId: ours.invite.id });
+
+    const elsewhere = { ...scope, workspaceId: WorkspaceId.make("workspace-elsewhere") };
+    const theirs = yield* collaboration.createInvite(lead, {
+      ...elsewhere,
+      email: "someone-elses-hire@example.com",
+      scope: "workspace",
+      roles: ["developer"],
+      expiresAt,
+    });
+
+    // Somebody is present in the workspace the visitor was never invited to.
+    yield* collaboration.upsertPresence(delegate, {
+      ...elsewhere,
+      threadId,
+      status: "online",
+    });
+
+    const refusedPresence = yield* Effect.flip(collaboration.listPresence(visitor, elsewhere));
+    assert.ok(refusedPresence, "presence in a foreign workspace is refused");
+
+    const refusedInvites = yield* Effect.flip(collaboration.listInvites(visitor, elsewhere));
+    assert.ok(refusedInvites, "a foreign workspace's invite listing is refused");
+
+    // Tenant-wide: answered, but only with what they could have asked for one
+    // workspace at a time.
+    const narrowed = yield* collaboration.listInvites(visitor, { tenantId });
+    assert.deepStrictEqual(
+      narrowed.invites.map((invite) => invite.email),
+      ["visitor@example.com"],
+      "a tenant-wide listing hides other workspaces' invited addresses",
+    );
+
+    // The lead is not an invited collaborator, so their reach is the tenant and
+    // nothing here narrows it.
+    const full = yield* collaboration.listInvites(lead, { tenantId });
+    assert.strictEqual(full.invites.length, 2, "the tenant's own lead still sees both invites");
+    assert.ok(
+      full.invites.some((invite) => invite.id === theirs.invite.id),
+      "including the one the visitor cannot see",
+    );
+
+    // Their own workspace still works.
+    const own = yield* collaboration.listPresence(visitor, scope);
+    assert.ok(own, "presence in their own workspace is unaffected");
+  }).pipe(Effect.provide(makeLayer())),
+);
+
+// `activity_notes.target_id` for a direct message names the RECIPIENT, so a
+// read by target was every message anyone had ever sent that person — readable
+// by anybody who could name them. `listDirectMessages` always scoped to the
+// caller; this read has to agree with it.
+it.effect("hands a direct-message thread only to the two people in it", () =>
+  Effect.gen(function* () {
+    const collaboration = yield* CollaborationService;
+
+    yield* collaboration.createNote(member, {
+      ...scope,
+      targetType: "user",
+      targetId: delegate.userId,
+      body: "between the two of us",
+    });
+
+    const snooped = yield* collaboration.listNotesForTarget(lead, {
+      ...scope,
+      targetType: "user",
+      targetId: delegate.userId,
+    });
+    assert.deepStrictEqual(
+      snooped.notes.map((note) => note.body),
+      [],
+      "a third party reading by target gets nothing",
+    );
+
+    for (const party of [member, delegate]) {
+      const read = yield* collaboration.listNotesForTarget(party, {
+        ...scope,
+        targetType: "user",
+        targetId: party.userId === member.userId ? delegate.userId : member.userId,
+      });
+      assert.deepStrictEqual(
+        read.notes.map((note) => note.body),
+        ["between the two of us"],
+        `${party.displayName} reads their own thread`,
+      );
+    }
   }).pipe(Effect.provide(makeLayer())),
 );

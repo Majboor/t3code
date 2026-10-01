@@ -109,6 +109,7 @@ export interface CollaborationServiceShape {
   ) => Effect.Effect<CollaborationPresenceUpsertResult, CollaborationError>;
 
   readonly listPresence: (
+    actor: CollaborationActor,
     input: CollaborationPresenceListInput,
   ) => Effect.Effect<CollaborationPresenceListResult, CollaborationError>;
 
@@ -118,6 +119,7 @@ export interface CollaborationServiceShape {
   ) => Effect.Effect<CollaborationInviteCreateResult, CollaborationError>;
 
   readonly listInvites: (
+    actor: CollaborationActor,
     input: CollaborationInviteListInput,
   ) => Effect.Effect<CollaborationInviteListResult, CollaborationError>;
 
