@@ -2,6 +2,7 @@ import type { OrchestrationProjectOwnership } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultProjectKindFor,
   CREATABLE_PROJECT_KINDS,
   DEFAULT_PROJECT_KIND,
   describeProjectKindChoice,
@@ -167,6 +168,36 @@ describe("resolveSelectedProjectKind", () => {
     );
     expect(
       resolveSelectedProjectKind(availability({ workspaceSource: "paired-environment" }), "hosted"),
+    ).toBe("local");
+  });
+});
+
+// Which kind a surface starts on is the client's answer, not the person's: a
+// browser is not on the machine the files would live on, so "a folder on this
+// computer" means the server's computer there and is the one thing the web app
+// cannot sensibly assume. The desktop app is running on that machine.
+describe("defaultProjectKindFor", () => {
+  it("starts the web app on hosted and the desktop app on local", () => {
+    const availability = { workspaceSource: "this-server", cloudSyncConfigured: true } as const;
+    expect(defaultProjectKindFor({ isDesktop: false, availability })).toBe("hosted");
+    expect(defaultProjectKindFor({ isDesktop: true, availability })).toBe("local");
+  });
+
+  // Still only a starting point: a paired environment hosts nothing, so a
+  // browser there falls back to local rather than starting on a kind the
+  // server would refuse.
+  it("falls back to local where hosting is impossible", () => {
+    expect(
+      defaultProjectKindFor({
+        isDesktop: false,
+        availability: { workspaceSource: "paired-environment", cloudSyncConfigured: true },
+      }),
+    ).toBe("local");
+    expect(
+      defaultProjectKindFor({
+        isDesktop: false,
+        availability: { workspaceSource: "this-server", cloudSyncConfigured: false },
+      }),
     ).toBe("local");
   });
 });

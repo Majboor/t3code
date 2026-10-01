@@ -38,6 +38,7 @@ import {
   describeProjectKindChoice,
   resolveProjectKindAvailability,
   resolveProjectKindChoices,
+  defaultProjectKindFor,
   resolveSelectedProjectKind,
   type CreatableProjectKind,
 } from "./projectKind.logic";
@@ -118,6 +119,7 @@ import {
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import { toastManager } from "./ui/toast";
+import { isElectron } from "../env";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 
@@ -361,7 +363,11 @@ function OpenCommandPaletteDialog() {
    */
   const selectedProjectKind = resolveSelectedProjectKind(
     projectKindAvailability,
-    requestedProjectKind,
+    // The platform's default when nobody has asked for one — the palette is
+    // reachable without going through the dashboard, and arriving by Cmd+K
+    // should not silently mean something different from pressing the button.
+    requestedProjectKind ??
+      defaultProjectKindFor({ isDesktop: isElectron, availability: projectKindAvailability }),
   );
 
   const isBrowsing = isFilesystemBrowseQuery(query, browseEnvironmentPlatform);

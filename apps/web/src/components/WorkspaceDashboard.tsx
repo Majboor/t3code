@@ -35,13 +35,10 @@ import {
   type WorkspaceDashboardWorkspace,
 } from "./WorkspaceDashboard.logic";
 import {
-  describeProjectKindChoice,
+  defaultProjectKindFor,
   resolveProjectKindAvailability,
-  resolveProjectKindChoices,
   type CreatableProjectKind,
-  type ProjectKindChoice,
 } from "./projectKind.logic";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import {
   Dialog,
   DialogDescription,
@@ -260,8 +257,15 @@ export function WorkspaceDashboard() {
    * mean, so that this menu and the palette's picker cannot disagree about what
    * this instance can do.
    */
-  const resolveWorkspaceProjectKindChoices = useCallback(
-    (workspace: WorkspaceDashboardWorkspace | null): readonly ProjectKindChoice[] => {
+  /**
+   * The kind a workspace's "Add project" should start on.
+   *
+   * Still per workspace, because availability is: a workspace on a paired
+   * environment hosts nothing, and `defaultProjectKindFor` refuses a kind this
+   * instance cannot honour rather than offering one that would be refused.
+   */
+  const resolveWorkspaceDefaultProjectKind = useCallback(
+    (workspace: WorkspaceDashboardWorkspace | null): CreatableProjectKind => {
       const environmentId = workspace?.environmentId ?? primaryEnvironmentDescriptor?.environmentId;
       const auth =
         environmentId && environmentId === primaryEnvironmentDescriptor?.environmentId
@@ -269,9 +273,13 @@ export function WorkspaceDashboard() {
           : environmentId
             ? (environmentRuntimeById[environmentId]?.serverConfig?.auth ?? null)
             : null;
-      return resolveProjectKindChoices(
-        resolveProjectKindAvailability({ auth, ownership: workspace?.ownership ?? null }),
-      );
+      return defaultProjectKindFor({
+        isDesktop: isElectron,
+        availability: resolveProjectKindAvailability({
+          auth,
+          ownership: workspace?.ownership ?? null,
+        }),
+      });
     },
     [environmentRuntimeById, primaryEnvironmentDescriptor?.environmentId, primaryServerConfig],
   );
@@ -392,7 +400,7 @@ export function WorkspaceDashboard() {
             {model.workspaceCount === 0 && !model.hasFilter ? (
               <EmptyDashboard
                 canCreateWorkspace={model.createTargets.length > 0}
-                projectKindChoices={resolveWorkspaceProjectKindChoices(null)}
+                defaultProjectKind={resolveWorkspaceDefaultProjectKind(null)}
                 onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
                 onAddProject={(projectKind) => openAddProject(undefined, projectKind)}
               />
@@ -413,7 +421,7 @@ export function WorkspaceDashboard() {
                             entry,
                             getEnvironmentLabel(entry.environmentId),
                           )}
-                          projectKindChoices={resolveWorkspaceProjectKindChoices(entry)}
+                          defaultProjectKind={resolveWorkspaceDefaultProjectKind(entry)}
                           onAddProject={handleAddProjectToWorkspace}
                           onInvite={(workspace) => {
                             setCreatedInviteUrl(null);
@@ -684,66 +692,56 @@ function DashboardEmptyResult({ label }: { label: string }) {
  * hosting hunting for a control that is not there, and hunting is what the
  * feature is supposed to end.
  */
-function AddProjectKindMenu({
-  choices,
+/**
+ * "Add project", which adds a project.
+ *
+ * It used to be a menu: three kinds, each with its sentence, and nothing
+ * happened until one was chosen. That put a decision in front of somebody whose
+ * answer is the same almost every time, and the right answer differs by client
+ * rather than by person — a browser cannot sensibly default to "a folder on
+ * this computer", because the computer in question is the server's, and the
+ * desktop app is running on the very machine where local is both safe and true.
+ * So the client decides, the project is added, and the kind stays changeable in
+ * the palette that opens, which is where the path is typed anyway.
+ *
+ * The kinds have not gone anywhere and neither has their copy — the palette's
+ * own picker carries both, one line above the input.
+ */
+function AddProjectButton({
   label,
   testId,
+  defaultKind,
   onChoose,
 }: {
-  choices: readonly ProjectKindChoice[];
   label: string;
   testId?: string;
+  defaultKind: CreatableProjectKind;
   onChoose: (kind: CreatableProjectKind) => void;
 }) {
   return (
-    <Menu>
-      <MenuTrigger
-        render={
-          <button
-            type="button"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none"
-            {...(testId ? { "data-testid": testId } : {})}
-          />
-        }
-      >
-        <FolderPlusIcon className="size-3.5" />
-        <span>{label}</span>
-      </MenuTrigger>
-      <MenuPopup align="end" className="max-w-80">
-        {choices.map((choice) => (
-          <MenuItem
-            key={choice.kind}
-            disabled={!choice.available}
-            className="flex-col items-start gap-0.5 py-2"
-            onClick={() => {
-              if (!choice.available) {
-                return;
-              }
-              onChoose(choice.kind);
-            }}
-          >
-            <span className="text-xs font-medium text-foreground">{choice.label}</span>
-            <span className="text-[11px] leading-snug text-muted-foreground whitespace-normal">
-              {choice.unavailableReason ?? describeProjectKindChoice(choice)}
-            </span>
-          </MenuItem>
-        ))}
-      </MenuPopup>
-    </Menu>
+    <button
+      type="button"
+      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:text-foreground focus-visible:outline-none"
+      {...(testId ? { "data-testid": testId } : {})}
+      onClick={() => onChoose(defaultKind)}
+    >
+      <FolderPlusIcon className="size-3.5" />
+      <span>{label}</span>
+    </button>
   );
 }
 
 function WorkspaceRow({
   entry,
   ownershipLabel,
-  projectKindChoices,
+  defaultProjectKind,
   onAddProject,
   onInvite,
   onOpenProject,
 }: {
   entry: WorkspaceDashboardWorkspace;
   ownershipLabel: string;
-  projectKindChoices: readonly ProjectKindChoice[];
+  defaultProjectKind: CreatableProjectKind;
   onAddProject: (entry: WorkspaceDashboardWorkspace, projectKind: CreatableProjectKind) => void;
   onInvite: (entry: WorkspaceDashboardWorkspace) => void;
   onOpenProject: (entry: WorkspaceDashboardProject) => void;
@@ -831,9 +829,9 @@ function WorkspaceRow({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
-          <AddProjectKindMenu
-            choices={projectKindChoices}
+          <AddProjectButton
             label="Add project"
+            defaultKind={defaultProjectKind}
             onChoose={(projectKind) => onAddProject(entry, projectKind)}
           />
           <button
@@ -1103,12 +1101,12 @@ function ArchivedSessionRow({
 
 function EmptyDashboard({
   canCreateWorkspace,
-  projectKindChoices,
+  defaultProjectKind,
   onCreateWorkspace,
   onAddProject,
 }: {
   canCreateWorkspace: boolean;
-  projectKindChoices: readonly ProjectKindChoice[];
+  defaultProjectKind: CreatableProjectKind;
   onCreateWorkspace: () => void;
   onAddProject: (projectKind: CreatableProjectKind) => void;
 }) {
@@ -1133,10 +1131,10 @@ function EmptyDashboard({
             <PlusIcon className="size-3.5" />
             <span>Create Workspace</span>
           </button>
-          <AddProjectKindMenu
-            choices={projectKindChoices}
+          <AddProjectButton
             label="Add Project"
             testId="dashboard-empty-add-project"
+            defaultKind={defaultProjectKind}
             onChoose={onAddProject}
           />
         </div>

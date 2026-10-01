@@ -41,15 +41,41 @@ export const CREATABLE_PROJECT_KINDS = ["local", "hosted", "self-hosted"] as con
 export type CreatableProjectKind = (typeof CREATABLE_PROJECT_KINDS)[number];
 
 /**
- * What a project defaults to when nobody has chosen yet.
+ * What a project defaults to when nobody has chosen yet, and the floor every
+ * other answer falls back to.
  *
  * `local` for the same asymmetry `resolveProjectKind` is built on: it is the only
  * one of the kinds that promises less than the truth. A default that quietly
  * uploaded somebody's files would be the worst kind of surprise — it is not
  * undoable by unchecking a box afterwards, because by then the files have left
  * the machine. It is also simply what every project in existence today is.
+ *
+ * `defaultProjectKindFor` is what callers should use: this is what it falls
+ * back to, not what every surface should offer.
  */
 export const DEFAULT_PROJECT_KIND: CreatableProjectKind = "local";
+
+/**
+ * The kind a surface should start on, before anybody chooses.
+ *
+ * The honest default is not the same on both, because the two clients are not
+ * in the same position. A browser is not on the machine the files would live
+ * on: "a folder on this computer" means the SERVER's computer there, which is
+ * nobody's laptop, so local is the one answer the web app cannot sensibly
+ * assume. The desktop app is running on exactly that machine, so local is both
+ * the safe answer and the true one.
+ *
+ * Still only a starting point. `resolveSelectedProjectKind` refuses a kind this
+ * instance cannot honour, so a browser on a paired environment — which hosts
+ * nothing — falls back to local rather than offering something that would be
+ * refused.
+ */
+export function defaultProjectKindFor(input: {
+  readonly isDesktop: boolean;
+  readonly availability: ProjectKindAvailability;
+}): CreatableProjectKind {
+  return resolveSelectedProjectKind(input.availability, input.isDesktop ? "local" : "hosted");
+}
 
 export interface ProjectKindChoice {
   readonly kind: CreatableProjectKind;
