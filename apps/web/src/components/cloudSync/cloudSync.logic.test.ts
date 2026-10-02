@@ -446,3 +446,41 @@ describe("describeOfflineReachability", () => {
     }
   });
 });
+
+// Read in a browser on a project that lives on the server, the old answer was
+// not merely verbose, it was false: it told somebody their cloud project was
+// "only on this machine" and that nothing had been uploaded, about a project
+// they had just created in the cloud.
+describe("describeOfflineReachability on a hosted project", () => {
+  it("says it is hosted rather than asking about this machine", () => {
+    const result = describeOfflineReachability({
+      sync: null,
+      liveLinkRunning: false,
+      hostedOnServer: true,
+    });
+    expect(result.answer).toBe("yes");
+    expect(result.reachable).toBe(true);
+    expect(result.title).toMatch(/hosted/i);
+    expect(result.detail).not.toMatch(/only on this machine/i);
+  });
+
+  // A live tunnel is the state somebody is most certain and most wrong about,
+  // and on a hosted project it is beside the point rather than a warning.
+  it("is unmoved by a live link, because the server is the copy", () => {
+    expect(
+      describeOfflineReachability({ sync: null, liveLinkRunning: true, hostedOnServer: true })
+        .answer,
+    ).toBe("yes");
+  });
+
+  // Unchanged where it was right: a local project with nothing uploaded.
+  it("still warns about a local project nobody can reach", () => {
+    const result = describeOfflineReachability({
+      sync: null,
+      liveLinkRunning: false,
+      hostedOnServer: false,
+    });
+    expect(result.answer).toBe("no");
+    expect(result.tone).toBe("warning");
+  });
+});

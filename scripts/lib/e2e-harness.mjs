@@ -265,16 +265,23 @@ export function createHarness({
     }
     const input = palette.locator("input").first();
     await input.waitFor({ state: "visible", timeout: 15_000 });
-    // The palette keeps its own picker, pre-set from the menu choice. Assert it
-    // rather than click it again, so a changed default fails here loudly
-    // instead of putting a test project somewhere it was never meant to go.
-    const selectedKind = palette.locator(
-      '[data-testid="command-palette-project-kind"] [role="radio"][aria-checked="true"]',
-    );
-    if ((await selectedKind.count().catch(() => 0)) > 0) {
-      const label = (await selectedKind.first().textContent().catch(() => "")) ?? "";
-      if (!/this computer/i.test(label)) {
-        throw new Error(`Expected the local project kind to be selected, got "${label.trim()}".`);
+    // Chosen, not asserted. The web client defaults to `hosted`, which is right
+    // for a person in a browser and wrong for this suite: every script here
+    // makes a real directory on the machine running the server and then adds
+    // THAT path, which is a local project. Picking it explicitly is also what
+    // keeps the suite honest about the default — it is free to change without
+    // quietly moving where test projects land.
+    const kindPicker = palette.locator('[data-testid="command-palette-project-kind"]');
+    if ((await kindPicker.count().catch(() => 0)) > 0) {
+      const localRadio = kindPicker
+        .locator('[role="radio"]')
+        .filter({ hasText: /this computer/i })
+        .first();
+      if (await localRadio.isVisible().catch(() => false)) {
+        if ((await localRadio.getAttribute("aria-checked").catch(() => null)) !== "true") {
+          await localRadio.click().catch(() => undefined);
+          await sleep(400);
+        }
       }
     }
     await input.fill(workspaceRoot);

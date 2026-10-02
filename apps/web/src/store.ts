@@ -216,6 +216,10 @@ function mapProject(
     name: project.title,
     cwd: project.workspaceRoot,
     ownership: project.ownership ?? null,
+    // Carried so a surface can tell a hosted project from a local one. Without
+    // it the client could not, and the Cloud panel told somebody looking at a
+    // project that lives on the server that it was "only on this machine".
+    kind: project.kind ?? null,
     repositoryIdentity: project.repositoryIdentity ?? null,
     defaultModelSelection: project.defaultModelSelection
       ? normalizeModelSelection(project.defaultModelSelection)

@@ -94,6 +94,13 @@ export interface Project {
   name: string;
   cwd: string;
   ownership?: OrchestrationProjectOwnership | null;
+  /**
+   * Where this project lives. Optional and nullable like the contract's own
+   * field, and read through `resolveProjectKind` rather than compared directly,
+   * for the reason that function documents: a `!== "local"` test quietly does
+   * the wrong thing against every project created before the kind existed.
+   */
+  kind?: string | null;
   repositoryIdentity?: RepositoryIdentity | null;
   defaultModelSelection: ModelSelection | null;
   createdAt?: string | undefined;

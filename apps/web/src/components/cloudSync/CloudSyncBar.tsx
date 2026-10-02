@@ -1,8 +1,10 @@
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { resolveProjectKind, type EnvironmentId, type ProjectId } from "@t3tools/contracts";
+import { useShallow } from "zustand/react/shallow";
 import { CloudAlertIcon, CloudIcon, CloudOffIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "../../lib/utils";
+import { selectProjectsAcrossEnvironments, useStore, type AppState } from "../../store";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -51,6 +53,16 @@ export function CloudSyncBar({
    * this project is reachable and most wrong about it.
    */
   const share = useWorkspaceShareState();
+  // The project itself, for the one question the sync state cannot answer: a
+  // hosted project is already on the server, so "what happens when this machine
+  // is off" has a different answer and the panel must not guess.
+  const project = useStore(
+    useShallow((state: AppState) =>
+      projectId
+        ? (selectProjectsAcrossEnvironments(state).find((p) => p.id === projectId) ?? null)
+        : null,
+    ),
+  );
 
   // A project outside a shared workspace has nowhere to sync to.
   if (!scope.tenantId || !scope.workspaceId || !scope.projectId) {
@@ -63,6 +75,7 @@ export function CloudSyncBar({
   const reachability = describeOfflineReachability({
     sync: state.sync,
     liveLinkRunning: isWorkspaceShareLive(share.state.status),
+    hostedOnServer: resolveProjectKind(project) === "hosted",
   });
   /*
    * Withheld until the first read lands. A null `sync` before it means "not

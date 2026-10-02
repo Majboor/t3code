@@ -149,8 +149,31 @@ export function describeOfflineReachability(input: {
   readonly sync: ProjectCloudSync | null;
   /** The Cloudflare quick tunnel publishing this machine, when one is up. */
   readonly liveLinkRunning: boolean;
+  /**
+   * True when the project already lives on the server the app is served from,
+   * rather than on the reader's own computer.
+   *
+   * The whole question below is "what happens when this machine is off", and it
+   * is written for somebody reading it on their laptop. Read in a browser on a
+   * hosted project it was not merely verbose, it was false: the machine in
+   * question is the server, it is not going off, and telling somebody their
+   * work is "only on this machine" about a project they created in the cloud is
+   * the opposite of true.
+   */
+  readonly hostedOnServer?: boolean | undefined;
 }): CloudSyncOfflineReachability {
   const { sync, liveLinkRunning } = input;
+
+  if (input.hostedOnServer === true) {
+    return {
+      answer: "yes",
+      reachable: true,
+      short: "Yes",
+      title: `Hosted on ${APP_BASE_NAME}`,
+      detail: `This project lives on ${APP_BASE_NAME}, not on your computer, so a link keeps working whatever you shut.`,
+      tone: "ok",
+    };
+  }
 
   if (sync && sync.lastAgreedAt !== null) {
     return {
